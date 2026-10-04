@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: d61e4f57cf0e9daa950ac0def221aeaf2925b790f7a46af33db0620af973bd11
+  source_sha256: 1137f70474e81122647116459b665bbbd7dc9133d0f436d0aa395d6580a4edce
   translated_at: 2026-10-04
   status: complete
 ---
@@ -137,6 +137,13 @@ un blocage dans un sens ou l'autre, ou un auteur masqué → `PST-1001` / une li
 les appelants du mesh sautent ce contrôle ; tout autre lecteur (anonyme compris) en dépend, et une
 panne échoue fermé avec `PST-5001` (`UNAVAILABLE`), jamais en servant le post.
 
+**Partage de la localisation (#657).** `PostView.location` est ce que l'auteur partage avec le
+lecteur : le point du post pour l'auteur ; pour tout autre (mesh compris), le point par défaut, le
+centre de sa cellule H3 R5 (~87 km², la bande « ville » de la carte) au niveau ville, et rien en
+mode fantôme. Le réglage vient du `ProfileLocationSettingsChanged` de profile, projeté dans
+`post.author_location_settings`, et s'applique aux posts créés avant son changement. Une erreur du
+magasin fait échouer la lecture plutôt que de montrer le point.
+
 ### Contrat d'erreur (`PST-xxxx`)
 
 | Code | Variant | HTTP |
@@ -176,6 +183,7 @@ panne échoue fermé avec `PST-5001` (`UNAVAILABLE`), jamais en servant le post.
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `profile.v1.events` | `post-author-tier` | dénormalise `ProfileTierChanged` dans la projection `author_tiers` (`profile_id → tier`) ; lue sur le chemin de publication pour estampiller `author_tier` sur les posts publiés. Les autres types committent en no-op | DLQ `profile.v1.events.dlq` |
+| `profile.v1.events` | `post-author-location` | projette `ProfileLocationSettingsChanged` dans `author_location_settings` (`profile_id → ghost, city`), que `GetPost` applique à la localisation montrée à tout autre que l'auteur. Démarre au plus ancien offset (un profil adolescent est créé en mode fantôme). Les autres types committent en no-op | DLQ `profile.v1.events.dlq` |
 | `moderation.v1.events` | `post-moderation` | enregistre `enforcement_applied` / `enforcement_reversed` sur un **post** comme sa restriction de modération (`remove_content` → Removed, `visibility_limit` → Limited, `age_gate` → AgeGated ; réversion → None), gardé par l'`EnforcementVersion` par sujet de moderation pour que la redélivrance converge. Les autres entités, les actions au niveau de l'acteur et les autres types committent en no-op | DLQ `moderation.v1.events.dlq` |
 
 > **Contrat d'exécution :** l'événement est publié après le dual-write durable. Les consommateurs aval

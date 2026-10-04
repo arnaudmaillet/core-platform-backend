@@ -14,15 +14,18 @@ use service_runtime::edge::{authenticated, public_read};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
+use transport::kafka::config::consumer::AutoOffsetReset;
 use transport::kafka::config::{ConsumerConfig, KafkaClientConfig, ProducerConfig};
 use transport::kafka::consumer::{KafkaConsumerBuilder, KafkaConsumerHandle};
 use transport::kafka::producer::{KafkaProducerBuilder, KafkaProducerHandle};
 
 use crate::app::{App, Backends};
-use crate::application::port::{AudienceGate, AuthorTierStore};
+use crate::application::port::{AudienceGate, AuthorLocationStore, AuthorTierStore};
 use crate::infrastructure::client::GrpcAudienceGate;
 use tonic::transport::Channel;
-use crate::infrastructure::consumer::{run_author_tier_consumer, run_moderation_consumer};
+use crate::infrastructure::consumer::{
+    run_author_location_consumer, run_author_tier_consumer, run_moderation_consumer,
+};
 use crate::infrastructure::grpc::handler::post_service_handler::PostServiceServer;
 use crate::infrastructure::grpc::handler::PostServiceHandler;
 use crate::infrastructure::grpc::server::FILE_DESCRIPTOR_SET;
@@ -32,6 +35,8 @@ use crate::infrastructure::publisher::KafkaEventPublisher;
 const PROFILE_EVENTS_TOPIC: &str = "profile.v1.events";
 /// Consumer group for post's author-tier projection consumer.
 const AUTHOR_TIER_GROUP: &str = "post-author-tier";
+/// Consumer group for post's author location-sharing projection consumer.
+const AUTHOR_LOCATION_GROUP: &str = "post-author-location";
 /// Moderation's decision stream; post holds the outcome for its reads.
 const MODERATION_EVENTS_TOPIC: &str = "moderation.v1.events";
 /// Consumer group for post's moderation-outcome consumer.
@@ -93,6 +98,9 @@ impl Service for PostService {
         // Inbound integration: profile tier signal → denormalized author-tier
         // projection (read on the publish path to stamp posts).
         spawn_author_tier_consumer(Arc::clone(&app.author_tier_store));
+        // Inbound integration: authors' ghost mode / location precision → the
+        // location GetPost shows anyone but the author.
+        spawn_author_location_consumer(Arc::clone(&app.author_location_store));
         // Inbound integration: moderation outcomes (takedowns, reversals) → the
         // restriction post's reads apply.
         spawn_moderation_consumer(Arc::clone(&app.command_bus));
@@ -141,7 +149,34 @@ fn spawn_author_tier_consumer(store: Arc<dyn AuthorTierStore>) {
 /// Builds the manual-commit consumer (subscribed to `profile.v1.events`) and the
 /// dead-letter producer the runner needs.
 fn build_author_tier_consumer() -> anyhow::Result<(KafkaConsumerHandle, KafkaProducerHandle)> {
-    build_consumer(AUTHOR_TIER_GROUP, PROFILE_EVENTS_TOPIC, "author-tier")
+    build_consumer(AUTHOR_TIER_GROUP, PROFILE_EVENTS_TOPIC, "author-tier", AutoOffsetReset::Latest)
+}
+
+/// Spawns the supervised author location-sharing consumer (profile.v1.events →
+/// `post.author_location_settings`). A new group starts from the earliest
+/// offset: settings made before it first ran (teen profiles are created
+/// ghosted) must not be skipped.
+fn spawn_author_location_consumer(store: Arc<dyn AuthorLocationStore>) {
+    tokio::spawn(async move {
+        loop {
+            let built = build_consumer(
+                AUTHOR_LOCATION_GROUP,
+                PROFILE_EVENTS_TOPIC,
+                "author-location",
+                AutoOffsetReset::Earliest,
+            );
+            match built {
+                Ok((consumer, producer)) => {
+                    run_author_location_consumer(consumer, Arc::clone(&store), producer).await;
+                    tracing::warn!("author-location consumer exited; respawning after backoff");
+                }
+                Err(error) => {
+                    tracing::error!(%error, "failed to build author-location consumer; retrying");
+                }
+            }
+            tokio::time::sleep(CONSUMER_RESPAWN_BACKOFF).await;
+        }
+    });
 }
 
 /// Spawns the supervised moderation-outcome consumer (moderation.v1.events →
@@ -150,7 +185,7 @@ fn build_author_tier_consumer() -> anyhow::Result<(KafkaConsumerHandle, KafkaPro
 fn spawn_moderation_consumer(command_bus: Arc<InMemoryCommandBus>) {
     tokio::spawn(async move {
         loop {
-            match build_consumer(MODERATION_GROUP, MODERATION_EVENTS_TOPIC, "moderation") {
+            match build_consumer(MODERATION_GROUP, MODERATION_EVENTS_TOPIC, "moderation", AutoOffsetReset::Latest) {
                 Ok((consumer, producer)) => {
                     run_moderation_consumer(consumer, Arc::clone(&command_bus), producer).await;
                     tracing::warn!("moderation consumer exited; respawning after backoff");
@@ -164,15 +199,18 @@ fn spawn_moderation_consumer(command_bus: Arc<InMemoryCommandBus>) {
     });
 }
 
-/// Builds a manual-commit consumer for `group` on `topic`, and the dead-letter
-/// producer the runner needs.
+/// Builds a manual-commit consumer for `group` on `topic` (a new group starts
+/// at `reset`), and the dead-letter producer the runner needs.
 fn build_consumer(
     group: &str,
     topic: &str,
     label: &str,
+    reset: AutoOffsetReset,
 ) -> anyhow::Result<(KafkaConsumerHandle, KafkaProducerHandle)> {
     let kafka = KafkaClientConfig::from_env();
-    let consumer = KafkaConsumerBuilder::new(ConsumerConfig::new(kafka.clone(), group))
+    let mut config = ConsumerConfig::new(kafka.clone(), group);
+    config.auto_offset_reset = reset;
+    let consumer = KafkaConsumerBuilder::new(config)
         .subscribe(topic)
         .build()
         .map_err(|e| anyhow::anyhow!("build {label} consumer: {e}"))?;
