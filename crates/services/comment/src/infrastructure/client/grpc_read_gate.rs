@@ -41,6 +41,58 @@ fn post_is_public(view: &post_api::PostView) -> bool {
         && view.moderation != ModerationRestriction::Removed as i32
 }
 
+/// `CheckAccess` caps per call (social-graph `MAX_VIEWERS` / `MAX_TARGETS`).
+const MAX_VIEWERS_PER_CALL: usize = 20;
+const MAX_TARGETS_PER_CALL: usize = 100;
+
+/// The calls covering `viewers` × `targets` within the caps: one per (viewer
+/// chunk, target chunk). An anonymous reader is one viewer chunk with no
+/// profiles.
+fn requests(viewers: &[ProfileId], targets: &[String]) -> Vec<CheckAccessRequest> {
+    let viewer_chunks: Vec<&[ProfileId]> = if viewers.is_empty() {
+        vec![&[]]
+    } else {
+        viewers.chunks(MAX_VIEWERS_PER_CALL).collect()
+    };
+    let mut out = Vec::new();
+    for v in &viewer_chunks {
+        for t in targets.chunks(MAX_TARGETS_PER_CALL) {
+            out.push(CheckAccessRequest {
+                viewer_profile_ids: v.iter().map(ProfileId::as_str).collect(),
+                target_profile_ids: t.to_vec(),
+            });
+        }
+    }
+    out
+}
+
+/// One answer per target from the split calls, as one call over the whole
+/// viewer set would give: HIDDEN if any viewer chunk says HIDDEN (or none
+/// answered for it: fail closed), else VISIBLE if any says VISIBLE (any profile
+/// follows), else HEADER_ONLY.
+fn combine(targets: &[String], responses: &[Vec<(String, i32)>]) -> Vec<(String, i32)> {
+    targets
+        .iter()
+        .map(|target| {
+            let mut answered = false;
+            let mut combined = ContentAccess::HeaderOnly;
+            for (id, access) in responses.iter().flatten() {
+                if id != target {
+                    continue;
+                }
+                answered = true;
+                match ContentAccess::try_from(*access) {
+                    Ok(ContentAccess::Visible) => combined = ContentAccess::Visible,
+                    Ok(ContentAccess::HeaderOnly) => {}
+                    _ => return (target.clone(), ContentAccess::Hidden as i32),
+                }
+            }
+            let combined = if answered { combined } else { ContentAccess::Hidden };
+            (target.clone(), combined as i32)
+        })
+        .collect()
+}
+
 /// Applies the access answers: `None` when the post author is not VISIBLE to
 /// the reader; otherwise the comment authors that are HIDDEN (or unanswered:
 /// fail closed). One's own profiles are never hidden from oneself.
@@ -106,26 +158,25 @@ impl ReadGate for GrpcReadGate {
             return Ok(None);
         }
 
-        // One CheckAccess for the post author and every comment author.
+        // CheckAccess for the post author and every comment author, split to
+        // the RPC's caps (a full page of 100 commenters + the post author is
+        // already over), then recombined per target.
         let mut targets: Vec<String> = comment_authors.iter().map(ProfileId::as_str).collect();
         targets.push(view.profile_id.clone());
         targets.sort();
         targets.dedup();
-        let response = self
-            .social_graph
-            .clone()
-            .check_access(CheckAccessRequest {
-                viewer_profile_ids: viewers.iter().map(ProfileId::as_str).collect(),
-                target_profile_ids: targets,
-            })
-            .await
-            .map_err(unavailable)?
-            .into_inner();
-        let answers: Vec<(String, i32)> = response
-            .targets
-            .into_iter()
-            .map(|t| (t.target_profile_id, t.access))
-            .collect();
+        let mut responses = Vec::new();
+        for request in requests(viewers, &targets) {
+            let response = self
+                .social_graph
+                .clone()
+                .check_access(request)
+                .await
+                .map_err(unavailable)?
+                .into_inner();
+            responses.push(response.targets.into_iter().map(|t| (t.target_profile_id, t.access)).collect());
+        }
+        let answers = combine(&targets, &responses);
         Ok(decide(&answers, viewers, &view.profile_id, comment_authors))
     }
 }
@@ -171,6 +222,40 @@ mod tests {
         )
         .unwrap();
         assert_eq!(hidden, HashSet::from([blocked, silent]), "the reader's own comments stay");
+    }
+
+    #[test]
+    fn a_full_page_of_commenters_stays_within_the_rpc_caps() {
+        // 100 distinct commenters + the post author, read by an account with 25
+        // profiles: 2 viewer chunks × 2 target chunks, each within the caps.
+        let viewers: Vec<ProfileId> = (0..25).map(|_| id()).collect();
+        let targets: Vec<String> = (0..101).map(|_| id().as_str()).collect();
+        let calls = requests(&viewers, &targets);
+        assert_eq!(calls.len(), 4);
+        for call in &calls {
+            assert!(call.viewer_profile_ids.len() <= MAX_VIEWERS_PER_CALL);
+            assert!(call.target_profile_ids.len() <= MAX_TARGETS_PER_CALL);
+        }
+        let covered: HashSet<&String> = calls.iter().flat_map(|c| &c.target_profile_ids).collect();
+        assert_eq!(covered.len(), 101, "every target asked");
+        // Anonymous: one viewer chunk with no profiles.
+        assert_eq!(requests(&[], &targets).len(), 2);
+    }
+
+    #[test]
+    fn split_answers_combine_like_one_call() {
+        let t = |s: &str| s.to_owned();
+        let (v, h, ho) = (ContentAccess::Visible as i32, ContentAccess::Hidden as i32, ContentAccess::HeaderOnly as i32);
+        let targets = [t("a"), t("b"), t("c"), t("d")];
+        let responses = vec![
+            vec![(t("a"), ho), (t("b"), v), (t("c"), ho)],
+            vec![(t("a"), v), (t("b"), h), (t("c"), ho)],
+        ];
+        let combined: std::collections::HashMap<String, i32> = combine(&targets, &responses).into_iter().collect();
+        assert_eq!(combined["a"], v, "a follower in another chunk");
+        assert_eq!(combined["b"], h, "a block in any chunk");
+        assert_eq!(combined["c"], ho);
+        assert_eq!(combined["d"], h, "never answered: fail closed");
     }
 
     #[test]
