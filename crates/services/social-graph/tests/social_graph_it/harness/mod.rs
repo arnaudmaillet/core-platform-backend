@@ -100,7 +100,7 @@ impl TestHarness {
 
     /// Returns the follower profile ids of `target` (from the `followers` table).
     pub async fn followers(&self, target: &ProfileId) -> Vec<ProfileId> {
-        let (edges, _next) = self
+        let page = self
             .query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
@@ -113,7 +113,7 @@ impl TestHarness {
             ))
             .await
             .expect("list_followers");
-        edges.into_iter().map(|e| e.profile_id).collect()
+        page.edges.into_iter().map(|e| e.profile_id).collect()
     }
 
     /// Records an audience fact, as the `profile.v1.events` consumer does.
@@ -139,7 +139,7 @@ impl TestHarness {
 
     /// Returns the follower ids of `target` as `viewer` sees them.
     pub async fn followers_as(&self, target: &ProfileId, viewer: Viewer) -> Vec<ProfileId> {
-        let (edges, _next) = self
+        let page = self
             .query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
@@ -147,12 +147,12 @@ impl TestHarness {
             ))
             .await
             .expect("list_followers");
-        edges.into_iter().map(|e| e.profile_id).collect()
+        page.edges.into_iter().map(|e| e.profile_id).collect()
     }
 
     /// Returns the followee profile ids of `actor` (from the `following` table).
     pub async fn following(&self, actor: &ProfileId) -> Vec<ProfileId> {
-        let (edges, _next) = self
+        let page = self
             .query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
@@ -165,7 +165,7 @@ impl TestHarness {
             ))
             .await
             .expect("list_following");
-        edges.into_iter().map(|e| e.profile_id).collect()
+        page.edges.into_iter().map(|e| e.profile_id).collect()
     }
 }
 

@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 
 use crate::domain::access::AccessFacts;
 use crate::domain::interaction::InteractionPolicy;
+use crate::domain::list_privacy::ListPrivacy;
 use crate::domain::aggregate::Relation;
 use crate::domain::entity::{BlockEdge, FollowEdge};
 use crate::domain::value_object::ProfileId;
@@ -157,4 +158,10 @@ pub trait SocialGraphRepository: Send + Sync + 'static {
 
     /// `profile_id`'s interaction policy; the default (everyone) when none.
     async fn load_interaction_policy(&self, profile_id: &ProfileId) -> Result<InteractionPolicy, SocialGraphError>;
+
+    /// Records who may see `profile_id`'s follower / following lists.
+    async fn set_list_privacy(&self, profile_id: &ProfileId, privacy: &ListPrivacy) -> Result<(), SocialGraphError>;
+
+    /// `profile_id`'s list privacy; the default (everyone) when none.
+    async fn load_list_privacy(&self, profile_id: &ProfileId) -> Result<ListPrivacy, SocialGraphError>;
 }

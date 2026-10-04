@@ -21,12 +21,14 @@ use crate::application::command::{
     ApproveFollowRequestCommand, ApproveFollowRequestHandler, BlockProfileCommand,
     BlockProfileHandler, FollowProfileCommand, FollowProfileHandler, WithdrawFollowRequestCommand,
     WithdrawFollowRequestHandler,
-    RecordProfileAudienceCommand, RecordProfileAudienceHandler, UnblockProfileCommand,
+    RecordProfileAudienceCommand, RecordProfileAudienceHandler, SetListPrivacyCommand,
+    SetListPrivacyHandler, UnblockProfileCommand,
     UnblockProfileHandler, UnfollowProfileCommand, UnfollowProfileHandler,
 };
 use crate::application::port::{EventPublisher, SocialGraphCache, SocialGraphRepository};
 use crate::application::query::{
-    CheckAccessHandler, CheckAccessQuery, CheckInteractionHandler, CheckInteractionQuery, GetRelationStatusHandler, GetRelationStatusQuery,
+    CheckAccessHandler, CheckAccessQuery, CheckInteractionHandler, CheckInteractionQuery, GetListPrivacyHandler,
+    GetListPrivacyQuery, GetRelationStatusHandler, GetRelationStatusQuery,
     ListBlocksHandler, ListBlocksQuery, ListFollowRequestsHandler, ListFollowRequestsQuery,
     ListFollowersHandler, ListFollowersQuery, ListFollowingHandler, ListFollowingQuery,
 };
@@ -99,6 +101,7 @@ impl App {
                 .register::<RecordProfileAudienceCommand, _>(RecordProfileAudienceHandler::new(
                     Arc::clone(&repo),
                 ))?
+                .register::<SetListPrivacyCommand, _>(SetListPrivacyHandler::new(Arc::clone(&repo)))?
                 .register::<ApproveFollowRequestCommand, _>(ApproveFollowRequestHandler::new(
                     Arc::clone(&repo),
                     Arc::clone(&cache),
@@ -120,6 +123,7 @@ impl App {
                 .register::<ListFollowersQuery, _>(ListFollowersHandler::new(Arc::clone(&repo)))?
                 .register::<ListFollowingQuery, _>(ListFollowingHandler::new(Arc::clone(&repo)))?
                 .register::<ListBlocksQuery, _>(ListBlocksHandler::new(Arc::clone(&repo)))?
+                .register::<GetListPrivacyQuery, _>(GetListPrivacyHandler::new(Arc::clone(&repo)))?
                 .register::<ListFollowRequestsQuery, _>(ListFollowRequestsHandler::new(Arc::clone(&repo)))?
                 .register::<CheckAccessQuery, _>(CheckAccessHandler::new(Arc::clone(&repo)))?
                 .register::<CheckInteractionQuery, _>(CheckInteractionHandler::new(Arc::clone(&repo)))?

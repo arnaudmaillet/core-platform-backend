@@ -80,6 +80,11 @@ impl Service for SocialGraphService {
         public_read("/social_graph.v1.SocialGraphService/ListFollowers"),
         public_read("/social_graph.v1.SocialGraphService/ListFollowing"),
         authenticated("/social_graph.v1.SocialGraphService/ListBlocks"),
+        // The owner's list tools (bound to profile_id): remove a follower, and
+        // who may see the follower / following lists.
+        authenticated("/social_graph.v1.SocialGraphService/RemoveFollower"),
+        authenticated("/social_graph.v1.SocialGraphService/SetListPrivacy"),
+        authenticated("/social_graph.v1.SocialGraphService/GetListPrivacy"),
         // Follow requests to private profiles: the owner's inbox and answers
         // (bound to owner_id), the requester's cancel (bound to actor_id).
         authenticated("/social_graph.v1.SocialGraphService/ListFollowRequests"),
