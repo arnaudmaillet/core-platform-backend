@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 35adade4b9794960533d8b239f3934988e672b36084ca8c33d5a4016da9dc7a0
+  source_sha256: bdceec11bdbb6229b430293ed5455e5bc257c0a3975a247f175d70bb9053aa30
   translated_at: 2026-10-04
   status: complete
 ---
@@ -126,8 +126,8 @@ multipliée sur toute la flotte.
 service AccountService {
   // Commands (all return CommandResponse { success, account_id })
   rpc CreateAccount (CreateAccountRequest) returns (CommandResponse);
-  rpc VerifyEmail (VerifyEmailRequest) returns (CommandResponse);
-  rpc VerifyPhone (VerifyPhoneRequest) returns (CommandResponse);
+  rpc VerifyEmail (VerifyEmailRequest) returns (CommandResponse);   // mesh uniquement : auth, après une preuve (id_token vérifié ou code)
+  rpc VerifyPhone (VerifyPhoneRequest) returns (CommandResponse);   // mesh uniquement : auth, après un code SMS
   rpc ChangePassword (ChangePasswordRequest) returns (CommandResponse);
   rpc EnrollMfa (EnrollMfaRequest) returns (CommandResponse);
   rpc RevokeMfa (RevokeMfaRequest) returns (CommandResponse);

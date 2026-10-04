@@ -111,8 +111,8 @@ gateway calls it on the request path, so its latency is multiplied across the wh
 service AccountService {
   // Commands (all return CommandResponse { success, account_id })
   rpc CreateAccount (CreateAccountRequest) returns (CommandResponse);
-  rpc VerifyEmail (VerifyEmailRequest) returns (CommandResponse);
-  rpc VerifyPhone (VerifyPhoneRequest) returns (CommandResponse);
+  rpc VerifyEmail (VerifyEmailRequest) returns (CommandResponse);   // mesh only: auth, after a proof (verified id_token or code)
+  rpc VerifyPhone (VerifyPhoneRequest) returns (CommandResponse);   // mesh only: auth, after an SMS code
   rpc ChangePassword (ChangePasswordRequest) returns (CommandResponse);
   rpc EnrollMfa (EnrollMfaRequest) returns (CommandResponse);
   rpc RevokeMfa (RevokeMfaRequest) returns (CommandResponse);
