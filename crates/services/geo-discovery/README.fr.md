@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 91eeb8f6d4e34ab358e4f7981b46db9809a644c4824ce08cc59aa1acb0e904ba
+  source_sha256: 97a2b5dd5a441aa178891c061b8e6f34c8a1b0bc9f0d39424fa107eacf4acf9c
   translated_at: 2026-10-04
   status: complete
 ---
@@ -228,6 +228,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 |---|---|---|---|
 | `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
 | `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | suppression de la carte : suppression → définitive ; `remove_content` / `visibility_limit` sur un post → masqué ; une réversion plus récente → restauré (gardé par version ; événements au niveau de l'acteur et autres ignorés) | DLQ `{topic}.dlq` |
+| `profile.v1.events` | `geo-discovery-location-settings` | partage de localisation des auteurs (#657) depuis `ProfileLocationSettingsChanged` → `geo_discovery.location_settings` ; chaque requête de carte l'applique pour tout lecteur sauf l'auteur (mesh compris) : les pins et cartes d'un **fantôme** quittent la carte ; ceux d'un auteur au **niveau ville** n'apparaissent qu'à la bande R5, au centre de la cellule R5, et ses cartes indiquent la cellule R7 de la ville. Autres événements profile ignorés | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |
 
@@ -302,6 +303,7 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Oui** (prod) | `http://localhost:50053` | endpoint social-graph du filtre d'audience par lecteur (`CheckAccess`) ; sans lui, les lectures clientes échouent fermé. |
 | `GEO_AUDIENCE_RPC_TIMEOUT_MS` / `GEO_AUDIENCE_CONNECT_TIMEOUT_MS` | Non | `500` / `500` | délais de cet appel. |
 | `GEO_VISIBILITY_GROUP_ID` | Non | `geo-discovery-visibility` | groupe Kafka du consumer de suppression de la carte. |
+| `GEO_LOCATION_SETTINGS_GROUP_ID` | Non | `geo-discovery-location-settings` | groupe Kafka du consumer de partage de localisation des auteurs (`profile.v1.events`). |
 | `GEO_GEOIP_MMDB_PATH` | **Oui** (prod) | — | Base IP→pays au format MaxMind (DB-IP Lite country, CC BY 4.0 — *IP Geolocation by DB-IP*, <https://db-ip.com> ; ou GeoLite2-Country). Absente → l'accès par pays n'accorde rien. |
 | `GEO_GEOIP_PRIVATE_NETWORK_COUNTRY` | Non | — | Ce que vaut une adresse client privée/loopback : un code ISO, ou `*` = la déclaration de l'appareil. **Flotte locale uniquement** — jamais dans un env déployé. |
 | `GEO_TRUSTED_PROXY_HOPS` | Non | `GRPC_TRUSTED_PROXY_HOPS`, sinon `1` | Proxys qui ajoutent à `X-Forwarded-For` (l'ALB) ; l'adresse client est à autant d'entrées depuis la droite. Non défini = le `GRPC_TRUSTED_PROXY_HOPS` de toute la flotte. |

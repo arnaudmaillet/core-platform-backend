@@ -4,10 +4,13 @@ use cqrs::{Envelope, Query, QueryHandler};
 use uuid::Uuid;
 
 use crate::application::country_access::country_limit;
-use crate::application::port::{visible_authors, AudienceGate, CardStore, CountryGrantStore, TileRepository};
+use crate::application::port::{
+    sharing_for_reader, visible_authors, AudienceGate, CardStore, CountryGrantStore, LocationSettingsStore,
+    TileRepository,
+};
 use crate::domain::country_atlas::CountryAtlas;
 use crate::domain::entity::MapPostCard;
-use crate::domain::value_object::{MapScope, PostId, Viewer};
+use crate::domain::value_object::{city_point, city_r7, MapScope, PostId, Viewer};
 use crate::error::GeoDiscoveryError;
 
 /// Focus path: hydrates a batch of focused pins into fully-rendered cards.
@@ -41,6 +44,8 @@ pub struct GetGeoTimelineHandler<CS, TR> {
     pub audience:        Arc<dyn AudienceGate>,
     pub grants:          Arc<dyn CountryGrantStore>,
     pub atlas:           &'static CountryAtlas,
+    /// The authors' location sharing (ghost, city level).
+    pub location:        Arc<dyn LocationSettingsStore>,
 }
 
 impl<CS, TR> QueryHandler<GetGeoTimelineQuery> for GetGeoTimelineHandler<CS, TR>
@@ -99,6 +104,32 @@ where
             cards.retain(|c| match (c.lat, c.lng) {
                 (Some(lat), Some(lng)) => self.atlas.contains(country, lat, lng),
                 _ => false,
+            });
+        }
+
+        // ── Phase 2c: the authors' location sharing (#657; fails closed): a
+        //   ghost's cards leave the map; a city-level author's name the city's
+        //   R7 cell, never their own.
+        let owned: &[String] = match &envelope.payload.viewer {
+            Viewer::Profiles(ids) => ids,
+            Viewer::Internal => &[],
+        };
+        let sharing = sharing_for_reader(self.location.as_ref(), owned, cards.iter().map(|c| c.author_id)).await?;
+        if !sharing.is_empty() {
+            cards.retain_mut(|c| match sharing.get(&c.author_id) {
+                None => true,
+                Some(s) if s.ghost => false,
+                Some(_) => match city_r7(c.h3_index_r7) {
+                    Some(r7) => {
+                        c.h3_index_r7 = r7;
+                        (c.lat, c.lng) = match (c.lat, c.lng) {
+                            (Some(lat), Some(lng)) => city_point(lat, lng).map_or((None, None), |(a, b)| (Some(a), Some(b))),
+                            _ => (None, None),
+                        };
+                        true
+                    }
+                    None => false,
+                },
             });
         }
 

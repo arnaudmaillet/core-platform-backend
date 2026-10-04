@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 01f625b9a0564895b8ef4a7483c0be0bb68e3192e945af9692dab2f7f04ff716
+  source_sha256: 3417fcf5353b57911921d765abc1054e6f78d8f69b293769d97f2698b78ac651
   translated_at: 2026-10-04
   status: complete
 ---
@@ -129,6 +129,7 @@ service ProfileService {
   rpc UpdateBanner(UpdateBannerRequest) returns (CommandResponse);
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
   rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // qui peut commenter / mentionner / écrire, téléchargements, compteurs de likes ; les ados démarrent abonnés uniquement
+  rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse); // mode fantôme + précis / niveau ville (réservé au propriétaire sur la vue) ; les ados démarrent fantômes ; geo-discovery l'applique
   rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
   rpc HideProfile(HideProfileRequest) returns (CommandResponse);
   rpc RestoreProfile(RestoreProfileRequest) returns (CommandResponse);

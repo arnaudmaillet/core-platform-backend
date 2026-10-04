@@ -81,6 +81,8 @@ pub struct TestHarness {
     pub country_access: Arc<geo_discovery::application::country_access::ResolveCountryAccess>,
     /// Direct handle on the durable card store, for row-level assertions.
     pub tiles:       ScyllaTileRepository,
+    /// The authors' location sharing, written as the profile-events worker does.
+    pub location:    geo_discovery::infrastructure::persistence::ScyllaLocationSettingsStore,
 }
 
 impl TestHarness {
@@ -111,7 +113,10 @@ impl TestHarness {
             .expect("integration: build geo-discovery app");
 
         let tiles = ScyllaTileRepository::new(Arc::clone(&app.scylla));
+        let location =
+            geo_discovery::infrastructure::persistence::ScyllaLocationSettingsStore::new(Arc::clone(&app.scylla));
         Self {
+            location,
             command_bus: app.command_bus,
             query_bus: app.query_bus,
             gate,

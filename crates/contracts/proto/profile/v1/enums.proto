@@ -62,3 +62,11 @@ enum InteractionAudience {
     INTERACTION_AUDIENCE_MUTUALS     = 3;
     INTERACTION_AUDIENCE_NO_ONE      = 4;
 }
+
+// How precisely others see where a profile's posts were made.
+enum LocationPrecision {
+    LOCATION_PRECISION_UNSPECIFIED = 0;
+    LOCATION_PRECISION_PRECISE     = 1;
+    // City level: only the coarse map band, at a coarse point.
+    LOCATION_PRECISION_CITY        = 2;
+}

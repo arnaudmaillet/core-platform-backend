@@ -5,10 +5,11 @@ use uuid::Uuid;
 use crate::domain::entity::ProfileLink;
 use crate::domain::event::{
     DomainEvent, HandleChanged, ProfileCreated, ProfileDeleted, ProfileHidden, ProfileRestored,
-    InteractionSettingsChanged, ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
+    InteractionSettingsChanged, LocationSettingsChanged, ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
 };
 use crate::domain::value_object::{
     AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, InteractionSettings, Locale,
+    LocationSettings,
     MaskingReason, ProfileId, ProfileKind, ProfileStatus, ProfileVisibility, VerificationKind,
     WebsiteUrl,
 };
@@ -27,6 +28,8 @@ pub struct ProfileCreateParams {
     pub visibility: ProfileVisibility,
     /// [`InteractionSettings::teen`] for a 13–17 holder; the defaults otherwise.
     pub interaction: InteractionSettings,
+    /// [`LocationSettings::teen`] (ghost) for a 13–17 holder; the defaults otherwise.
+    pub location: LocationSettings,
     pub correlation_id: Uuid,
 }
 
@@ -59,6 +62,9 @@ pub struct Profile {
     /// Who may comment / mention / message, downloads, like counts.
     #[serde(default)]
     interaction: InteractionSettings,
+    /// Ghost mode and location precision (geo-discovery applies them).
+    #[serde(default)]
+    location: LocationSettings,
     verified: bool,
     verification_kind: Option<VerificationKind>,
     /// Author tier (0=Standard, 1=Premium, 2=Vip), denormalized from
@@ -108,6 +114,7 @@ impl Profile {
             profile_kind: params.profile_kind,
             visibility: params.visibility,
             interaction: params.interaction,
+            location: params.location,
             verified: false,
             verification_kind: None,
             tier: 0,
@@ -135,6 +142,14 @@ impl Profile {
                     correlation_id: params.correlation_id,
                 },
             ));
+        }
+        if params.location != LocationSettings::default() {
+            profile.pending_events.push(DomainEvent::LocationSettingsChanged(LocationSettingsChanged {
+                profile_id: id,
+                settings: params.location,
+                occurred_at: now,
+                correlation_id: params.correlation_id,
+            }));
         }
         if params.visibility == ProfileVisibility::Private {
             profile.pending_events.push(DomainEvent::VisibilityChanged(VisibilityChanged {
@@ -188,6 +203,7 @@ impl Profile {
             profile_kind,
             visibility,
             interaction: InteractionSettings::default(),
+            location: LocationSettings::default(),
             verified,
             verification_kind,
             tier,
@@ -317,6 +333,42 @@ impl Profile {
             correlation_id,
         }));
         Ok(true)
+    }
+
+    /// Changes ghost mode / location precision. Unchanged ⇒ no-op.
+    pub fn set_location_settings(
+        &mut self,
+        settings: LocationSettings,
+        correlation_id: Uuid,
+    ) -> Result<bool, ProfileError> {
+        if self.status == ProfileStatus::Deleted {
+            return Err(ProfileError::ProfileNotActive {
+                current: self.status.as_str().to_owned(),
+            });
+        }
+        if settings == self.location {
+            return Ok(false);
+        }
+        self.location = settings;
+        let now = self.touch_now();
+        self.pending_events.push(DomainEvent::LocationSettingsChanged(LocationSettingsChanged {
+            profile_id: self.id,
+            settings,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(true)
+    }
+
+    /// Restores the stored location settings (a column added after
+    /// [`Self::reconstitute`]'s set).
+    pub fn with_location(mut self, settings: LocationSettings) -> Self {
+        self.location = settings;
+        self
+    }
+
+    pub fn location(&self) -> LocationSettings {
+        self.location
     }
 
     /// Restores the stored interaction settings (a column added after
@@ -530,6 +582,7 @@ mod tests {
             locale: Locale::new("en-US").unwrap(),
             visibility: ProfileVisibility::Public,
             interaction: InteractionSettings::default(),
+            location: LocationSettings::default(),
             correlation_id: Uuid::now_v7(),
         });
         p.drain_events(); // discard the ProfileCreated event
@@ -550,6 +603,7 @@ mod tests {
             locale: Locale::new("en-US").unwrap(),
             visibility: ProfileVisibility::Private,
             interaction: InteractionSettings::teen(),
+            location: LocationSettings::teen(),
             correlation_id: Uuid::now_v7(),
         });
         assert_eq!(p.visibility(), ProfileVisibility::Private);
@@ -558,6 +612,7 @@ mod tests {
         assert!(matches!(events.as_slice(), [
             DomainEvent::ProfileCreated(_),
             DomainEvent::InteractionSettingsChanged(_),
+            DomainEvent::LocationSettingsChanged(_),
             DomainEvent::VisibilityChanged(VisibilityChanged { visibility: ProfileVisibility::Private, .. })
         ]));
     }

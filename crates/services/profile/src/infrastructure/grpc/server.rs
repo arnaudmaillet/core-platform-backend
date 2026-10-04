@@ -52,6 +52,13 @@ where
         self.update_banner(request).await
     }
 
+    async fn set_location_settings(
+        &self,
+        request: Request<proto::SetLocationSettingsRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.set_location_settings(request).await
+    }
+
     async fn set_interaction_settings(
         &self,
         request: Request<proto::SetInteractionSettingsRequest>,
