@@ -232,6 +232,7 @@ async fn main() -> anyhow::Result<()> {
 | `POSTGRES_*` (URL/pool/timeouts) | **Yes** | — | CockroachDB-compatible connection; see the `postgres-storage` crate. |
 | `KAFKA_BROKERS` | **Yes** | — | Kafka bootstrap brokers for `account.v1.events`. |
 | `ACCOUNT_GRPC_ADDR` | No | `0.0.0.0:50059` | gRPC bind address. |
+| `ACCOUNT_REQUIRE_STEP_UP` | No | `false` | `DeactivateAccount` and `RequestGdprDeletion` on the edge need a credential proof under 5 min old (the token's `auth_time`, from `auth.v1.Login` / `VerifyCredentials`); otherwise `PERMISSION_DENIED` `step_up_required…`. Turn on once clients step up. |
 
 > Full connection/timeout/pool tuning lives in the shared `postgres-storage` and `transport` crates.
 

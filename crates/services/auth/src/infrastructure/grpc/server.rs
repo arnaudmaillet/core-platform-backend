@@ -46,6 +46,20 @@ impl AuthService for AuthServiceHandler {
         self.introspect(request).await
     }
 
+    async fn change_password(
+        &self,
+        request: Request<proto::ChangePasswordRequest>,
+    ) -> Result<Response<proto::ChangePasswordResponse>, Status> {
+        self.change_password(request).await
+    }
+
+    async fn verify_credentials(
+        &self,
+        request: Request<proto::VerifyCredentialsRequest>,
+    ) -> Result<Response<proto::VerifyCredentialsResponse>, Status> {
+        self.verify_credentials(request).await
+    }
+
     async fn list_sessions(
         &self,
         request: Request<proto::ListSessionsRequest>,

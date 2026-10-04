@@ -80,10 +80,15 @@ impl Service for AccountService {
     }
 
     fn register(self, routes: &mut RoutesBuilder) -> anyhow::Result<()> {
+        // Step-up on account deletion / deactivation: off until clients call
+        // auth.v1.VerifyCredentials first (then flip it per environment).
+        let require_step_up = std::env::var("ACCOUNT_REQUIRE_STEP_UP")
+            .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes"));
         let handler = AccountServiceHandler::new(
             Arc::clone(&self.app.command_bus),
             Arc::clone(&self.app.query_bus),
-        );
+        )
+        .with_step_up(require_step_up);
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
             .build_v1()?;

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a23115eb003727f05fcac9c2adfb9ebb84ffc265cc526b96f1975a9810ba58be
+  source_sha256: f1cecfc8098802f2be004d356b09646ef3f99df09c195eba8c43bc0688ada135
   translated_at: 2026-10-04
   status: complete
 ---
@@ -81,6 +81,24 @@ l'outbox (le plan d'audit enregistre des comptes). La vérification App Attest e
 / par appareil sur `StartGuestSession` relèvent de la tranche anti-abus (B5) ; d'ici là, la RPC est
 **désactivée par défaut** (`AUTH_GUEST_SESSIONS_ENABLED` ; la fleet locale l'active).
 
+### Identifiants et step-up
+
+Le mot de passe ne vit que chez l'IdP. `ChangePassword` (edge **authenticated**, membres) prouve le
+mot de passe actuel par un password grant sous le nom de connexion du sujet, pose le nouveau via
+l'API Admin de Keycloak (`reset-password`, un client confidentiel à service account doté de
+`view-users` + `manage-users`), et déconnecte en option toutes les **autres** sessions (révocations
+`password_changed` ; celle de l'appelant reste). Nouveaux mots de passe : 8 à 128 caractères et
+différents de l'actuel (`AUT-VAL-024/025/026`), puis la politique du realm (`AUT-5006`, sa règle dans
+le message). Sans client admin configuré, les RPC d'identifiants répondent `UNAVAILABLE` (`AUT-5005`).
+
+**Step-up.** Un jeton émis juste après une preuve d'identifiant — `Login`, ou `VerifyCredentials`
+(re-prouver le mot de passe ; un code MFA est refusé avec `AUT-5007` tant que l'enrôlement n'existe
+pas) — porte `auth_time` ; un jeton rafraîchi non. Les RPC destructives ailleurs appellent
+`transport::grpc::edge::require_recent_auth` (`auth_time` de moins de 5 min, mesh exempté) et
+répondent sinon `PERMISSION_DENIED` `step_up_required…` ; `account` protège `DeactivateAccount` /
+`RequestGdprDeletion` derrière `ACCOUNT_REQUIRE_STEP_UP`. `VerifyCredentials` ré-émet le jeton
+d'accès de l'appelant (même session, même refresh token).
+
 ## 📐 Architecture & concepts
 
 Hexagonal / DDD (`domain` → `application` → `infrastructure`), bus CQRS commande/requête, PostgreSQL
@@ -159,6 +177,7 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_SIGNING_KID` · `AUTH_TOKEN_ISSUER` · `AUTH_TOKEN_AUDIENCE` | `kid` / `iss` / `aud` du jeton d'edge | `auth-es256-1` · `https://auth.core-platform` · `core-platform` |
 | `AUTH_ACCESS_TTL_SECS` · `AUTH_SESSION_TTL_SECS` · `AUTH_ABSOLUTE_TTL_SECS` · `AUTH_REFRESH_TTL_SECS` | Durées de vie jeton / session | `600` · `1800` · `28800` · `604800` |
 | `AUTH_KEYCLOAK_TOKEN_ENDPOINT` · `AUTH_KEYCLOAK_CLIENT_ID` · `AUTH_KEYCLOAK_CLIENT_SECRET` · `AUTH_KEYCLOAK_SCOPE` | Courtier IdP | — · — · — · `openid` |
+| `AUTH_KEYCLOAK_ADMIN_URL` · `AUTH_KEYCLOAK_ADMIN_CLIENT_ID` · `AUTH_KEYCLOAK_ADMIN_CLIENT_SECRET` | Gestion des identifiants (`ChangePassword`, `VerifyCredentials`) : la base admin du realm (`…/admin/realms/<realm>`) et un client confidentiel à service account doté de `realm-management` `view-users` + `manage-users`. Absent → ces RPC répondent `UNAVAILABLE` (`AUT-5005`). | — |
 | `AUTH_ACCOUNT_GRPC_ENDPOINT` | Endpoint du service `account` | `http://localhost:50059` |
 | `AUTH_ACCOUNT_RPC_TIMEOUT_MS` · `AUTH_ACCOUNT_CONNECT_TIMEOUT_MS` | Deadlines par requête / de connexion sur le canal `account` (chemin chaud du login — échouer vite, ne jamais bloquer) | `2000` · `2000` |
 | `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Deadlines de requête / de connexion des appels HTTP Keycloak (échange de token) | `5000` · `2000` |

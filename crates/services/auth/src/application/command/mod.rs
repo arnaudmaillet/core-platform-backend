@@ -1,9 +1,14 @@
+pub mod change_password;
+mod credentials;
 pub mod login;
 pub mod logout;
 pub mod logout_all_sessions;
 pub mod refresh;
 pub mod start_guest_session;
+pub mod verify_credentials;
 
+pub use change_password::{ChangePasswordCommand, ChangePasswordHandler, ChangePasswordOutcome};
+pub use credentials::STEP_UP_WINDOW_SECS;
 pub use login::{IssuedSession, LoginCommand, LoginHandler};
 pub use logout::{LogoutCommand, LogoutHandler, LogoutOutcome};
 pub use logout_all_sessions::{
@@ -11,3 +16,6 @@ pub use logout_all_sessions::{
 };
 pub use refresh::{RefreshCommand, RefreshHandler};
 pub use start_guest_session::{StartGuestSessionCommand, StartGuestSessionHandler, GUEST_ISSUER};
+pub use verify_credentials::{
+    StepUpCredential, SteppedUpToken, VerifyCredentialsCommand, VerifyCredentialsHandler,
+};

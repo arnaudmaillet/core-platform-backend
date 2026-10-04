@@ -1,5 +1,6 @@
 //! Live scenarios driving the real Postgres + Redis graph through the gRPC handler.
 
+pub mod credentials;
 pub mod global_logout;
 pub mod guest_session;
 pub mod lifecycle;

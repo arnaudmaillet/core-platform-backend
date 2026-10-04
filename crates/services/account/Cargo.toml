@@ -55,6 +55,9 @@ integration-account = []
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Builds a verified edge principal for the step-up gate test.
+auth-context = { workspace = true }
+serde_json   = { workspace = true }
 
 # ── Integration suite (feature = "integration-account") ──────────────────────
 # Container orchestration (incl. Postgres), the `.sql` migration runner, and

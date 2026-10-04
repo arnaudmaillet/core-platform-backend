@@ -66,6 +66,24 @@ is not published to the outbox (the audit plane records accounts). App Attest ve
 per-IP / per-device limits on `StartGuestSession` are the abuse-control slice (B5); until then the
 RPC is **off by default** (`AUTH_GUEST_SESSIONS_ENABLED`; the local fleet turns it on).
 
+### Credentials and step-up
+
+The password lives at the IdP only. `ChangePassword` (edge **authenticated**, members) proves the
+current password with a password grant under the subject's login name, sets the new one through the
+Keycloak Admin API (`reset-password`, a confidential service-account client with `view-users` +
+`manage-users`), and optionally signs every **other** session out (`password_changed` revocations;
+the caller's stays). New passwords: 8–128 characters and not the current one (`AUT-VAL-024/025/026`),
+then the realm policy (`AUT-5006`, its rule in the message). Without the admin client configured the
+credential RPCs answer `UNAVAILABLE` (`AUT-5005`).
+
+**Step-up.** A token minted right after a credential proof — `Login`, or `VerifyCredentials`
+(re-prove the password; an MFA code is refused with `AUT-5007` until enrolment exists) — carries
+`auth_time`; a refreshed one does not. Destructive RPCs elsewhere call
+`transport::grpc::edge::require_recent_auth` (`auth_time` ≤ 5 min old, mesh exempt) and answer
+`PERMISSION_DENIED` `step_up_required…` otherwise; `account` gates `DeactivateAccount` /
+`RequestGdprDeletion` behind `ACCOUNT_REQUIRE_STEP_UP`. `VerifyCredentials` re-mints the caller's
+access token (same session, same refresh token).
+
 ## 📐 Architecture & Concepts
 
 Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS command/query buses,
@@ -143,6 +161,7 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | `AUTH_SIGNING_KID` · `AUTH_TOKEN_ISSUER` · `AUTH_TOKEN_AUDIENCE` | Edge-token `kid` / `iss` / `aud` | `auth-es256-1` · `https://auth.core-platform` · `core-platform` |
 | `AUTH_ACCESS_TTL_SECS` · `AUTH_SESSION_TTL_SECS` · `AUTH_ABSOLUTE_TTL_SECS` · `AUTH_REFRESH_TTL_SECS` | Token / session lifetimes | `600` · `1800` · `28800` · `604800` |
 | `AUTH_KEYCLOAK_TOKEN_ENDPOINT` · `AUTH_KEYCLOAK_CLIENT_ID` · `AUTH_KEYCLOAK_CLIENT_SECRET` · `AUTH_KEYCLOAK_SCOPE` | IdP broker | — · — · — · `openid` |
+| `AUTH_KEYCLOAK_ADMIN_URL` · `AUTH_KEYCLOAK_ADMIN_CLIENT_ID` · `AUTH_KEYCLOAK_ADMIN_CLIENT_SECRET` | Credential management (`ChangePassword`, `VerifyCredentials`): the realm's admin base (`…/admin/realms/<realm>`) and a confidential service-account client with `realm-management` `view-users` + `manage-users`. Unset → those RPCs answer `UNAVAILABLE` (`AUT-5005`). | — |
 | `AUTH_ACCOUNT_GRPC_ENDPOINT` | `account` service endpoint | `http://localhost:50059` |
 | `AUTH_ACCOUNT_RPC_TIMEOUT_MS` · `AUTH_ACCOUNT_CONNECT_TIMEOUT_MS` | Per-request / connect deadlines on the `account` channel (login hot path — fail fast, never hang) | `2000` · `2000` |
 | `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Request / connect deadlines on Keycloak HTTP calls (token exchange) | `5000` · `2000` |

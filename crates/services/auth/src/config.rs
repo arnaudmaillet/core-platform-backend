@@ -4,7 +4,7 @@
 use chrono::Duration;
 
 use crate::application::SessionPolicy;
-use crate::infrastructure::idp::KeycloakConfig;
+use crate::infrastructure::idp::{KeycloakAdminConfig, KeycloakConfig};
 use crate::infrastructure::token::{EsKeyMaterial, EsVerifyingKey};
 
 /// Fully-resolved auth configuration (token policy, signing material, IdP broker,
@@ -17,6 +17,10 @@ pub struct AuthConfig {
     /// during a rotation window. Empty in steady state.
     pub retiring_keys: Vec<EsVerifyingKey>,
     pub keycloak: KeycloakConfig,
+    /// The Keycloak Admin API client `ChangePassword` uses
+    /// (`AUTH_KEYCLOAK_ADMIN_URL` / `_CLIENT_ID` / `_CLIENT_SECRET`). Unset ⇒
+    /// changing a password answers UNAVAILABLE; everything else works.
+    pub keycloak_admin: KeycloakAdminConfig,
     /// gRPC endpoint of the `account` service, e.g. `http://account:50059`.
     pub account_endpoint: String,
     /// Per-request deadline on `account` RPCs. This sits on the login hot path,
@@ -71,6 +75,13 @@ impl AuthConfig {
             scope: env_or("AUTH_KEYCLOAK_SCOPE", "openid".to_owned()),
         };
 
+        let keycloak_admin = KeycloakAdminConfig {
+            admin_url: env_or("AUTH_KEYCLOAK_ADMIN_URL", String::new()),
+            token_endpoint: keycloak.token_endpoint.clone(),
+            client_id: env_or("AUTH_KEYCLOAK_ADMIN_CLIENT_ID", String::new()),
+            client_secret: env_or("AUTH_KEYCLOAK_ADMIN_CLIENT_SECRET", String::new()),
+        };
+
         // Optional single retiring key for a rotation window.
         let retiring_keys = match (
             std::env::var("AUTH_SIGNING_RETIRING_PUBLIC_PEM").ok(),
@@ -87,6 +98,7 @@ impl AuthConfig {
             signing,
             retiring_keys,
             keycloak,
+            keycloak_admin,
             account_endpoint: env_or("AUTH_ACCOUNT_GRPC_ENDPOINT", "http://localhost:50059"),
             account_rpc_timeout: env_ms("AUTH_ACCOUNT_RPC_TIMEOUT_MS", 2_000),
             account_connect_timeout: env_ms("AUTH_ACCOUNT_CONNECT_TIMEOUT_MS", 2_000),

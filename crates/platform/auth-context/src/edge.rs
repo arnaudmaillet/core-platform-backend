@@ -11,6 +11,7 @@
 //! | `perms` | normalised permissions ([`EDGE_PERMISSIONS_CLAIM`])  |
 //! | `pids`  | the **profile** ids the account owns ([`EDGE_PROFILES_CLAIM`]) |
 //! | `did`   | the device the session is bound to ([`EDGE_DEVICE_CLAIM`]); absent when the client sent none |
+//! | `auth_time` | when the caller last proved a credential ([`EDGE_AUTH_TIME_CLAIM`], Unix seconds): set on tokens minted by `Login` and `VerifyCredentials` (step-up), absent on refreshed ones |
 //! | `kind`  | `"guest"` on a guest token ([`EDGE_KIND_CLAIM`]: `sub = "guest:<id>"`, `perms = ["read:public"]`, no `pids`); absent on a member's |
 //!
 //! `pids` exists because the client-facing surface is keyed by profile id while
@@ -54,6 +55,22 @@ pub fn is_guest(claims: &OidcClaims) -> bool {
 /// The claim carrying the device id the session was bound to at login
 /// (`auth.v1.DeviceContext.device_id`). The realtime gateway keys a socket by it.
 pub const EDGE_DEVICE_CLAIM: &str = "did";
+
+/// The claim carrying when the caller last proved a credential to `auth` (OIDC
+/// `auth_time`, Unix seconds). Present only on a token minted right after that
+/// proof — `Login` or the `VerifyCredentials` step-up — never on a refreshed
+/// one, so its presence and age say how recently the human was there.
+pub const EDGE_AUTH_TIME_CLAIM: &str = "auth_time";
+
+/// How long a credential proof counts as "recent" for a step-up-gated RPC
+/// (deleting or deactivating the account, changing a contact address…).
+pub const STEP_UP_MAX_AGE_SECS: i64 = 300;
+
+/// When the token's holder last proved a credential (Unix seconds), if the
+/// token says so.
+pub fn auth_time(claims: &OidcClaims) -> Option<i64> {
+    claims.extra.get(EDGE_AUTH_TIME_CLAIM).and_then(|v| v.as_i64())
+}
 
 /// The decoder specialisation every edge-token verifier in the fleet uses.
 pub type EdgeDecoder = JwtDecoder<OidcClaims, OidcClaimsExtractor>;

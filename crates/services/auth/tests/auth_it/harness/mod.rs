@@ -19,8 +19,8 @@ use uuid::Uuid;
 
 use auth::app::{App, AppDeps};
 use auth::application::port::{
-    AccountActivation, AccountDirectory, AccountSnapshot, AuthnGrant, EventPublisher,
-    IdentityProvider, NormalizedClaims, ProfileDirectory,
+    AccountActivation, AccountDirectory, AccountSnapshot, AuthnGrant, CredentialAdmin,
+    EventPublisher, IdentityProvider, NormalizedClaims, ProfileDirectory,
 };
 use auth::application::SessionPolicy;
 use auth::domain::value_object::{AccountId, IdpSubject, Permission, ProfileId};
@@ -64,6 +64,25 @@ impl IdentityProvider for StubIdp {
             AuthnGrant::AuthorizationCode { code, .. } => code,
         };
         Ok(NormalizedClaims { issuer: "https://idp.test".to_owned(), subject })
+    }
+}
+
+/// IdP credential-management stub, consistent with [`StubIdp`]: a subject's
+/// login name is the subject itself; each password set is recorded.
+#[derive(Default)]
+pub struct StubCredentials {
+    pub set: Mutex<Vec<(String, String)>>,
+}
+
+#[async_trait]
+impl CredentialAdmin for StubCredentials {
+    async fn login_name(&self, subject: &IdpSubject) -> Result<String, AuthError> {
+        Ok(subject.subject().to_owned())
+    }
+
+    async fn set_password(&self, subject: &IdpSubject, new_password: &str) -> Result<(), AuthError> {
+        self.set.lock().unwrap().push((subject.subject().to_owned(), new_password.to_owned()));
+        Ok(())
     }
 }
 
@@ -112,6 +131,7 @@ impl ProfileDirectory for StubProfiles {
 pub struct Harness {
     pub handler: AuthServiceHandler,
     pub pool: PgPool,
+    pub credentials: Arc<StubCredentials>,
 }
 
 impl Harness {
@@ -150,8 +170,10 @@ impl Harness {
         })
         .expect("it: minter");
 
+        let credentials = Arc::new(StubCredentials::default());
         let deps = AppDeps {
             idp: Arc::new(StubIdp),
+            credentials: credentials.clone(),
             directory: Arc::new(StubDirectory { accounts: Mutex::new(HashMap::new()) }),
             profiles: Arc::new(StubProfiles),
             links: Arc::new(PgSubjectLinkRepository::new(tx.clone())),
@@ -170,7 +192,7 @@ impl Harness {
             ),
         };
 
-        Self { handler: App::compose(deps), pool }
+        Self { handler: App::compose(deps), pool, credentials }
     }
 
     // ── RPC helpers ──────────────────────────────────────────────────────────

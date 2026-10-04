@@ -29,6 +29,9 @@ use thiserror::Error;
 /// | AUT-5002 | IdpAuthenticationFailed      | 401  | Low      | No        |
 /// | AUT-5003 | IdpTokenRejected             | 401  | Low      | No        |
 /// | AUT-5004 | ClaimsNormalizationFailed    | 502  | Medium   | No        |
+/// | AUT-5005 | CredentialManagementUnavailable | 503 | High   | **Yes**   |
+/// | AUT-5006 | PasswordRejected             | 422  | Low      | No        |
+/// | AUT-5007 | VerificationMethodUnavailable | 422 | Low      | No        |
 /// | AUT-1005 | GuestSessionsDisabled        | 403  | Low      | No        |
 /// | AUT-6001 | AccountNotActive             | 403  | Medium   | No        |
 /// | AUT-6002 | AccountDirectoryUnavailable  | 503  | High     | **Yes**   |
@@ -120,6 +123,20 @@ pub enum AuthError {
     #[error("failed to normalize identity-provider claims: {0}")]
     ClaimsNormalizationFailed(String),
 
+    /// The IdP's credential management (setting a password) is unreachable or
+    /// not configured (`AUTH_KEYCLOAK_ADMIN_*`).
+    #[error("credential management is unavailable")]
+    CredentialManagementUnavailable,
+
+    /// The IdP refused the new password under its password policy.
+    #[error("the new password was rejected: {reason}")]
+    PasswordRejected { reason: String },
+
+    /// A step-up method the account cannot use (e.g. an MFA code with no MFA
+    /// enrolled).
+    #[error("this verification method is not available for the account")]
+    VerificationMethodUnavailable,
+
     // ── Account directory (AUT-6xxx) ──────────────────────────────────────────
     #[error("account is not active; current status: '{current}'")]
     AccountNotActive { current: String },
@@ -178,6 +195,9 @@ impl AppError for AuthError {
             AuthError::IdpAuthenticationFailed => "AUT-5002",
             AuthError::IdpTokenRejected => "AUT-5003",
             AuthError::ClaimsNormalizationFailed(_) => "AUT-5004",
+            AuthError::CredentialManagementUnavailable => "AUT-5005",
+            AuthError::PasswordRejected { .. } => "AUT-5006",
+            AuthError::VerificationMethodUnavailable => "AUT-5007",
 
             AuthError::AccountNotActive { .. } => "AUT-6001",
             AuthError::AccountDirectoryUnavailable => "AUT-6002",
@@ -223,6 +243,7 @@ impl AppError for AuthError {
 
             AuthError::SigningKeyUnavailable
             | AuthError::IdpUnavailable
+            | AuthError::CredentialManagementUnavailable
             | AuthError::AccountDirectoryUnavailable
             | AuthError::ProfileDirectoryUnavailable => StatusCode::SERVICE_UNAVAILABLE,
 
@@ -243,6 +264,7 @@ impl AppError for AuthError {
             | AuthError::TokenSigningFailed
             | AuthError::SigningKeyUnavailable
             | AuthError::IdpUnavailable
+            | AuthError::CredentialManagementUnavailable
             | AuthError::AccountDirectoryUnavailable => Severity::High,
 
             AuthError::InvalidSessionTransition { .. }
@@ -263,6 +285,7 @@ impl AppError for AuthError {
             AuthError::ConcurrentModification
             | AuthError::SigningKeyUnavailable
             | AuthError::IdpUnavailable
+            | AuthError::CredentialManagementUnavailable
             | AuthError::AccountDirectoryUnavailable
             | AuthError::ProfileDirectoryUnavailable => true,
             _ => false,
@@ -302,6 +325,9 @@ impl AppError for AuthError {
             AuthError::IdpAuthenticationFailed => "The credentials provided are incorrect.",
             AuthError::IdpTokenRejected => "Your sign-in could not be verified; please sign in again.",
             AuthError::ClaimsNormalizationFailed(_) => "We could not complete sign-in. Please try again.",
+            AuthError::CredentialManagementUnavailable => "Passwords cannot be changed right now. Please try again later.",
+            AuthError::PasswordRejected { .. } => "This password does not meet the requirements.",
+            AuthError::VerificationMethodUnavailable => "This verification method is not available for your account.",
             AuthError::AccountNotActive { .. } => "This account cannot sign in at this time.",
             AuthError::AccountDirectoryUnavailable => "The account service is temporarily unavailable.",
             AuthError::ProfileDirectoryUnavailable => "The profile service is temporarily unavailable.",
