@@ -88,9 +88,10 @@ where
             cmd.gif_height,
         )?;
 
-        let held = match self.gate.may_comment(&author_id, &post_id).await? {
-            CommentAdmission::Allowed => false,
-            CommentAdmission::Held => true,
+        let (held, quiet) = match self.gate.may_comment(&author_id, &post_id).await? {
+            CommentAdmission::Allowed => (false, false),
+            CommentAdmission::Quiet => (false, true),
+            CommentAdmission::Held => (true, false),
             CommentAdmission::PostUnavailable => {
                 return Err(CommentError::PostNotFound { post_id: cmd.post_id.clone() });
             }
@@ -116,6 +117,11 @@ where
         if held {
             // Held for the post owner's review: stored, not announced (#669).
             comment.hold();
+        }
+        if quiet {
+            // The post's owner restricted the author (#659): announced, but
+            // nobody is notified.
+            comment.announce_quietly();
         }
 
         self.repository.insert(&comment).await?;

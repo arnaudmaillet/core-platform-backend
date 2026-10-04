@@ -129,7 +129,8 @@ transport (`edge::viewer`). For anyone but a mesh caller, a **read gate** decide
   `next_token` stays valid;
 - comments by a profile the **post's owner restricted** (#659) are seen only by that profile and the
   owner: for any other reader one more social-graph call, `ListRestrictedAmong(owner, commenters)`,
-  drops them;
+  drops them. Their `comment.created` carries `quiet: true` (checked at creation, and again when a
+  held one is approved), so notification tells nobody;
 - comments the **post owner's filter** hides (#660) are seen only by their author, the owner included:
   one of the owner's hidden words (case-insensitive, whole words; an emoji anywhere), or a term of the
   offensive list while the owner keeps the offensive filter on (the default). The filter is projected
@@ -168,7 +169,7 @@ silently.
 
 | Topic | Trigger | Key | Payload | Consumers |
 |---|---|---|---|---|
-| `comment.created` | `CreateComment` success | `comment_id` | `comment_id, post_id, author_id, parent_id, created_at_ms` | `engagement` (incr), `notification` |
+| `comment.created` | `CreateComment` success | `comment_id` | `comment_id, post_id, author_id, parent_id, created_at_ms, quiet` | `engagement` (incr), `notification` |
 | `comment.deleted` | `DeleteComment` (either strategy) | `comment_id` | `comment_id, post_id, author_id, deleted_at_ms` | `engagement` (decr) |
 
 **Consumes:** `profile.v1.events` (group `comment-filters`, from the earliest offset): the post owners'

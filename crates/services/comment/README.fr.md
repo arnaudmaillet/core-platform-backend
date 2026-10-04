@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 1820a56f74b1916a081a1a32f0d994830b2113ca11d578099ff393276eace190
+  source_sha256: 8f2fb7fc0fa3f5f43b4f12a48f5ce24bb699b226117aaef4b1f1d2016c84902c
   translated_at: 2026-10-05
   status: complete
 ---
@@ -146,7 +146,9 @@ la page) :
   revenir plus courte tandis que `next_token` reste valide ;
 - les commentaires d'un profil que le **propriétaire du post a restreint** (#659) ne sont vus que par
   ce profil et le propriétaire : pour tout autre lecteur, un appel social-graph de plus,
-  `ListRestrictedAmong(propriétaire, commentateurs)`, les retire ;
+  `ListRestrictedAmong(propriétaire, commentateurs)`, les retire. Leur `comment.created` porte
+  `quiet: true` (vérifié à la création, et de nouveau quand un commentaire retenu est approuvé) : la
+  notification ne prévient personne ;
 - les commentaires que le **filtre du propriétaire du post** masque (#660) ne sont vus que par leur
   auteur, propriétaire compris : un des mots masqués du propriétaire (sans casse, mots entiers ; un emoji
   n'importe où), ou un terme de la liste offensante tant que le propriétaire garde le filtre offensant
@@ -185,7 +187,7 @@ part alors — ou le refuser — il disparaît, sans bruit.
 
 | Topic | Trigger | Key | Payload | Consumers |
 |---|---|---|---|---|
-| `comment.created` | `CreateComment` success | `comment_id` | `comment_id, post_id, author_id, parent_id, created_at_ms` | `engagement` (incr), `notification` |
+| `comment.created` | `CreateComment` success | `comment_id` | `comment_id, post_id, author_id, parent_id, created_at_ms, quiet` | `engagement` (incr), `notification` |
 | `comment.deleted` | `DeleteComment` (either strategy) | `comment_id` | `comment_id, post_id, author_id, deleted_at_ms` | `engagement` (decr) |
 
 **Consomme :** `profile.v1.events` (groupe `comment-filters`, depuis l'offset le plus ancien) : les filtres

@@ -50,12 +50,20 @@ pub trait ReadGate: Send + Sync + 'static {
 
     /// The post's author (mesh read), `None` when the post does not exist.
     async fn post_author(&self, post_id: &PostId) -> Result<Option<ProfileId>, CommentError>;
+
+    /// Has `owner` restricted `author` (#659)? Social-graph
+    /// `ListRestrictedAmong`; errors are `AccessCheckUnavailable`.
+    async fn restricted_by(&self, owner: &ProfileId, author: &ProfileId) -> Result<bool, CommentError>;
 }
 
 /// The answer to [`ReadGate::may_comment`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommentAdmission {
     Allowed,
+    /// Accepted, but the post's author restricted this profile (#659): the
+    /// comment is seen by its author and the post's owner only, and announced
+    /// without notifications.
+    Quiet,
     /// Missing, or not one the author may read: indistinguishable on purpose.
     PostUnavailable,
     /// The post's author does not take comments from this profile.
