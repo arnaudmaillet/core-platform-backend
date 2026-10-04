@@ -146,16 +146,16 @@ impl SpatialIndex for RedisGeoSpatialIndex {
         res:       H3Resolution,
         min_score: f64,
     ) -> Result<Vec<Uuid>, GeoDiscoveryError> {
-        let key     = tile_key(tile.as_u64(), res.as_i8());
-        let min_str = if min_score <= 0.0 {
-            "-inf".to_owned()
-        } else {
-            format!("{}", min_score)
-        };
+        let key = tile_key(tile.as_u64(), res.as_i8());
+        // Score bounds go to fred as f64: a string other than "±inf" becomes a
+        // LEX bound ("[500"), which Redis rejects for ZRANGEBYSCORE ("min or
+        // max is not a float") — every Radar query below zoom 13 (floor > 0)
+        // failed that way.
+        let min = if min_score <= 0.0 { f64::NEG_INFINITY } else { min_score };
 
         // ZRANGEBYSCORE with score ascending → all members with score ≥ min_score.
         let members: Vec<String> = self.client.inner
-            .zrangebyscore(&key, min_str.as_str(), "+inf", false, None)
+            .zrangebyscore(&key, min, f64::INFINITY, false, None)
             .await
             .map_err(fred_err)?;
 
