@@ -17,12 +17,16 @@ use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 
 use geo_discovery::app::{App, Backends};
-use geo_discovery::application::command::{ApplyMapVisibilityCommand, IndexPostCommand};
+use geo_discovery::application::command::{
+    ApplyMapVisibilityCommand, IndexPostCommand, UpdateViralityWithTilesCommand,
+};
 use geo_discovery::application::port::AudienceGate;
 use geo_discovery::application::query::get_geo_timeline::{GetGeoTimelineQuery, GetGeoTimelineResult};
 use geo_discovery::application::query::query_tile::{QueryTileQuery, QueryTileResult};
 use geo_discovery::config::GeoDiscoveryConfig;
+use geo_discovery::domain::value_object::{GeoCoordinate, H3Index, H3Resolution};
 use geo_discovery::error::GeoDiscoveryError;
+use geo_discovery::infrastructure::persistence::ScyllaTileRepository;
 
 pub use geo_discovery::domain::value_object::{ContentAccess, VisibilityChange, Viewer};
 
@@ -73,6 +77,8 @@ pub struct TestHarness {
     pub command_bus: Arc<InMemoryCommandBus>,
     pub query_bus:   Arc<InMemoryQueryBus>,
     pub gate:        Arc<ScriptedGate>,
+    /// Direct handle on the durable card store, for row-level assertions.
+    pub tiles:       ScyllaTileRepository,
 }
 
 impl TestHarness {
@@ -98,7 +104,8 @@ impl TestHarness {
             .await
             .expect("integration: build geo-discovery app");
 
-        Self { command_bus: app.command_bus, query_bus: app.query_bus, gate }
+        let tiles = ScyllaTileRepository::new(Arc::clone(&app.scylla));
+        Self { command_bus: app.command_bus, query_bus: app.query_bus, gate, tiles }
     }
 
     /// Indexes a post at `(lat, lng)` with the given virality, returning its uuid.
@@ -136,6 +143,41 @@ impl TestHarness {
             author_tier:       0,
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
+    }
+
+    /// Indexes a post at `(lat, lng)` that the map retains for `retention_secs`.
+    pub async fn index_post_retained(&self, lat: f64, lng: f64, retention_secs: u64) -> Uuid {
+        let post_uuid = Uuid::now_v7();
+        let cmd = IndexPostCommand {
+            post_id:           post_uuid.to_string(),
+            author_id:         Uuid::now_v7().to_string(),
+            author_handle:     "tester".to_owned(),
+            author_avatar_url: String::new(),
+            thumbnail_url:     String::new(),
+            caption:           String::new(),
+            lat,
+            lng,
+            virality_score:    5.0,
+            published_at_ms:   chrono::Utc::now().timestamp_millis(),
+            retention_secs:    Some(retention_secs),
+            author_tier:       0,
+        };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
+        post_uuid
+    }
+
+    /// Re-scores a post at `(lat, lng)`, as the score updater does.
+    pub async fn update_score(&self, post: Uuid, lat: f64, lng: f64, score: f64) {
+        let coord = GeoCoordinate::new(lat, lng).expect("coordinate");
+        let tile = |res| H3Index::encode(&coord, res).as_i64();
+        let cmd = UpdateViralityWithTilesCommand {
+            post_id:     post.to_string(),
+            new_score:   score,
+            h3_index_r5: tile(H3Resolution::R5),
+            h3_index_r7: tile(H3Resolution::R7),
+            h3_index_r9: tile(H3Resolution::R9),
+        };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("update_score");
     }
 
     /// Indexes a post by `author`.

@@ -34,7 +34,9 @@ pub trait TileRepository: Send + Sync {
         ttl:  RetentionTtl,
     ) -> Result<(), GeoDiscoveryError>;
 
-    /// Updates only the `virality_score` column for an existing card.
+    /// Updates only the `virality_score` column for an existing card. The write
+    /// carries the card's remaining TTL so it expires with the row; a no-op when
+    /// there is no live card (absent, expired, or a tombstone).
     async fn update_card_score(
         &self,
         post_id: &PostId,
