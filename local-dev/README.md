@@ -85,12 +85,68 @@ grpcurl -plaintext -d '{"device":{"user_agent":"cli","ip_address":"127.0.0.1","d
   localhost:50060 auth.v1.AuthService/Login
 ```
 
+## Edge mode (token-checked, as in staging)
+
+By default every service serves only its **mesh** port, which trusts the network: no
+token check and no `EDGE_POLICY` allow-list. A call that staging refuses with
+`UNAUTHENTICATED` (no or bad token) or `UNIMPLEMENTED` (RPC not exposed to clients)
+then succeeds locally. To test client gating against the real policy, add the edge
+overlay:
+
+```bash
+docker compose -f local-dev/docker-compose.fleet.yml -f local-dev/docker-compose.edge.yml up -d
+```
+
+Every client-facing server then also runs the **client edge** listener on `:9443`
+(the port the ALB targets in staging), verifying auth's ES256 token against
+`http://auth-server:8081/.well-known/jwks.json`.
+
+- **Inside the fleet network** (the iOS Envoy from `dev/fleet-gateway.sh`): target
+  `<service>-server:9443` instead of the mesh port.
+- **From the host:** edge port = mesh port + 10000.
+
+| Service | Edge (host) | Service | Edge (host) |
+|---|---|---|---|
+| chat | 60051 | engagement | 60058 |
+| profile | 60052 | account | 60059 |
+| social-graph | 60053 | auth | 60060 |
+| geo-discovery | 60054 | moderation | 60061 |
+| notification | 60055 | search | 60062 |
+| post | 60056 | media | 60063 |
+| comment | 60057 | counter | 60064 |
+| | | timeline | 60070 |
+
+The edge listener does not serve gRPC reflection (prod doesn't either), so point
+grpcurl at the protos:
+
+```bash
+G="grpcurl -plaintext -import-path crates/contracts/proto -proto auth/v1/service.proto -proto profile/v1/service.proto"
+TOKEN=$($G -d '{"device":{"device_id":"d1"},"grant_type":"PASSWORD",
+  "password":{"username":"alice","password":"password"}}' \
+  localhost:60060 auth.v1.AuthService/Login | jq -r .tokens.accessToken)
+$G -H "authorization: Bearer $TOKEN" -d '{"handle":"bob"}' \
+  localhost:60052 profile.v1.ProfileService/GetProfileByHandle      # OK
+$G -d '{"handle":"bob"}' \
+  localhost:60052 profile.v1.ProfileService/GetProfileByHandle      # UNAUTHENTICATED
+$G -H "authorization: Bearer $TOKEN" -d '{}' \
+  localhost:60052 profile.v1.ProfileService/HideProfile             # UNIMPLEMENTED (mesh-only)
+```
+
+(`G` is meant for bash, which splits it into words; in zsh use an array.)
+
+The mesh ports stay published and unauthenticated, as they are in-cluster: only
+the edge ports show what a client will get in staging. realtime is not in the
+overlay; its WSS gateway (`:8443`) always verifies the token.
+
 ## Verified working end-to-end
 
 - ✅ Real login (auth → Keycloak password grant → ES256 token); wrong password rejected.
 - ✅ Timeline fan-out — alice's following-feed returns bob's + carol's 10 posts.
 - ✅ Search — OpenSearch indexed 3 profiles + 15 posts; queries return hits.
 - ✅ Accounts (Active), profiles, follows, published posts.
+- ✅ Edge mode (2026-10-04): login on the auth edge; the token carries `did` and
+  `pids`; no or bad token → `UNAUTHENTICATED`; mesh-only RPC → `UNIMPLEMENTED`;
+  `CreatePost` as an owned profile passes, as another profile → `PERMISSION_DENIED`.
 
 ## Known caveats / follow-ups
 
@@ -117,7 +173,7 @@ grpcurl -plaintext -d '{"device":{"user_agent":"cli","ip_address":"127.0.0.1","d
   in code, not here. Other realtime channels + the WSS gateway (`ws://localhost:8443`) are up.
 - **`ProfileService/ListProfilesByAccount` is broken** (CQL bug: binds `i64` for a `LIMIT`
   column typed `int`). Use `GetProfileByHandle` / `GetProfileById` instead (the seed does).
-- No transport-level JWT enforcement — services accept direct calls without a token
-  during dev; auth is exercised via the login flow above.
+- The mesh ports have no JWT enforcement (as in-cluster); use the edge overlay
+  above to test token checks and the edge allow-list.
 
 `docker-compose.backends.yml` remains the infra-only smoke stack.
