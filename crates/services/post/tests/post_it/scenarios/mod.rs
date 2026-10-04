@@ -5,4 +5,5 @@
 mod dual_table_consistency;
 mod lifecycle_events;
 mod location_sharing;
+mod recently_deleted;
 mod viewer_visibility;

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 1137f70474e81122647116459b665bbbd7dc9133d0f436d0aa395d6580a4edce
-  translated_at: 2026-10-04
+  source_sha256: 32f1e1b1d86944c16c0a1f251adc6677e5d90c5058a37e99aaec94f71fd03099
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -118,12 +118,22 @@ service PostService {
   rpc PublishPost (PublishPostRequest) returns (CommandResponse);           // Draft→Published; emits post.published
   rpc UpdatePost (UpdatePostRequest) returns (CommandResponse);             // emits post.updated
   rpc DeletePost (DeletePostRequest) returns (CommandResponse);             // soft-delete; emits post.deleted
+  rpc RestorePost (RestorePostRequest) returns (CommandResponse);           // #663 within 30 days: published again (re-emits post.published at its original time) or a draft
+  rpc ListRecentlyDeleted (ListRecentlyDeletedRequest) returns (ListRecentlyDeletedResponse); // #663 the author's restorable posts, newest deletion first
   rpc GetPost (GetPostRequest) returns (PostView);                          // point lookup; viewer-aware
   rpc ListPostsByProfile (ListPostsByProfileRequest) returns (ListPostsByProfileResponse); // cursor-paginated; viewer-aware
 }
 // CreatePostRequest / PostView portent une localisation GeoPoint optionnelle :
 message GeoPoint { double lat = 1; double lng = 2; }  // WGS-84 ; absent → post non géo-indexé
 ```
+
+**Récemment supprimés (#663).** Une suppression est une pierre tombale : le post est indexé dans
+`post.deleted_by_profile` (lignes expirées au bout de 30 jours) et `ListRecentlyDeleted` montre à l'auteur ses
+posts restaurables. `RestorePost` en ramène un dans les 30 jours tel qu'il était — publié (réannoncé sur
+`post.published` à sa date de publication d'origine, pour que fils et recherche le reprennent ; un post
+retiré ou limité par la modération n'est restauré que pour son auteur, jamais réannoncé, pour qu'un retrait
+survive à supprimer → restaurer) ou brouillon — et le retire de la liste. geo-discovery écarte définitivement
+un post supprimé : l'épingle d'un post restauré ne revient pas sur la carte. Les deux sont `authenticated` sur l'edge, liés à `profile_id`.
 
 **Lectures selon le lecteur.** Le lecteur vient du transport (`edge::viewer`), jamais d'un champ de
 requête. Un brouillon, un post supprimé ou un post **retiré** par la modération n'est visible que de
@@ -152,6 +162,8 @@ magasin fait échouer la lecture plutôt que de montrer le point.
 | PST-1002/1003 | `PostAlreadyPublished` / `PostAlreadyDeleted` | 409 |
 | PST-1004 | `NotDraft` | 422 |
 | PST-1005 | `AuthorMismatch` | 403 |
+| PST-1006 | `PostNotDeleted` (restauration d'un post non supprimé) | 409 |
+| PST-1007 | `RestoreWindowExpired` (supprimé il y a plus de 30 jours) | 410 |
 | PST-2001..2003 | carousel cardinality / video length | 422 |
 | PST-3001..3004 | thumbnail / MIME / CDN URL / dimensions | 422 |
 | PST-9001/9002 | invalid post/profile ID | 422 |

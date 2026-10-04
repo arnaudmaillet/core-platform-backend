@@ -9,6 +9,9 @@ service PostService {
     rpc PublishPost (PublishPostRequest) returns (CommandResponse);
     rpc UpdatePost  (UpdatePostRequest)  returns (CommandResponse);
     rpc DeletePost  (DeletePostRequest)  returns (CommandResponse);
+    // "Recently deleted" (#663): restore within 30 days, and the list.
+    rpc RestorePost (RestorePostRequest) returns (CommandResponse);
+    rpc ListRecentlyDeleted (ListRecentlyDeletedRequest) returns (ListRecentlyDeletedResponse);
 
     rpc GetPost             (GetPostRequest)             returns (PostView);
     rpc ListPostsByProfile  (ListPostsByProfileRequest)  returns (ListPostsByProfileResponse);

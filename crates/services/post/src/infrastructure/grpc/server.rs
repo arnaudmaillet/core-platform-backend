@@ -38,6 +38,20 @@ where
         self.update_post(request).await
     }
 
+    async fn restore_post(
+        &self,
+        request: Request<proto::RestorePostRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.restore_post(request).await
+    }
+
+    async fn list_recently_deleted(
+        &self,
+        request: Request<proto::ListRecentlyDeletedRequest>,
+    ) -> Result<Response<proto::ListRecentlyDeletedResponse>, Status> {
+        self.list_recently_deleted(request).await
+    }
+
     async fn delete_post(
         &self,
         request: Request<proto::DeletePostRequest>,

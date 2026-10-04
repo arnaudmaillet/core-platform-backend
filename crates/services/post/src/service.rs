@@ -65,6 +65,9 @@ impl Service for PostService {
         authenticated("/post.v1.PostService/PublishPost"),
         authenticated("/post.v1.PostService/UpdatePost"),
         authenticated("/post.v1.PostService/DeletePost"),
+        // "Recently deleted" (#663): the author's own, bound to profile_id.
+        authenticated("/post.v1.PostService/RestorePost"),
+        authenticated("/post.v1.PostService/ListRecentlyDeleted"),
         public_read("/post.v1.PostService/GetPost"),
         public_read("/post.v1.PostService/ListPostsByProfile"),
     ];

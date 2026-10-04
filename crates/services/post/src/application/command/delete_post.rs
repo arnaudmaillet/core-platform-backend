@@ -4,7 +4,7 @@ use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
 use crate::{
-    application::port::{EventPublisher, PostRepository},
+    application::port::{EventPublisher, PostRepository, RecentlyDeleted},
     domain::value_object::{PostId, ProfileId},
     error::PostError,
 };
@@ -30,8 +30,10 @@ impl Validate for DeletePostCommand {
 }
 
 pub struct DeletePostHandler<R, P> {
-    pub repository: Arc<R>,
-    pub publisher:  Arc<P>,
+    pub repository:       Arc<R>,
+    pub publisher:        Arc<P>,
+    /// "Recently deleted" (#663): the post can be restored for 30 days.
+    pub recently_deleted: Arc<dyn RecentlyDeleted>,
 }
 
 impl<R, P> CommandHandler<DeletePostCommand> for DeletePostHandler<R, P>
@@ -57,7 +59,10 @@ where
             });
         }
 
-        post.delete()?;
+        let deleted_at = post.delete()?;
+        // Indexed first: a listed entry whose post is not deleted is dropped on
+        // read, while a deleted post missing from the list could not be restored.
+        self.recently_deleted.add(&profile_id, deleted_at, &post_id).await?;
         self.repository.update_lifecycle(&post).await?;
 
         for event in post.take_events() {

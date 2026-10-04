@@ -20,14 +20,18 @@ use crate::application::command::apply_moderation::{ApplyModerationCommand, Appl
 use crate::application::command::create_post::{CreatePostCommand, CreatePostHandler};
 use crate::application::command::delete_post::{DeletePostCommand, DeletePostHandler};
 use crate::application::command::publish_post::{PublishPostCommand, PublishPostHandler};
+use crate::application::command::restore_post::{RestorePostCommand, RestorePostHandler};
+use crate::application::query::list_recently_deleted::{ListRecentlyDeletedHandler, ListRecentlyDeletedQuery};
 use crate::application::command::update_post::{UpdatePostCommand, UpdatePostHandler};
-use crate::application::port::{AudienceGate, AuthorLocationStore, AuthorTierStore, EventPublisher};
+use crate::application::port::{
+    AudienceGate, AuthorLocationStore, AuthorTierStore, EventPublisher, RecentlyDeleted,
+};
 use crate::application::query::get_post::{GetPostHandler, GetPostQuery};
 use crate::application::query::list_posts_by_profile::{
     ListPostsByProfileHandler, ListPostsByProfileQuery,
 };
 use crate::infrastructure::persistence::{
-    ScyllaAuthorLocationStore, ScyllaAuthorTierStore, ScyllaPostRepository,
+    ScyllaAuthorLocationStore, ScyllaAuthorTierStore, ScyllaPostRepository, ScyllaRecentlyDeleted,
 };
 
 /// Storage endpoints the graph is wired against. Post has no Redis and emits its
@@ -68,6 +72,8 @@ impl App {
             Arc::new(ScyllaAuthorTierStore::new(Arc::clone(&scylla_client)));
         let author_location_store: Arc<dyn AuthorLocationStore> =
             Arc::new(ScyllaAuthorLocationStore::new(Arc::clone(&scylla_client)));
+        let recently_deleted: Arc<dyn RecentlyDeleted> =
+            Arc::new(ScyllaRecentlyDeleted::new(Arc::clone(&scylla_client)));
 
         let command_bus = Arc::new(
             CommandBusBuilder::new()
@@ -85,8 +91,15 @@ impl App {
                     publisher:  Arc::clone(&publisher),
                 })?
                 .register::<DeletePostCommand, _>(DeletePostHandler {
-                    repository: Arc::clone(&repository),
-                    publisher:  Arc::clone(&publisher),
+                    repository:       Arc::clone(&repository),
+                    publisher:        Arc::clone(&publisher),
+                    recently_deleted: Arc::clone(&recently_deleted),
+                })?
+                .register::<RestorePostCommand, _>(RestorePostHandler {
+                    repository:        Arc::clone(&repository),
+                    publisher:         Arc::clone(&publisher),
+                    author_tier_store: Arc::clone(&author_tier_store),
+                    recently_deleted:  Arc::clone(&recently_deleted),
                 })?
                 .register::<ApplyModerationCommand, _>(ApplyModerationHandler {
                     repository: Arc::clone(&repository),
@@ -100,6 +113,10 @@ impl App {
                     repository: Arc::clone(&repository),
                     audience:   Arc::clone(&audience),
                     locations:  Arc::clone(&author_location_store),
+                })?
+                .register::<ListRecentlyDeletedQuery, _>(ListRecentlyDeletedHandler {
+                    repository:       Arc::clone(&repository),
+                    recently_deleted: Arc::clone(&recently_deleted),
                 })?
                 .register::<ListPostsByProfileQuery, _>(ListPostsByProfileHandler {
                     repository: Arc::clone(&repository),
