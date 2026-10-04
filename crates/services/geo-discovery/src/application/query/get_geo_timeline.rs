@@ -3,9 +3,9 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 use uuid::Uuid;
 
-use crate::application::port::{CardStore, TileRepository};
+use crate::application::port::{visible_authors, AudienceGate, CardStore, TileRepository};
 use crate::domain::entity::MapPostCard;
-use crate::domain::value_object::PostId;
+use crate::domain::value_object::{PostId, Viewer};
 use crate::error::GeoDiscoveryError;
 
 /// Focus path: hydrates a batch of focused pins into fully-rendered cards.
@@ -19,6 +19,8 @@ use crate::error::GeoDiscoveryError;
 /// result — the handler does not error on partial resolution.
 pub struct GetGeoTimelineQuery {
     pub post_ids: Vec<Uuid>,
+    /// Who is looking: a client only gets cards of authors it may see.
+    pub viewer:   Viewer,
 }
 
 pub struct GetGeoTimelineResult {
@@ -32,6 +34,7 @@ impl Query for GetGeoTimelineQuery {
 pub struct GetGeoTimelineHandler<CS, TR> {
     pub card_store:      Arc<CS>,
     pub tile_repository: Arc<TR>,
+    pub audience:        Arc<dyn AudienceGate>,
 }
 
 impl<CS, TR> QueryHandler<GetGeoTimelineQuery> for GetGeoTimelineHandler<CS, TR>
@@ -78,6 +81,17 @@ where
             for maybe_card in miss_results.into_iter().flatten() {
                 cards.push(maybe_card);
             }
+        }
+
+        // ── Phase 3: the reader's audience (one bulk CheckAccess; fail closed).
+        if let Some(visible) = visible_authors(
+            self.audience.as_ref(),
+            &envelope.payload.viewer,
+            cards.iter().map(|c| c.author_id),
+        )
+        .await?
+        {
+            cards.retain(|c| visible.contains(&c.author_id));
         }
 
         Ok(GetGeoTimelineResult { cards })

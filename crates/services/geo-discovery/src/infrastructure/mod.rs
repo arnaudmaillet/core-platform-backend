@@ -1,3 +1,4 @@
+pub mod client;
 pub mod cache;
 pub mod grpc;
 pub mod h3;

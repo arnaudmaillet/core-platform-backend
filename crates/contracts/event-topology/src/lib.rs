@@ -93,6 +93,7 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("post.published", "notification"),
     ("post.published", "geo-discovery"),
     ("post.deleted", "timeline"),
+    ("post.deleted", "geo-discovery"),
     // post (unified v1)
     ("post.v1.events", "timeline"),
     ("post.v1.events", "search"),
@@ -119,11 +120,12 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     // auth lifecycle → compliance plane
     ("auth.v1.events", "audit"),
     // moderation decisions → compliance plane, search visibility, media takedown,
-    // post read restriction
+    // post read restriction, map suppression
     ("moderation.v1.events", "audit"),
     ("moderation.v1.events", "search"),
     ("moderation.v1.events", "media"),
     ("moderation.v1.events", "post"),
+    ("moderation.v1.events", "geo-discovery"),
     // media lifecycle → Plane-B processing pipeline (self-consume)
     ("media.v1.events", "media"),
     // audit generic ingest lane (see DEFERRED)

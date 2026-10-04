@@ -19,4 +19,9 @@ pub struct RadarPin {
     pub lat:           f64,
     pub lng:           f64,
     pub thumbnail_url: String,
+    /// The post's author, for the per-reader audience filter. Internal: not on
+    /// the wire. `None` on pins written before it existed; a client never sees
+    /// those (unverifiable author).
+    #[serde(default)]
+    pub author_id:     Option<Uuid>,
 }

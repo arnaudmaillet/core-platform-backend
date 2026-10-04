@@ -26,6 +26,13 @@ pub struct MapCardRow {
     /// Option<i8> because rows written before migration 0004 have NULL here.
     /// NULL maps to Standard (0) — correct for any legacy post.
     pub author_tier:       Option<i8>,
+    /// Migration 0006: NULL on older rows (shown, never moderated, no coordinates).
+    pub suppressed:         Option<i8>,
+    pub moderation_version: Option<i64>,
+    pub lat:                Option<f64>,
+    pub lng:                Option<f64>,
+    /// `TTL(author_handle)`: the row's remaining seconds (NULL when no TTL).
+    pub ttl_secs:           Option<i32>,
 }
 
 impl From<MapCardRow> for crate::domain::entity::MapPostCard {
@@ -41,6 +48,8 @@ impl From<MapCardRow> for crate::domain::entity::MapPostCard {
             virality_score:    row.virality_score,
             published_at_ms:   row.published_at.0,
             author_tier:       row.author_tier.unwrap_or(0) as u8,
+            lat:               row.lat,
+            lng:               row.lng,
         }
     }
 }

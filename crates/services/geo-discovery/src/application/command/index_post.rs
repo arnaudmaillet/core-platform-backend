@@ -6,7 +6,8 @@ use validate_core::{FieldViolation, Validate};
 use crate::application::port::{CardStore, PinStore, SpatialIndex, TileRepository};
 use crate::domain::entity::{MapPostCard, RadarPin};
 use crate::domain::value_object::{
-    AuthorId, GeoCoordinate, H3Index, H3Resolution, PostId, RetentionTtl, ViralityScore,
+    AuthorId, GeoCoordinate, H3Index, H3Resolution, PostId, RetentionTtl, Suppression,
+    ViralityScore,
 };
 use crate::error::GeoDiscoveryError;
 
@@ -105,7 +106,17 @@ where
             virality_score:    score.as_f32(),
             published_at_ms:   cmd.published_at_ms,
             author_tier:       cmd.author_tier,
+            lat:               Some(cmd.lat),
+            lng:               Some(cmd.lng),
         };
+
+        // A redelivered post.published must not bring back a post the map
+        // already suppressed (deleted, or moderated): keep it off Redis.
+        let suppressed = self
+            .tile_repository
+            .get_card_with_visibility(&post_id)
+            .await?
+            .is_some_and(|(_, visibility, _)| visibility.suppression != Suppression::None);
 
         // ── 1. ScyllaDB (durable, always first) ───────────────────────────────
         let (r5, r7, r9, card_res) = tokio::join!(
@@ -115,6 +126,10 @@ where
             self.tile_repository.upsert_card(&card, ttl),
         );
         r5?; r7?; r9?; card_res?;
+        if suppressed {
+            tracing::debug!(post_id = %post_id, "post.published for a suppressed map post — Redis left untouched");
+            return Ok(());
+        }
 
         // ── 2. Redis spatial index (ZADDs with Top-K cap) ─────────────────────
         let (si5, si7, si9) = tokio::join!(
@@ -134,6 +149,7 @@ where
             lat:           cmd.lat,
             lng:           cmd.lng,
             thumbnail_url: cmd.thumbnail_url.clone(),
+            author_id:     Some(author_id.as_uuid()),
         };
         if let Err(e) = self.pin_store.set(&pin, ttl).await {
             tracing::warn!(post_id = %post_id, error = %e, "pin store write failed — Radar will miss this post until reindex");

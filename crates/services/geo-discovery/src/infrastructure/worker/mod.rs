@@ -1,10 +1,12 @@
 pub mod post_indexer;
 pub mod score_updater;
 pub mod tile_pruner;
+pub mod visibility_worker;
 
 pub use post_indexer::PostIndexerWorker;
 pub use score_updater::ScoreUpdaterWorker;
 pub use tile_pruner::TilePrunerWorker;
+pub use visibility_worker::VisibilityWorker;
 
 use transport::kafka::config::client::KafkaClientConfig;
 use transport::kafka::config::producer::ProducerConfig;

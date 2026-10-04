@@ -587,6 +587,8 @@ services:
       REDIS_HOSTS: redis:6379
       REDIS_TOPOLOGY: standalone
       KAFKA_BROKERS: redpanda:9092
+      # Per-reader audience filter (CheckAccess). Client map reads fail closed without it.
+      GEO_SOCIAL_GRAPH_GRPC_ENDPOINT: http://social-graph-server:50053
     ports:
       - "50054:50054"
     depends_on:

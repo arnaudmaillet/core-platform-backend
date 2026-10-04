@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::domain::entity::MapPostCard;
-use crate::domain::value_object::{H3Index, H3Resolution, PostId, RetentionTtl};
+use crate::domain::value_object::{H3Index, H3Resolution, MapVisibility, PostId, RetentionTtl};
 use crate::error::GeoDiscoveryError;
 
 /// Port: ScyllaDB durable persistence layer.
@@ -51,6 +51,21 @@ pub trait TileRepository: Send + Sync {
     /// Returns all post IDs in the given tile partition (cold-start recovery).
     ///
     /// Ordered by `published_at DESC`. Limited to `limit` rows to bound memory.
+    /// The card whatever its visibility, with that visibility and the row's
+    /// remaining TTL in seconds. `get_card` hides suppressed cards; this does not.
+    async fn get_card_with_visibility(
+        &self,
+        post_id: &PostId,
+    ) -> Result<Option<(MapPostCard, MapVisibility, Option<i32>)>, GeoDiscoveryError>;
+
+    /// Records the card's visibility; `ttl` is the row's remaining life.
+    async fn set_visibility(
+        &self,
+        post_id:    &PostId,
+        visibility: MapVisibility,
+        ttl:        RetentionTtl,
+    ) -> Result<(), GeoDiscoveryError>;
+
     async fn list_tile_post_ids(
         &self,
         h3_index:   H3Index,
