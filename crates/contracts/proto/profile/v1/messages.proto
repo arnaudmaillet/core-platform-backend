@@ -48,6 +48,8 @@ message ProfileView {
     CommentFilters                  comment_filters      = 25;
     // Owner-only (unset for anyone else): post window, tab visibility.
     TabSettings                     tab_settings         = 26;
+    // Owner-only (unset for anyone else): feed controls.
+    FeedSettings                    feed_settings        = 27;
 }
 
 message ProfileSummaryView {
@@ -250,4 +252,16 @@ message SetTabSettingsRequest {
     optional bool show_saved   = 4;
     optional bool show_reposts = 5;
     optional bool show_places  = 6;
+}
+
+// Feed controls (#662), synced across the holder's devices: the client sends
+// the level as timeline's content_level (LESS → RESTRICTED, STANDARD →
+// STANDARD). Timeline never serves STANDARD to a guest or a 13–17 holder.
+message FeedSettings {
+    SensitiveContent sensitive_content = 1;
+}
+
+message SetFeedSettingsRequest {
+    string       profile_id = 1;
+    FeedSettings settings   = 2;
 }

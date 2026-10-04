@@ -140,3 +140,23 @@ async fn tab_settings_update_partially_stay_owner_only_and_are_announced() {
     assert_eq!(h.get_by_handle_as(&handle, other).await.unwrap().tab_settings, None, "owner-only");
     assert!(h.publisher.published().iter().any(|t| t == "ProfileTabSettingsChanged"));
 }
+
+#[tokio::test]
+async fn feed_settings_round_trip_owner_only() {
+    use profile::application::command::SetFeedSettingsCommand;
+    use profile::domain::value_object::{FeedSettings, SensitiveContent, Viewer};
+
+    let h = TestHarness::start().await;
+    let (account, handle) = (harness::random_account_id(), harness::random_handle());
+    h.create(&account, &handle, "Alice").await;
+    let profile = h.get_by_handle(&handle).await.expect("created");
+    assert_eq!(profile.feed_settings, Some(FeedSettings::default()), "less by default");
+
+    let standard = FeedSettings { sensitive_content: SensitiveContent::Standard };
+    let cmd = SetFeedSettingsCommand { profile_id: profile.id.clone(), settings: standard };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("set");
+
+    assert_eq!(h.get_by_id(&profile.id).await.unwrap().feed_settings, Some(standard));
+    let other = Viewer::Account(harness::random_account_id());
+    assert_eq!(h.get_by_handle_as(&handle, other).await.unwrap().feed_settings, None, "owner-only");
+}

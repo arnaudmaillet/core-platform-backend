@@ -56,6 +56,9 @@ service ProfileService {
     // Post history window and tab visibility (owner only).
     rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse);
 
+    // Feed controls: the sensitive-content level (owner only).
+    rpc SetFeedSettings(SetFeedSettingsRequest) returns (CommandResponse);
+
     // Grant a platform verification badge (admin only).
     rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
 

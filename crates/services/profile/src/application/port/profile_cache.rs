@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::value_object::{
-    CommentFilters, DiscoverySettings, InteractionSettings, LocationSettings, TabSettings,
+    CommentFilters, DiscoverySettings, FeedSettings, InteractionSettings, LocationSettings, TabSettings,
 };
 use crate::domain::aggregate::Profile;
 use crate::domain::entity::ProfileLink;
@@ -68,6 +68,9 @@ pub struct ProfileView {
     /// Owner-only (cleared for others): post window, tab visibility.
     #[serde(default)]
     pub tab_settings: Option<TabSettings>,
+    /// Owner-only (cleared for others): feed controls.
+    #[serde(default)]
+    pub feed_settings: Option<FeedSettings>,
 }
 
 impl From<&Profile> for ProfileView {
@@ -99,6 +102,7 @@ impl From<&Profile> for ProfileView {
             discovery: Some(p.discovery()),
             comment_filters: Some(p.comment_filters().clone()),
             tab_settings: Some(p.tab_settings()),
+            feed_settings: Some(p.feed_settings()),
         }
     }
 }
@@ -129,6 +133,7 @@ impl ProfileView {
         self.discovery = None;
         self.comment_filters = None;
         self.tab_settings = None;
+        self.feed_settings = None;
         Some(self)
     }
 }
@@ -195,6 +200,7 @@ mod viewer_tests {
             discovery: Some(DiscoverySettings::teen()),
             comment_filters: None,
             tab_settings: None,
+            feed_settings: None,
         }
     }
 

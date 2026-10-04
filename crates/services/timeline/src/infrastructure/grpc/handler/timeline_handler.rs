@@ -119,6 +119,8 @@ where
         let (viewer, guest) = viewer_of(&request);
         let guest_principal = guest.then(|| edge::principal(&request).map(|p| p.account_id().to_owned()))
             .flatten();
+        // 13–17 (the token's `age` bracket, #652) never see sensitive content.
+        let minor = edge::principal(&request).is_some_and(|p| p.is_minor());
         let req = request.into_inner();
 
         let ranking = match proto::DiscoveryRanking::try_from(req.ranking) {
@@ -127,12 +129,7 @@ where
             Ok(proto::DiscoveryRanking::Nearby) => DiscoveryRanking::Nearby,
             _ => DiscoveryRanking::ForYou,
         };
-        // A guest never gets more than RESTRICTED; anyone else gets what it asks
-        // for, RESTRICTED by default (no date of birth is known server-side yet).
-        let content_level = match proto::ContentLevel::try_from(req.content_level) {
-            Ok(proto::ContentLevel::Standard) if !guest => ContentLevel::Standard,
-            _ => ContentLevel::Restricted,
-        };
+        let content_level = content_level_for(req.content_level, guest, minor);
 
         let query = GetDiscoveryFeedQuery {
             ranking,
@@ -170,6 +167,16 @@ where
                 ContentLevel::Standard => proto::ContentLevel::Standard,
             } as i32,
         }))
+    }
+}
+
+/// The sensitive-content level a reader gets: a guest or a 13–17 reader never
+/// more than RESTRICTED; anyone else what it asks for (the client sends the
+/// profile's sensitive-content setting, #662), RESTRICTED by default.
+fn content_level_for(requested: i32, guest: bool, minor: bool) -> ContentLevel {
+    match proto::ContentLevel::try_from(requested) {
+        Ok(proto::ContentLevel::Standard) if !guest && !minor => ContentLevel::Standard,
+        _ => ContentLevel::Restricted,
     }
 }
 
@@ -240,5 +247,19 @@ pub fn cqrs_to_status(err: cqrs::error::CqrsError) -> Status {
                 _         => Status::internal(msg),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod content_level_tests {
+    use super::*;
+
+    #[test]
+    fn guests_and_teens_never_get_sensitive_content() {
+        let standard = proto::ContentLevel::Standard as i32;
+        assert_eq!(content_level_for(standard, false, false), ContentLevel::Standard);
+        assert_eq!(content_level_for(standard, true, false), ContentLevel::Restricted, "guest");
+        assert_eq!(content_level_for(standard, false, true), ContentLevel::Restricted, "13–17");
+        assert_eq!(content_level_for(0, false, false), ContentLevel::Restricted, "unspecified");
     }
 }

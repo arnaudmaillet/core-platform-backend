@@ -79,3 +79,10 @@ enum PostWindow {
     POST_WINDOW_ONE_MONTH   = 3;
     POST_WINDOW_THREE_DAYS  = 4;
 }
+
+// How much sensitive content a holder's discovery feeds show.
+enum SensitiveContent {
+    SENSITIVE_CONTENT_UNSPECIFIED = 0;
+    SENSITIVE_CONTENT_LESS        = 1;
+    SENSITIVE_CONTENT_STANDARD    = 2;
+}

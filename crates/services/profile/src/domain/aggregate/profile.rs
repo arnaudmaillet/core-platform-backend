@@ -9,7 +9,7 @@ use crate::domain::event::{
 };
 use crate::domain::value_object::{
     AccountId, AvatarUrl, BannerUrl, Bio, CommentFilters, DisplayName, DiscoverySettings, Handle, InteractionSettings,
-    Locale, LocationSettings, TabSettings,
+    FeedSettings, Locale, LocationSettings, TabSettings,
     MaskingReason, ProfileId, ProfileKind, ProfileStatus, ProfileVisibility, VerificationKind,
     WebsiteUrl,
 };
@@ -76,6 +76,9 @@ pub struct Profile {
     /// Post history window and tab visibility (post applies the window).
     #[serde(default)]
     tab_settings: TabSettings,
+    /// Feed controls (the sensitive-content level).
+    #[serde(default)]
+    feed_settings: FeedSettings,
     verified: bool,
     verification_kind: Option<VerificationKind>,
     /// Author tier (0=Standard, 1=Premium, 2=Vip), denormalized from
@@ -129,6 +132,7 @@ impl Profile {
             discovery: params.discovery,
             comment_filters: CommentFilters::default(),
             tab_settings: TabSettings::default(),
+            feed_settings: FeedSettings::default(),
             verified: false,
             verification_kind: None,
             tier: 0,
@@ -229,6 +233,7 @@ impl Profile {
             discovery: DiscoverySettings::default(),
             comment_filters: CommentFilters::default(),
             tab_settings: TabSettings::default(),
+            feed_settings: FeedSettings::default(),
             verified,
             verification_kind,
             tier,
@@ -498,6 +503,33 @@ impl Profile {
 
     pub fn tab_settings(&self) -> TabSettings {
         self.tab_settings
+    }
+
+    /// Changes the feed controls. Unchanged ⇒ no-op. No event: only the
+    /// owner's clients read them.
+    pub fn set_feed_settings(&mut self, settings: FeedSettings) -> Result<bool, ProfileError> {
+        if self.status == ProfileStatus::Deleted {
+            return Err(ProfileError::ProfileNotActive {
+                current: self.status.as_str().to_owned(),
+            });
+        }
+        if settings == self.feed_settings {
+            return Ok(false);
+        }
+        self.feed_settings = settings;
+        self.touch_now();
+        Ok(true)
+    }
+
+    /// Restores the stored feed settings (a column added after
+    /// [`Self::reconstitute`]'s set).
+    pub fn with_feed_settings(mut self, settings: FeedSettings) -> Self {
+        self.feed_settings = settings;
+        self
+    }
+
+    pub fn feed_settings(&self) -> FeedSettings {
+        self.feed_settings
     }
 
     /// Restores the stored interaction settings (a column added after

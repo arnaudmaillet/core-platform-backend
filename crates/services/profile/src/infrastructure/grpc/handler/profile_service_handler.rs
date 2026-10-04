@@ -9,7 +9,8 @@ use crate::domain::value_object::{
     InteractionAudience, InteractionSettings, LocationPrecision, LocationSettings,
 };
 use crate::application::command::{
-    SetCommentFiltersCommand, SetDiscoverySettingsCommand, SetInteractionSettingsCommand, SetTabSettingsCommand, SetLocationSettingsCommand,
+    SetCommentFiltersCommand, SetDiscoverySettingsCommand, SetFeedSettingsCommand, SetInteractionSettingsCommand,
+    SetTabSettingsCommand, SetLocationSettingsCommand,
     ChangeHandleCommand, CreateProfileCommand, DeleteProfileCommand, HideProfileCommand,
     RestoreProfileCommand, SetVisibilityCommand, UpdateAvatarCommand, UpdateBannerCommand,
     UpdateProfileCommand, VerifyProfileCommand,
@@ -229,6 +230,31 @@ where
         let cmd = SetLocationSettingsCommand {
             profile_id: req.profile_id.clone(),
             settings: LocationSettings { ghost: s.ghost, precision },
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_cmd(&req.profile_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    /// The owner's feed controls (edge: one of the caller's profiles).
+    pub async fn set_feed_settings(
+        &self,
+        request: Request<proto::SetFeedSettingsRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        use crate::domain::value_object::{FeedSettings, SensitiveContent};
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let settings = req.settings.ok_or_else(|| Status::invalid_argument("settings are required"))?;
+        let sensitive_content = match proto::SensitiveContent::try_from(settings.sensitive_content) {
+            Ok(proto::SensitiveContent::Less) => SensitiveContent::Less,
+            Ok(proto::SensitiveContent::Standard) => SensitiveContent::Standard,
+            _ => return Err(Status::invalid_argument("sensitive_content must be set")),
+        };
+        let cmd = SetFeedSettingsCommand {
+            profile_id: req.profile_id.clone(),
+            settings:   FeedSettings { sensitive_content },
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -531,6 +557,12 @@ fn profile_view_to_proto(v: ProfileView) -> proto::ProfileView {
             precision: (match l.precision {
                 LocationPrecision::Precise => proto::LocationPrecision::Precise,
                 LocationPrecision::City => proto::LocationPrecision::City,
+            }) as i32,
+        }),
+        feed_settings: v.feed_settings.map(|f| proto::FeedSettings {
+            sensitive_content: (match f.sensitive_content {
+                crate::domain::value_object::SensitiveContent::Less => proto::SensitiveContent::Less,
+                crate::domain::value_object::SensitiveContent::Standard => proto::SensitiveContent::Standard,
             }) as i32,
         }),
         tab_settings: v.tab_settings.map(|t| proto::TabSettings {
