@@ -85,6 +85,14 @@ pub enum ProfileEventWire {
     },
     /// Activity status, read receipts and how people can find the profile.
     /// `search` projects `by_handle_search`; chat, the presence flags.
+    /// Hidden words and the offensive-comment filter (#660); `comment`
+    /// applies them to the comments on the profile's posts.
+    ProfileCommentFiltersChanged {
+        profile_id: String,
+        hidden_words: Vec<String>,
+        filter_offensive: bool,
+        occurred_at_ms: i64,
+    },
     ProfileDiscoverySettingsChanged {
         profile_id: String,
         activity_status: bool,
@@ -113,7 +121,8 @@ impl ProfileEventWire {
             | ProfileEventWire::ProfileVisibilityChanged { profile_id, .. }
             | ProfileEventWire::ProfileInteractionSettingsChanged { profile_id, .. }
             | ProfileEventWire::ProfileLocationSettingsChanged { profile_id, .. }
-            | ProfileEventWire::ProfileDiscoverySettingsChanged { profile_id, .. } => profile_id,
+            | ProfileEventWire::ProfileDiscoverySettingsChanged { profile_id, .. }
+            | ProfileEventWire::ProfileCommentFiltersChanged { profile_id, .. } => profile_id,
         }
     }
 
@@ -134,6 +143,7 @@ impl ProfileEventWire {
             }
             ProfileEventWire::ProfileLocationSettingsChanged { .. } => "ProfileLocationSettingsChanged",
             ProfileEventWire::ProfileDiscoverySettingsChanged { .. } => "ProfileDiscoverySettingsChanged",
+            ProfileEventWire::ProfileCommentFiltersChanged { .. } => "ProfileCommentFiltersChanged",
         }
     }
 }
@@ -195,6 +205,12 @@ impl From<&DomainEvent> for ProfileEventWire {
                     occurred_at_ms: e.occurred_at.timestamp_millis(),
                 }
             }
+            DomainEvent::CommentFiltersChanged(e) => ProfileEventWire::ProfileCommentFiltersChanged {
+                profile_id: e.profile_id.to_string(),
+                hidden_words: e.filters.hidden_words.clone(),
+                filter_offensive: e.filters.filter_offensive,
+                occurred_at_ms: e.occurred_at.timestamp_millis(),
+            },
             DomainEvent::DiscoverySettingsChanged(e) => ProfileEventWire::ProfileDiscoverySettingsChanged {
                 profile_id: e.profile_id.to_string(),
                 activity_status: e.settings.activity_status,

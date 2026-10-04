@@ -905,6 +905,7 @@ dependencies = [
  "error",
  "http",
  "post-api",
+ "profile",
  "scylla",
  "scylla-storage",
  "serde",

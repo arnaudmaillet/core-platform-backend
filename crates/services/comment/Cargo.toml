@@ -44,6 +44,8 @@ scylla = { workspace = true }
 integration-comment = []
 
 [dev-dependencies]
+# Wire contract test of the comment-filters worker against profile's own type.
+profile = { workspace = true }
 tokio = { workspace = true }
 
 # ── Integration suite (feature = "integration-comment") ──────────────────────

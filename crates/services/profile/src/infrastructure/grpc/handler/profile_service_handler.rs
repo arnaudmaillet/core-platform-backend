@@ -9,7 +9,7 @@ use crate::domain::value_object::{
     InteractionAudience, InteractionSettings, LocationPrecision, LocationSettings,
 };
 use crate::application::command::{
-    SetDiscoverySettingsCommand, SetInteractionSettingsCommand, SetLocationSettingsCommand,
+    SetCommentFiltersCommand, SetDiscoverySettingsCommand, SetInteractionSettingsCommand, SetLocationSettingsCommand,
     ChangeHandleCommand, CreateProfileCommand, DeleteProfileCommand, HideProfileCommand,
     RestoreProfileCommand, SetVisibilityCommand, UpdateAvatarCommand, UpdateBannerCommand,
     UpdateProfileCommand, VerifyProfileCommand,
@@ -229,6 +229,26 @@ where
         let cmd = SetLocationSettingsCommand {
             profile_id: req.profile_id.clone(),
             settings: LocationSettings { ghost: s.ghost, precision },
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_cmd(&req.profile_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    /// The owner's hidden words and offensive filter (edge: one of the caller's profiles).
+    pub async fn set_comment_filters(
+        &self,
+        request: Request<proto::SetCommentFiltersRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let filters = req.filters.ok_or_else(|| Status::invalid_argument("filters are required"))?;
+        let cmd = SetCommentFiltersCommand {
+            profile_id:       req.profile_id.clone(),
+            hidden_words:     filters.hidden_words,
+            filter_offensive: filters.filter_offensive,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -481,6 +501,10 @@ fn profile_view_to_proto(v: ProfileView) -> proto::ProfileView {
                 LocationPrecision::Precise => proto::LocationPrecision::Precise,
                 LocationPrecision::City => proto::LocationPrecision::City,
             }) as i32,
+        }),
+        comment_filters: v.comment_filters.map(|f| proto::CommentFilters {
+            hidden_words:     f.hidden_words,
+            filter_offensive: f.filter_offensive,
         }),
         discovery_settings: v.discovery.map(|d| proto::DiscoverySettings {
             activity_status:  d.activity_status,

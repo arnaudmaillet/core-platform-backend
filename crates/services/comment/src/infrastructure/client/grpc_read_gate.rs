@@ -14,7 +14,7 @@ use social_graph_api::{
 use tonic::transport::Channel;
 use tonic::Code;
 
-use crate::application::port::{CommentAdmission, ReadGate};
+use crate::application::port::{CommentAdmission, ReadDecision, ReadGate};
 use crate::domain::value_object::{PostId, ProfileId, Viewer};
 use crate::error::CommentError;
 
@@ -161,9 +161,9 @@ impl ReadGate for GrpcReadGate {
         viewer: &Viewer,
         post_id: &PostId,
         comment_authors: &[ProfileId],
-    ) -> Result<Option<HashSet<ProfileId>>, CommentError> {
+    ) -> Result<Option<ReadDecision>, CommentError> {
         let viewers: &[ProfileId] = match viewer {
-            Viewer::Internal => return Ok(Some(HashSet::new())),
+            Viewer::Internal => return Ok(Some(ReadDecision::default())),
             Viewer::Profiles(ids) => ids,
         };
 
@@ -223,7 +223,10 @@ impl ReadGate for GrpcReadGate {
                 .into_inner();
             hidden.extend(response.restricted_ids.iter().filter_map(|id| ProfileId::try_from(id.as_str()).ok()));
         }
-        Ok(Some(hidden))
+        Ok(Some(ReadDecision {
+            hidden_authors: hidden,
+            post_author:    ProfileId::try_from(view.profile_id.as_str()).ok(),
+        }))
     }
 
     async fn may_comment(&self, author: &ProfileId, post_id: &PostId) -> Result<CommentAdmission, CommentError> {

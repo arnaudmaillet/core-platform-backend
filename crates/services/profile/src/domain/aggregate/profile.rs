@@ -5,10 +5,10 @@ use uuid::Uuid;
 use crate::domain::entity::ProfileLink;
 use crate::domain::event::{
     DomainEvent, HandleChanged, ProfileCreated, ProfileDeleted, ProfileHidden, ProfileRestored,
-    DiscoverySettingsChanged, InteractionSettingsChanged, LocationSettingsChanged, ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
+    CommentFiltersChanged, DiscoverySettingsChanged, InteractionSettingsChanged, LocationSettingsChanged, ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
 };
 use crate::domain::value_object::{
-    AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, DiscoverySettings, Handle, InteractionSettings,
+    AccountId, AvatarUrl, BannerUrl, Bio, CommentFilters, DisplayName, DiscoverySettings, Handle, InteractionSettings,
     Locale, LocationSettings,
     MaskingReason, ProfileId, ProfileKind, ProfileStatus, ProfileVisibility, VerificationKind,
     WebsiteUrl,
@@ -70,6 +70,9 @@ pub struct Profile {
     /// Activity status, read receipts and how people can find the profile.
     #[serde(default)]
     discovery: DiscoverySettings,
+    /// Hidden words and the offensive-comment filter (comment applies them).
+    #[serde(default)]
+    comment_filters: CommentFilters,
     verified: bool,
     verification_kind: Option<VerificationKind>,
     /// Author tier (0=Standard, 1=Premium, 2=Vip), denormalized from
@@ -121,6 +124,7 @@ impl Profile {
             interaction: params.interaction,
             location: params.location,
             discovery: params.discovery,
+            comment_filters: CommentFilters::default(),
             verified: false,
             verification_kind: None,
             tier: 0,
@@ -219,6 +223,7 @@ impl Profile {
             interaction: InteractionSettings::default(),
             location: LocationSettings::default(),
             discovery: DiscoverySettings::default(),
+            comment_filters: CommentFilters::default(),
             verified,
             verification_kind,
             tier,
@@ -420,6 +425,42 @@ impl Profile {
 
     pub fn discovery(&self) -> DiscoverySettings {
         self.discovery
+    }
+
+    /// Replaces the hidden words / offensive filter. Unchanged ⇒ no-op.
+    pub fn set_comment_filters(
+        &mut self,
+        filters: CommentFilters,
+        correlation_id: Uuid,
+    ) -> Result<bool, ProfileError> {
+        if self.status == ProfileStatus::Deleted {
+            return Err(ProfileError::ProfileNotActive {
+                current: self.status.as_str().to_owned(),
+            });
+        }
+        if filters == self.comment_filters {
+            return Ok(false);
+        }
+        self.comment_filters = filters.clone();
+        let now = self.touch_now();
+        self.pending_events.push(DomainEvent::CommentFiltersChanged(CommentFiltersChanged {
+            profile_id: self.id,
+            filters,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(true)
+    }
+
+    /// Restores the stored comment filters (a column added after
+    /// [`Self::reconstitute`]'s set).
+    pub fn with_comment_filters(mut self, filters: CommentFilters) -> Self {
+        self.comment_filters = filters;
+        self
+    }
+
+    pub fn comment_filters(&self) -> &CommentFilters {
+        &self.comment_filters
     }
 
     /// Restores the stored interaction settings (a column added after

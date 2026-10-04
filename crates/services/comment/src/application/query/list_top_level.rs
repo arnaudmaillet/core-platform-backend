@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::{
-    application::port::{filter_page, CommentRepository, CommentSummary, ReadGate},
+    application::port::{filter_page, CommentRepository, CommentSummary, OwnerFilters, ReadGate},
     domain::value_object::{PostId, Viewer},
     error::CommentError,
 };
@@ -23,6 +23,7 @@ impl Query for ListTopLevelQuery {
 pub struct ListTopLevelHandler<R> {
     pub repository: Arc<R>,
     pub gate:       Arc<dyn ReadGate>,
+    pub filters:    OwnerFilters,
 }
 
 impl<R: CommentRepository> QueryHandler<ListTopLevelQuery> for ListTopLevelHandler<R> {
@@ -38,6 +39,6 @@ impl<R: CommentRepository> QueryHandler<ListTopLevelQuery> for ListTopLevelHandl
             .repository
             .list_top_level(&post_id, q.limit, q.page_token.as_deref())
             .await?;
-        filter_page(self.gate.as_ref(), &q.viewer, &post_id, page).await
+        filter_page(self.gate.as_ref(), &self.filters, &q.viewer, &post_id, page).await
     }
 }

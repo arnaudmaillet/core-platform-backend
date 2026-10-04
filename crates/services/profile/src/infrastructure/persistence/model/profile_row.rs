@@ -8,7 +8,7 @@ use crate::domain::aggregate::Profile;
 use crate::domain::entity::ProfileLink;
 use crate::domain::value_object::{
     AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, InteractionSettings, Locale,
-    DiscoverySettings, LocationSettings, MaskingReason, ProfileId,
+    CommentFilters, DiscoverySettings, LocationSettings, MaskingReason, ProfileId,
     ProfileKind, ProfileStatus, ProfileVisibility, VerificationKind, WebsiteUrl,
 };
 use crate::error::ProfileError;
@@ -51,6 +51,8 @@ pub struct ProfileRow {
     pub location_settings: Option<String>,
     /// JSON; NULL on rows predating the column → the defaults.
     pub discovery_settings: Option<String>,
+    /// JSON; NULL on rows predating the column → the defaults.
+    pub comment_filters: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -150,6 +152,7 @@ impl TryFrom<ProfileRow> for Profile {
             deleted_at,
         ).with_interaction(InteractionSettings::from_json(row.interaction_settings.as_deref()))
         .with_location(LocationSettings::from_json(row.location_settings.as_deref()))
-        .with_discovery(DiscoverySettings::from_json(row.discovery_settings.as_deref())))
+        .with_discovery(DiscoverySettings::from_json(row.discovery_settings.as_deref()))
+        .with_comment_filters(CommentFilters::from_json(row.comment_filters.as_deref())))
     }
 }

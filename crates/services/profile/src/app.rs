@@ -24,7 +24,8 @@ use crate::application::command::{
     DeleteProfileCommand, DeleteProfileHandler, HideAccountProfilesCommand, HideProfileCommand,
     HideProfileHandler, MaskAccountProfilesHandler, RestoreAccountProfilesCommand,
     RestoreProfileCommand, RestoreProfileHandler, SetProfileTierCommand, SetProfileTierHandler,
-    SetDiscoverySettingsCommand, SetDiscoverySettingsHandler,
+    SetCommentFiltersCommand, SetCommentFiltersHandler, SetDiscoverySettingsCommand,
+    SetDiscoverySettingsHandler,
     SetInteractionSettingsCommand, SetInteractionSettingsHandler, SetLocationSettingsCommand,
     SetLocationSettingsHandler, SetVisibilityCommand, SetVisibilityHandler, UpdateAvatarCommand, UpdateAvatarHandler,
     UpdateBannerCommand, UpdateBannerHandler, UpdateProfileCommand, UpdateProfileHandler,
@@ -129,6 +130,11 @@ impl App {
                     Arc::clone(&publisher),
                 ))?
                 .register::<SetLocationSettingsCommand, _>(SetLocationSettingsHandler::new(
+                    Arc::clone(&repository),
+                    Arc::clone(&cache),
+                    Arc::clone(&publisher),
+                ))?
+                .register::<SetCommentFiltersCommand, _>(SetCommentFiltersHandler::new(
                     Arc::clone(&repository),
                     Arc::clone(&cache),
                     Arc::clone(&publisher),

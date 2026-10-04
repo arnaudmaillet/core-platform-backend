@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::{
-    application::port::{CommentRepository, ReadGate},
+    application::port::{CommentRepository, OwnerFilters, ReadGate},
     domain::{aggregate::Comment, value_object::{CommentId, Viewer}},
     error::CommentError,
 };
@@ -21,6 +21,7 @@ impl Query for GetCommentQuery {
 pub struct GetCommentHandler<R> {
     pub repository: Arc<R>,
     pub gate:       Arc<dyn ReadGate>,
+    pub filters:    OwnerFilters,
 }
 
 impl<R: CommentRepository> QueryHandler<GetCommentQuery> for GetCommentHandler<R> {
@@ -34,11 +35,18 @@ impl<R: CommentRepository> QueryHandler<GetCommentQuery> for GetCommentHandler<R
         if query.viewer == Viewer::Internal {
             return Ok(comment);
         }
-        // The post must be readable, and the comment's author not hidden.
+        // The post must be readable, the comment's author not hidden, and the
+        // comment not hidden by the post owner's filter.
         let author = comment.author_id().clone();
-        match self.gate.check(&query.viewer, comment.post_id(), std::slice::from_ref(&author)).await? {
-            Some(hidden) if !hidden.contains(&author) => Ok(comment),
-            _ => Err(not_found()),
+        let Some(decision) = self.gate.check(&query.viewer, comment.post_id(), std::slice::from_ref(&author)).await? else {
+            return Err(not_found());
+        };
+        let filter = self.filters.of(decision.post_author.as_ref()).await?;
+        let body = comment.body().map(|b| b.as_str().to_owned());
+        if self.filters.shows(&query.viewer, &decision, filter.as_ref(), &author, body.as_deref()) {
+            Ok(comment)
+        } else {
+            Err(not_found())
         }
     }
 }

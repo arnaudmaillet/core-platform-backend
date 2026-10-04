@@ -23,6 +23,8 @@ use crate::infrastructure::grpc::handler::comment_service_handler::{
     CommentServiceHandler, CommentServiceServer,
 };
 use crate::infrastructure::grpc::server::FILE_DESCRIPTOR_SET;
+use crate::domain::comment_filter::TermList;
+use crate::infrastructure::consumer::CommentFiltersWorker;
 use crate::infrastructure::publisher::KafkaCommentEventPublisher;
 
 type CommentServer =
@@ -58,9 +60,20 @@ impl Service for CommentService {
             .build()?;
         let publisher = Arc::new(KafkaCommentEventPublisher::new(producer));
 
-        let app = App::build(backends, publisher, read_gate_from_env()?)
+        let app = App::build(backends, publisher, read_gate_from_env()?, offensive_terms_from_env())
             .await
             .map_err(|e| anyhow::anyhow!("comment app build: {e}"))?;
+
+        // Inbound integration: the post owners' hidden words / offensive
+        // filter (profile.v1.events) → the filter the reads apply.
+        tokio::spawn(
+            CommentFiltersWorker::new(
+                KafkaClientConfig::from_env(),
+                Arc::clone(&app.filter_store),
+                COMMENT_FILTERS_GROUP,
+            )
+            .run(),
+        );
 
         Ok(Self { app })
     }
@@ -81,6 +94,30 @@ impl Service for CommentService {
         routes.add_service(reflection);
         routes.add_service(CommentServiceServer::new(handler));
         Ok(())
+    }
+}
+
+/// Consumer group of the comment-filters projection.
+const COMMENT_FILTERS_GROUP: &str = "comment-filters";
+
+/// The offensive-term list (#660): one term per line (`#` comments) in the file
+/// at `COMMENT_OFFENSIVE_TERMS_FILE`. Trust & safety owns its content. Without
+/// it the offensive filter hides nothing (hidden words still apply).
+pub(crate) fn offensive_terms_from_env() -> Arc<TermList> {
+    let Ok(path) = std::env::var("COMMENT_OFFENSIVE_TERMS_FILE") else {
+        tracing::warn!("COMMENT_OFFENSIVE_TERMS_FILE unset: the offensive-comment filter hides nothing");
+        return Arc::new(TermList::default());
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let terms = TermList::new(text.lines().map(str::to_owned));
+            tracing::info!(path, terms = terms.len(), "offensive-comment terms loaded");
+            Arc::new(terms)
+        }
+        Err(error) => {
+            tracing::error!(path, %error, "cannot read the offensive-comment terms; the filter hides nothing");
+            Arc::new(TermList::default())
+        }
     }
 }
 
