@@ -14,7 +14,8 @@ const DEFAULT_HEARTBEAT_TIMEOUT_MS: u64 = 90_000;
 const DEFAULT_SEND_QUEUE_CAP: usize = 256;
 const DEFAULT_MAX_SUBSCRIPTIONS: usize = 256;
 const DEFAULT_REGISTRY_TTL_MS: u64 = 120_000;
-const DEFAULT_DEVICE_CLAIM: &str = "did";
+/// Minted by `auth` from the session's bound `DeviceContext.device_id`.
+const DEFAULT_DEVICE_CLAIM: &str = auth_context::edge::EDGE_DEVICE_CLAIM;
 
 /// Fully-resolved realtime configuration shared by both binaries (the gateway uses
 /// the WS/auth/heartbeat knobs; the dispatcher uses Kafka + the routing fabric).

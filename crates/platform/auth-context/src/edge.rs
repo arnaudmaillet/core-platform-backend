@@ -10,6 +10,7 @@
 //! | `gen`   | the revocation generation                            |
 //! | `perms` | normalised permissions ([`EDGE_PERMISSIONS_CLAIM`])  |
 //! | `pids`  | the **profile** ids the account owns ([`EDGE_PROFILES_CLAIM`]) |
+//! | `did`   | the device the session is bound to ([`EDGE_DEVICE_CLAIM`]); absent when the client sent none |
 //!
 //! `pids` exists because the client-facing surface is keyed by profile id while
 //! the token subject is an account id (one account owns N profiles): a service
@@ -31,6 +32,10 @@ pub const EDGE_PROFILES_CLAIM: &str = "pids";
 
 /// The claim carrying the session id.
 pub const EDGE_SESSION_CLAIM: &str = "sid";
+
+/// The claim carrying the device id the session was bound to at login
+/// (`auth.v1.DeviceContext.device_id`). The realtime gateway keys a socket by it.
+pub const EDGE_DEVICE_CLAIM: &str = "did";
 
 /// The decoder specialisation every edge-token verifier in the fleet uses.
 pub type EdgeDecoder = JwtDecoder<OidcClaims, OidcClaimsExtractor>;

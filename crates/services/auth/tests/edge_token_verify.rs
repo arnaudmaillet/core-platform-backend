@@ -103,6 +103,7 @@ async fn minted_edge_token_is_verified_by_auth_context() {
         generation: Generation::from_i64(7),
         permissions: vec![Permission::new("posts:write"), Permission::new("ROLE_ADMIN")],
         profile_ids: Vec::new(),
+        device_id: None,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
@@ -130,9 +131,50 @@ async fn auth_context_rejects_a_token_for_a_different_audience() {
         generation: Generation::INITIAL,
         permissions: vec![],
         profile_ids: Vec::new(),
+        device_id: None,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
     let token = other.mint_access(&claims).await.unwrap();
     assert!(decoder(&public_pem).await.decode(&token).await.is_err());
+}
+
+/// The realtime handshake reads the device from `did` on the **fleet** edge
+/// decoder (`auth_context::edge`), not on a bespoke claim struct. Prove the claim
+/// survives that exact path, under the constant realtime defaults to.
+#[tokio::test]
+async fn fleet_edge_decoder_sees_the_did_claim_realtime_requires() {
+    let (private_pem, public_pem) = keypair();
+    let claims = AccessTokenClaims {
+        account_id: AccountId::from_uuid(Uuid::now_v7()),
+        session_id: SessionId::new(),
+        generation: Generation::INITIAL,
+        permissions: vec![],
+        profile_ids: Vec::new(),
+        device_id: Some("ios-install-1".to_owned()),
+        issued_at: Utc::now(),
+        expires_at: Utc::now() + Duration::minutes(10),
+    };
+    let token = minter(&private_pem, &public_pem, AUDIENCE).mint_access(&claims).await.unwrap();
+
+    let cache = JwksCache::new();
+    let mut keys = HashMap::new();
+    keys.insert(KID.to_owned(), DecodingKey::from_ec_pem(&public_pem).unwrap());
+    cache.replace(keys).await;
+    let config = AuthContextConfig {
+        expected_issuer: Some(ISSUER.to_owned()),
+        expected_audience: Some(AUDIENCE.to_owned()),
+        ..AuthContextConfig::default()
+    };
+    let principal = auth_context::edge::edge_decoder(&config, cache)
+        .decode(&token)
+        .await
+        .expect("fleet edge decoder verifies the token");
+
+    let did = principal
+        .raw_claims
+        .extra
+        .get(auth_context::edge::EDGE_DEVICE_CLAIM)
+        .and_then(|v| v.as_str());
+    assert_eq!(did, Some("ios-install-1"));
 }

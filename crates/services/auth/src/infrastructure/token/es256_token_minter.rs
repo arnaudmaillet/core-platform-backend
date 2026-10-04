@@ -58,6 +58,11 @@ struct EdgeClaims {
     /// to empty so tokens minted before the claim existed still verify.
     #[serde(default)]
     pids: Vec<String>,
+    /// The device the session is bound to (`auth_context::edge::EDGE_DEVICE_CLAIM`);
+    /// the realtime gateway rejects a handshake without it. Omitted when the
+    /// client sent no device id, rather than minted as an empty string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    did: Option<String>,
 }
 
 /// A verifying key plus the SPKI PEM it was built from (retained so the JWKS can
@@ -202,6 +207,7 @@ impl TokenMinter for Es256TokenMinter {
             exp: claims.expires_at.timestamp(),
             perms: claims.permissions.iter().map(|p| p.as_str().to_owned()).collect(),
             pids: claims.profile_ids.iter().map(ProfileId::as_str).collect(),
+            did: claims.device_id.clone(),
         };
         encode(&self.header, &edge, &self.encoding_key).map_err(|_| AuthError::TokenSigningFailed)
     }
@@ -240,6 +246,7 @@ impl TokenMinter for Es256TokenMinter {
             generation: Generation::from_i64(c.generation),
             permissions,
             profile_ids,
+            device_id: c.did,
             issued_at,
             expires_at,
         })
@@ -299,6 +306,7 @@ mod tests {
             generation: Generation::from_i64(3),
             permissions: vec![Permission::new("posts:write")],
             profile_ids: vec![ProfileId::from_uuid(Uuid::now_v7())],
+            device_id: Some("ios-install-1".into()),
             issued_at: now,
             expires_at: now + ttl,
         }
@@ -316,6 +324,7 @@ mod tests {
         assert_eq!(back.generation, claims.generation);
         assert_eq!(back.permissions, claims.permissions);
         assert_eq!(back.profile_ids, claims.profile_ids);
+        assert_eq!(back.device_id, claims.device_id);
     }
 
     #[tokio::test]
@@ -328,6 +337,20 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["pids"], serde_json::json!([claims.profile_ids[0].as_str()]));
         assert_eq!(json["perms"], serde_json::json!(["posts:write"]));
+        assert_eq!(json["did"], serde_json::json!("ios-install-1"));
+    }
+
+    #[tokio::test]
+    async fn did_is_omitted_when_the_session_has_no_device_id() {
+        let minter = single_key_minter();
+        let claims =
+            AccessTokenClaims { device_id: None, ..claims_at(Utc::now(), Duration::minutes(10)) };
+        let token = minter.mint_access(&claims).await.unwrap();
+        let payload = token.split('.').nth(1).unwrap();
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json.get("did").is_none(), "no empty-string device claim");
+        assert_eq!(minter.verify_access(&token).await.unwrap().device_id, None);
     }
 
     #[tokio::test]

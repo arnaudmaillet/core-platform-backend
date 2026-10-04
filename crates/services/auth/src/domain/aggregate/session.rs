@@ -225,6 +225,7 @@ impl Session {
             self.generation,
             permissions,
             profile_ids,
+            self.device.device_id().map(str::to_owned),
             now,
             expires_at,
         ))
@@ -388,6 +389,22 @@ mod tests {
         let perms = vec![Permission::new("posts:write"), Permission::new("ROLE_ADMIN")];
         let claims = s.mint_access_token(t0(), Duration::minutes(5), perms.clone(), vec![]).unwrap();
         assert_eq!(claims.permissions, perms);
+    }
+
+    #[test]
+    fn mint_carries_the_bound_device_id() {
+        let mut p = params();
+        p.device = DeviceFingerprint::new(None, None, Some("ios-install-1".into()));
+        let s = Session::issue(p).unwrap();
+        let claims = s.mint_access_token(t0(), Duration::minutes(5), vec![], vec![]).unwrap();
+        assert_eq!(claims.device_id.as_deref(), Some("ios-install-1"));
+    }
+
+    #[test]
+    fn mint_without_a_device_id_carries_none() {
+        let claims =
+            active_session().mint_access_token(t0(), Duration::minutes(5), vec![], vec![]).unwrap();
+        assert_eq!(claims.device_id, None);
     }
 
     #[test]

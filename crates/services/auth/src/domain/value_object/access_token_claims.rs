@@ -25,22 +25,38 @@ pub struct AccessTokenClaims {
     /// services bind profile-keyed actors to this set (see `transport::grpc::edge`).
     /// A profile created after the mint appears at the next refresh.
     pub profile_ids: Vec<ProfileId>,
+    /// `did` — the stable device id the session was bound to at login
+    /// (`DeviceContext.device_id`). The realtime gateway keys a socket by it and
+    /// rejects a handshake without it. `None` when the client sent no device id.
+    #[serde(default)]
+    pub device_id: Option<String>,
     pub issued_at: DateTime<Utc>,
     /// Always ≤ the session's sliding and absolute expiry.
     pub expires_at: DateTime<Utc>,
 }
 
 impl AccessTokenClaims {
+    #[allow(clippy::too_many_arguments)] // one positional arg per claim
     pub(crate) fn new(
         account_id: AccountId,
         session_id: SessionId,
         generation: Generation,
         permissions: Vec<Permission>,
         profile_ids: Vec<ProfileId>,
+        device_id: Option<String>,
         issued_at: DateTime<Utc>,
         expires_at: DateTime<Utc>,
     ) -> Self {
-        Self { account_id, session_id, generation, permissions, profile_ids, issued_at, expires_at }
+        Self {
+            account_id,
+            session_id,
+            generation,
+            permissions,
+            profile_ids,
+            device_id,
+            issued_at,
+            expires_at,
+        }
     }
 
     /// Remaining lifetime in whole seconds at `now` (saturating at zero).
