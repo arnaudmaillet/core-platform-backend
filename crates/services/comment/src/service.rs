@@ -17,6 +17,8 @@ use transport::kafka::config::{KafkaClientConfig, ProducerConfig};
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::app::{App, Backends};
+use crate::application::port::ReadGate;
+use crate::infrastructure::client::GrpcReadGate;
 use crate::infrastructure::grpc::handler::comment_service_handler::{
     CommentServiceHandler, CommentServiceServer,
 };
@@ -56,7 +58,7 @@ impl Service for CommentService {
             .build()?;
         let publisher = Arc::new(KafkaCommentEventPublisher::new(producer));
 
-        let app = App::build(backends, publisher)
+        let app = App::build(backends, publisher, read_gate_from_env()?)
             .await
             .map_err(|e| anyhow::anyhow!("comment app build: {e}"))?;
 
@@ -80,4 +82,31 @@ impl Service for CommentService {
         routes.add_service(CommentServiceServer::new(handler));
         Ok(())
     }
+}
+
+/// The read gate: post GetPost + social-graph CheckAccess. Lazy connects (a
+/// cold start needs neither up); request + connect deadlines are mandatory
+/// (tonic has none). Non-mesh reads fail closed without them.
+pub(crate) fn read_gate_from_env() -> anyhow::Result<Arc<dyn ReadGate>> {
+    Ok(Arc::new(GrpcReadGate::new(
+        lazy_channel("COMMENT_POST_GRPC_ENDPOINT", "http://localhost:50056")?,
+        lazy_channel("COMMENT_SOCIAL_GRAPH_GRPC_ENDPOINT", "http://localhost:50053")?,
+    )))
+}
+
+/// A lazily-connected channel to the endpoint in `endpoint_env` (or `default`),
+/// with the request and connect deadlines from COMMENT_GATE_RPC_TIMEOUT_MS /
+/// COMMENT_GATE_CONNECT_TIMEOUT_MS (1 s each by default).
+fn lazy_channel(endpoint_env: &str, default: &str) -> anyhow::Result<tonic::transport::Channel> {
+    let ms = |key: &str| {
+        std::time::Duration::from_millis(
+            std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(1_000),
+        )
+    };
+    let endpoint = std::env::var(endpoint_env).unwrap_or_else(|_| default.to_owned());
+    Ok(tonic::transport::Channel::from_shared(endpoint)
+        .map_err(|e| anyhow::anyhow!("invalid {endpoint_env}: {e}"))?
+        .timeout(ms("COMMENT_GATE_RPC_TIMEOUT_MS"))
+        .connect_timeout(ms("COMMENT_GATE_CONNECT_TIMEOUT_MS"))
+        .connect_lazy())
 }

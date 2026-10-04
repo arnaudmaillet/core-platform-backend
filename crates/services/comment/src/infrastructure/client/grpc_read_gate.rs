@@ -1,0 +1,274 @@
+//! The comment read gate over gRPC: post `GetPost` (the post's own state) then
+//! social-graph's mesh-only `CheckAccess` (the authors' audience).
+
+use std::collections::HashSet;
+
+use async_trait::async_trait;
+use post_api::post_service_client::PostServiceClient;
+use post_api::{GetPostRequest, ModerationRestriction, PostStatus};
+use social_graph_api::social_graph_service_client::SocialGraphServiceClient;
+use social_graph_api::{CheckAccessRequest, ContentAccess};
+use tonic::transport::Channel;
+use tonic::Code;
+
+use crate::application::port::ReadGate;
+use crate::domain::value_object::{PostId, ProfileId, Viewer};
+use crate::error::CommentError;
+
+/// Both channels are `Arc`-backed and must carry request timeouts (tonic has
+/// none by default).
+pub struct GrpcReadGate {
+    post:         PostServiceClient<Channel>,
+    social_graph: SocialGraphServiceClient<Channel>,
+}
+
+impl GrpcReadGate {
+    pub fn new(post: Channel, social_graph: Channel) -> Self {
+        Self {
+            post:         PostServiceClient::new(post),
+            social_graph: SocialGraphServiceClient::new(social_graph),
+        }
+    }
+}
+
+fn unavailable(status: tonic::Status) -> CommentError {
+    CommentError::AccessCheckUnavailable { reason: status.to_string() }
+}
+
+/// Whether the post's own state lets anyone but its author read it.
+fn post_is_public(view: &post_api::PostView) -> bool {
+    view.status == PostStatus::Published as i32
+        && view.moderation != ModerationRestriction::Removed as i32
+}
+
+/// `CheckAccess` caps per call (social-graph `MAX_VIEWERS` / `MAX_TARGETS`).
+const MAX_VIEWERS_PER_CALL: usize = 20;
+const MAX_TARGETS_PER_CALL: usize = 100;
+
+/// The calls covering `viewers` × `targets` within the caps: one per (viewer
+/// chunk, target chunk). An anonymous reader is one viewer chunk with no
+/// profiles.
+fn requests(viewers: &[ProfileId], targets: &[String]) -> Vec<CheckAccessRequest> {
+    let viewer_chunks: Vec<&[ProfileId]> = if viewers.is_empty() {
+        vec![&[]]
+    } else {
+        viewers.chunks(MAX_VIEWERS_PER_CALL).collect()
+    };
+    let mut out = Vec::new();
+    for v in &viewer_chunks {
+        for t in targets.chunks(MAX_TARGETS_PER_CALL) {
+            out.push(CheckAccessRequest {
+                viewer_profile_ids: v.iter().map(ProfileId::as_str).collect(),
+                target_profile_ids: t.to_vec(),
+            });
+        }
+    }
+    out
+}
+
+/// One answer per target from the split calls, as one call over the whole
+/// viewer set would give: HIDDEN if any viewer chunk says HIDDEN (or none
+/// answered for it: fail closed), else VISIBLE if any says VISIBLE (any profile
+/// follows), else HEADER_ONLY.
+fn combine(targets: &[String], responses: &[Vec<(String, i32)>]) -> Vec<(String, i32)> {
+    targets
+        .iter()
+        .map(|target| {
+            let mut answered = false;
+            let mut combined = ContentAccess::HeaderOnly;
+            for (id, access) in responses.iter().flatten() {
+                if id != target {
+                    continue;
+                }
+                answered = true;
+                match ContentAccess::try_from(*access) {
+                    Ok(ContentAccess::Visible) => combined = ContentAccess::Visible,
+                    Ok(ContentAccess::HeaderOnly) => {}
+                    _ => return (target.clone(), ContentAccess::Hidden as i32),
+                }
+            }
+            let combined = if answered { combined } else { ContentAccess::Hidden };
+            (target.clone(), combined as i32)
+        })
+        .collect()
+}
+
+/// Applies the access answers: `None` when the post author is not VISIBLE to
+/// the reader; otherwise the comment authors that are HIDDEN (or unanswered:
+/// fail closed). One's own profiles are never hidden from oneself.
+fn decide(
+    answers: &[(String, i32)],
+    viewers: &[ProfileId],
+    post_author: &str,
+    comment_authors: &[ProfileId],
+) -> Option<HashSet<ProfileId>> {
+    let access = |id: &str| {
+        answers
+            .iter()
+            .find(|(target, _)| target == id)
+            .and_then(|(_, a)| ContentAccess::try_from(*a).ok())
+    };
+    let own = |id: &str| viewers.iter().any(|v| v.as_str() == id);
+    if !own(post_author) && access(post_author) != Some(ContentAccess::Visible) {
+        return None;
+    }
+    Some(
+        comment_authors
+            .iter()
+            .filter(|a| {
+                let id = a.as_str();
+                !own(&id)
+                    && !matches!(
+                        access(&id),
+                        Some(ContentAccess::Visible) | Some(ContentAccess::HeaderOnly)
+                    )
+            })
+            .cloned()
+            .collect(),
+    )
+}
+
+#[async_trait]
+impl ReadGate for GrpcReadGate {
+    async fn check(
+        &self,
+        viewer: &Viewer,
+        post_id: &PostId,
+        comment_authors: &[ProfileId],
+    ) -> Result<Option<HashSet<ProfileId>>, CommentError> {
+        let viewers: &[ProfileId] = match viewer {
+            Viewer::Internal => return Ok(Some(HashSet::new())),
+            Viewer::Profiles(ids) => ids,
+        };
+
+        // The post's own state, read over the mesh (unfiltered), then judged
+        // here for this reader: only its author reads a draft or a takedown.
+        let view = match self
+            .post
+            .clone()
+            .get_post(GetPostRequest { post_id: post_id.as_str() })
+            .await
+        {
+            Ok(response) => response.into_inner(),
+            Err(status) if status.code() == Code::NotFound => return Ok(None),
+            Err(status) => return Err(unavailable(status)),
+        };
+        let reader_is_author = viewers.iter().any(|v| v.as_str() == view.profile_id);
+        if !reader_is_author && !post_is_public(&view) {
+            return Ok(None);
+        }
+
+        // CheckAccess for the post author and every comment author, split to
+        // the RPC's caps (a full page of 100 commenters + the post author is
+        // already over), then recombined per target.
+        let mut targets: Vec<String> = comment_authors.iter().map(ProfileId::as_str).collect();
+        targets.push(view.profile_id.clone());
+        targets.sort();
+        targets.dedup();
+        let mut responses = Vec::new();
+        for request in requests(viewers, &targets) {
+            let response = self
+                .social_graph
+                .clone()
+                .check_access(request)
+                .await
+                .map_err(unavailable)?
+                .into_inner();
+            responses.push(response.targets.into_iter().map(|t| (t.target_profile_id, t.access)).collect());
+        }
+        let answers = combine(&targets, &responses);
+        Ok(decide(&answers, viewers, &view.profile_id, comment_authors))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn id() -> ProfileId {
+        ProfileId::try_from(Uuid::now_v7().to_string().as_str()).unwrap()
+    }
+
+    fn answer(p: &ProfileId, a: ContentAccess) -> (String, i32) {
+        (p.as_str(), a as i32)
+    }
+
+    #[test]
+    fn the_post_author_must_be_visible() {
+        let (author, reader) = (id(), id());
+        for a in [ContentAccess::HeaderOnly, ContentAccess::Hidden] {
+            assert_eq!(decide(&[answer(&author, a)], std::slice::from_ref(&reader), &author.as_str(), &[]), None);
+        }
+        assert_eq!(decide(&[], std::slice::from_ref(&reader), &author.as_str(), &[]), None, "no answer");
+        assert!(decide(&[answer(&author, ContentAccess::Visible)], &[reader], &author.as_str(), &[]).is_some());
+        assert!(decide(&[], std::slice::from_ref(&author), &author.as_str(), &[]).is_some(), "the author");
+    }
+
+    #[test]
+    fn hidden_or_unanswered_comment_authors_are_dropped_private_ones_kept() {
+        let (author, reader, blocked, private, silent) = (id(), id(), id(), id(), id());
+        let answers = [
+            answer(&author, ContentAccess::Visible),
+            answer(&blocked, ContentAccess::Hidden),
+            answer(&private, ContentAccess::HeaderOnly),
+        ];
+        let hidden = decide(
+            &answers,
+            std::slice::from_ref(&reader),
+            &author.as_str(),
+            &[blocked.clone(), private, silent.clone(), reader.clone()],
+        )
+        .unwrap();
+        assert_eq!(hidden, HashSet::from([blocked, silent]), "the reader's own comments stay");
+    }
+
+    #[test]
+    fn a_full_page_of_commenters_stays_within_the_rpc_caps() {
+        // 100 distinct commenters + the post author, read by an account with 25
+        // profiles: 2 viewer chunks × 2 target chunks, each within the caps.
+        let viewers: Vec<ProfileId> = (0..25).map(|_| id()).collect();
+        let targets: Vec<String> = (0..101).map(|_| id().as_str()).collect();
+        let calls = requests(&viewers, &targets);
+        assert_eq!(calls.len(), 4);
+        for call in &calls {
+            assert!(call.viewer_profile_ids.len() <= MAX_VIEWERS_PER_CALL);
+            assert!(call.target_profile_ids.len() <= MAX_TARGETS_PER_CALL);
+        }
+        let covered: HashSet<&String> = calls.iter().flat_map(|c| &c.target_profile_ids).collect();
+        assert_eq!(covered.len(), 101, "every target asked");
+        // Anonymous: one viewer chunk with no profiles.
+        assert_eq!(requests(&[], &targets).len(), 2);
+    }
+
+    #[test]
+    fn split_answers_combine_like_one_call() {
+        let t = |s: &str| s.to_owned();
+        let (v, h, ho) = (ContentAccess::Visible as i32, ContentAccess::Hidden as i32, ContentAccess::HeaderOnly as i32);
+        let targets = [t("a"), t("b"), t("c"), t("d")];
+        let responses = vec![
+            vec![(t("a"), ho), (t("b"), v), (t("c"), ho)],
+            vec![(t("a"), v), (t("b"), h), (t("c"), ho)],
+        ];
+        let combined: std::collections::HashMap<String, i32> = combine(&targets, &responses).into_iter().collect();
+        assert_eq!(combined["a"], v, "a follower in another chunk");
+        assert_eq!(combined["b"], h, "a block in any chunk");
+        assert_eq!(combined["c"], ho);
+        assert_eq!(combined["d"], h, "never answered: fail closed");
+    }
+
+    #[test]
+    fn only_published_and_not_removed_posts_are_public() {
+        let view = |status: PostStatus, moderation: ModerationRestriction| post_api::PostView {
+            status: status as i32,
+            moderation: moderation as i32,
+            ..Default::default()
+        };
+        assert!(post_is_public(&view(PostStatus::Published, ModerationRestriction::None)));
+        assert!(post_is_public(&view(PostStatus::Published, ModerationRestriction::Limited)));
+        assert!(!post_is_public(&view(PostStatus::Published, ModerationRestriction::Removed)));
+        assert!(!post_is_public(&view(PostStatus::Draft, ModerationRestriction::None)));
+        assert!(!post_is_public(&view(PostStatus::Deleted, ModerationRestriction::None)));
+    }
+}

@@ -36,7 +36,8 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     let publisher = Arc::new(KafkaCommentEventPublisher::new(producer));
 
     let backends = Backends { scylla: ScyllaConfig::from_env() };
-    let app = App::build(backends, publisher).await?;
+    let gate = crate::service::read_gate_from_env().map_err(|e| e.to_string())?;
+    let app = App::build(backends, publisher, gate).await?;
 
     // ── gRPC server ───────────────────────────────────────────────────────────
 

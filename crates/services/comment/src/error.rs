@@ -54,6 +54,12 @@ pub enum CommentError {
 
     #[error("domain violation on field '{field}': {message}")]
     DomainViolation { field: String, message: String },
+
+    // ── CMT-5xxx: dependencies ────────────────────────────────────────────────
+    /// The read check (post lookup or social-graph `CheckAccess`) could not
+    /// answer. Reads fail closed rather than risk showing hidden content.
+    #[error("audience check unavailable: {reason}")]
+    AccessCheckUnavailable { reason: String },
 }
 
 impl AppError for CommentError {
@@ -79,6 +85,7 @@ impl AppError for CommentError {
             Self::InvalidPostId(_)             => "CMT-9002",
             Self::InvalidProfileId(_)          => "CMT-9003",
             Self::DomainViolation { .. }       => "CMT-9004",
+            Self::AccessCheckUnavailable { .. } => "CMT-5001",
         }
     }
 
@@ -104,6 +111,7 @@ impl AppError for CommentError {
             | Self::DomainViolation { .. }     => StatusCode::UNPROCESSABLE_ENTITY,
 
             Self::EventPublishFailed { .. }    => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::AccessCheckUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -114,6 +122,7 @@ impl AppError for CommentError {
             Self::EventPublishFailed { .. }    => Severity::High,
             Self::AuthorMismatch { .. }        => Severity::Medium,
             Self::DomainViolation { .. }       => Severity::Medium,
+            Self::AccessCheckUnavailable { .. } => Severity::Medium,
             _                                  => Severity::Low,
         }
     }
@@ -121,6 +130,7 @@ impl AppError for CommentError {
     fn is_retryable(&self) -> bool {
         match self {
             Self::Storage(e) => e.is_retryable(),
+            Self::AccessCheckUnavailable { .. } => true,
             _                => false,
         }
     }
@@ -138,6 +148,7 @@ impl AppError for CommentError {
             Self::EmptyContent
             | Self::IncompleteGifMetadata      => "content",
             Self::EventPublishFailed { .. }    => "kafka",
+            Self::AccessCheckUnavailable { .. } => "dependency",
             _                                  => "CMT",
         }
     }
@@ -160,6 +171,8 @@ impl AppError for CommentError {
             Self::InvalidPostId(_)             => "The provided post ID is not valid.",
             Self::InvalidProfileId(_)          => "The provided profile ID is not valid.",
             Self::DomainViolation { .. }       => "A domain constraint was violated.",
+            Self::AccessCheckUnavailable { .. } =>
+                "These comments are temporarily unavailable. Please try again later.",
             Self::Validation(e)                => e.user_facing_message(),
         }
     }

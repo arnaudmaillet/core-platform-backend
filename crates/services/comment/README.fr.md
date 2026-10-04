@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 5c4c2750cac509c6e09295fad86b37f93c09ab36a92ac9e01f3329f0b1cd1cc9
-  translated_at: 2026-06-25
+  source_sha256: 96f0f709b3177d1b70afc262e065b5dac8a38a5114a122d9cb0ab2dfeaa6e808
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -131,6 +131,20 @@ service CommentService {
 > Les curseurs de pagination sont `created_at DESC` ; les inserts après le curseur ne sont jamais renvoyés
 > (pages stables de façon monotone).
 
+**Lectures selon le lecteur.** `GetComment` / `ListTopLevel` / `ListReplies` prennent le lecteur du
+transport (`edge::viewer`). Pour tout appelant hors mesh, un **read gate** décide avec un `GetPost`
+(post) et un `CheckAccess` (social-graph) par appel (auteur du post + chaque auteur de commentaire de
+la page) :
+- le **post** doit être lisible : publié et non retiré par la modération (son auteur le voit quoi
+  qu'il arrive), et son auteur `VISIBLE` pour le lecteur (pas un auteur privé qu'il ne suit pas, pas
+  de blocage dans un sens ou l'autre, pas masqué). Sinon `GetComment` renvoie `CMT-1001` et les
+  listes sont vides ;
+- les commentaires d'un auteur **masqué** pour le lecteur (blocage dans un sens ou l'autre, profil
+  masqué) sont retirés ; le commentaire d'un profil privé sur un post lisible reste. Une page peut
+  revenir plus courte tandis que `next_token` reste valide.
+
+Le gate échoue fermé : une panne renvoie `CMT-5001` (`UNAVAILABLE`), jamais les commentaires.
+
 ### Contrat d'erreur (`CMT-xxxx`)
 
 | Code | Error | HTTP |
@@ -138,6 +152,7 @@ service CommentService {
 | CMT-1001/1002/1003 | not found / already deleted / author mismatch | 404 / 409 / 403 |
 | CMT-2001/2002/2003 | nesting depth / parent not found / parent deleted | 422 / 404 / 422 |
 | CMT-3001/3002 | empty content / incomplete GIF metadata | 422 |
+| CMT-5001 | `AccessCheckUnavailable` (read gate down; retryable) | 503 → `UNAVAILABLE` |
 | CMT-4001 | Kafka publish failed | 500 |
 | CMT-9001..9004 | invalid ids / domain violation | 422 |
 
@@ -213,6 +228,8 @@ async fn main() -> anyhow::Result<()> {
 | `KAFKA_BOOTSTRAP_SERVERS` | **Yes** | — | Kafka brokers. |
 | `KAFKA_SECURITY_PROTOCOL` / `KAFKA_SASL_*` | No | `PLAINTEXT` | Auth for managed Kafka. |
 | `COMMENT_GRPC_ADDR` | No | `0.0.0.0:50057` | gRPC bind address. |
+| `COMMENT_POST_GRPC_ENDPOINT` / `COMMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Oui** (prod) | `http://localhost:50056` / `:50053` | Endpoints mesh du read gate (`GetPost`, `CheckAccess`). Sans eux, les lectures hors mesh échouent fermé (`CMT-5001`). |
+| `COMMENT_GATE_RPC_TIMEOUT_MS` / `COMMENT_GATE_CONNECT_TIMEOUT_MS` | Non | `1000` / `1000` | Délais de ces appels. |
 
 > Le réglage complet `SCYLLA_*` / `KAFKA_*` vit dans les crates partagés storage/transport.
 
