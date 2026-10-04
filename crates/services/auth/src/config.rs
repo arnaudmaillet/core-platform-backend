@@ -36,6 +36,11 @@ pub struct AuthConfig {
     pub idp_http_timeout: std::time::Duration,
     /// Connect deadline for Keycloak HTTP calls.
     pub idp_connect_timeout: std::time::Duration,
+    /// `AUTH_GUEST_SESSIONS_ENABLED` (default **false**): `StartGuestSession`
+    /// writes a session per call with no credential, so it stays off wherever
+    /// the abuse controls (per-IP / per-device limits, App Attest — B5) are not
+    /// in front of it yet. The local fleet turns it on.
+    pub guest_sessions_enabled: bool,
 }
 
 impl AuthConfig {
@@ -90,6 +95,8 @@ impl AuthConfig {
             profile_connect_timeout: env_ms("AUTH_PROFILE_CONNECT_TIMEOUT_MS", 2_000),
             idp_http_timeout: env_ms("AUTH_IDP_HTTP_TIMEOUT_MS", 5_000),
             idp_connect_timeout: env_ms("AUTH_IDP_CONNECT_TIMEOUT_MS", 2_000),
+            guest_sessions_enabled: std::env::var("AUTH_GUEST_SESSIONS_ENABLED")
+                .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes")),
         })
     }
 }

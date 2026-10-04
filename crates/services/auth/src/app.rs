@@ -52,6 +52,8 @@ pub struct AppDeps {
     pub publisher: Arc<dyn EventPublisher>,
     /// Guest records (`StartGuestSession`).
     pub guests: Arc<dyn GuestRegistry>,
+    /// `StartGuestSession` kill switch (`AUTH_GUEST_SESSIONS_ENABLED`).
+    pub guest_sessions_enabled: bool,
     pub policy: SessionPolicy,
 }
 
@@ -128,6 +130,7 @@ impl App {
             Arc::clone(&deps.minter),
             Arc::clone(&deps.guests),
             deps.policy.clone(),
+            deps.guest_sessions_enabled,
         ));
 
         AuthServiceHandler::new(
@@ -204,6 +207,7 @@ impl App {
             minter: Arc::new(minter),
             publisher,
             guests: Arc::new(PgGuestRegistry::new(tx.clone())),
+            guest_sessions_enabled: config.guest_sessions_enabled,
             policy: config.policy,
         };
 
@@ -232,6 +236,7 @@ mod tests {
             minter: fx.minter.clone(),
             publisher: fx.publisher.clone(),
             guests: fx.guests.clone(),
+            guest_sessions_enabled: true,
             policy: fx.policy.clone(),
         })
     }

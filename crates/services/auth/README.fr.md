@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: f77268d84631f802ee3b4f6743e64a6bd4c48cfd7ebb8d11764bf18684e6ef9c
+  source_sha256: 3c638222b7a00428117be154e0c42f92184b8abc0024958200043fc24077740c
   translated_at: 2026-10-04
   status: complete
 ---
@@ -78,7 +78,8 @@ une fois par appareil à l'inscription). L'edge client refuse un jeton invité s
 `permission(…, "read:public")` ; realtime refuse les handshakes invité. **Les membres portent aussi
 `read:public`** (ajoutée à chaque émission). L'émission d'une session invité n'est pas publiée dans
 l'outbox (le plan d'audit enregistre des comptes). La vérification App Attest et les limites par IP
-/ par appareil sur `StartGuestSession` relèvent de la tranche anti-abus (B5).
+/ par appareil sur `StartGuestSession` relèvent de la tranche anti-abus (B5) ; d'ici là, la RPC est
+**désactivée par défaut** (`AUTH_GUEST_SESSIONS_ENABLED` ; la fleet locale l'active).
 
 ## 📐 Architecture & concepts
 
@@ -161,6 +162,7 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_ACCOUNT_GRPC_ENDPOINT` | Endpoint du service `account` | `http://localhost:50059` |
 | `AUTH_ACCOUNT_RPC_TIMEOUT_MS` · `AUTH_ACCOUNT_CONNECT_TIMEOUT_MS` | Deadlines par requête / de connexion sur le canal `account` (chemin chaud du login — échouer vite, ne jamais bloquer) | `2000` · `2000` |
 | `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Deadlines de requête / de connexion des appels HTTP Keycloak (échange de token) | `5000` · `2000` |
+| `AUTH_GUEST_SESSIONS_ENABLED` | Interrupteur de `StartGuestSession`. **Désactivé par défaut** : il écrit une session par appel sans identifiant, donc à laisser éteint partout où les contrôles anti-abus (limites par IP / par appareil, App Attest) ne sont pas devant lui. Éteint → `AUT-1005` (`PERMISSION_DENIED`). | `false` |
 | Postgres / Redis / Kafka | via les `from_env()` des crates de stockage partagées | — |
 
 ## 🧪 Développement local

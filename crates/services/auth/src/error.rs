@@ -29,6 +29,7 @@ use thiserror::Error;
 /// | AUT-5002 | IdpAuthenticationFailed      | 401  | Low      | No        |
 /// | AUT-5003 | IdpTokenRejected             | 401  | Low      | No        |
 /// | AUT-5004 | ClaimsNormalizationFailed    | 502  | Medium   | No        |
+/// | AUT-1005 | GuestSessionsDisabled        | 403  | Low      | No        |
 /// | AUT-6001 | AccountNotActive             | 403  | Medium   | No        |
 /// | AUT-6002 | AccountDirectoryUnavailable  | 503  | High     | **Yes**   |
 /// | AUT-6003 | ProfileDirectoryUnavailable  | 503  | Medium   | **Yes**   |
@@ -140,6 +141,10 @@ pub enum AuthError {
 
     #[error("invalid account ID: '{0}'")]
     InvalidAccountId(String),
+
+    /// `StartGuestSession` is switched off (`AUTH_GUEST_SESSIONS_ENABLED`).
+    #[error("guest sessions are disabled")]
+    GuestSessionsDisabled,
 }
 
 impl AppError for AuthError {
@@ -181,6 +186,7 @@ impl AppError for AuthError {
             AuthError::DomainViolation { .. } => "AUT-9001",
             AuthError::InvalidSessionId(_) => "AUT-9002",
             AuthError::InvalidAccountId(_) => "AUT-9003",
+            AuthError::GuestSessionsDisabled => "AUT-1005",
         }
     }
 
@@ -209,7 +215,7 @@ impl AppError for AuthError {
 
             AuthError::SubjectAlreadyLinked { .. } => StatusCode::CONFLICT,
 
-            AuthError::AccountNotActive { .. } => StatusCode::FORBIDDEN,
+            AuthError::AccountNotActive { .. } | AuthError::GuestSessionsDisabled => StatusCode::FORBIDDEN,
 
             AuthError::TokenSigningFailed => StatusCode::INTERNAL_SERVER_ERROR,
 
@@ -299,6 +305,7 @@ impl AppError for AuthError {
             AuthError::AccountNotActive { .. } => "This account cannot sign in at this time.",
             AuthError::AccountDirectoryUnavailable => "The account service is temporarily unavailable.",
             AuthError::ProfileDirectoryUnavailable => "The profile service is temporarily unavailable.",
+            AuthError::GuestSessionsDisabled => "Browsing without an account is not available right now.",
             _ => "A domain constraint was violated.",
         }
     }
