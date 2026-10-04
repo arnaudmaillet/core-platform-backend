@@ -192,6 +192,8 @@ mod tests {
             show_like_counts: true,
             allow_remix: true,
             allow_sound_reuse: false,
+            limit_audience: None,
+            limit_until_ms: None,
             occurred_at_ms: 1,
         });
         assert_eq!(

@@ -25,6 +25,7 @@ async fn interaction_settings_round_trip_and_are_announced() {
         show_like_counts: false,
         allow_remix: false,
         allow_sound_reuse: true,
+        limit: None,
     };
     h.command_bus
         .dispatch(Envelope::new(
@@ -224,4 +225,36 @@ async fn account_type_and_a_verification_request_through_review() {
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), decide(true, None))).await.expect("approve");
     assert!(h.get_by_id(&profile.id).await.unwrap().verified, "the outcome reaches the profile");
     assert!(h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), ask())).await.is_err(), "already verified");
+}
+
+#[tokio::test]
+async fn an_interaction_limit_is_set_kept_by_other_changes_and_cleared() {
+    use profile::application::command::{SetInteractionLimitCommand, SetInteractionSettingsCommand};
+    use profile::domain::value_object::{InteractionLimit, InteractionSettings, LimitAudience};
+
+    let h = TestHarness::start().await;
+    let handle = harness::random_handle();
+    h.create(&harness::random_account_id(), &handle, "Alice").await;
+    let profile = h.get_by_handle(&handle).await.expect("created");
+
+    let now = chrono::Utc::now();
+    let limit = InteractionLimit::new(LimitAudience::RecentFollowers, now + chrono::Duration::days(3), now).unwrap();
+    assert!(InteractionLimit::new(LimitAudience::NonFollowers, now + chrono::Duration::weeks(5), now).is_err(), "≤ 4 weeks");
+    let set = SetInteractionLimitCommand { profile_id: profile.id.clone(), limit: Some(limit) };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), set)).await.expect("set limit");
+    assert_eq!(h.get_by_id(&profile.id).await.unwrap().interaction.limit, Some(limit));
+
+    // Changing the other settings keeps the limit.
+    let other = SetInteractionSettingsCommand {
+        profile_id: profile.id.clone(),
+        settings: InteractionSettings::default(),
+        allow_remix: None,
+        allow_sound_reuse: None,
+    };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), other)).await.expect("settings");
+    assert_eq!(h.get_by_id(&profile.id).await.unwrap().interaction.limit, Some(limit));
+
+    let clear = SetInteractionLimitCommand { profile_id: profile.id.clone(), limit: None };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), clear)).await.expect("clear");
+    assert_eq!(h.get_by_id(&profile.id).await.unwrap().interaction.limit, None);
 }

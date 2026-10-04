@@ -122,6 +122,20 @@ where
         self.set_location_settings(request).await
     }
 
+    async fn set_interaction_limit(
+        &self,
+        request: Request<proto::SetInteractionLimitRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.set_interaction_limit(request).await
+    }
+
+    async fn clear_interaction_limit(
+        &self,
+        request: Request<proto::ClearInteractionLimitRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.clear_interaction_limit(request).await
+    }
+
     async fn set_interaction_settings(
         &self,
         request: Request<proto::SetInteractionSettingsRequest>,

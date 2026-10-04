@@ -33,6 +33,9 @@ pub struct Comment {
     created_at:     DateTime<Utc>,
     updated_at:     DateTime<Utc>,
     deleted_at:     Option<DateTime<Utc>>,
+    /// Held for the post owner's review (a temporary limit, #669): seen by its
+    /// author and the owner only, announced on approval.
+    held:           bool,
     pending_events: Vec<DomainEvent>,
 }
 
@@ -80,6 +83,7 @@ impl Comment {
             created_at: now,
             updated_at: now,
             deleted_at: None,
+            held: false,
             pending_events: vec![event],
         })
     }
@@ -110,6 +114,7 @@ impl Comment {
             created_at,
             updated_at,
             deleted_at,
+            held: false,
             pending_events: Vec::new(),
         }
     }
@@ -153,6 +158,42 @@ impl Comment {
         }
     }
 
+    /// Holds a just-created comment for the post owner's review: it is not
+    /// announced (its `CommentCreated` waits for the approval).
+    pub fn hold(&mut self) {
+        self.held = true;
+        self.pending_events.clear();
+    }
+
+    /// Restores the stored held flag.
+    pub fn with_held(mut self, held: bool) -> Self {
+        self.held = held;
+        self
+    }
+
+    /// The post owner approves a held comment: it shows and is announced.
+    pub fn release(&mut self) -> Result<(), CommentError> {
+        if !self.held || self.status == CommentStatus::Deleted {
+            return Err(CommentError::DomainViolation {
+                field:   "held".into(),
+                message: "the comment is not held".into(),
+            });
+        }
+        self.held = false;
+        self.pending_events.push(DomainEvent::CommentCreated(CommentCreatedEvent {
+            comment_id:    self.id.as_str(),
+            post_id:       self.post_id.as_str(),
+            author_id:     self.author_id.as_str(),
+            parent_id:     self.parent_id.as_ref().map(CommentId::as_str),
+            created_at_ms: self.created_at.timestamp_millis(),
+        }));
+        Ok(())
+    }
+
+    pub fn held(&self) -> bool {
+        self.held
+    }
+
     /// Drains the pending domain event queue. Must be called after each mutation.
     pub fn take_events(&mut self) -> Vec<DomainEvent> {
         std::mem::take(&mut self.pending_events)
@@ -177,4 +218,36 @@ impl Comment {
 fn _assert_send_sync() {
     fn _check<T: Send + Sync>() {}
     _check::<CommentError>();
+}
+
+#[cfg(test)]
+mod held_tests {
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn comment() -> Comment {
+        Comment::create(
+            CommentId::from_uuid(Uuid::now_v7()),
+            PostId::from_uuid(Uuid::now_v7()),
+            ProfileId::from_uuid(Uuid::now_v7()),
+            None,
+            true,
+            Some(CommentBody::new("hi").unwrap()),
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_held_comment_is_announced_only_on_release() {
+        let mut c = comment();
+        c.hold();
+        assert!(c.held());
+        assert!(c.take_events().is_empty(), "not announced while held");
+        c.release().unwrap();
+        assert!(!c.held());
+        assert!(matches!(c.take_events().as_slice(), [DomainEvent::CommentCreated(_)]));
+        assert!(c.release().is_err(), "only a held comment is released");
+    }
 }

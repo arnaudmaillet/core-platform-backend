@@ -176,6 +176,27 @@ message InteractionSettings {
     // request, absent keeps the stored value.
     optional bool       allow_remix       = 6;
     optional bool       allow_sound_reuse = 7;
+    // A temporary interaction limit, when one is on (view only; set it with
+    // SetInteractionLimit).
+    InteractionLimit    limit             = 8;
+}
+
+// While on (until until_ms), comments and messages from `audience` are held
+// for the owner's review instead of shown (#669).
+message InteractionLimit {
+    LimitAudience audience = 1;
+    int64         until_ms = 2;
+}
+
+// Turn a limit on: `until_ms` in the future, at most four weeks ahead.
+message SetInteractionLimitRequest {
+    string        profile_id = 1;
+    LimitAudience audience   = 2;
+    int64         until_ms   = 3;
+}
+
+message ClearInteractionLimitRequest {
+    string profile_id = 1;
 }
 
 // The whole set at once (an UNSPECIFIED audience is refused).

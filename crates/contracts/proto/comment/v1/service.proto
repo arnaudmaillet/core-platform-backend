@@ -12,6 +12,9 @@ service CommentService {
     // Emits CommentDeleted to Kafka in both cases.
     rpc DeleteComment (DeleteCommentRequest) returns (CommandResponse);
 
+    // The post owner's review of a held comment (#669).
+    rpc ReviewHeldComment (ReviewHeldCommentRequest) returns (CommandResponse);
+
     // Point-reads a single comment by ID from the source-of-truth table.
     rpc GetComment    (GetCommentRequest)    returns (CommentView);
 

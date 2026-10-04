@@ -115,6 +115,8 @@ service ProfileService {
   rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);
   rpc UpdateBanner(UpdateBannerRequest) returns (CommandResponse);
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
+  rpc SetInteractionLimit(SetInteractionLimitRequest) returns (CommandResponse); // #669 hold comments / messages from non-followers or recent followers until a time (≤ 4 weeks)
+  rpc ClearInteractionLimit(ClearInteractionLimitRequest) returns (CommandResponse);
   rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // who may comment / mention / message, downloads, like counts, remix and original-sound reuse (#669; absent on a set request ⇒ unchanged); teens start with followers-only and no downloads / remix / sound reuse
   rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse); // ghost mode + precise / city level (owner-only on the view); teens start ghosted; geo-discovery applies it
   rpc SetFeedSettings(SetFeedSettingsRequest) returns (CommandResponse); // #662 sensitive content less (default) / standard, synced across devices; the client sends it as timeline's content_level; owner-only on the view

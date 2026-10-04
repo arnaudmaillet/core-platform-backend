@@ -131,7 +131,7 @@ service SocialGraphService {
   rpc ListMutes(ListMutesRequest) returns (ListMutesResponse);   // owner
   rpc ListRestricted(ListRestrictedRequest) returns (ListRestrictedResponse);   // owner
   rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY
-  rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);   // MESH-ONLY: may actor comment / mention / message target (its profile interaction settings, blocks)
+  rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);   // MESH-ONLY: may actor comment / mention / message target (its profile interaction settings, blocks); `held` when the target's temporary limit (#669) covers the actor — a comment / message from a non-follower, or a follower of less than 7 days under `recent_followers`
   rpc ListMutedProfiles(ListMutedProfilesRequest) returns (ListMutedProfilesResponse);   // MESH-ONLY: a reader's mutes for one scope (timeline)
   rpc ListRestrictedAmong(ListRestrictedAmongRequest) returns (ListRestrictedAmongResponse);   // MESH-ONLY: which commenters the post owner restricted (comment)
 }

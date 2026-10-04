@@ -62,6 +62,8 @@ impl CommandHandler<SetInteractionSettingsCommand> for SetInteractionSettingsHan
         let settings = InteractionSettings {
             allow_remix: cmd.allow_remix.unwrap_or(current.allow_remix),
             allow_sound_reuse: cmd.allow_sound_reuse.unwrap_or(current.allow_sound_reuse),
+            // The temporary limit has its own commands.
+            limit: current.limit,
             ..cmd.settings
         };
         if !profile.set_interaction_settings(settings, envelope.correlation_id)? {
@@ -73,6 +75,54 @@ impl CommandHandler<SetInteractionSettingsCommand> for SetInteractionSettingsHan
         }
         let _ = self.cache.invalidate_by_id(&id).await;
         let _ = self.cache.invalidate_account_profiles(&profile.account_id()).await;
+        Ok(())
+    }
+}
+
+/// Turns a temporary interaction limit on (`Some`) or off (`None`) (#669).
+#[derive(Debug, Clone)]
+pub struct SetInteractionLimitCommand {
+    pub profile_id: String,
+    pub limit:      Option<crate::domain::value_object::InteractionLimit>,
+}
+
+impl Command for SetInteractionLimitCommand {}
+
+impl Validate for SetInteractionLimitCommand {
+    fn validate(&self) -> Result<(), Vec<FieldViolation>> {
+        if self.profile_id.trim().is_empty() {
+            return Err(vec![FieldViolation::new("profile_id", "VAL-3061", "profile_id must not be empty")]);
+        }
+        Ok(())
+    }
+}
+
+pub struct SetInteractionLimitHandler {
+    pub repo:      Arc<dyn ProfileRepository>,
+    pub cache:     Arc<dyn ProfileCache>,
+    pub publisher: Arc<dyn EventPublisher>,
+}
+
+impl CommandHandler<SetInteractionLimitCommand> for SetInteractionLimitHandler {
+    type Error = ProfileError;
+
+    async fn handle(&self, envelope: Envelope<SetInteractionLimitCommand>) -> Result<(), Self::Error> {
+        let cmd = &envelope.payload;
+        let id = ProfileId::try_from(cmd.profile_id.as_str())?;
+        let mut profile = self
+            .repo
+            .find_by_id(&id)
+            .await?
+            .ok_or_else(|| ProfileError::ProfileNotFound { id: cmd.profile_id.clone() })?;
+        let settings = InteractionSettings { limit: cmd.limit, ..profile.interaction() };
+        if !profile.set_interaction_settings(settings, envelope.correlation_id)? {
+            return Ok(());
+        }
+        self.repo.save(&profile).await?;
+        for event in profile.drain_events() {
+            self.publisher.publish(&event).await?;
+        }
+        let _ = self.cache.invalidate_by_id(&id).await;
         Ok(())
     }
 }

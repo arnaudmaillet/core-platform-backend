@@ -36,7 +36,7 @@ pub use profile_visibility::ProfileVisibility;
 pub use verification_kind::VerificationKind;
 pub use viewer::Viewer;
 pub use website_url::WebsiteUrl;
-pub use interaction_settings::{InteractionAudience, InteractionSettings};
+pub use interaction_settings::{InteractionAudience, InteractionLimit, InteractionSettings, LimitAudience, MAX_LIMIT};
 pub use business_info::BusinessInfo;
 pub use comment_filters::CommentFilters;
 pub use discovery_settings::DiscoverySettings;

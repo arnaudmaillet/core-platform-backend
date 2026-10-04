@@ -189,6 +189,48 @@ where
             .map_err(cqrs_error_to_status)
     }
 
+    /// Turns the owner's temporary interaction limit on (edge: one of the caller's profiles).
+    pub async fn set_interaction_limit(
+        &self,
+        request: Request<proto::SetInteractionLimitRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        use crate::application::command::SetInteractionLimitCommand;
+        use crate::domain::value_object::{InteractionLimit, LimitAudience};
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let audience = match proto::LimitAudience::try_from(req.audience) {
+            Ok(proto::LimitAudience::NonFollowers) => LimitAudience::NonFollowers,
+            Ok(proto::LimitAudience::RecentFollowers) => LimitAudience::RecentFollowers,
+            _ => return Err(Status::invalid_argument("audience must be set")),
+        };
+        let until = chrono::DateTime::from_timestamp_millis(req.until_ms)
+            .ok_or_else(|| Status::invalid_argument("until_ms out of range"))?;
+        let limit = InteractionLimit::new(audience, until, chrono::Utc::now())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let cmd = SetInteractionLimitCommand { profile_id: req.profile_id.clone(), limit: Some(limit) };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_cmd(&req.profile_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    /// Turns the owner's temporary interaction limit off.
+    pub async fn clear_interaction_limit(
+        &self,
+        request: Request<proto::ClearInteractionLimitRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        use crate::application::command::SetInteractionLimitCommand;
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let cmd = SetInteractionLimitCommand { profile_id: req.profile_id.clone(), limit: None };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_cmd(&req.profile_id))
+            .map_err(cqrs_error_to_status)
+    }
+
     /// The owner's interaction settings (edge: one of the caller's profiles).
     pub async fn set_interaction_settings(
         &self,
@@ -745,6 +787,13 @@ fn interaction_to_proto(s: InteractionSettings) -> proto::InteractionSettings {
         show_like_counts: s.show_like_counts,
         allow_remix: Some(s.allow_remix),
         allow_sound_reuse: Some(s.allow_sound_reuse),
+        limit: s.limit.map(|l| proto::InteractionLimit {
+            audience: (match l.audience {
+                crate::domain::value_object::LimitAudience::NonFollowers => proto::LimitAudience::NonFollowers,
+                crate::domain::value_object::LimitAudience::RecentFollowers => proto::LimitAudience::RecentFollowers,
+            }) as i32,
+            until_ms: l.until.timestamp_millis(),
+        }),
     }
 }
 

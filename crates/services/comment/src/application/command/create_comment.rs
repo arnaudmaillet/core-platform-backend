@@ -88,15 +88,16 @@ where
             cmd.gif_height,
         )?;
 
-        match self.gate.may_comment(&author_id, &post_id).await? {
-            CommentAdmission::Allowed => {}
+        let held = match self.gate.may_comment(&author_id, &post_id).await? {
+            CommentAdmission::Allowed => false,
+            CommentAdmission::Held => true,
             CommentAdmission::PostUnavailable => {
                 return Err(CommentError::PostNotFound { post_id: cmd.post_id.clone() });
             }
             CommentAdmission::Restricted => {
                 return Err(CommentError::CommentsRestricted { post_id: cmd.post_id.clone() });
             }
-        }
+        };
 
         let (parent_id, parent_is_top_level) = resolve_parent(
             cmd.parent_id.as_deref(),
@@ -112,6 +113,10 @@ where
             body,
             gif,
         )?;
+        if held {
+            // Held for the post owner's review: stored, not announced (#669).
+            comment.hold();
+        }
 
         self.repository.insert(&comment).await?;
 

@@ -24,4 +24,6 @@ pub struct CommentRow {
     pub created_at: CqlTimestamp,
     pub updated_at: CqlTimestamp,
     pub deleted_at: Option<CqlTimestamp>,
+    /// NULL ⇒ not held (#669).
+    pub held:       Option<bool>,
 }

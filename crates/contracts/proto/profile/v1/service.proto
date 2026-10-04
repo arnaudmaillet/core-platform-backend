@@ -43,6 +43,11 @@ service ProfileService {
     // Who may comment / mention / message this profile, downloads, like counts.
     rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse);
 
+    // A temporary interaction limit (#669): hold comments and messages from
+    // non-followers / recent followers until a time (owner only).
+    rpc SetInteractionLimit(SetInteractionLimitRequest) returns (CommandResponse);
+    rpc ClearInteractionLimit(ClearInteractionLimitRequest) returns (CommandResponse);
+
     // Ghost mode and location precision (owner only).
     rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse);
 

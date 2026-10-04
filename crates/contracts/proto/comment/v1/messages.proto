@@ -21,6 +21,14 @@ message CreateCommentRequest {
     uint32 gif_height = 9;
 }
 
+// The post's owner approves (shows and announces) or declines (removes) a
+// held comment.
+message ReviewHeldCommentRequest {
+    string comment_id = 1;
+    string owner_id   = 2;
+    bool   approve    = 3;
+}
+
 message DeleteCommentRequest {
     string comment_id = 1;
     string author_id  = 2;
@@ -78,6 +86,9 @@ message CommentView {
     GifMetadata   gif           = 7;
     int64         created_at_ms = 8;
     int64         updated_at_ms = 9;
+    // Held for the post owner's review (their temporary interaction limit,
+    // #669): only its author and the post's owner see it.
+    bool          held          = 10;
 }
 
 message ListCommentsResponse {

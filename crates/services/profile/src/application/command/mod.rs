@@ -27,7 +27,7 @@ pub use mask_account_profiles::{
 };
 pub use restore_profile::{RestoreProfileCommand, RestoreProfileHandler};
 pub use set_tier::{SetProfileTierCommand, SetProfileTierHandler};
-pub use set_interaction_settings::{SetInteractionSettingsCommand, SetInteractionSettingsHandler};
+pub use set_interaction_settings::{SetInteractionLimitCommand, SetInteractionLimitHandler, SetInteractionSettingsCommand, SetInteractionSettingsHandler};
 pub use set_comment_filters::{SetCommentFiltersCommand, SetCommentFiltersHandler};
 pub use set_discovery_settings::{SetDiscoverySettingsCommand, SetDiscoverySettingsHandler};
 pub use set_tab_settings::{SetTabSettingsCommand, SetTabSettingsHandler};

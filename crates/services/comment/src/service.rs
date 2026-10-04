@@ -46,6 +46,7 @@ impl Service for CommentService {
     const EDGE_POLICY: EdgePolicy = &[
         authenticated("/comment.v1.CommentService/CreateComment"),
         authenticated("/comment.v1.CommentService/DeleteComment"),
+        authenticated("/comment.v1.CommentService/ReviewHeldComment"),
         public_read("/comment.v1.CommentService/GetComment"),
         public_read("/comment.v1.CommentService/ListTopLevel"),
         public_read("/comment.v1.CommentService/ListReplies"),

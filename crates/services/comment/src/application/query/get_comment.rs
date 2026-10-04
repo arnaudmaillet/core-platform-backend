@@ -46,7 +46,7 @@ impl<R: CommentRepository> QueryHandler<GetCommentQuery> for GetCommentHandler<R
         };
         let filter = self.filters.of(decision.post_author.as_ref()).await?;
         let body = comment.body().map(|b| b.as_str().to_owned());
-        if self.filters.shows(&query.viewer, &decision, filter.as_ref(), &author, body.as_deref()) {
+        if self.filters.shows(&query.viewer, &decision, filter.as_ref(), &author, body.as_deref(), comment.held()) {
             Ok(comment)
         } else {
             Err(not_found())

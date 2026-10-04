@@ -64,6 +64,8 @@ pub struct ScriptedGate {
     restricted_posts: Mutex<HashSet<String>>,
     /// post → its author, so the owner's comment filter applies.
     post_authors:     Mutex<std::collections::HashMap<String, ProfileId>>,
+    /// Posts whose author's temporary limit holds other profiles' comments.
+    limited_posts:    Mutex<HashSet<String>>,
     down:             Mutex<bool>,
 }
 
@@ -80,6 +82,10 @@ impl ScriptedGate {
     }
     pub fn set_post_author(&self, post_id: &str, author: &ProfileId) {
         self.post_authors.lock().unwrap().insert(post_id.to_owned(), author.clone());
+    }
+    /// The post's author has a temporary limit on: others' comments are held.
+    pub fn limit(&self, post_id: &str) {
+        self.limited_posts.lock().unwrap().insert(post_id.to_owned());
     }
     pub fn set_down(&self, down: bool) {
         *self.down.lock().unwrap() = down;
@@ -118,7 +124,15 @@ impl ReadGate for ScriptedGate {
         if self.restricted_posts.lock().unwrap().contains(&post_id.as_str()) {
             return Ok(CommentAdmission::Restricted);
         }
+        let own = self.post_authors.lock().unwrap().get(&post_id.as_str()) == Some(_author);
+        if !own && self.limited_posts.lock().unwrap().contains(&post_id.as_str()) {
+            return Ok(CommentAdmission::Held);
+        }
         Ok(CommentAdmission::Allowed)
+    }
+
+    async fn post_author(&self, post_id: &PostId) -> Result<Option<ProfileId>, CommentError> {
+        Ok(self.post_authors.lock().unwrap().get(&post_id.as_str()).cloned())
     }
 }
 

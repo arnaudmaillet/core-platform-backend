@@ -277,7 +277,7 @@ impl ReadGate for GrpcReadGate {
             return Ok(CommentAdmission::PostUnavailable);
         }
         // …and its author takes comments from them.
-        let allowed = self
+        let answer = self
             .social_graph
             .clone()
             .check_interaction(CheckInteractionRequest {
@@ -287,9 +287,20 @@ impl ReadGate for GrpcReadGate {
             })
             .await
             .map_err(unavailable)?
-            .into_inner()
-            .allowed;
-        Ok(if allowed { CommentAdmission::Allowed } else { CommentAdmission::Restricted })
+            .into_inner();
+        Ok(match (answer.allowed, answer.held) {
+            (false, _) => CommentAdmission::Restricted,
+            (true, true) => CommentAdmission::Held,
+            (true, false) => CommentAdmission::Allowed,
+        })
+    }
+
+    async fn post_author(&self, post_id: &PostId) -> Result<Option<ProfileId>, CommentError> {
+        match self.post.clone().get_post(GetPostRequest { post_id: post_id.as_str() }).await {
+            Ok(response) => Ok(ProfileId::try_from(response.into_inner().profile_id.as_str()).ok()),
+            Err(status) if status.code() == Code::NotFound => Ok(None),
+            Err(status) => Err(unavailable(status)),
+        }
     }
 }
 

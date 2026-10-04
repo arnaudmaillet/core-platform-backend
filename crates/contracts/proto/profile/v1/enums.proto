@@ -86,3 +86,11 @@ enum SensitiveContent {
     SENSITIVE_CONTENT_LESS        = 1;
     SENSITIVE_CONTENT_STANDARD    = 2;
 }
+
+// Whom a temporary interaction limit holds back.
+enum LimitAudience {
+    LIMIT_AUDIENCE_UNSPECIFIED      = 0;
+    LIMIT_AUDIENCE_NON_FOLLOWERS    = 1;
+    // Non-followers and profiles that followed in the last week.
+    LIMIT_AUDIENCE_RECENT_FOLLOWERS = 2;
+}

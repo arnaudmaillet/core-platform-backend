@@ -28,6 +28,7 @@ use crate::application::command::{
     SetFeedSettingsHandler, SetTabSettingsCommand,
     SetTabSettingsHandler,
     SetDiscoverySettingsHandler,
+    SetInteractionLimitCommand, SetInteractionLimitHandler,
     SetInteractionSettingsCommand, SetInteractionSettingsHandler, SetLocationSettingsCommand,
     SetLocationSettingsHandler, SetVisibilityCommand, SetVisibilityHandler, UpdateAvatarCommand, UpdateAvatarHandler,
     UpdateBannerCommand, UpdateBannerHandler, UpdateProfileCommand, UpdateProfileHandler,
@@ -152,6 +153,11 @@ impl App {
                     Arc::clone(&cache),
                     Arc::clone(&publisher),
                 ))?
+                .register::<SetInteractionLimitCommand, _>(SetInteractionLimitHandler {
+                    repo:      Arc::clone(&repository),
+                    cache:     Arc::clone(&cache),
+                    publisher: Arc::clone(&publisher),
+                })?
                 .register::<SetLocationSettingsCommand, _>(SetLocationSettingsHandler::new(
                     Arc::clone(&repository),
                     Arc::clone(&cache),
