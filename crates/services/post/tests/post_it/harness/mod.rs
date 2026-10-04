@@ -19,6 +19,7 @@ use scylla_storage::ScyllaConfig;
 
 use post::app::{App, Backends};
 use post::application::command::create_post::CreatePostCommand;
+use post::application::command::apply_moderation::ApplyModerationCommand;
 use post::application::command::delete_post::DeletePostCommand;
 use post::application::command::publish_post::PublishPostCommand;
 use post::application::query::get_post::GetPostQuery;
@@ -26,7 +27,7 @@ use post::application::query::list_posts_by_profile::ListPostsByProfileQuery;
 
 pub use post::application::port::PostSummary;
 pub use post::domain::aggregate::Post;
-pub use post::domain::value_object::{PostStatus, ProfileId, Viewer};
+pub use post::domain::value_object::{ModerationRestriction, PostStatus, ProfileId, Viewer};
 pub use test_support::await_until;
 
 use crate::post_it::fakes::CapturingPublisher;
@@ -101,6 +102,15 @@ impl TestHarness {
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await
             .expect("delete_post");
+    }
+
+    /// Records a moderation outcome, as the `moderation.v1.events` consumer does.
+    pub async fn moderate(&self, post_id: &str, restriction: ModerationRestriction, version: i64) {
+        let cmd = ApplyModerationCommand { post_id: post_id.to_owned(), restriction, version };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .expect("apply_moderation");
     }
 
     /// Reads a single post from the `posts` table (`Err` when absent), as a

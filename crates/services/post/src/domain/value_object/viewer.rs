@@ -1,4 +1,4 @@
-use super::{PostStatus, ProfileId};
+use super::{ModerationRestriction, PostStatus, ProfileId};
 
 /// Who is reading a post. Decides what a reader who is not the author may see;
 /// taken from how the request arrived (`transport::grpc::edge::viewer`), never
@@ -29,10 +29,17 @@ impl Viewer {
         matches!(self, Self::Internal) || self.is_author(author)
     }
 
-    /// Whether a post by `author` in `status` is visible to this viewer. Drafts
-    /// and deleted posts belong to their author alone.
-    pub fn may_see(&self, author: &ProfileId, status: PostStatus) -> bool {
-        status == PostStatus::Published || self.sees_every_post_of(author)
+    /// Whether a post by `author` in `status`, under `restriction`, is visible to
+    /// this viewer. Drafts, deleted posts and posts moderation removed belong to
+    /// their author alone.
+    pub fn may_see(
+        &self,
+        author: &ProfileId,
+        status: PostStatus,
+        restriction: ModerationRestriction,
+    ) -> bool {
+        self.sees_every_post_of(author)
+            || (status == PostStatus::Published && restriction != ModerationRestriction::Removed)
     }
 }
 
@@ -46,12 +53,28 @@ mod tests {
         ProfileId::from_uuid(Uuid::now_v7())
     }
 
+    const NONE: ModerationRestriction = ModerationRestriction::None;
+
     #[test]
     fn published_posts_are_visible_to_everyone() {
         let author = profile();
         for viewer in [Viewer::Internal, Viewer::Anonymous, Viewer::Profiles(vec![profile()])] {
-            assert!(viewer.may_see(&author, PostStatus::Published), "{viewer:?}");
+            assert!(viewer.may_see(&author, PostStatus::Published, NONE), "{viewer:?}");
+            // Limited / age-gated posts stay readable; discovery applies those.
+            for r in [ModerationRestriction::Limited, ModerationRestriction::AgeGated] {
+                assert!(viewer.may_see(&author, PostStatus::Published, r), "{viewer:?} {r:?}");
+            }
         }
+    }
+
+    #[test]
+    fn a_removed_post_belongs_to_its_author() {
+        let author = profile();
+        let removed = ModerationRestriction::Removed;
+        assert!(!Viewer::Anonymous.may_see(&author, PostStatus::Published, removed));
+        assert!(!Viewer::Profiles(vec![profile()]).may_see(&author, PostStatus::Published, removed));
+        assert!(Viewer::Profiles(vec![author.clone()]).may_see(&author, PostStatus::Published, removed));
+        assert!(Viewer::Internal.may_see(&author, PostStatus::Published, removed));
     }
 
     #[test]
@@ -59,10 +82,10 @@ mod tests {
         let author = profile();
         let other = profile();
         for status in [PostStatus::Draft, PostStatus::Deleted] {
-            assert!(!Viewer::Anonymous.may_see(&author, status));
-            assert!(!Viewer::Profiles(vec![other.clone()]).may_see(&author, status));
-            assert!(Viewer::Profiles(vec![other.clone(), author.clone()]).may_see(&author, status));
-            assert!(Viewer::Internal.may_see(&author, status), "the mesh is trusted");
+            assert!(!Viewer::Anonymous.may_see(&author, status, NONE));
+            assert!(!Viewer::Profiles(vec![other.clone()]).may_see(&author, status, NONE));
+            assert!(Viewer::Profiles(vec![other.clone(), author.clone()]).may_see(&author, status, NONE));
+            assert!(Viewer::Internal.may_see(&author, status, NONE), "the mesh is trusted");
         }
     }
 }

@@ -242,6 +242,7 @@ fn post_to_proto(post: Post) -> proto::PostView {
         deleted_at_ms:   post.deleted_at().map(|d| d.timestamp_millis()).unwrap_or_default(),
         audio_ref:       domain_audio_ref_to_proto(post.audio_ref()),
         location:        post.location().map(|g| proto::GeoPoint { lat: g.lat(), lng: g.lng() }),
+        moderation:      post.moderation().restriction.as_tinyint() as i32 + 1,
     }
 }
 
@@ -250,6 +251,7 @@ fn summary_to_proto(s: PostSummary) -> proto::PostSummary {
         post_id:      s.post_id.as_str(),
         kind:         s.kind.as_tinyint() as i32 + 1,
         status:       s.status.as_tinyint() as i32 + 1,
+        moderation:   s.moderation.as_tinyint() as i32 + 1,
         created_at_ms: s.created_at.timestamp_millis(),
     }
 }

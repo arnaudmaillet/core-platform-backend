@@ -116,10 +116,12 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("counter.v1.popularity", "geo-discovery"),
     // auth lifecycle → compliance plane
     ("auth.v1.events", "audit"),
-    // moderation decisions → compliance plane, search visibility, media takedown
+    // moderation decisions → compliance plane, search visibility, media takedown,
+    // post read restriction
     ("moderation.v1.events", "audit"),
     ("moderation.v1.events", "search"),
     ("moderation.v1.events", "media"),
+    ("moderation.v1.events", "post"),
     // media lifecycle → Plane-B processing pipeline (self-consume)
     ("media.v1.events", "media"),
     // audit generic ingest lane (see DEFERRED)

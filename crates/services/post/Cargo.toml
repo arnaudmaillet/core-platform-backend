@@ -39,6 +39,9 @@ integration-post = []
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Wire contract test in the moderation consumer: decode events serialized by
+# moderation's own types, so a casing drift fails here (see search, #687).
+moderation = { workspace = true }
 
 # ── Integration suite (feature = "integration-post") ─────────────────────────
 # Container orchestration, the RF=1 migration runner, and `await_until` come from

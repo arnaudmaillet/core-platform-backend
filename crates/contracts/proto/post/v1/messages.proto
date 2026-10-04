@@ -49,6 +49,7 @@ message PostView {
     int64      deleted_at_ms                    = 12;
     optional AudioReference audio_ref           = 13;
     optional GeoPoint       location            = 14;
+    ModerationRestriction   moderation          = 15;
 }
 
 message PostSummary {
@@ -56,6 +57,7 @@ message PostSummary {
     PostKind   kind         = 2;
     PostStatus status       = 3;
     int64      created_at_ms = 4;
+    ModerationRestriction moderation = 5;
 }
 
 message CommandResponse {

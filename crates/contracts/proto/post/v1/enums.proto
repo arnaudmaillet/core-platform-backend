@@ -16,6 +16,19 @@ enum PostStatus {
     POST_STATUS_DELETED     = 3;
 }
 
+// What moderation currently imposes on a post. Only the author ever reads a
+// REMOVED post; everyone else gets NOT_FOUND.
+enum ModerationRestriction {
+    MODERATION_RESTRICTION_UNSPECIFIED = 0;
+    MODERATION_RESTRICTION_NONE        = 1;
+    // Reach reduced: readable, kept out of discovery.
+    MODERATION_RESTRICTION_LIMITED     = 2;
+    // Shown only to audiences cleared for mature content.
+    MODERATION_RESTRICTION_AGE_GATED   = 3;
+    // Taken down: visible to its author only.
+    MODERATION_RESTRICTION_REMOVED     = 4;
+}
+
 enum AudioKind {
     AUDIO_KIND_UNSPECIFIED    = 0;
     AUDIO_KIND_ORIGINAL_SOUND = 1;

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: e9355e6f6919bc56d2061d97c5e3bd12e2cf162da5415323ea2cc3fd69e7261e
-  translated_at: 2026-06-29
+  source_sha256: 902a2548242f30281d4d73e0f2f0be7ba33c49567a863059fc6e9800fc340351
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -20,7 +20,7 @@ i18n:
 > | **Palier (Tier)** | **TIER-0** — le chemin de publication du contenu ; feeds et découverte dérivent de ses événements |
 > | **Binaire déployable** | `crates/apps/post-server` (crate bibliothèque : `crates/services/post`) |
 > | **Bases de données** | ScyllaDB keyspace `post` (2 tables) |
-> | **Asynchrone** | publie `post.v1.events` (unifié) + `post.published` / `post.updated` / `post.deleted` (legacy) · consomme `profile.v1.events` (dénormalisation du palier auteur) |
+> | **Asynchrone** | publie `post.v1.events` (unifié) + `post.published` / `post.updated` / `post.deleted` (legacy) · consomme `profile.v1.events` (dénormalisation du palier auteur) + `moderation.v1.events` (restriction de lecture) |
 > | **Appelants amont** | `<TODO: passerelle>` |
 > | **Dépendances aval** | ScyllaDB, Kafka |
 > | **SLO** | `<TODO>` dispo · `GetPost` p99 `<TODO>` · publication p99 `<TODO>` |
@@ -118,12 +118,20 @@ service PostService {
   rpc PublishPost (PublishPostRequest) returns (CommandResponse);           // Draft→Published; emits post.published
   rpc UpdatePost (UpdatePostRequest) returns (CommandResponse);             // emits post.updated
   rpc DeletePost (DeletePostRequest) returns (CommandResponse);             // soft-delete; emits post.deleted
-  rpc GetPost (GetPostRequest) returns (PostView);                          // point lookup
-  rpc ListPostsByProfile (ListPostsByProfileRequest) returns (ListPostsByProfileResponse); // cursor-paginated
+  rpc GetPost (GetPostRequest) returns (PostView);                          // point lookup; viewer-aware
+  rpc ListPostsByProfile (ListPostsByProfileRequest) returns (ListPostsByProfileResponse); // cursor-paginated; viewer-aware
 }
 // CreatePostRequest / PostView portent une localisation GeoPoint optionnelle :
 message GeoPoint { double lat = 1; double lng = 2; }  // WGS-84 ; absent → post non géo-indexé
 ```
+
+**Lectures selon le lecteur.** Le lecteur vient du transport (`edge::viewer`), jamais d'un champ de
+requête. Un brouillon, un post supprimé ou un post **retiré** par la modération n'est visible que de
+son auteur (tout profil des `pids` du jeton) et des appelants du mesh ; tout autre lecteur reçoit
+`PST-1001` de `GetPost` et ne le voit pas dans `ListPostsByProfile` (filtré par page : une page peut
+revenir plus courte tandis que `next_token` reste valide). `PostView.moderation` /
+`PostSummary.moderation` indiquent à l'auteur ce qui est en vigueur ; les posts `LIMITED` et
+`AGE_GATED` restent lisibles (la découverte les applique).
 
 ### Contrat d'erreur (`PST-xxxx`)
 
@@ -163,6 +171,7 @@ message GeoPoint { double lat = 1; double lng = 2; }  // WGS-84 ; absent → pos
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `profile.v1.events` | `post-author-tier` | dénormalise `ProfileTierChanged` dans la projection `author_tiers` (`profile_id → tier`) ; lue sur le chemin de publication pour estampiller `author_tier` sur les posts publiés. Les autres types committent en no-op | DLQ `profile.v1.events.dlq` |
+| `moderation.v1.events` | `post-moderation` | enregistre `enforcement_applied` / `enforcement_reversed` sur un **post** comme sa restriction de modération (`remove_content` → Removed, `visibility_limit` → Limited, `age_gate` → AgeGated ; réversion → None), gardé par l'`EnforcementVersion` par sujet de moderation pour que la redélivrance converge. Les autres entités, les actions au niveau de l'acteur et les autres types committent en no-op | DLQ `moderation.v1.events.dlq` |
 
 > **Contrat d'exécution :** l'événement est publié après le dual-write durable. Les consommateurs aval
 > gèrent leur propre traitement at-least-once sous `run_consumer` ; tous traitent `post.*` comme
@@ -233,7 +242,8 @@ async fn main() -> anyhow::Result<()> {
 ## 🚀 Déploiement, migrations & rollback
 
 - **Migrations :** `migrations/0001_create_keyspace.cql` → `0002_create_posts_table.cql` →
-  `0003_create_posts_by_profile_table.cql` sur `post`, appliquées **avant** le premier démarrage.
+  `0003_create_posts_by_profile_table.cql` → `0004`–`0007` (audio, paliers auteur, géo, colonnes de
+  modération ; `ALTER` en ligne) sur `post`, appliquées **avant** le premier démarrage.
 - **Déploiement/Rollback :** `<TODO>` ; service sans état, sûr à déployer.
 - **Piège de schéma :** l'ordre de clustering de l'index créateur (`created_at DESC, post_id ASC`) est un
   contrat de lecture — ne pas le changer une fois que des données existent.

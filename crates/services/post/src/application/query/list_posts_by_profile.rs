@@ -13,7 +13,7 @@ pub struct ListPostsByProfileQuery {
     pub limit:      i32,
     pub page_token: Option<String>,
     /// Who is reading. Anyone but the author (or a trusted internal caller) gets
-    /// published posts only.
+    /// published posts that moderation has not removed.
     pub viewer:     Viewer,
 }
 
@@ -41,7 +41,7 @@ impl<R: PostRepository> QueryHandler<ListPostsByProfileQuery> for ListPostsByPro
             .repository
             .list_by_profile(&profile_id, query.limit, query.page_token.as_deref())
             .await?;
-        posts.retain(|post| query.viewer.may_see(&profile_id, post.status));
+        posts.retain(|post| query.viewer.may_see(&profile_id, post.status, post.moderation));
         Ok((posts, next))
     }
 }

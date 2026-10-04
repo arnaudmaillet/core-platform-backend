@@ -4,7 +4,8 @@ use crate::{
         entity::MediaAttachment,
         event::{DomainEvent, PostDeletedEvent, PostPublishedEvent, PostUpdatedEvent},
         value_object::{
-            AudioReference, Caption, GeoPoint, PostId, PostKind, PostStatus, ProfileId, Viewer,
+            AudioReference, Caption, GeoPoint, ModerationRestriction, ModerationState, PostId,
+            PostKind, PostStatus, ProfileId, Viewer,
         },
     },
     error::PostError,
@@ -28,6 +29,8 @@ pub struct Post {
     updated_at:     DateTime<Utc>,
     published_at:   Option<DateTime<Utc>>,
     deleted_at:     Option<DateTime<Utc>>,
+    /// What moderation imposes on the post (from `moderation.v1.events`).
+    moderation:     ModerationState,
     pending_events: Vec<DomainEvent>,
 }
 
@@ -63,6 +66,7 @@ impl Post {
             updated_at: now,
             published_at: None,
             deleted_at: None,
+            moderation: ModerationState::default(),
             pending_events: Vec::new(),
         })
     }
@@ -83,6 +87,7 @@ impl Post {
         updated_at:   DateTime<Utc>,
         published_at: Option<DateTime<Utc>>,
         deleted_at:   Option<DateTime<Utc>>,
+        moderation:   ModerationState,
     ) -> Self {
         Self {
             id,
@@ -99,6 +104,7 @@ impl Post {
             updated_at,
             published_at,
             deleted_at,
+            moderation,
             pending_events: Vec::new(),
         }
     }
@@ -187,10 +193,18 @@ impl Post {
         Ok(now)
     }
 
-    /// Whether `viewer` may read this post: drafts and deleted posts are their
-    /// author's alone.
+    /// Whether `viewer` may read this post: drafts, deleted posts and posts
+    /// moderation removed are their author's alone.
     pub fn is_visible_to(&self, viewer: &Viewer) -> bool {
-        viewer.may_see(&self.profile_id, self.status)
+        viewer.may_see(&self.profile_id, self.status, self.moderation.restriction)
+    }
+
+    /// Records a moderation outcome (an enforcement applied or reversed). Ignored
+    /// unless `version` is newer than the one held, so redelivered or reordered
+    /// events converge. Returns whether the post changed. Emits no post event:
+    /// downstream services read moderation's stream themselves.
+    pub fn apply_moderation(&mut self, restriction: ModerationRestriction, version: i64) -> bool {
+        self.moderation.apply(restriction, version)
     }
 
     pub fn take_events(&mut self) -> Vec<DomainEvent> {
@@ -201,6 +215,7 @@ impl Post {
     pub fn profile_id(&self)   -> &ProfileId { &self.profile_id }
     pub fn kind(&self)         -> PostKind   { self.kind }
     pub fn status(&self)       -> PostStatus { self.status }
+    pub fn moderation(&self)   -> ModerationState { self.moderation }
     pub fn caption(&self)      -> &Caption   { &self.caption }
     pub fn attachments(&self)  -> &[MediaAttachment] { &self.attachments }
     pub fn parent_id(&self)    -> Option<&PostId>    { self.parent_id.as_ref() }
