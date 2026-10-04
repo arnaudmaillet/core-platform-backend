@@ -147,7 +147,10 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > `visibility_limit` on a post — the map is a discovery surface). The card row is marked
 > (`suppressed`, `moderation_version`; writes carry the row's remaining TTL) and its pin and cached
 > card leave Redis, so both paths drop it; a **newer** reversal restores it and rebuilds the pin
-> from the card's stored coordinates. **Per reader:** for any caller but the mesh, pins and cards are
+> and spatial-index entries from the card's stored coordinates. The two consumers are unordered: a
+> decision that arrives before its post.published is kept as a **tombstone** (visibility cells only,
+> 30-day TTL), and the indexer then stores the card without surfacing it, re-stamping the
+> visibility with the card's TTL so it never expires first. **Per reader:** for any caller but the mesh, pins and cards are
 > kept only for authors the reader may see (social-graph `CheckAccess`, one bulk call; private authors
 > they don't follow, blocks either way and hidden authors are dropped; one's own posts always stay).
 > That check fails **closed** (`GEO-6001`, `UNAVAILABLE`).

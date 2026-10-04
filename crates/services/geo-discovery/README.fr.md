@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 4ca23134b94b75a48a5948ab73e2c41e52e18baa3f4c80b1438db51c7a7cc0ae
+  source_sha256: f302ac844b44863eb9e9d065e3cb30330d36afee65e9d740bb0f82ac2c67fc51
   translated_at: 2026-10-04
   status: complete
 ---
@@ -161,8 +161,11 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > `remove_content` / `visibility_limit` sur un post — la carte est une surface de découverte). La
 > ligne de la fiche est marquée (`suppressed`, `moderation_version` ; les écritures portent le TTL
 > restant de la ligne) et son pin et sa fiche en cache quittent Redis, si bien que les deux chemins
-> l'ignorent ; une réversion **plus récente** le restaure et reconstruit le pin à partir des
-> coordonnées stockées sur la fiche. **Par lecteur :** pour tout appelant hors mesh, pins et fiches ne
+> l'ignorent ; une réversion **plus récente** le restaure et reconstruit le pin et les entrées de
+> l'index spatial à partir des coordonnées stockées sur la fiche. Les deux consumers ne sont pas
+> ordonnés : une décision arrivée avant son post.published est conservée comme **pierre tombale**
+> (cellules de visibilité seules, TTL 30 jours), puis l'indexeur stocke la fiche sans l'afficher, en
+> ré-estampillant la visibilité avec le TTL de la fiche pour qu'elle n'expire jamais avant elle. **Par lecteur :** pour tout appelant hors mesh, pins et fiches ne
 > sont gardés que pour les auteurs que le lecteur peut voir (`CheckAccess` de social-graph, un appel
 > groupé ; auteurs privés qu'il ne suit pas, blocages dans un sens ou l'autre et auteurs masqués sont
 > retirés ; ses propres posts restent toujours). Ce contrôle échoue **fermé** (`GEO-6001`, `UNAVAILABLE`).

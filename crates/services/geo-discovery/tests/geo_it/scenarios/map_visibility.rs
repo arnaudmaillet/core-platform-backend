@@ -71,3 +71,27 @@ async fn a_reader_only_sees_posts_of_authors_it_may_see() {
     assert!(h.try_get_timeline_as(&[from_open], reader()).await.is_err());
     assert_eq!(h.get_timeline(&[from_open]).await.cards.len(), 1);
 }
+
+#[tokio::test]
+async fn a_visibility_event_before_the_index_event_still_wins() {
+    let h = TestHarness::start().await;
+    let near = || h.pins_near_as(LAT, LNG, Viewer::Internal);
+
+    // Deleted before post.published reached the index consumer.
+    let deleted = Uuid::now_v7();
+    h.change_visibility(deleted, VisibilityChange::Deleted).await;
+    h.index_post_with_id(deleted, LAT, LNG).await;
+    assert!(!near().await.contains(&deleted));
+    assert!(h.get_timeline(&[deleted]).await.cards.is_empty());
+
+    // Taken down first, then indexed (twice: a redelivery), then reversed.
+    let moderated = Uuid::now_v7();
+    h.change_visibility(moderated, VisibilityChange::Moderation { restricted: true, version: 1 }).await;
+    h.index_post_with_id(moderated, LAT, LNG).await;
+    h.index_post_with_id(moderated, LAT, LNG).await;
+    assert!(!near().await.contains(&moderated));
+    assert!(h.get_timeline(&[moderated]).await.cards.is_empty());
+    h.change_visibility(moderated, VisibilityChange::Moderation { restricted: false, version: 2 }).await;
+    assert!(near().await.contains(&moderated), "restored: pin + spatial index rebuilt");
+    assert_eq!(h.get_timeline(&[moderated]).await.cards.len(), 1);
+}

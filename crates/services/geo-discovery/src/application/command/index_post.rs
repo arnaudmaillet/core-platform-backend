@@ -110,13 +110,18 @@ where
             lng:               Some(cmd.lng),
         };
 
-        // A redelivered post.published must not bring back a post the map
-        // already suppressed (deleted, or moderated): keep it off Redis.
-        let suppressed = self
-            .tile_repository
-            .get_card_with_visibility(&post_id)
-            .await?
-            .is_some_and(|(_, visibility, _)| visibility.suppression != Suppression::None);
+        // A post the map already suppressed (deleted or moderated, possibly
+        // before this event: a tombstone) must not surface. The card is still
+        // stored (a reversal rebuilds the pin from it), and the visibility is
+        // re-stamped with the card's TTL so it never expires before the card.
+        if let Some((_, visibility, _)) = self.tile_repository.get_card_with_visibility(&post_id).await?
+            && visibility.suppression != Suppression::None
+        {
+            self.tile_repository.upsert_card(&card, ttl).await?;
+            self.tile_repository.set_visibility(&post_id, visibility, ttl).await?;
+            tracing::debug!(post_id = %post_id, "post.published for a suppressed map post — card stored, map untouched");
+            return Ok(());
+        }
 
         // ── 1. ScyllaDB (durable, always first) ───────────────────────────────
         let (r5, r7, r9, card_res) = tokio::join!(
@@ -126,10 +131,6 @@ where
             self.tile_repository.upsert_card(&card, ttl),
         );
         r5?; r7?; r9?; card_res?;
-        if suppressed {
-            tracing::debug!(post_id = %post_id, "post.published for a suppressed map post — Redis left untouched");
-            return Ok(());
-        }
 
         // ── 2. Redis spatial index (ZADDs with Top-K cap) ─────────────────────
         let (si5, si7, si9) = tokio::join!(

@@ -92,6 +92,7 @@ impl App {
                     tile_repository: Arc::clone(&tile_repository),
                 })?
                 .register::<ApplyMapVisibilityCommand, _>(ApplyMapVisibilityHandler {
+                    spatial_index:   Arc::clone(&spatial_index),
                     card_store:      Arc::clone(&card_store),
                     tile_repository: Arc::clone(&tile_repository),
                     pin_store:       Arc::clone(&pin_store),
@@ -142,6 +143,7 @@ impl App {
             tokio::spawn(
                 VisibilityWorker::new(
                     kafka_config.clone(),
+                    Arc::clone(&spatial_index),
                     Arc::clone(&card_store),
                     Arc::clone(&tile_repository),
                     Arc::clone(&pin_store),

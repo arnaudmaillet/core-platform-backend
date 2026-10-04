@@ -167,13 +167,13 @@ impl TileRepository for ScyllaTileRepository {
             .get_card_with_visibility(post_id)
             .await?
             .filter(|(_, visibility, _)| visibility.suppression == Suppression::None)
-            .map(|(card, _, _)| card))
+            .and_then(|(card, _, _)| card))
     }
 
     async fn get_card_with_visibility(
         &self,
         post_id: &PostId,
-    ) -> Result<Option<(MapPostCard, MapVisibility, Option<i32>)>, GeoDiscoveryError> {
+    ) -> Result<Option<(Option<MapPostCard>, MapVisibility, Option<i32>)>, GeoDiscoveryError> {
         // TTL(author_handle): the row's real remaining life (author_handle is
         // written once, with the row), not published_at + retention.
         let stmt = self.fast_stmt(
@@ -201,8 +201,7 @@ impl TileRepository for ScyllaTileRepository {
                     suppression:        Suppression::from_tinyint(row.suppressed),
                     moderation_version: row.moderation_version.unwrap_or(0),
                 };
-                let ttl_secs = row.ttl_secs;
-                Ok(Some((MapPostCard::from(row), visibility, ttl_secs)))
+                Ok(Some((row.card(), visibility, row.ttl_secs)))
             }
             Some(Err(e))  => Err(row_err("get_card:deser", e)),
             None          => Ok(None),

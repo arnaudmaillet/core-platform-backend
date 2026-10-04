@@ -119,6 +119,25 @@ impl TestHarness {
         self.index_post_by(Uuid::now_v7(), lat, lng, virality, caption, thumbnail).await
     }
 
+    /// Indexes a post with a given id (to replay events out of order).
+    pub async fn index_post_with_id(&self, post: Uuid, lat: f64, lng: f64) {
+        let cmd = IndexPostCommand {
+            post_id:           post.to_string(),
+            author_id:         Uuid::now_v7().to_string(),
+            author_handle:     "tester".to_owned(),
+            author_avatar_url: String::new(),
+            thumbnail_url:     String::new(),
+            caption:           String::new(),
+            lat,
+            lng,
+            virality_score:    5.0,
+            published_at_ms:   chrono::Utc::now().timestamp_millis(),
+            retention_secs:    None,
+            author_tier:       0,
+        };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
+    }
+
     /// Indexes a post by `author`.
     pub async fn index_post_by(
         &self,

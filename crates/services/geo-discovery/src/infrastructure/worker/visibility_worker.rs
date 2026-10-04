@@ -19,7 +19,7 @@ use transport::kafka::consumer::{run_consumer, ProcessOutcome, RetryPolicy};
 use transport::kafka::producer::KafkaProducerHandle;
 
 use crate::application::command::{ApplyMapVisibilityCommand, ApplyMapVisibilityHandler};
-use crate::application::port::{CardStore, PinStore, TileRepository};
+use crate::application::port::{CardStore, PinStore, SpatialIndex, TileRepository};
 use crate::domain::value_object::VisibilityChange;
 use crate::infrastructure::worker::build_dlq_producer;
 
@@ -91,28 +91,31 @@ fn outcome(event: &VisibilityEvent) -> Outcome {
     })
 }
 
-pub struct VisibilityWorker<CS, TR, PS> {
+pub struct VisibilityWorker<SI, CS, TR, PS> {
     kafka_config:    KafkaClientConfig,
+    spatial_index:   Arc<SI>,
     card_store:      Arc<CS>,
     tile_repository: Arc<TR>,
     pin_store:       Arc<PS>,
     group_id:        String,
 }
 
-impl<CS, TR, PS> VisibilityWorker<CS, TR, PS>
+impl<SI, CS, TR, PS> VisibilityWorker<SI, CS, TR, PS>
 where
+    SI: SpatialIndex + 'static,
     CS: CardStore + 'static,
     TR: TileRepository + 'static,
     PS: PinStore + 'static,
 {
     pub fn new(
         kafka_config:    KafkaClientConfig,
+        spatial_index:   Arc<SI>,
         card_store:      Arc<CS>,
         tile_repository: Arc<TR>,
         pin_store:       Arc<PS>,
         group_id:        impl Into<String>,
     ) -> Self {
-        Self { kafka_config, card_store, tile_repository, pin_store, group_id: group_id.into() }
+        Self { kafka_config, spatial_index, card_store, tile_repository, pin_store, group_id: group_id.into() }
     }
 
     pub async fn run(self) {
@@ -164,6 +167,7 @@ where
             Outcome::Apply(cmd) => cmd,
         };
         let handler = ApplyMapVisibilityHandler {
+            spatial_index:   Arc::clone(&self.spatial_index),
             card_store:      Arc::clone(&self.card_store),
             tile_repository: Arc::clone(&self.tile_repository),
             pin_store:       Arc::clone(&self.pin_store),
