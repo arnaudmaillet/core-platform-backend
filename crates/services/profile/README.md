@@ -121,7 +121,7 @@ service ProfileService {
   rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse); // #664 post window (all / 6 months / 1 month / 3 days; post hides older posts from visitors) + likes / saved / reposts / places tab visibility (stored; no tab served yet); partial; owner-only on the view
   rpc SetCommentFilters(SetCommentFiltersRequest) returns (CommandResponse); // #660 hidden words (≤ 200, normalised) + offensive filter (on by default); owner-only on the view; comment applies them
   rpc SetDiscoverySettings(SetDiscoverySettingsRequest) returns (CommandResponse); // #661 activity status, read receipts, findable by phone / email / handle search / QR / suggestions (partial; owner-only on the view); teens start unfindable by phone, email, suggestions; search applies by_handle_search
-  rpc SetAccountType(SetAccountTypeRequest) returns (CommandResponse); // #668 personal / professional (creator) / brand (business) + a brand's public contact card; bots stay bots
+  rpc SetAccountType(SetAccountTypeRequest) returns (CommandResponse); // #668 personal / professional (creator) / brand (business) + a brand's public contact card; bots stay bots; creator and business are 18+ (a 13–17 token gets FAILED_PRECONDITION)
   rpc RequestVerification(RequestVerificationRequest) returns (CommandResponse); // #668 owner: category + 1–5 documents → staff queue
   rpc GetVerificationRequest(GetVerificationRequestRequest) returns (GetVerificationRequestResponse); // #668 owner: pending / approved / rejected (+ reason)
   rpc ListPendingVerificationRequests(ListPendingVerificationRequestsRequest) returns (ListPendingVerificationRequestsResponse); // staff, mesh-only

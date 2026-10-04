@@ -346,10 +346,16 @@ where
         use crate::application::command::SetAccountTypeCommand;
         use crate::domain::value_object::{BusinessInfo, ProfileKind};
         edge::require_profile(&request, &request.get_ref().profile_id)?;
+        // Creator and business accounts are 18+: a teen's profile stays
+        // personal (and never publishes a business contact card).
+        let minor = edge::principal(&request).is_some_and(|p| p.is_minor());
         let req = request.into_inner();
         let kind = profile_kind_i32_to_str(req.kind)
             .and_then(|k| ProfileKind::try_from(k).ok())
             .ok_or_else(|| Status::invalid_argument("unknown kind"))?;
+        if !account_type_allowed(kind, minor) {
+            return Err(Status::failed_precondition("creator and business accounts are for holders 18 and over"));
+        }
         let business = match req.business {
             Some(b) if kind == ProfileKind::Brand => Some(
                 BusinessInfo::new(b.category, Some(b.contact_email), Some(b.contact_phone))
@@ -796,6 +802,13 @@ fn profile_status_str_to_i32(s: &str) -> i32 {
     }
 }
 
+/// Creator (professional) and business (brand) accounts are for holders 18
+/// and over; a 13–17 holder keeps a personal profile.
+fn account_type_allowed(kind: crate::domain::value_object::ProfileKind, minor: bool) -> bool {
+    use crate::domain::value_object::ProfileKind;
+    !minor || kind == ProfileKind::Personal
+}
+
 fn verification_to_proto(profile_id: &str, r: crate::domain::entity::VerificationRequest) -> proto::VerificationRequestView {
     use crate::domain::entity::VerificationStatus;
     proto::VerificationRequestView {
@@ -864,5 +877,20 @@ pub fn cqrs_error_to_status(err: cqrs::error::CqrsError) -> Status {
                 _ => Status::internal(msg),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod account_type_tests {
+    use super::*;
+    use crate::domain::value_object::ProfileKind;
+
+    #[test]
+    fn creator_and_business_accounts_are_18_plus() {
+        assert!(account_type_allowed(ProfileKind::Brand, false));
+        assert!(account_type_allowed(ProfileKind::Professional, false));
+        assert!(!account_type_allowed(ProfileKind::Brand, true));
+        assert!(!account_type_allowed(ProfileKind::Professional, true));
+        assert!(account_type_allowed(ProfileKind::Personal, true));
     }
 }
