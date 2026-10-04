@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: ec6626c016f9351b54f9fe64d8f69d679953db65c334b317af9f10ef66e0c35e
-  translated_at: 2026-07-03
+  source_sha256: df791f78fc71b13c4daaad25a2aff7baaef8385562ca6fc0a7ec445a2aeb53b5
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -127,6 +127,7 @@ Voir l'impl `Service` et le binaire en §API publique — c'est toute la surface
 | `INFRA_CONFIG_PATH` | `infrastructure.toml` | Externalized-config document path |
 | `HEALTH_PROBE_INTERVAL_SECS` | `10` | Readiness poll cadence |
 | `TRAFFIC_PRUNE_INTERVAL_SECS` | `60` | Rate-limiter memory-bounding cadence |
+| `GRPC_TRUSTED_PROXY_HOPS` | `1` | Proxys qui ajoutent à `X-Forwarded-For` avant les listeners (l'ALB) ; les limites `per_ip` utilisent l'entrée à autant de places depuis la droite. À augmenter si un proxy CDN/WAF est placé devant |
 
 Les `*_GRPC_ADDR` + tuning par service vivent dans le README de chaque service. La télémétrie honore
 `RUST_LOG` / `OTEL_*` au boot ; les dials live sont ensuite pilotés par la section `[telemetry]`

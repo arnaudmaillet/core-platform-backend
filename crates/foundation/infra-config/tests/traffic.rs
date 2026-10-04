@@ -106,3 +106,79 @@ fn rejects_binding_to_unknown_profile() {
     let err = TrafficRegistry::from_section(cfg.traffic.unwrap()).err().expect("expected error");
     assert!(err.to_string().contains("unknown profile 'nope'"), "got: {err}");
 }
+
+const EDGE: &str = r#"
+[resilience]
+default_profile = "standard"
+[resilience.profiles.standard]
+timeout = { duration_ms = 10000 }
+circuit_breaker = { failure_threshold = 5, success_threshold = 2, open_duration_ms = 30000, half_open_max_calls = 1 }
+retry = { max_attempts = 3, backoff = { kind = "exponential", base_ms = 50, max_ms = 10000, jitter = "full" } }
+
+[traffic]
+default_profile = "standard"
+edge_default_profile = "client"
+[traffic.profiles.standard]
+rps = 1000
+burst = 200
+scope = "per_method"
+[traffic.profiles.client]
+rps = 50
+burst = 100
+scope = "per_caller"
+[traffic.profiles.guest-start]
+rps = 30
+per_secs = 3600
+burst = 10
+scope = "per_ip"
+[traffic.bindings]
+"/post.PostService/CreatePost" = "standard"
+[traffic.edge_bindings]
+"/auth.v1.AuthService/StartGuestSession" = "guest-start"
+"#;
+
+#[test]
+fn the_edge_resolves_its_own_bindings_and_default_the_mesh_is_unchanged() {
+    let registry = traffic_registry(EDGE);
+
+    // Mesh: as before.
+    let (name, bound, _) = registry.resolve("/auth.v1.AuthService/StartGuestSession");
+    assert_eq!((name, bound), ("standard", false));
+    assert_eq!(registry.profile_for("/social_graph.v1.SocialGraphService/CheckAccess").scope(), Scope::PerMethod);
+
+    // Edge: its bindings, then its default; mesh bindings do not leak in.
+    let (name, bound, start) = registry.resolve_edge("/auth.v1.AuthService/StartGuestSession");
+    assert_eq!((name, bound), ("guest-start", true));
+    assert_eq!(start.scope(), Scope::PerIp);
+    assert_eq!(start.config().per_secs, 3600);
+    let (name, _, client) = registry.resolve_edge("/post.PostService/CreatePost");
+    assert_eq!(name, "client");
+    assert_eq!(client.scope(), Scope::PerCaller);
+}
+
+#[test]
+fn without_edge_settings_the_edge_resolves_like_the_mesh() {
+    let registry = traffic_registry(SAMPLE);
+    let (name, bound, _) = registry.resolve_edge("/post.PostService/CreatePost");
+    assert_eq!((name, bound), ("write-tight", true));
+    let (name, bound, _) = registry.resolve_edge("/some.Unbound/Method");
+    assert_eq!((name, bound), ("standard", false));
+}
+
+#[test]
+fn edge_references_and_windows_are_validated() {
+    for (from, to) in [
+        ("edge_default_profile = \"client\"", "edge_default_profile = \"nope\""),
+        ("= \"guest-start\"", "= \"nope\""),
+        ("per_secs = 3600", "per_secs = 0"),
+        ("per_secs = 3600", "per_secs = 3600\nmode = \"distributed\"\nlease_ms = 200"),
+    ] {
+        let toml = EDGE.replace(from, to);
+        let cfg = InfrastructureConfig::from_toml(&toml);
+        let section = cfg.ok().and_then(|c| c.traffic);
+        assert!(
+            section.is_none_or(|s| TrafficRegistry::from_section(s).is_err()),
+            "should be rejected: {to}"
+        );
+    }
+}

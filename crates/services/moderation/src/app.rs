@@ -29,7 +29,9 @@ use crate::application::query::{
 };
 use crate::application::ModerationPolicy;
 use crate::config::ModerationConfig;
-use crate::infrastructure::cache::{RedisEnforcementProjection, RedisScreenCorpus, RedisReportRateLimiter};
+use crate::infrastructure::cache::{
+    DebouncedClassifierGateway, RedisEnforcementProjection, RedisReportRateLimiter, RedisScreenCorpus,
+};
 use crate::infrastructure::classifier::LogClassifierGateway;
 use crate::infrastructure::directory::{GrpcAccountDirectory, GrpcSubjectResolver};
 use crate::infrastructure::event::{
@@ -215,7 +217,11 @@ impl App {
             appeals: Arc::new(PgAppealRepository::new(tx.clone())),
             projection: Arc::new(RedisEnforcementProjection::new(redis.clone())),
             corpus: Arc::new(RedisScreenCorpus::new(redis.clone())),
-            classifiers: Arc::new(LogClassifierGateway),
+            classifiers: Arc::new(DebouncedClassifierGateway::new(
+                Arc::new(LogClassifierGateway),
+                redis.clone(),
+                config.classification_debounce_secs,
+            )),
             accounts: Arc::new(GrpcAccountDirectory::new(channel)),
             publisher,
             subjects,

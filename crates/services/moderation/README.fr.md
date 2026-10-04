@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 6a1ce97fdd8aef4468a90a49cb1ed87741204e699a0bc2ef7ec3afe3b2d7d7fc
+  source_sha256: 24e1744a57e0e468c6bc590069fa24f48bdd8b994ff1ee055927253c845c4742
   translated_at: 2026-10-04
   status: complete
 ---
@@ -162,7 +162,11 @@ rpc GetEnforcementState   (..) returns (..);   // edge : son propre état unique
 > auteur : `MODERATION_REPORTS_PER_HOUR` / `_PER_DAY` (20 / 100) dans Redis, **fail-open** si Redis est indisponible
 > (signaler est un droit ; la file l'absorbe). Le signalement alimente ensuite le dossier du sujet comme un
 > signalement du pipeline ; celui d'un invité est un signal plus faible (`guest_report`, 0,3 contre 0,5). `OpenCase`
-> reste mesh uniquement (c'est celui de la console de modération).
+> reste mesh uniquement (c'est celui de la console de modération). **Bornes contre les afflux** (beaucoup d'auteurs,
+> p. ex. des sessions invitées) : un dossier garde au plus `MAX_SIGNALS_PER_SOURCE` (25) signaux par source — les
+> signalements suivants restent enregistrés pour leurs auteurs mais n'ajoutent rien au dossier — et un sujet n'est
+> envoyé en classification qu'une fois par `MODERATION_CLASSIFICATION_DEBOUNCE_SECS` (600, `SET NX` Redis,
+> fail-open).
 >
 > **La vue de l'auteur du signalement (`ListMyReports`, DSA art. 16(5)).** Chaque signalement est aussi enregistré
 > pour son auteur (table `reports`, une ligne par auteur × sujet, clé = l'id renvoyé par `SubmitReport`).
@@ -271,6 +275,7 @@ async fn main() -> anyhow::Result<()> {
 | `MODERATION_POST_GRPC_ENDPOINT` · `MODERATION_COMMENT_GRPC_ENDPOINT` · `MODERATION_PROFILE_GRPC_ENDPOINT` | **Oui** (prod) | `:50056` · `:50057` · `:50052` sur localhost | résolution du sujet d'un signalement (à qui appartient le contenu signalé) |
 | `MODERATION_CONTENT_RPC_TIMEOUT_MS` · `MODERATION_CONTENT_CONNECT_TIMEOUT_MS` | Non | `1000` · `1000` | délais de ces appels |
 | `MODERATION_REPORTS_PER_HOUR` · `MODERATION_REPORTS_PER_DAY` | Non | `20` · `100` | quota de signalements client par auteur (membre ou invité) |
+| `MODERATION_CLASSIFICATION_DEBOUNCE_SECS` | Non | `600` | au plus une demande de classification par sujet par fenêtre |
 | `MODERATION_ACCOUNT_RPC_TIMEOUT_MS` | Non | `2000` | deadline par requête des RPC `account` (tonic n'a pas de timeout par défaut) |
 | `MODERATION_ACCOUNT_CONNECT_TIMEOUT_MS` | Non | `2000` | deadline de connexion à l'ouverture du canal `account` |
 | `MODERATION_SCREEN_TIMEOUT_MS` | Non | `200` | timeout strict de la porte Plan C ; à l'expiration la porte retourne `MOD-7002` et l'appelant échoue fermé pour les catégories catastrophiques |

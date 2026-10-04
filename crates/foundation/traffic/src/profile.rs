@@ -35,11 +35,20 @@ use crate::config::{BackendError, Mode, Scope, TrafficConfig, TrafficDecision};
 /// rps = 50
 /// burst = 10
 /// scope = "per_caller"
+///
+/// [traffic.profiles.guest-start]
+/// rps = 30
+/// per_secs = 3600   # 30 an hour
+/// burst = 10
+/// scope = "per_ip"
 /// ```
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TrafficProfileSpec {
     pub rps: u32,
+    /// The window `rps` is counted over, in seconds; absent = 1 (per second).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub per_secs: Option<u32>,
     pub burst: u32,
     #[cfg_attr(feature = "serde", serde(default))]
     pub scope: Scope,
@@ -65,6 +74,7 @@ impl TrafficProfileSpec {
     fn to_config(&self) -> TrafficConfig {
         TrafficConfig {
             rps: self.rps,
+            per_secs: self.per_secs.unwrap_or(1),
             burst: self.burst,
             scope: self.scope,
             mode: self.mode,
@@ -92,7 +102,12 @@ fn nz(value: u32) -> NonZeroU32 {
 }
 
 fn build_limiter(config: &TrafficConfig) -> DefaultKeyedRateLimiter<String> {
-    let quota = Quota::per_second(nz(config.rps)).allow_burst(nz(config.burst));
+    // One cell replenishes every `per_secs / rps` seconds.
+    let window = std::time::Duration::from_secs(u64::from(config.per_secs.max(1)));
+    let period = (window / nz(config.rps).get()).max(std::time::Duration::from_nanos(1));
+    let quota = Quota::with_period(period)
+        .unwrap_or_else(|| Quota::per_second(nz(config.rps)))
+        .allow_burst(nz(config.burst));
     RateLimiter::keyed(quota)
 }
 
@@ -155,7 +170,8 @@ impl TrafficProfile {
     pub fn apply(&self, spec: &TrafficProfileSpec) {
         let next = spec.to_config();
         let current = self.config.load();
-        let quota_changed = next.rps != current.rps || next.burst != current.burst;
+        let quota_changed =
+            next.rps != current.rps || next.per_secs != current.per_secs || next.burst != current.burst;
 
         if quota_changed {
             self.limiter.store(Arc::new(build_limiter(&next)));

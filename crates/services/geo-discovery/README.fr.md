@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: f650636be665dfe4935dbe2b1b4a5701adb4f63cf97c3fa28f151defb0543db0
+  source_sha256: 91eeb8f6d4e34ab358e4f7981b46db9809a644c4824ce08cc59aa1acb0e904ba
   translated_at: 2026-10-04
   status: complete
 ---
@@ -304,7 +304,7 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_VISIBILITY_GROUP_ID` | Non | `geo-discovery-visibility` | groupe Kafka du consumer de suppression de la carte. |
 | `GEO_GEOIP_MMDB_PATH` | **Oui** (prod) | — | Base IP→pays au format MaxMind (DB-IP Lite country, CC BY 4.0 — *IP Geolocation by DB-IP*, <https://db-ip.com> ; ou GeoLite2-Country). Absente → l'accès par pays n'accorde rien. |
 | `GEO_GEOIP_PRIVATE_NETWORK_COUNTRY` | Non | — | Ce que vaut une adresse client privée/loopback : un code ISO, ou `*` = la déclaration de l'appareil. **Flotte locale uniquement** — jamais dans un env déployé. |
-| `GEO_TRUSTED_PROXY_HOPS` | Non | `1` | Proxys qui ajoutent à `X-Forwarded-For` (l'ALB) ; l'adresse client est à autant d'entrées depuis la droite. |
+| `GEO_TRUSTED_PROXY_HOPS` | Non | `GRPC_TRUSTED_PROXY_HOPS`, sinon `1` | Proxys qui ajoutent à `X-Forwarded-For` (l'ALB) ; l'adresse client est à autant d'entrées depuis la droite. Non défini = le `GRPC_TRUSTED_PROXY_HOPS` de toute la flotte. |
 | `GEO_COUNTRY_GRANT_TTL_SECS` | Non | `43200` | Durée d'ouverture d'un pays accordé sans nouvelle confirmation (12 h). |
 
 > Aucun flag de feature de compilation. `build.rs` compile `proto/geo_discovery/v1/*.proto`. Profils

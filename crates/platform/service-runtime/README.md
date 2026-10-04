@@ -115,6 +115,7 @@ See the `Service` impl and binary in §Public API — that is the whole integrat
 | `INFRA_CONFIG_PATH` | `infrastructure.toml` | Externalized-config document path |
 | `HEALTH_PROBE_INTERVAL_SECS` | `10` | Readiness poll cadence |
 | `TRAFFIC_PRUNE_INTERVAL_SECS` | `60` | Rate-limiter memory-bounding cadence |
+| `GRPC_TRUSTED_PROXY_HOPS` | `1` | Proxies appending to `X-Forwarded-For` before the listeners (the ALB); `per_ip` rate limits key on the entry that many places from the right. Bump it when a CDN/WAF proxy is put in front |
 
 Per-service `*_GRPC_ADDR` + tuning live in each service's README. Telemetry honours `RUST_LOG` /
 `OTEL_*` at boot; live dials are then driven by the `[telemetry]` section of `infrastructure.toml`. No

@@ -13,6 +13,12 @@ pub enum Scope {
     /// One bucket per authenticated caller per method. Requires an upstream layer to have
     /// established the principal; falls back to method-level keying when none is present.
     PerCaller,
+    /// One bucket per client IP address per method — for anonymous methods (no principal
+    /// to key on), e.g. starting a guest session. The address is the one the trusted
+    /// proxy (the ALB) appended to `X-Forwarded-For`, else the peer address; falls back to
+    /// method-level keying when neither is known. Mobile carriers put many users behind
+    /// one address (CGNAT): size these limits generously.
+    PerIp,
 }
 
 /// Where the limiter's counter state lives.
@@ -44,8 +50,13 @@ pub enum BackendError {
 /// Resolved, runtime traffic values for one profile. Cheap to clone and compare.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrafficConfig {
-    /// Sustained admit rate, requests per second. Always `> 0` once validated.
+    /// Sustained admit rate: requests per [`per_secs`](Self::per_secs) seconds (per second
+    /// by default). Always `> 0` once validated.
     pub rps: u32,
+    /// The window `rps` is counted over, in seconds (`1` = per second). Lets a profile
+    /// express rates below one per second (`rps = 30, per_secs = 3600` = 30 an hour).
+    /// Always `>= 1` once validated.
+    pub per_secs: u32,
     /// Bucket capacity — the largest instantaneous burst admitted. Always `>= 1`.
     pub burst: u32,
     /// Key dimension.

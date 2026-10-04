@@ -14,6 +14,11 @@ pub fn corpus_key(algorithm: &str, value: &str) -> String {
     format!("mod:corpus:{{{algorithm}}}:{value}")
 }
 
+/// Classification debounce marker for a subject: `mod:cls:{<entity>:<id>}`.
+pub fn classification_debounce_key(entity_type: &str, entity_id: &str) -> String {
+    format!("mod:cls:{{{entity_type}:{entity_id}}}")
+}
+
 /// A reporter's report counter for one window: `mod:rq:{<reporter>}:<window>:<bucket>`.
 pub fn report_quota_key(reporter: &str, window: &str, bucket: i64) -> String {
     format!("mod:rq:{{{reporter}}}:{window}:{bucket}")

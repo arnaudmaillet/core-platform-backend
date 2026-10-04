@@ -58,7 +58,8 @@ pub struct GeoDiscoveryConfig {
     /// (the ALB: 1). The client address is that many entries from the right;
     /// anything further left is client-supplied and never trusted.
     ///
-    /// Default: 1.
+    /// `GEO_TRUSTED_PROXY_HOPS`, else `GRPC_TRUSTED_PROXY_HOPS` (the runtime's, also used
+    /// by `per_ip` rate limits — keep one value for the fleet), else 1.
     pub trusted_proxy_hops: usize,
 }
 
@@ -108,9 +109,11 @@ impl GeoDiscoveryConfig {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(43_200),
 
-            trusted_proxy_hops: std::env::var("GEO_TRUSTED_PROXY_HOPS")
-                .ok()
-                .and_then(|v| v.parse().ok())
+            // One setting for the fleet: GEO_ overrides, else the runtime's
+            // GRPC_TRUSTED_PROXY_HOPS (also used by per_ip rate limits), else 1.
+            trusted_proxy_hops: ["GEO_TRUSTED_PROXY_HOPS", "GRPC_TRUSTED_PROXY_HOPS"]
+                .iter()
+                .find_map(|key| std::env::var(key).ok().and_then(|v| v.parse().ok()))
                 .unwrap_or(1),
         }
     }

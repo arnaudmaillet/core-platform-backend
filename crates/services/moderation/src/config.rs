@@ -26,6 +26,8 @@ pub struct ModerationConfig {
     /// Client report quotas per reporter (member or guest).
     pub reports_per_hour: u32,
     pub reports_per_day: u32,
+    /// At most one classification request per subject per this many seconds.
+    pub classification_debounce_secs: u64,
 }
 
 impl ModerationConfig {
@@ -66,6 +68,7 @@ impl ModerationConfig {
             ),
             reports_per_hour: env_secs("MODERATION_REPORTS_PER_HOUR", 20) as u32,
             reports_per_day: env_secs("MODERATION_REPORTS_PER_DAY", 100) as u32,
+            classification_debounce_secs: env_secs("MODERATION_CLASSIFICATION_DEBOUNCE_SECS", 600) as u64,
         })
     }
 }

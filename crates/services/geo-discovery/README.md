@@ -285,7 +285,7 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_VISIBILITY_GROUP_ID` | No | `geo-discovery-visibility` | Kafka group of the map-suppression consumer. |
 | `GEO_GEOIP_MMDB_PATH` | **Yes** (prod) | — | MaxMind-format IP→country database (DB-IP Lite country, CC BY 4.0 — *IP Geolocation by DB-IP*, <https://db-ip.com>; or GeoLite2-Country). Missing → country access grants nothing. |
 | `GEO_GEOIP_PRIVATE_NETWORK_COUNTRY` | No | — | What a private/loopback client address resolves to: an ISO code, or `*` = the device's claim. **Local fleet only** — never in a deployed env. |
-| `GEO_TRUSTED_PROXY_HOPS` | No | `1` | Proxies appending to `X-Forwarded-For` (the ALB); the client address is that many entries from the right. |
+| `GEO_TRUSTED_PROXY_HOPS` | No | `GRPC_TRUSTED_PROXY_HOPS`, else `1` | Proxies appending to `X-Forwarded-For` (the ALB); the client address is that many entries from the right. Unset = the fleet-wide `GRPC_TRUSTED_PROXY_HOPS`. |
 | `GEO_COUNTRY_GRANT_TTL_SECS` | No | `43200` | How long a granted country stays open without being confirmed again (12 h). |
 
 > No compile-time feature flags. `build.rs` compiles `proto/geo_discovery/v1/*.proto`. ScyllaDB profiles:

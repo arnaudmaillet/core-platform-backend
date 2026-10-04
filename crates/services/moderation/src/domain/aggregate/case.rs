@@ -8,6 +8,10 @@ use crate::domain::value_object::{
 };
 use crate::error::ModerationError;
 
+/// Most signals a case keeps from one source (`report`, `guest_report`, a
+/// classifier…).
+pub const MAX_SIGNALS_PER_SOURCE: usize = 25;
+
 /// Parameters to open a case.
 #[derive(Debug, Clone)]
 pub struct CaseOpenParams {
@@ -146,12 +150,19 @@ impl Case {
 
     // ─── Commands ────────────────────────────────────────────────────────────
 
-    /// Appends an evidence signal. Rejected once the case is resolved.
-    pub fn add_signal(&mut self, signal: Signal) -> Result<(), ModerationError> {
+    /// Appends an evidence signal; `Ok(false)` when the case already holds
+    /// [`MAX_SIGNALS_PER_SOURCE`] signals from that source (more of the same adds no
+    /// evidence, and a report flood must not grow the case without bound — the
+    /// reports themselves are still recorded). Rejected once the case is resolved.
+    pub fn add_signal(&mut self, signal: Signal) -> Result<bool, ModerationError> {
         self.ensure_not_resolved()?;
+        let same_source = self.signals.iter().filter(|s| s.source() == signal.source()).count();
+        if same_source >= MAX_SIGNALS_PER_SOURCE {
+            return Ok(false);
+        }
         self.signals.push(signal);
         self.touch();
-        Ok(())
+        Ok(true)
     }
 
     /// Assigns a reviewer, moving an `Open` case to `Triaged`.
@@ -350,9 +361,19 @@ mod tests {
     #[test]
     fn signals_accrue_while_open() {
         let mut c = Case::open(params());
-        c.add_signal(sig()).unwrap();
-        c.add_signal(sig()).unwrap();
+        assert!(c.add_signal(sig()).unwrap());
+        assert!(c.add_signal(sig()).unwrap());
         assert_eq!(c.signals().len(), 2);
         assert_eq!(c.version(), 2);
+    }
+
+    #[test]
+    fn signals_from_one_source_are_capped() {
+        let mut c = Case::open(params());
+        for _ in 0..MAX_SIGNALS_PER_SOURCE {
+            assert!(c.add_signal(sig()).unwrap());
+        }
+        assert!(!c.add_signal(sig()).unwrap(), "the cap is reached");
+        assert_eq!(c.signals().len(), MAX_SIGNALS_PER_SOURCE);
     }
 }

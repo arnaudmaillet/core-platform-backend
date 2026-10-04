@@ -43,6 +43,10 @@ pub struct GrpcServerConfig {
     ///
     /// [`max_connection_age`]: Self::max_connection_age
     pub max_connection_age_grace: Option<Duration>,
+
+    /// Proxies in front of this listener that append to `X-Forwarded-For` (the ALB: 1).
+    /// Read by the traffic layer for `per_ip` keying; see [`crate::grpc::client_ip`].
+    pub trusted_proxy_hops: usize,
 }
 
 impl Default for GrpcServerConfig {
@@ -54,6 +58,7 @@ impl Default for GrpcServerConfig {
             identity_header: HeaderName::from_static(DEFAULT_IDENTITY_HEADER),
             max_connection_age: None,
             max_connection_age_grace: None,
+            trusted_proxy_hops: crate::grpc::client_ip::DEFAULT_TRUSTED_PROXY_HOPS,
         }
     }
 }
@@ -89,6 +94,12 @@ impl GrpcServerConfig {
     /// Force-closes connections whose streams outlive the age deadline by `grace`.
     pub fn with_max_connection_age_grace(mut self, grace: Duration) -> Self {
         self.max_connection_age_grace = Some(grace);
+        self
+    }
+
+    /// Sets how many proxies append to `X-Forwarded-For` before this listener.
+    pub fn with_trusted_proxy_hops(mut self, hops: usize) -> Self {
+        self.trusted_proxy_hops = hops;
         self
     }
 }

@@ -150,7 +150,10 @@ rpc GetEnforcementState   (..) returns (..);   // edge: own state only; DISCOURA
 > sanction at someone else. Quota per reporter: `MODERATION_REPORTS_PER_HOUR` / `_PER_DAY` (20 / 100) in Redis,
 > **fail-open** if Redis is down (reporting is a right; the queue absorbs it). The report then feeds the subject's
 > case like a pipeline report; a guest's is a weaker signal (`guest_report`, 0.3 vs 0.5). `OpenCase` stays
-> mesh-only (it is the reviewer console's).
+> mesh-only (it is the reviewer console's). **Flood bounds** (many reporters, e.g. guest sessions): a case keeps at
+> most `MAX_SIGNALS_PER_SOURCE` (25) signals per source — further reports are still recorded for their reporters
+> but add nothing to the case — and a subject is sent to classification at most once per
+> `MODERATION_CLASSIFICATION_DEBOUNCE_SECS` (600, Redis `SET NX`, fail-open).
 >
 > **The reporter's view (`ListMyReports`, DSA Art. 16(5)).** Each report is also recorded for its reporter (`reports`
 > table, one row per reporter × subject, keyed by the id `SubmitReport` returns). `ListMyReports` (edge
@@ -259,6 +262,7 @@ async fn main() -> anyhow::Result<()> {
 | `MODERATION_POST_GRPC_ENDPOINT` · `MODERATION_COMMENT_GRPC_ENDPOINT` · `MODERATION_PROFILE_GRPC_ENDPOINT` | **Yes** (prod) | `:50056` · `:50057` · `:50052` on localhost | report subject resolution (whose content a client report targets) |
 | `MODERATION_CONTENT_RPC_TIMEOUT_MS` · `MODERATION_CONTENT_CONNECT_TIMEOUT_MS` | No | `1000` · `1000` | deadlines on those calls |
 | `MODERATION_REPORTS_PER_HOUR` · `MODERATION_REPORTS_PER_DAY` | No | `20` · `100` | client report quota per reporter (member or guest) |
+| `MODERATION_CLASSIFICATION_DEBOUNCE_SECS` | No | `600` | at most one classification request per subject per window |
 | `MODERATION_ACCOUNT_RPC_TIMEOUT_MS` | No | `2000` | per-request deadline on `account` RPCs (tonic has no default timeout) |
 | `MODERATION_ACCOUNT_CONNECT_TIMEOUT_MS` | No | `2000` | connect deadline when dialing the `account` channel |
 | `MODERATION_SCREEN_TIMEOUT_MS` | No | `200` | hard timeout for the Plane C gate; on elapse the gate returns `MOD-7002` and the caller fails closed for catastrophic categories |
