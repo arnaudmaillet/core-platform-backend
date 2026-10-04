@@ -10,11 +10,11 @@ use transport::grpc::edge;
 use crate::application::command::{
     ChangePasswordCommand, ChangePasswordHandler, IssuedSession, LoginCommand, LoginHandler,
     LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutCommand, LogoutHandler,
-    RefreshCommand, RefreshHandler, SignUpCommand, SignUpHandler, SignUpOutcome,
-    StartGuestSessionCommand, StartGuestSessionHandler,
+    RefreshCommand, RefreshHandler, SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome,
+    StartGuestSessionCommand, StartGuestSessionHandler, StartVerificationCommand, VerificationCodes,
     StepUpCredential, VerifyCredentialsCommand, VerifyCredentialsHandler,
 };
-use crate::application::port::{AuthnGrant, SignUpConsent};
+use crate::application::port::{AuthnGrant, SignUpConsent, VerificationChannel};
 use crate::application::query::{
     IntrospectHandler, IntrospectQuery, ListSessionsHandler, ListSessionsQuery, SessionSummary,
 };
@@ -43,6 +43,7 @@ pub struct AuthServiceHandler {
     change_password: Arc<ChangePasswordHandler>,
     verify_credentials: Arc<VerifyCredentialsHandler>,
     sign_up: Option<Arc<SignUpHandler>>,
+    codes: Option<Arc<VerificationCodes>>,
 }
 
 impl AuthServiceHandler {
@@ -69,7 +70,41 @@ impl AuthServiceHandler {
             change_password,
             verify_credentials,
             sign_up: None,
+            codes: None,
         }
+    }
+
+    /// Enables StartVerification (email one-time codes).
+    pub fn with_codes(mut self, codes: Arc<VerificationCodes>) -> Self {
+        self.codes = Some(codes);
+        self
+    }
+
+    /// Edge `public`: sends a one-time code (see `VerificationCodes`).
+    pub async fn start_verification(
+        &self,
+        request: Request<proto::StartVerificationRequest>,
+    ) -> Result<Response<proto::StartVerificationResponse>, Status> {
+        let codes = self.codes.as_ref().ok_or_else(|| Status::unimplemented("verification codes are not enabled"))?;
+        let req = request.into_inner();
+        let channel = match proto::VerificationChannel::try_from(req.channel) {
+            Ok(proto::VerificationChannel::Email) => VerificationChannel::Email,
+            Ok(proto::VerificationChannel::Sms) => VerificationChannel::Sms,
+            _ => return Err(Status::invalid_argument("channel must be EMAIL or SMS")),
+        };
+        let started = codes
+            .start(StartVerificationCommand {
+                channel,
+                destination: req.destination,
+                locale: Some(req.locale).filter(|l| !l.is_empty()),
+            })
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::StartVerificationResponse {
+            challenge_id: started.challenge_id,
+            expires_in_secs: started.expires_in_secs,
+            resend_after_secs: started.resend_after_secs,
+        }))
     }
 
     /// Enables SignUp (native Sign in with Apple / Google).
@@ -85,12 +120,22 @@ impl AuthServiceHandler {
     ) -> Result<Response<proto::SignUpResponse>, Status> {
         let handler = self.sign_up.as_ref().ok_or_else(|| Status::unimplemented("sign-up is not enabled"))?;
         let req = request.into_inner();
-        let grant = req.id_token.ok_or_else(|| Status::invalid_argument("sign-up requires an id_token"))?;
+        let credential = match (req.id_token, req.verification_code) {
+            (Some(grant), None) => SignUpCredential::IdToken {
+                provider: provider_from_proto(grant.provider)?,
+                id_token: grant.id_token,
+                nonce: grant.nonce,
+            },
+            (None, Some(code)) => SignUpCredential::Code { challenge_id: code.challenge_id, code: code.code },
+            _ => {
+                return Err(Status::invalid_argument(
+                    "sign-up requires exactly one of id_token and verification_code",
+                ));
+            }
+        };
         let consent = req.consent.unwrap_or_default();
         let cmd = SignUpCommand {
-            provider: provider_from_proto(grant.provider)?,
-            id_token: grant.id_token,
-            nonce: grant.nonce,
+            credential,
             date_of_birth: req.date_of_birth,
             consent: SignUpConsent {
                 policy_version: consent.policy_version,
@@ -381,6 +426,9 @@ fn grant_from_proto(
             id_token: g.id_token,
             nonce: g.nonce,
         }),
+        Some(proto::login_request::Credential::VerificationCode(g)) => {
+            Ok(AuthnGrant::Code { challenge_id: g.challenge_id, code: g.code })
+        }
         None => Err(Status::invalid_argument("login requires a credential")),
     }
 }
@@ -398,6 +446,7 @@ fn method_to_proto(method: SignInMethod) -> proto::SignInMethod {
         SignInMethod::Apple => proto::SignInMethod::Apple,
         SignInMethod::Google => proto::SignInMethod::Google,
         SignInMethod::Password => proto::SignInMethod::Password,
+        SignInMethod::EmailCode => proto::SignInMethod::EmailCode,
     }
 }
 
@@ -454,6 +503,13 @@ fn to_timestamp(dt: DateTime<Utc>) -> prost_types::Timestamp {
 pub fn auth_error_to_status(err: AuthError) -> Status {
     let msg = err.to_string();
     let retryable = err.is_retryable();
+    if let AuthError::VerificationRateLimited { retry_after_secs } = err {
+        let mut status = Status::resource_exhausted(msg);
+        if let Ok(value) = retry_after_secs.to_string().parse() {
+            status.metadata_mut().insert("retry-after-secs", value);
+        }
+        return status;
+    }
     match err.http_status().as_u16() {
         401 => Status::unauthenticated(msg),
         403 => Status::permission_denied(msg),

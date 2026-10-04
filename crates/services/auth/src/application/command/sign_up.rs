@@ -20,20 +20,40 @@ use cqrs::Envelope;
 use validate_core::{FieldViolation, Validate};
 
 use crate::application::command::member_session::MemberSessions;
+use crate::application::command::verification::VerificationCodes;
 use crate::application::ensure_valid;
 use crate::application::port::{
     AccountActivation, AccountDirectory, EventPublisher, FederatedTokenVerifier, GuestRegistry, NewAccount,
     SignUpConsent, SubjectLinkRepository,
 };
 use crate::domain::aggregate::SubjectLink;
-use crate::domain::value_object::{AccountId, DeviceFingerprint, FederatedProvider, IdpSubject, SignInMethod};
+use crate::domain::value_object::{
+    AccountId, DeviceFingerprint, FederatedProvider, IdpSubject, SignInMethod, EMAIL_CODE_ISSUER,
+};
+
+/// How the person proves who they are.
+#[derive(Debug, Clone)]
+pub enum SignUpCredential {
+    /// Native Sign in with Apple / Google.
+    IdToken { provider: FederatedProvider, id_token: String, nonce: String },
+    /// A one-time code sent to an email address (passwordless account).
+    Code { challenge_id: String, code: String },
+}
+
+/// What a credential proved.
+struct Proven {
+    subject:        IdpSubject,
+    email:          Option<String>,
+    email_verified: bool,
+    private_relay:  bool,
+    /// How this identity signs in.
+    method:         SignInMethod,
+}
 use crate::error::AuthError;
 
 #[derive(Debug, Clone)]
 pub struct SignUpCommand {
-    pub provider:            FederatedProvider,
-    pub id_token:            String,
-    pub nonce:               String,
+    pub credential:          SignUpCredential,
     /// ISO 8601 (YYYY-MM-DD).
     pub date_of_birth:       String,
     pub consent:             SignUpConsent,
@@ -46,11 +66,24 @@ pub struct SignUpCommand {
 impl Validate for SignUpCommand {
     fn validate(&self) -> Result<(), Vec<FieldViolation>> {
         let mut v = Vec::new();
-        if self.id_token.trim().is_empty() {
-            v.push(FieldViolation::new("id_token", "AUT-VAL-030", "id_token must not be empty"));
-        }
-        if self.nonce.trim().is_empty() {
-            v.push(FieldViolation::new("nonce", "AUT-VAL-031", "nonce must not be empty"));
+        match &self.credential {
+            SignUpCredential::IdToken { id_token, nonce, .. } => {
+                if id_token.trim().is_empty() {
+                    v.push(FieldViolation::new("id_token", "AUT-VAL-030", "id_token must not be empty"));
+                }
+                if nonce.trim().is_empty() {
+                    v.push(FieldViolation::new("nonce", "AUT-VAL-031", "nonce must not be empty"));
+                }
+            }
+            SignUpCredential::Code { challenge_id, code } => {
+                if challenge_id.trim().is_empty() || code.trim().is_empty() {
+                    v.push(FieldViolation::new(
+                        "verification_code",
+                        "AUT-VAL-036",
+                        "challenge_id and code are required",
+                    ));
+                }
+            }
         }
         if NaiveDate::parse_from_str(&self.date_of_birth, "%Y-%m-%d").is_err() {
             v.push(FieldViolation::new(
@@ -107,6 +140,8 @@ pub struct SignUpHandler {
     publisher: Arc<dyn EventPublisher>,
     guests:    Arc<dyn GuestRegistry>,
     members:   MemberSessions,
+    /// Email one-time codes; `None` refuses code sign-ups.
+    codes:     Option<Arc<VerificationCodes>>,
 }
 
 impl SignUpHandler {
@@ -117,7 +152,42 @@ impl SignUpHandler {
         guests: Arc<dyn GuestRegistry>,
         members: MemberSessions,
     ) -> Self {
-        Self { verifier, directory, links, publisher: Arc::clone(&members.publisher), guests, members }
+        Self { verifier, directory, links, publisher: Arc::clone(&members.publisher), guests, members, codes: None }
+    }
+
+    /// Enables passwordless email sign-up (one-time codes).
+    pub fn with_codes(mut self, codes: Arc<VerificationCodes>) -> Self {
+        self.codes = Some(codes);
+        self
+    }
+
+    async fn prove(&self, credential: &SignUpCredential) -> Result<Proven, AuthError> {
+        match credential {
+            SignUpCredential::IdToken { provider, id_token, nonce } => {
+                let identity = self.verifier.verify(*provider, id_token, nonce).await?;
+                Ok(Proven {
+                    subject: IdpSubject::new(identity.issuer, identity.subject)?,
+                    email: identity.email,
+                    email_verified: identity.email_verified,
+                    private_relay: identity.private_relay,
+                    method: (*provider).into(),
+                })
+            }
+            SignUpCredential::Code { challenge_id, code } => {
+                let codes = self
+                    .codes
+                    .as_ref()
+                    .ok_or_else(|| AuthError::VerificationChannelUnavailable { channel: "email".into() })?;
+                let proven = codes.verify(challenge_id, code).await?;
+                Ok(Proven {
+                    subject: IdpSubject::new(EMAIL_CODE_ISSUER, proven.destination.clone())?,
+                    email: Some(proven.destination),
+                    email_verified: true,
+                    private_relay: false,
+                    method: SignInMethod::EmailCode,
+                })
+            }
+        }
     }
 
     pub async fn handle(
@@ -129,13 +199,13 @@ impl SignUpHandler {
         let cmd = envelope.payload;
         let correlation_id = envelope.correlation_id;
 
-        // 1. Who this is, per the provider.
-        let identity = self.verifier.verify(cmd.provider, &cmd.id_token, &cmd.nonce).await?;
-        let subject = IdpSubject::new(identity.issuer.clone(), identity.subject.clone())?;
+        // 1. Who this is: per the provider, or per the code sent to the address.
+        let identity = self.prove(&cmd.credential).await?;
+        let subject = identity.subject.clone();
 
         // 2. This very identity already has an account: sign in instead.
         if self.links.find_by_subject(&subject).await?.is_some() {
-            return Ok(SignUpOutcome::ExistingAccount { method: cmd.provider.into() });
+            return Ok(SignUpOutcome::ExistingAccount { method: identity.method });
         }
 
         let email = identity.email.clone().ok_or(AuthError::IdTokenWithoutEmail)?;
@@ -287,9 +357,11 @@ mod tests {
 
     fn sign_up(token: &str, dob: String, guest: Option<String>) -> Envelope<SignUpCommand> {
         Envelope::new(Uuid::now_v7(), SignUpCommand {
-            provider: FederatedProvider::Apple,
-            id_token: token.to_owned(),
-            nonce: "n".into(),
+            credential: SignUpCredential::IdToken {
+                provider: FederatedProvider::Apple,
+                id_token: token.to_owned(),
+                nonce: "n".into(),
+            },
             date_of_birth: dob,
             consent: SignUpConsent {
                 policy_version: "2026-10".into(),
@@ -372,7 +444,11 @@ mod tests {
         let mut no_consent = sign_up("t", adult_dob(), None);
         no_consent.payload.consent.data_processing = false;
         let mut bad_dob = sign_up("t", "15/01/1990".into(), None);
-        bad_dob.payload.nonce = String::new();
+        bad_dob.payload.credential = SignUpCredential::IdToken {
+            provider: FederatedProvider::Apple,
+            id_token: "t".into(),
+            nonce: String::new(),
+        };
         for env in [no_consent, bad_dob] {
             assert!(handler(&fx, &verifier).handle(env, t0()).await.is_err());
         }
@@ -466,5 +542,85 @@ mod tests {
         // Without a verifier, id_token grants are refused.
         let err = fx.login_handler().handle(login(None), t0()).await.unwrap_err();
         assert!(matches!(err, AuthError::FederatedProviderNotConfigured { .. }));
+    }
+
+    #[tokio::test]
+    async fn an_email_code_signs_up_a_passwordless_account_and_signs_it_back_in() {
+        use crate::application::command::verification::{StartVerificationCommand, VerificationPolicy};
+        use crate::application::command::LoginCommand;
+        use crate::application::fakes::{InMemoryVerificationStore, RecordingCodeSender};
+        use crate::application::port::{AuthnGrant, VerificationChannel};
+
+        let fx = Fixture::new();
+        let sender = Arc::new(RecordingCodeSender::default());
+        let codes = Arc::new(VerificationCodes::new(
+            Arc::new(InMemoryVerificationStore::default()),
+            Arc::clone(&sender) as _,
+            VerificationPolicy::default(),
+        ));
+        let verifier = Arc::new(StubVerifier::default());
+        let handler = handler(&fx, &verifier).with_codes(Arc::clone(&codes));
+        let start = |to: &str| StartVerificationCommand {
+            channel: VerificationChannel::Email,
+            destination: to.into(),
+            locale: None,
+        };
+        let by_code = |challenge_id: String, code: String| {
+            let mut env = sign_up("unused", adult_dob(), None);
+            env.payload.credential = SignUpCredential::Code { challenge_id, code };
+            env
+        };
+
+        let started = codes.start(start("Mia@Example.com")).await.unwrap();
+        let (_, code, _) = sender.last().unwrap();
+        let outcome = handler.handle(by_code(started.challenge_id.clone(), code.clone()), t0()).await.unwrap();
+        let SignUpOutcome::SignedUp { account_id, .. } = outcome else { panic!("{outcome:?}") };
+        let created = fx.directory.provisioned();
+        assert_eq!(created.last().unwrap().email, "mia@example.com");
+        assert!(created.last().unwrap().email_verified, "the code proved the address");
+        assert_eq!(created.last().unwrap().subject, IdpSubject::new(EMAIL_CODE_ISSUER, "mia@example.com").unwrap());
+
+        // The code is spent.
+        let reused = handler.handle(by_code(started.challenge_id, code), t0()).await;
+        assert!(matches!(reused, Err(AuthError::VerificationCodeInvalid)));
+
+        // A second sign-up for the address: sign in with a code instead.
+        let again = codes.start(start("mia@example.com")).await.unwrap();
+        let (_, code, _) = sender.last().unwrap();
+        let outcome = handler.handle(by_code(again.challenge_id, code), t0()).await.unwrap();
+        assert!(matches!(outcome, SignUpOutcome::ExistingAccount { method: SignInMethod::EmailCode }));
+
+        // Signing back in with a code.
+        let login = fx.login_handler().with_codes(Arc::clone(&codes));
+        let next = codes.start(start("mia@example.com")).await.unwrap();
+        let (_, code, _) = sender.last().unwrap();
+        let issued = login
+            .handle(
+                Envelope::new(Uuid::now_v7(), LoginCommand {
+                    grant: AuthnGrant::Code { challenge_id: next.challenge_id, code },
+                    device: DeviceFingerprint::default(),
+                    guest_refresh_token: None,
+                }),
+                t0(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(issued.account_id, account_id);
+
+        // An address with no account: told only after the code (sign up).
+        let stranger = codes.start(start("nobody@example.com")).await.unwrap();
+        let (_, code, _) = sender.last().unwrap();
+        let err = login
+            .handle(
+                Envelope::new(Uuid::now_v7(), LoginCommand {
+                    grant: AuthnGrant::Code { challenge_id: stranger.challenge_id, code },
+                    device: DeviceFingerprint::default(),
+                    guest_refresh_token: None,
+                }),
+                t0(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AuthError::NoAccountForIdentity));
     }
 }

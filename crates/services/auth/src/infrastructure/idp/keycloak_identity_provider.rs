@@ -92,7 +92,9 @@ impl IdentityProvider for KeycloakIdentityProvider {
                 form.push(("password", password));
             }
             // Verified by auth itself (FederatedTokenVerifier), never brokered.
-            AuthnGrant::IdToken { .. } => return Err(AuthError::IdpAuthenticationFailed),
+            AuthnGrant::IdToken { .. } | AuthnGrant::Code { .. } => {
+                return Err(AuthError::IdpAuthenticationFailed);
+            }
         }
 
         let response = self

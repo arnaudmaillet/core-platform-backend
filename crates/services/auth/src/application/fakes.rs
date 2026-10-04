@@ -759,3 +759,126 @@ impl Fixture {
         )
     }
 }
+
+// ─── One-time codes ──────────────────────────────────────────────────────────
+
+struct StoredChallenge {
+    challenge: super::port::PendingChallenge,
+    attempts_left: u32,
+}
+
+/// Challenges in memory (no expiry) and a per-address send counter.
+#[derive(Default)]
+pub struct InMemoryVerificationStore {
+    challenges: Mutex<HashMap<String, StoredChallenge>>,
+    sends: Mutex<HashMap<String, u32>>,
+    failures: Mutex<HashMap<String, u32>>,
+}
+
+impl InMemoryVerificationStore {
+    pub fn len(&self) -> usize {
+        self.challenges.lock().unwrap().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[async_trait]
+impl super::port::VerificationStore for InMemoryVerificationStore {
+    async fn admit_send(
+        &self,
+        destination_key: &str,
+        limits: super::port::SendLimits,
+    ) -> Result<super::port::SendAdmission, AuthError> {
+        let mut sends = self.sends.lock().unwrap();
+        let n = sends.entry(destination_key.to_owned()).or_default();
+        *n += 1;
+        Ok(if *n > limits.per_hour.min(limits.per_day) {
+            super::port::SendAdmission::Refused { retry_after_secs: 3600 }
+        } else {
+            super::port::SendAdmission::Allowed
+        })
+    }
+
+    async fn save(&self, challenge: &super::port::PendingChallenge, _ttl: Duration, max_attempts: u32) -> Result<(), AuthError> {
+        self.challenges.lock().unwrap().insert(
+            challenge.challenge_id.clone(),
+            StoredChallenge { challenge: challenge.clone(), attempts_left: max_attempts },
+        );
+        Ok(())
+    }
+
+    async fn record_failure(&self, destination_key: &str, _window: Duration) -> Result<u32, AuthError> {
+        let mut failures = self.failures.lock().unwrap();
+        let n = failures.entry(destination_key.to_owned()).or_default();
+        *n += 1;
+        Ok(*n)
+    }
+
+    async fn failures(&self, destination_key: &str) -> Result<(u32, i64), AuthError> {
+        Ok((self.failures.lock().unwrap().get(destination_key).copied().unwrap_or(0), 86_400))
+    }
+
+    async fn consume(&self, challenge_id: &str, code_hash: &str) -> Result<super::port::ConsumeOutcome, AuthError> {
+        let mut challenges = self.challenges.lock().unwrap();
+        let Some(stored) = challenges.get_mut(challenge_id) else { return Ok(super::port::ConsumeOutcome::Unknown) };
+        let destination_key = stored.challenge.destination_key.clone();
+        if stored.challenge.code_hash == code_hash {
+            let stored = challenges.remove(challenge_id).unwrap();
+            return Ok(super::port::ConsumeOutcome::Verified {
+                destination: super::port::VerifiedDestination {
+                    channel: stored.challenge.channel,
+                    destination: stored.challenge.destination,
+                },
+                destination_key,
+            });
+        }
+        stored.attempts_left = stored.attempts_left.saturating_sub(1);
+        if stored.attempts_left == 0 {
+            challenges.remove(challenge_id);
+        }
+        Ok(super::port::ConsumeOutcome::Miss { destination_key })
+    }
+
+    async fn discard(&self, challenge_id: &str) -> Result<(), AuthError> {
+        self.challenges.lock().unwrap().remove(challenge_id);
+        Ok(())
+    }
+}
+
+/// Records every code "sent"; `fail()` makes later sends fail.
+#[derive(Default)]
+pub struct RecordingCodeSender {
+    sent: Mutex<Vec<(String, String, Option<String>)>>,
+    failing: std::sync::atomic::AtomicBool,
+}
+
+impl RecordingCodeSender {
+    /// The last (destination, code, locale) sent.
+    pub fn last(&self) -> Option<(String, String, Option<String>)> {
+        self.sent.lock().unwrap().last().cloned()
+    }
+
+    pub fn fail(&self) {
+        self.failing.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl super::port::CodeSender for RecordingCodeSender {
+    async fn send(
+        &self,
+        _channel: super::port::VerificationChannel,
+        destination: &str,
+        code: &str,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        if self.failing.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AuthError::VerificationSendFailed);
+        }
+        self.sent.lock().unwrap().push((destination.to_owned(), code.to_owned(), locale.map(str::to_owned)));
+        Ok(())
+    }
+}

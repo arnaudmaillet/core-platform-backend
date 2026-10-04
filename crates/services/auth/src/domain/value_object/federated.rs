@@ -3,6 +3,10 @@
 
 /// Apple's id_token issuer.
 pub const APPLE_ISSUER: &str = "https://appleid.apple.com";
+/// The issuer of identities proven by a one-time code sent to an email address
+/// (passwordless accounts): the subject is the normalized address.
+pub const EMAIL_CODE_ISSUER: &str = "urn:core-platform:email";
+
 /// Google's id_token issuers (both forms are in use).
 pub const GOOGLE_ISSUERS: [&str; 2] = ["https://accounts.google.com", "accounts.google.com"];
 
@@ -28,6 +32,8 @@ pub enum SignInMethod {
     Google,
     /// The IdP's own credential (email / username + password).
     Password,
+    /// A one-time code sent to the email address.
+    EmailCode,
 }
 
 impl SignInMethod {
@@ -38,6 +44,8 @@ impl SignInMethod {
             Self::Apple
         } else if GOOGLE_ISSUERS.contains(&issuer) {
             Self::Google
+        } else if issuer == EMAIL_CODE_ISSUER {
+            Self::EmailCode
         } else {
             Self::Password
         }
@@ -63,5 +71,6 @@ mod tests {
         assert_eq!(SignInMethod::from_issuer("accounts.google.com"), SignInMethod::Google);
         assert_eq!(SignInMethod::from_issuer("https://accounts.google.com"), SignInMethod::Google);
         assert_eq!(SignInMethod::from_issuer("https://sso.example/realms/core"), SignInMethod::Password);
+        assert_eq!(SignInMethod::from_issuer(EMAIL_CODE_ISSUER), SignInMethod::EmailCode);
     }
 }

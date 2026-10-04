@@ -51,6 +51,11 @@ pub struct AuthConfig {
     pub google_audiences: Vec<String>,
     /// Deadline on fetching a provider's JWKS.
     pub federated_jwks_timeout: std::time::Duration,
+    /// One-time codes: how they are sent (`smtp`, `log` for local runs, or
+    /// unset = off), the SMTP relay (Amazon SES), and their policy.
+    pub verification_sender: String,
+    pub smtp: Option<crate::infrastructure::notify::SmtpConfig>,
+    pub verification: crate::application::command::VerificationPolicy,
 }
 
 impl AuthConfig {
@@ -118,8 +123,32 @@ impl AuthConfig {
             apple_audiences: env_list("AUTH_APPLE_AUDIENCES"),
             google_audiences: env_list("AUTH_GOOGLE_AUDIENCES"),
             federated_jwks_timeout: env_ms("AUTH_FEDERATED_JWKS_TIMEOUT_MS", 3_000),
+            verification_sender: env_or("AUTH_VERIFICATION_SENDER", "").trim().to_ascii_lowercase(),
+            smtp: smtp_from_env(),
+            verification: crate::application::command::VerificationPolicy {
+                ttl: chrono::Duration::seconds(env_secs("AUTH_VERIFICATION_TTL_SECS", 600)),
+                max_attempts: env_secs("AUTH_VERIFICATION_MAX_ATTEMPTS", 5).max(1) as u32,
+                per_hour: env_secs("AUTH_VERIFICATION_PER_HOUR", 5).max(1) as u32,
+                per_day: env_secs("AUTH_VERIFICATION_PER_DAY", 20).max(1) as u32,
+                resend: chrono::Duration::seconds(env_secs("AUTH_VERIFICATION_RESEND_SECS", 30)),
+                max_failures: env_secs("AUTH_VERIFICATION_MAX_FAILURES", 15).max(1) as u32,
+                failure_window: chrono::Duration::hours(24),
+            },
         })
     }
+}
+
+/// The SMTP relay for email codes, when `AUTH_SMTP_HOST` is set.
+fn smtp_from_env() -> Option<crate::infrastructure::notify::SmtpConfig> {
+    let host = std::env::var("AUTH_SMTP_HOST").ok().filter(|h| !h.trim().is_empty())?;
+    Some(crate::infrastructure::notify::SmtpConfig {
+        host,
+        port: std::env::var("AUTH_SMTP_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(587),
+        username: env_or("AUTH_SMTP_USERNAME", ""),
+        password: env_or("AUTH_SMTP_PASSWORD", ""),
+        from: env_or("AUTH_SMTP_FROM", ""),
+        code_ttl_minutes: env_secs("AUTH_VERIFICATION_TTL_SECS", 600) / 60,
+    })
 }
 
 /// A comma-separated list (blank entries dropped).

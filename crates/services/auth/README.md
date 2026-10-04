@@ -85,6 +85,24 @@ id_token (`IdTokenGrant`) for returning users; an identity with no account gets 
 (`NOT_FOUND`) and the app goes on with `SignUp`. Both accept the device's **guest refresh token**:
 that guest session ends (`guest_upgraded`) and `guest_principals` records the account it became.
 
+### Passwordless email (guest mode)
+
+`StartVerification` (edge **public**) sends a 6-digit **one-time code** to an email address; `SignUp`
+and `Login` take it back (`verification_code{challenge_id, code}`) for a **passwordless** account —
+its identity is the address under the issuer `urn:core-platform:email`, and it signs in again with a
+new code (`SIGN_IN_METHOD_EMAIL_CODE`). Codes are stored hashed in Redis (`auth:{otp:<id>}`), live
+`AUTH_VERIFICATION_TTL_SECS` (600), allow `AUTH_VERIFICATION_MAX_ATTEMPTS` (5) tries, and are single
+use; a wrong, expired or used code is one error (`AUT-5011`). Sends are budgeted per address
+(`AUTH_VERIFICATION_PER_HOUR` 5, `AUTH_VERIFICATION_PER_DAY` 20, `AUTH_VERIFICATION_RESEND_SECS` 30
+→ `RESOURCE_EXHAUSTED` `AUT-5013` with `retry-after-secs`) and per IP at the edge. **Guessing is
+bounded per address:** after `AUTH_VERIFICATION_MAX_FAILURES` (15) wrong codes within 24 h, across
+challenges, the address gets no new code and even a right one is refused until the window ends. **Nothing to enumerate:** the answer to
+StartVerification is the same for any address; whether it has an account (or one made with Apple /
+Google) is only told to whoever enters the code. Email goes through SMTP to **Amazon SES**
+(`AUTH_VERIFICATION_SENDER=smtp`, `AUTH_SMTP_*`); `log` writes the code to the log (local runs only);
+unset = off (`AUT-5012`). SMS (phone accounts) comes later: `account` must first make the email
+optional.
+
 ### Credentials and step-up
 
 The password lives at the IdP only. `ChangePassword` (edge **authenticated**, members) proves the
@@ -193,6 +211,9 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | `AUTH_GUEST_SESSIONS_ENABLED` | `StartGuestSession` kill switch. **Off by default**: it writes a session per call with no credential, so keep it off wherever the abuse controls (per-IP / per-device limits, App Attest) are not in front of it. Off → `AUT-1005` (`PERMISSION_DENIED`). | `false` |
 | `AUTH_APPLE_AUDIENCES` · `AUTH_GOOGLE_AUDIENCES` | Comma-separated client ids an Apple / Google id_token must be minted for (`aud`: the app's bundle / services ids; Google OAuth client ids). Empty = that provider's sign-in is off (`AUT-5009`). | — |
 | `AUTH_FEDERATED_JWKS_TIMEOUT_MS` | Deadline on fetching a provider's JWKS. | `3000` |
+| `AUTH_VERIFICATION_SENDER` | How one-time codes are sent: `smtp` (Amazon SES), `log` (local runs only — the code is logged), unset = off (`AUT-5012`). | — |
+| `AUTH_SMTP_HOST` · `AUTH_SMTP_PORT` · `AUTH_SMTP_USERNAME` · `AUTH_SMTP_PASSWORD` · `AUTH_SMTP_FROM` | SMTP relay for email codes (SES: `email-smtp.<region>.amazonaws.com`, `587`, STARTTLS, SES SMTP credentials, a verified sender). | — · `587` |
+| `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES` | Code lifetime, tries per code, codes per address an hour / a day, resend cooldown, wrong codes per address in 24 h before it is locked. | `600` · `5` · `5` · `20` · `30` · `15` |
 | Postgres / Redis / Kafka | via the shared storage crates' own `from_env()` | — |
 
 ## 🧪 Local Development

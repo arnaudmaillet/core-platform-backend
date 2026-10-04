@@ -7,6 +7,7 @@ pub mod logout_all_sessions;
 pub mod refresh;
 pub mod sign_up;
 pub mod start_guest_session;
+pub mod verification;
 pub mod verify_credentials;
 
 pub use change_password::{ChangePasswordCommand, ChangePasswordHandler, ChangePasswordOutcome};
@@ -18,7 +19,10 @@ pub use logout_all_sessions::{
 };
 pub use member_session::{MemberSession, MemberSessions};
 pub use refresh::{RefreshCommand, RefreshHandler};
-pub use sign_up::{SignUpCommand, SignUpHandler, SignUpOutcome};
+pub use sign_up::{SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome};
+pub use verification::{
+    normalize_email, StartVerificationCommand, StartedVerification, VerificationCodes, VerificationPolicy,
+};
 pub use start_guest_session::{StartGuestSessionCommand, StartGuestSessionHandler, GUEST_ISSUER};
 pub use verify_credentials::{
     StepUpCredential, SteppedUpToken, VerifyCredentialsCommand, VerifyCredentialsHandler,

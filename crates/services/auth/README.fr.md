@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: d0dc5025efaa5b97de2e723939da8f094f8bd6574711bb96caa6c77016437f3b
+  source_sha256: b7c22830f0ba6f6b1915106d679eaa2597c0aa6b97d97cfc31117771c8294836
   translated_at: 2026-10-04
   status: complete
 ---
@@ -100,6 +100,26 @@ recherché, et les adresses relais privées d'Apple ne correspondent jamais. Le 
 id_token (`IdTokenGrant`) pour les retours ; une identité sans compte reçoit `AUT-6004` (`NOT_FOUND`)
 et l'app enchaîne sur `SignUp`. Les deux acceptent le **refresh token invité** de l'appareil : cette
 session invitée se termine (`guest_upgraded`) et `guest_principals` enregistre le compte devenu.
+
+### E-mail sans mot de passe (mode invité)
+
+`StartVerification` (edge **public**) envoie un **code à usage unique** à 6 chiffres à une adresse
+e-mail ; `SignUp` et `Login` le reprennent (`verification_code{challenge_id, code}`) pour un compte
+**sans mot de passe** — son identité est l'adresse sous l'émetteur `urn:core-platform:email`, et il
+se reconnecte avec un nouveau code (`SIGN_IN_METHOD_EMAIL_CODE`). Les codes sont stockés hachés dans
+Redis (`auth:{otp:<id>}`), vivent `AUTH_VERIFICATION_TTL_SECS` (600), autorisent
+`AUTH_VERIFICATION_MAX_ATTEMPTS` (5) essais et sont à usage unique ; un code faux, expiré ou déjà
+utilisé donne une seule et même erreur (`AUT-5011`). Les envois sont limités par adresse
+(`AUTH_VERIFICATION_PER_HOUR` 5, `AUTH_VERIFICATION_PER_DAY` 20, `AUTH_VERIFICATION_RESEND_SECS` 30
+→ `RESOURCE_EXHAUSTED` `AUT-5013` avec `retry-after-secs`) et par IP à l'edge. **Les tentatives sont
+bornées par adresse :** après `AUTH_VERIFICATION_MAX_FAILURES` (15) codes faux en 24 h, tous
+challenges confondus, l'adresse ne reçoit plus de code et même un bon code est refusé jusqu'à la fin
+de la fenêtre. **Rien à énumérer :** la réponse de StartVerification est
+la même pour toute adresse ; qu'elle ait un compte (ou un compte Apple / Google) n'est dit qu'à celui
+qui saisit le code. L'e-mail part en SMTP vers **Amazon SES** (`AUTH_VERIFICATION_SENDER=smtp`,
+`AUTH_SMTP_*`) ; `log` écrit le code dans les logs (exécutions locales uniquement) ; non défini =
+désactivé (`AUT-5012`). Le SMS (comptes téléphone) viendra plus tard : `account` doit d'abord rendre
+l'e-mail facultatif.
 
 ### Identifiants et step-up
 
@@ -210,6 +230,9 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_GUEST_SESSIONS_ENABLED` | Interrupteur de `StartGuestSession`. **Désactivé par défaut** : il écrit une session par appel sans identifiant, donc à laisser éteint partout où les contrôles anti-abus (limites par IP / par appareil, App Attest) ne sont pas devant lui. Éteint → `AUT-1005` (`PERMISSION_DENIED`). | `false` |
 | `AUTH_APPLE_AUDIENCES` · `AUTH_GOOGLE_AUDIENCES` | Client ids (séparés par des virgules) pour lesquels un id_token Apple / Google doit être émis (`aud` : bundle / services ids de l'app ; client ids OAuth Google). Vide = l'inscription par ce fournisseur est désactivée (`AUT-5009`). | — |
 | `AUTH_FEDERATED_JWKS_TIMEOUT_MS` | Délai de récupération des JWKS d'un fournisseur. | `3000` |
+| `AUTH_VERIFICATION_SENDER` | Mode d'envoi des codes : `smtp` (Amazon SES), `log` (exécutions locales uniquement — le code est journalisé), non défini = désactivé (`AUT-5012`). | — |
+| `AUTH_SMTP_HOST` · `AUTH_SMTP_PORT` · `AUTH_SMTP_USERNAME` · `AUTH_SMTP_PASSWORD` · `AUTH_SMTP_FROM` | Relais SMTP des codes e-mail (SES : `email-smtp.<region>.amazonaws.com`, `587`, STARTTLS, identifiants SMTP SES, un expéditeur vérifié). | — · `587` |
+| `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES` | Durée de vie d'un code, essais par code, codes par adresse par heure / par jour, délai avant renvoi, codes faux par adresse en 24 h avant verrouillage. | `600` · `5` · `5` · `20` · `30` · `15` |
 | Postgres / Redis / Kafka | via les `from_env()` des crates de stockage partagées | — |
 
 ## 🧪 Développement local

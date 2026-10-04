@@ -31,6 +31,16 @@ enum GrantType {
     // A native Sign in with Apple / Google id_token, verified by this service
     // against the provider's keys (no IdP round-trip).
     ID_TOKEN               = 3;
+    // A one-time code sent to an email address (StartVerification).
+    VERIFICATION_CODE      = 4;
+}
+
+// Where a one-time code is sent.
+enum VerificationChannel {
+    VERIFICATION_CHANNEL_UNSPECIFIED = 0;
+    VERIFICATION_CHANNEL_EMAIL       = 1;
+    // Not available yet (phone accounts come later): FAILED_PRECONDITION.
+    VERIFICATION_CHANNEL_SMS         = 2;
 }
 
 // A third-party identity provider whose id_tokens this service verifies.
@@ -47,4 +57,6 @@ enum SignInMethod {
     SIGN_IN_METHOD_GOOGLE      = 2;
     // Email / username + password (the IdP's own credential).
     SIGN_IN_METHOD_PASSWORD    = 3;
+    // A one-time code sent to the email address (no password).
+    SIGN_IN_METHOD_EMAIL_CODE  = 4;
 }

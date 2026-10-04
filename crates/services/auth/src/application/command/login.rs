@@ -5,6 +5,7 @@ use cqrs::Envelope;
 use validate_core::{FieldViolation, Validate};
 
 use crate::application::command::member_session::MemberSessions;
+use crate::application::command::verification::VerificationCodes;
 use crate::application::ensure_valid;
 use crate::application::policy::SessionPolicy;
 use crate::application::port::{
@@ -13,7 +14,7 @@ use crate::application::port::{
     SubjectLinkRepository, TokenMinter,
 };
 use crate::domain::aggregate::SubjectLink;
-use crate::domain::value_object::{AccountId, DeviceFingerprint, IdpSubject};
+use crate::domain::value_object::{AccountId, DeviceFingerprint, IdpSubject, EMAIL_CODE_ISSUER};
 use crate::error::AuthError;
 
 /// Establish a session by brokering a credential to the IdP, or by verifying a
@@ -66,6 +67,15 @@ impl Validate for LoginCommand {
                     v.push(FieldViolation::new("nonce", "AUT-VAL-031", "nonce must not be empty"));
                 }
             }
+            AuthnGrant::Code { challenge_id, code } => {
+                if challenge_id.trim().is_empty() || code.trim().is_empty() {
+                    v.push(FieldViolation::new(
+                        "verification_code",
+                        "AUT-VAL-036",
+                        "challenge_id and code are required",
+                    ));
+                }
+            }
         }
         if v.is_empty() { Ok(()) } else { Err(v) }
     }
@@ -98,6 +108,8 @@ pub struct LoginHandler {
     federated: Option<Arc<dyn FederatedTokenVerifier>>,
     /// Where a retired guest session's upgrade is recorded.
     guests: Option<Arc<dyn GuestRegistry>>,
+    /// Email one-time codes; `None` refuses code grants.
+    codes: Option<Arc<VerificationCodes>>,
 }
 
 impl LoginHandler {
@@ -122,7 +134,14 @@ impl LoginHandler {
             members: MemberSessions { profiles, sessions, refresh_tokens, cache, minter, publisher, policy },
             federated: None,
             guests: None,
+            codes: None,
         }
+    }
+
+    /// Enables passwordless sign-in with an email one-time code.
+    pub fn with_codes(mut self, codes: Arc<VerificationCodes>) -> Self {
+        self.codes = Some(codes);
+        self
     }
 
     /// Enables id_token grants (native Sign in with Apple / Google) and the
@@ -156,6 +175,17 @@ impl LoginHandler {
                 })?;
                 let identity = verifier.verify(provider, &id_token, &nonce).await?;
                 let subject = IdpSubject::new(identity.issuer, identity.subject)?;
+                let link = self.links.find_by_subject(&subject).await?.ok_or(AuthError::NoAccountForIdentity)?;
+                (subject, link.account_id(), false)
+            }
+            // A one-time code proving the address of a passwordless account.
+            AuthnGrant::Code { challenge_id, code } => {
+                let codes = self
+                    .codes
+                    .as_ref()
+                    .ok_or_else(|| AuthError::VerificationChannelUnavailable { channel: "email".into() })?;
+                let proven = codes.verify(&challenge_id, &code).await?;
+                let subject = IdpSubject::new(EMAIL_CODE_ISSUER, proven.destination)?;
                 let link = self.links.find_by_subject(&subject).await?.ok_or(AuthError::NoAccountForIdentity)?;
                 (subject, link.account_id(), false)
             }

@@ -35,6 +35,10 @@ use thiserror::Error;
 /// | AUT-5008 | IdTokenRejected              | 401  | Low      | No        |
 /// | AUT-5009 | FederatedProviderNotConfigured | 422 | Medium  | No        |
 /// | AUT-5010 | IdTokenWithoutEmail          | 422  | Low      | No        |
+/// | AUT-5011 | VerificationCodeInvalid      | 401  | Low      | No        |
+/// | AUT-5012 | VerificationChannelUnavailable | 422 | Medium  | No        |
+/// | AUT-5013 | VerificationRateLimited      | 429  | Low      | No        |
+/// | AUT-5014 | VerificationSendFailed       | 503  | High     | **Yes**   |
 /// | AUT-1005 | GuestSessionsDisabled        | 403  | Low      | No        |
 /// | AUT-6001 | AccountNotActive             | 403  | Medium   | No        |
 /// | AUT-6002 | AccountDirectoryUnavailable  | 503  | High     | **Yes**   |
@@ -157,6 +161,22 @@ pub enum AuthError {
     #[error("the identity token carries no email address")]
     IdTokenWithoutEmail,
 
+    /// A wrong, expired, used-up or unknown one-time code (never told apart).
+    #[error("the verification code is invalid or has expired")]
+    VerificationCodeInvalid,
+
+    /// No transport for this channel (SMS today, or no email sender configured).
+    #[error("codes cannot be sent by {channel} here")]
+    VerificationChannelUnavailable { channel: String },
+
+    /// Too many codes for this address.
+    #[error("too many codes for this address; retry in {retry_after_secs} s")]
+    VerificationRateLimited { retry_after_secs: i64 },
+
+    /// The code could not be delivered (the mail relay failed).
+    #[error("the verification code could not be sent")]
+    VerificationSendFailed,
+
     // ── Account directory (AUT-6xxx) ──────────────────────────────────────────
     #[error("account is not active; current status: '{current}'")]
     AccountNotActive { current: String },
@@ -233,6 +253,10 @@ impl AppError for AuthError {
             AuthError::IdTokenRejected { .. } => "AUT-5008",
             AuthError::FederatedProviderNotConfigured { .. } => "AUT-5009",
             AuthError::IdTokenWithoutEmail => "AUT-5010",
+            AuthError::VerificationCodeInvalid => "AUT-5011",
+            AuthError::VerificationChannelUnavailable { .. } => "AUT-5012",
+            AuthError::VerificationRateLimited { .. } => "AUT-5013",
+            AuthError::VerificationSendFailed => "AUT-5014",
 
             AuthError::AccountNotActive { .. } => "AUT-6001",
             AuthError::AccountDirectoryUnavailable => "AUT-6002",
@@ -270,7 +294,10 @@ impl AppError for AuthError {
             | AuthError::InvalidTokenGeneration
             | AuthError::IdpAuthenticationFailed
             | AuthError::IdpTokenRejected
-            | AuthError::IdTokenRejected { .. } => StatusCode::UNAUTHORIZED,
+            | AuthError::IdTokenRejected { .. }
+            | AuthError::VerificationCodeInvalid => StatusCode::UNAUTHORIZED,
+
+            AuthError::VerificationRateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
 
             AuthError::SubjectAlreadyLinked { .. } | AuthError::EmailAlreadyRegistered => StatusCode::CONFLICT,
 
@@ -284,7 +311,8 @@ impl AppError for AuthError {
             | AuthError::IdpUnavailable
             | AuthError::CredentialManagementUnavailable
             | AuthError::AccountDirectoryUnavailable
-            | AuthError::ProfileDirectoryUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            | AuthError::ProfileDirectoryUnavailable
+            | AuthError::VerificationSendFailed => StatusCode::SERVICE_UNAVAILABLE,
 
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         }
@@ -326,6 +354,7 @@ impl AppError for AuthError {
             | AuthError::IdpUnavailable
             | AuthError::CredentialManagementUnavailable
             | AuthError::AccountDirectoryUnavailable
+            | AuthError::VerificationSendFailed
             | AuthError::ProfileDirectoryUnavailable => true,
             _ => false,
         }
@@ -377,6 +406,10 @@ impl AppError for AuthError {
             AuthError::NoAccountForIdentity => "There is no account for this sign-in yet.",
             AuthError::AgeBelowMinimum => "You are not old enough to create an account.",
             AuthError::EmailAlreadyRegistered => "This email address already has an account.",
+            AuthError::VerificationCodeInvalid => "This code is not valid anymore; ask for a new one.",
+            AuthError::VerificationChannelUnavailable { .. } => "Codes cannot be sent this way right now.",
+            AuthError::VerificationRateLimited { .. } => "Too many codes were asked for; please wait a moment.",
+            AuthError::VerificationSendFailed => "We could not send the code. Please try again.",
             _ => "A domain constraint was violated.",
         }
     }

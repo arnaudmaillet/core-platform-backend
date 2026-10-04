@@ -62,7 +62,7 @@ impl IdentityProvider for StubIdp {
         let subject = match grant {
             AuthnGrant::Password { username, .. } => username,
             AuthnGrant::AuthorizationCode { code, .. } => code,
-            AuthnGrant::IdToken { .. } => return Err(AuthError::IdpAuthenticationFailed),
+            AuthnGrant::IdToken { .. } | AuthnGrant::Code { .. } => return Err(AuthError::IdpAuthenticationFailed),
         };
         Ok(NormalizedClaims { issuer: "https://idp.test".to_owned(), subject })
     }
@@ -142,6 +142,8 @@ pub struct Harness {
     pub handler: AuthServiceHandler,
     pub pool: PgPool,
     pub credentials: Arc<StubCredentials>,
+    /// The live Redis, for adapter-level scenarios (one-time codes).
+    pub redis: redis_storage::RedisClient,
 }
 
 impl Harness {
@@ -195,6 +197,11 @@ impl Harness {
             guests: Arc::new(PgGuestRegistry::new(tx.clone())),
             guest_sessions_enabled: true,
             federated: std::sync::Arc::new(auth::infrastructure::idp::JwksFederatedTokenVerifier::new()),
+            codes: std::sync::Arc::new(auth::application::command::VerificationCodes::new(
+                std::sync::Arc::new(auth::infrastructure::cache::RedisVerificationStore::new(redis.clone())),
+                std::sync::Arc::new(auth::infrastructure::notify::LogCodeSender),
+                auth::application::command::VerificationPolicy::default(),
+            )),
             policy: SessionPolicy::new(
                 ChronoDuration::minutes(10),
                 ChronoDuration::minutes(30),
@@ -203,7 +210,7 @@ impl Harness {
             ),
         };
 
-        Self { handler: App::compose(deps), pool, credentials }
+        Self { handler: App::compose(deps), pool, credentials, redis }
     }
 
     // ── RPC helpers ──────────────────────────────────────────────────────────

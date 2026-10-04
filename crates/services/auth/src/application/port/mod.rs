@@ -16,6 +16,7 @@ pub mod session_cache;
 pub mod session_repository;
 pub mod subject_link_repository;
 pub mod token_minter;
+pub mod verification;
 
 pub use account_directory::{
     AccountActivation, AccountDirectory, AccountSnapshot, EmailHolder, NewAccount, SignUpConsent,
@@ -31,3 +32,7 @@ pub use session_cache::SessionCache;
 pub use session_repository::SessionRepository;
 pub use subject_link_repository::SubjectLinkRepository;
 pub use token_minter::{GeneratedRefresh, TokenMinter};
+pub use verification::{
+    CodeSender, ConsumeOutcome, PendingChallenge, SendAdmission, SendLimits, VerificationChannel,
+    VerificationStore, VerifiedDestination,
+};

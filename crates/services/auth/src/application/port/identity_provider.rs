@@ -25,6 +25,9 @@ pub enum AuthnGrant {
         id_token: String,
         nonce: String,
     },
+    /// A one-time code sent to the account's email address (passwordless).
+    /// Checked by auth itself, never sent to the IdP broker.
+    Code { challenge_id: String, code: String },
 }
 
 /// The normalized identity an IdP returns after authenticating a grant.

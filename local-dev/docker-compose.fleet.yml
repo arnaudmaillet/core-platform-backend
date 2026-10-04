@@ -469,6 +469,8 @@ services:
       # ids. Unset = that provider is off locally.
       # AUTH_APPLE_AUDIENCES: <bundle id>
       # AUTH_GOOGLE_AUDIENCES: <iOS OAuth client id>
+      # Passwordless email codes: logged instead of sent (docker logs auth-server).
+      AUTH_VERIFICATION_SENDER: log
       AUTH_SIGNING_KID: local-es256-1
       AUTH_JWKS_HTTP_ADDR: 0.0.0.0:8081
       AUTH_ACCOUNT_GRPC_ENDPOINT: http://account-server:50059
