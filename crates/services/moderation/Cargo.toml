@@ -37,6 +37,9 @@ redis-storage    = { workspace = true }
 # ── Infrastructure adapters (Phase 4) ─────────────────────────────────────────
 transport   = { workspace = true }
 account-api = { workspace = true }
+post-api         = { workspace = true }   # report subject resolution
+comment-api      = { workspace = true }   # report subject resolution
+profile-api      = { workspace = true }   # report subject resolution
 sqlx        = { workspace = true }
 fred        = { workspace = true }
 scylla      = { workspace = true }
@@ -67,6 +70,8 @@ http      = { workspace = true }
 integration-moderation = []
 
 [dev-dependencies]
+# Builds a verified edge principal (member / guest) for the SubmitReport RPC test.
+auth-context = { workspace = true }
 # Live integration suite: shared container orchestration + migration runners.
 test-support     = { workspace = true }
 cqrs             = { workspace = true }

@@ -11,7 +11,7 @@ use crate::application::command::{
     AssignCaseCommand, AssignCaseHandler, DecideCaseCommand, DecideCaseHandler, DecideOutcome,
     FileAppealCommand, FileAppealHandler, OpenCaseCommand, OpenCaseHandler, OpenedCase,
     ResolveAppealCommand, ResolveAppealHandler, ResolveAppealOutcome, ScreenCommand, ScreenHandler,
-    ScreenVerdict,
+    ScreenVerdict, Reporter, SubmitReportCommand, SubmitReportHandler,
 };
 use crate::application::port::ContentHash;
 use crate::application::query::{
@@ -43,6 +43,7 @@ pub struct ModerationServiceHandler {
     resolve_appeal: Arc<ResolveAppealHandler>,
     statement_of_reasons: Arc<GetStatementOfReasonsHandler>,
     enforcement_state: Arc<GetEnforcementStateHandler>,
+    submit_report: Arc<SubmitReportHandler>,
 }
 
 impl ModerationServiceHandler {
@@ -57,6 +58,7 @@ impl ModerationServiceHandler {
         resolve_appeal: Arc<ResolveAppealHandler>,
         statement_of_reasons: Arc<GetStatementOfReasonsHandler>,
         enforcement_state: Arc<GetEnforcementStateHandler>,
+        submit_report: Arc<SubmitReportHandler>,
     ) -> Self {
         Self {
             screen,
@@ -68,6 +70,7 @@ impl ModerationServiceHandler {
             resolve_appeal,
             statement_of_reasons,
             enforcement_state,
+            submit_report,
         }
     }
 
@@ -104,6 +107,31 @@ impl ModerationServiceHandler {
             matched_categories: out.matched_categories.iter().map(|c| category_to_proto(*c)).collect(),
             match_reference: out.match_reference.unwrap_or_default(),
         }))
+    }
+
+    /// Client report (edge `member_or_guest`). The reporter is the verified
+    /// caller: a member's account, or a guest's id. A mesh call (no principal)
+    /// is refused: client reports always have a reporter.
+    pub async fn submit_report(
+        &self,
+        request: Request<proto::SubmitReportRequest>,
+    ) -> Result<Response<proto::SubmitReportResponse>, Status> {
+        let reporter = reporter_of(&request).map_err(status)?;
+        let req = request.into_inner();
+        let cmd = SubmitReportCommand {
+            reporter,
+            entity_type: entity_type_from_proto(req.entity_type)?,
+            entity_id: req.entity_id,
+            surface: req.surface,
+            category: category_from_proto(req.category)?,
+            reason: req.reason,
+        };
+        let report_id = self
+            .submit_report
+            .handle(Self::envelope(cmd), Utc::now())
+            .await
+            .map_err(status)?;
+        Ok(Response::new(proto::SubmitReportResponse { report_id: report_id.as_str() }))
     }
 
     pub async fn open_case(
@@ -257,6 +285,19 @@ fn parse_case_id(s: &str) -> Result<CaseId, Status> {
     Uuid::parse_str(s)
         .map(CaseId::from_uuid)
         .map_err(|_| Status::invalid_argument(format!("invalid case_id: '{s}'")))
+}
+
+/// The reporter of a client report, from the verified edge token: a guest's
+/// `sub` is `guest:<id>`, a member's is its account id.
+fn reporter_of<T>(request: &Request<T>) -> Result<Reporter, ModerationError> {
+    let principal = edge::principal(request).ok_or(ModerationError::ReporterRequired)?;
+    let sub = principal.account_id();
+    let (raw, guest) = match sub.strip_prefix("guest:") {
+        Some(id) => (id, true),
+        None => (sub, principal.is_guest()),
+    };
+    let id = ActorId::try_from(raw).map_err(|_| ModerationError::ReporterRequired)?;
+    Ok(if guest { Reporter::Guest(id) } else { Reporter::Member(id) })
 }
 
 fn subject_from_proto(s: Option<proto::SubjectRef>) -> Result<SubjectRef, Status> {
@@ -505,6 +546,7 @@ pub fn status(err: ModerationError) -> Status {
         404 => Status::not_found(msg),
         409 if retryable => Status::aborted(msg),
         409 => Status::already_exists(msg),
+        429 => Status::resource_exhausted(msg),
         451 => Status::permission_denied(msg), // content blocked for legal reasons
         400 | 422 => Status::failed_precondition(msg),
         502 | 503 => Status::unavailable(msg),

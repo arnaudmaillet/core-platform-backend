@@ -118,6 +118,9 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS where it
 // Plane C — the narrow, fail-closed pre-publish gate (media/post only).
 rpc Screen (ScreenRequest) returns (ScreenResponse);
 
+// Client reports (edge member_or_guest — DSA Art. 16, guests included).
+rpc SubmitReport (..) returns (..);
+
 // Ops console — case / queue / appeal lifecycle.
 rpc OpenCase   (..) returns (..);   rpc AssignCase (..) returns (..);
 rpc DecideCase (..) returns (..);   rpc ListQueue  (..) returns (..);
@@ -131,6 +134,16 @@ rpc GetEnforcementState   (..) returns (..);   // internal; DISCOURAGED on hot p
 > **Wire / contract rule:** the surface exposes only normalized integrity types — `SubjectRef` (entity_type + entity_id + actor_id + surface), policy category, action type, case/appeal ids — never classifier-vendor or content-internal fields.
 >
 > **Hot-path rule:** the fleet reads enforcement via **Plane B** (events + Redis projection), **not** `GetEnforcementState`. The RPC exists for back-office/cold reads only.
+>
+> **Client reports (`SubmitReport`).** Anyone may report (DSA Art. 16), so the RPC is open to every client
+> session, member **or guest** (edge `member_or_guest`). The **reporter** is the verified token (a member's account,
+> or `guest:<id>`), never a request field; a mesh call has no reporter and is refused (`MOD-6007`). The client sends
+> only the content (`POST` / `COMMENT` / `PROFILE` + id): the **account** a decision would penalise is resolved
+> server-side (post / comment → author profile → owning account, over the mesh), so a reporter can never point a
+> sanction at someone else. Quota per reporter: `MODERATION_REPORTS_PER_HOUR` / `_PER_DAY` (20 / 100) in Redis,
+> **fail-open** if Redis is down (reporting is a right; the queue absorbs it). The report then feeds the subject's
+> case like a pipeline report; a guest's is a weaker signal (`guest_report`, 0.3 vs 0.5). `OpenCase` stays
+> mesh-only (it is the reviewer console's).
 >
 > **Authorization (deployment requirement):** the mutating ops RPCs (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) are **privileged** — they ban/suspend/remove. The service does not self-authorize the caller; mutating RPCs **must** be restricted to authenticated reviewer principals at the edge (gateway authz / `auth-context` permission gate, e.g. `moderation:decide`) before exposure. `Screen` and `FileAppeal` are caller-facing; the rest are reviewer-only.
 
@@ -229,6 +242,9 @@ async fn main() -> anyhow::Result<()> {
 |---|---|---|---|
 | `MODERATION_GRPC_ADDR` | No | `0.0.0.0:50061` | gRPC bind address |
 | `MODERATION_ACCOUNT_GRPC_ENDPOINT` | No | `http://localhost:50059` | `account` service endpoint (suspension execution) |
+| `MODERATION_POST_GRPC_ENDPOINT` · `MODERATION_COMMENT_GRPC_ENDPOINT` · `MODERATION_PROFILE_GRPC_ENDPOINT` | **Yes** (prod) | `:50056` · `:50057` · `:50052` on localhost | report subject resolution (whose content a client report targets) |
+| `MODERATION_CONTENT_RPC_TIMEOUT_MS` · `MODERATION_CONTENT_CONNECT_TIMEOUT_MS` | No | `1000` · `1000` | deadlines on those calls |
+| `MODERATION_REPORTS_PER_HOUR` · `MODERATION_REPORTS_PER_DAY` | No | `20` · `100` | client report quota per reporter (member or guest) |
 | `MODERATION_ACCOUNT_RPC_TIMEOUT_MS` | No | `2000` | per-request deadline on `account` RPCs (tonic has no default timeout) |
 | `MODERATION_ACCOUNT_CONNECT_TIMEOUT_MS` | No | `2000` | connect deadline when dialing the `account` channel |
 | `MODERATION_SCREEN_TIMEOUT_MS` | No | `200` | hard timeout for the Plane C gate; on elapse the gate returns `MOD-7002` and the caller fails closed for catastrophic categories |

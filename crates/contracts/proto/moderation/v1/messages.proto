@@ -231,3 +231,22 @@ message GetEnforcementStateResponse {
     bool                      actor_restricted    = 1;
     repeated EnforcementView  active_enforcements = 2;
 }
+
+// ── Client reports ────────────────────────────────────────────────────────────
+
+message SubmitReportRequest {
+    // POST, COMMENT or PROFILE.
+    EntityType      entity_type = 1;
+    string          entity_id   = 2;
+    PolicyCategory  category    = 3;
+    // Free text from the reporter (optional).
+    string          reason      = 4;
+    // Where in the app the report was made, e.g. "post_menu", "profile_menu".
+    string          surface     = 5;
+}
+
+message SubmitReportResponse {
+    // Deterministic per reporter and subject: reporting the same content twice
+    // returns the same id.
+    string  report_id   = 1;
+}

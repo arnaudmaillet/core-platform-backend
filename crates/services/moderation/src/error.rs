@@ -31,6 +31,11 @@ use thiserror::Error;
 /// | MOD-6001 | ReportNotFound                | 404  | Low      | No        |
 /// | MOD-6002 | DuplicateReport               | 409  | Low      | No        |
 /// | MOD-6003 | SelfReportRejected            | 422  | Low      | No        |
+/// | MOD-6004 | ReportRateLimited             | 429  | Low      | No        |
+/// | MOD-6005 | ReportedContentNotFound       | 404  | Low      | No        |
+/// | MOD-6006 | UnsupportedReportTarget       | 422  | Low      | No        |
+/// | MOD-6007 | ReporterRequired              | 422  | Low      | No        |
+/// | MOD-8004 | ContentDirectoryUnavailable   | 503  | Medium   | **Yes**   |
 /// | MOD-7001 | ContentBlocked                | 451  | **High** | No        |
 /// | MOD-7002 | ScreenUnavailable             | 503  | **High** | **Yes**   |
 /// | MOD-7003 | HashCorpusUnavailable         | 503  | **High** | **Yes**   |
@@ -135,6 +140,27 @@ pub enum ModerationError {
     #[error("a reporter may not report their own content")]
     SelfReportRejected,
 
+    /// The reporter hit its report quota (per hour or per day).
+    #[error("too many reports; try again later")]
+    ReportRateLimited,
+
+    /// The reported content does not exist (or no longer does).
+    #[error("reported {entity_type} not found: {id}")]
+    ReportedContentNotFound { entity_type: String, id: String },
+
+    /// Clients can report posts, comments and profiles.
+    #[error("{entity_type} cannot be reported by a client")]
+    UnsupportedReportTarget { entity_type: String },
+
+    /// A client report needs a client principal (member or guest) as reporter.
+    #[error("a report needs an authenticated client as its reporter")]
+    ReporterRequired,
+
+    /// The services that tell whose content a report targets (post, comment,
+    /// profile) could not answer.
+    #[error("content directory unavailable")]
+    ContentDirectoryUnavailable,
+
     // ── Screen gate · Plane C (MOD-7xxx) ──────────────────────────────────────
     /// A positive match against the known-bad corpus for a catastrophic-harm
     /// category — the content must never become visible. `451 Unavailable For
@@ -205,6 +231,11 @@ impl AppError for ModerationError {
             ModerationError::ReportNotFound { .. } => "MOD-6001",
             ModerationError::DuplicateReport => "MOD-6002",
             ModerationError::SelfReportRejected => "MOD-6003",
+            ModerationError::ReportRateLimited => "MOD-6004",
+            ModerationError::ReportedContentNotFound { .. } => "MOD-6005",
+            ModerationError::UnsupportedReportTarget { .. } => "MOD-6006",
+            ModerationError::ReporterRequired => "MOD-6007",
+            ModerationError::ContentDirectoryUnavailable => "MOD-8004",
 
             ModerationError::ContentBlocked { .. } => "MOD-7001",
             ModerationError::ScreenUnavailable => "MOD-7002",
@@ -234,7 +265,10 @@ impl AppError for ModerationError {
             | ModerationError::EnforcementNotFound { .. }
             | ModerationError::PolicyVersionNotFound { .. }
             | ModerationError::AppealNotFound { .. }
-            | ModerationError::ReportNotFound { .. } => StatusCode::NOT_FOUND,
+            | ModerationError::ReportNotFound { .. }
+            | ModerationError::ReportedContentNotFound { .. } => StatusCode::NOT_FOUND,
+
+            ModerationError::ReportRateLimited => StatusCode::TOO_MANY_REQUESTS,
 
             ModerationError::CaseAlreadyResolved
             | ModerationError::DecisionImmutable
@@ -248,6 +282,7 @@ impl AppError for ModerationError {
             ModerationError::ScreenUnavailable
             | ModerationError::HashCorpusUnavailable
             | ModerationError::ClassifierUnavailable
+            | ModerationError::ContentDirectoryUnavailable
             | ModerationError::AccountDirectoryUnavailable => StatusCode::SERVICE_UNAVAILABLE,
 
             ModerationError::EventPublishFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -292,6 +327,7 @@ impl AppError for ModerationError {
             ModerationError::ScreenUnavailable
             | ModerationError::HashCorpusUnavailable
             | ModerationError::ClassifierUnavailable
+            | ModerationError::ContentDirectoryUnavailable
             | ModerationError::AccountDirectoryUnavailable
             | ModerationError::ConcurrentModification => true,
             _ => false,
@@ -320,6 +356,10 @@ impl AppError for ModerationError {
             | ModerationError::EnforcementNotFound { .. }
             | ModerationError::AppealNotFound { .. }
             | ModerationError::ReportNotFound { .. } => "The requested record does not exist.",
+            ModerationError::ReportedContentNotFound { .. } => "The content you reported no longer exists.",
+            ModerationError::ReportRateLimited => "You have sent many reports recently. Please try again later.",
+            ModerationError::UnsupportedReportTarget { .. } => "This item cannot be reported.",
+            ModerationError::ReporterRequired => "Please open the app to send a report.",
 
             ModerationError::CaseAlreadyResolved
             | ModerationError::AppealAlreadyResolved
@@ -338,6 +378,7 @@ impl AppError for ModerationError {
             ModerationError::ScreenUnavailable
             | ModerationError::HashCorpusUnavailable
             | ModerationError::ClassifierUnavailable
+            | ModerationError::ContentDirectoryUnavailable
             | ModerationError::AccountDirectoryUnavailable => {
                 "Safety checks are temporarily unavailable. Please try again."
             }

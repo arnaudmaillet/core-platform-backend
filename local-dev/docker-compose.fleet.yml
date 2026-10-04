@@ -676,6 +676,10 @@ services:
       REDIS_TOPOLOGY: standalone
       KAFKA_BROKERS: redpanda:9092
       MODERATION_ACCOUNT_GRPC_ENDPOINT: http://account-server:50059
+      # Client reports: whose content a report targets.
+      MODERATION_POST_GRPC_ENDPOINT: http://post-server:50056
+      MODERATION_COMMENT_GRPC_ENDPOINT: http://comment-server:50057
+      MODERATION_PROFILE_GRPC_ENDPOINT: http://profile-server:50052
     ports:
       - "50061:50061"
     depends_on:

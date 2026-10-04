@@ -20,20 +20,18 @@ use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
     AssignCaseHandler, DecideCaseHandler, FileAppealHandler, IngestReportHandler,
-    IngestSignalHandler, OpenCaseHandler, ResolveAppealHandler, ScreenHandler,
-};
+    IngestSignalHandler, OpenCaseHandler, ResolveAppealHandler, ScreenHandler, SubmitReportHandler};
 use crate::application::port::{
     AccountDirectory, AppealRepository, CaseRepository, ClassifierGateway, DecisionRepository,
-    EnforcementProjection, EnforcementRepository, EventPublisher, PenaltyRepository, ScreenCorpus,
-};
+    EnforcementProjection, EnforcementRepository, EventPublisher, PenaltyRepository, ScreenCorpus, ReportRateLimiter, SubjectResolver};
 use crate::application::query::{
     GetEnforcementStateHandler, GetStatementOfReasonsHandler, ListQueueHandler,
 };
 use crate::application::ModerationPolicy;
 use crate::config::ModerationConfig;
-use crate::infrastructure::cache::{RedisEnforcementProjection, RedisScreenCorpus};
+use crate::infrastructure::cache::{RedisEnforcementProjection, RedisScreenCorpus, RedisReportRateLimiter};
 use crate::infrastructure::classifier::LogClassifierGateway;
-use crate::infrastructure::directory::GrpcAccountDirectory;
+use crate::infrastructure::directory::{GrpcAccountDirectory, GrpcSubjectResolver};
 use crate::infrastructure::event::{
     FanoutEventPublisher, KafkaEventPublisher, LogEventPublisher,
 };
@@ -56,6 +54,10 @@ pub struct AppDeps {
     pub classifiers: Arc<dyn ClassifierGateway>,
     pub accounts: Arc<dyn AccountDirectory>,
     pub publisher: Arc<dyn EventPublisher>,
+    /// Whose content a client report targets (post / comment / profile lookups).
+    pub subjects: Arc<dyn SubjectResolver>,
+    /// Per-reporter report quotas.
+    pub report_quota: Arc<dyn ReportRateLimiter>,
     pub policy: ModerationPolicy,
 }
 
@@ -125,6 +127,15 @@ impl App {
             Arc::clone(&deps.projection),
             Arc::clone(&deps.enforcements),
         ));
+        let submit_report = Arc::new(SubmitReportHandler::new(
+            Arc::clone(&deps.subjects),
+            Arc::clone(&deps.report_quota),
+            Arc::new(IngestReportHandler::new(
+                Arc::clone(&deps.cases),
+                Arc::clone(&deps.publisher),
+                Arc::clone(&deps.classifiers),
+            )),
+        ));
 
         ModerationServiceHandler::new(
             screen,
@@ -136,6 +147,7 @@ impl App {
             resolve_appeal,
             statement_of_reasons,
             enforcement_state,
+            submit_report,
         )
     }
 
@@ -170,6 +182,25 @@ impl App {
             .connect_timeout(config.account_connect_timeout)
             .connect_lazy();
 
+        // Report subject resolution: post / comment / profile over the mesh,
+        // lazily connected, with the same mandatory deadlines.
+        let lazy = |endpoint: String| -> Result<Channel, Box<dyn std::error::Error>> {
+            Ok(Channel::from_shared(endpoint)?
+                .timeout(config.content_rpc_timeout)
+                .connect_timeout(config.content_connect_timeout)
+                .connect_lazy())
+        };
+        let subjects = Arc::new(GrpcSubjectResolver::new(
+            lazy(config.post_endpoint.clone())?,
+            lazy(config.comment_endpoint.clone())?,
+            lazy(config.profile_endpoint.clone())?,
+        ));
+        let report_quota = Arc::new(RedisReportRateLimiter::new(
+            redis.clone(),
+            config.reports_per_hour,
+            config.reports_per_day,
+        ));
+
         let deps = AppDeps {
             cases: Arc::new(PgCaseRepository::new(tx.clone())),
             decisions: Arc::new(PgDecisionRepository::new(tx.clone())),
@@ -181,6 +212,8 @@ impl App {
             classifiers: Arc::new(LogClassifierGateway),
             accounts: Arc::new(GrpcAccountDirectory::new(channel)),
             publisher,
+            subjects,
+            report_quota,
             policy: config.policy,
         };
 
@@ -226,6 +259,8 @@ mod tests {
             classifiers: fx.classifiers.clone(),
             accounts: fx.accounts.clone(),
             publisher: fx.publisher.clone(),
+            subjects: fx.subjects.clone(),
+            report_quota: fx.report_quota.clone(),
             policy: fx.policy.clone(),
         })
     }
@@ -327,5 +362,55 @@ mod tests {
         });
         let status = handler.decide_case(request).await.unwrap_err();
         assert_eq!(status.code(), Code::NotFound);
+    }
+
+    fn principal(sub: &str, kind: Option<&str>) -> transport::grpc::edge::EdgePrincipal {
+        let mut claims = serde_json::json!({ "sub": sub, "exp": 4_102_444_800_i64 });
+        if let Some(kind) = kind {
+            claims["kind"] = serde_json::json!(kind);
+        }
+        let raw: auth_context::OidcClaims = serde_json::from_value(claims).unwrap();
+        transport::grpc::edge::EdgePrincipal::new(std::sync::Arc::new(auth_context::CurrentPrincipal {
+            user_id: auth_context::PrincipalId::new(sub),
+            tenant_id: None,
+            permissions: vec![auth_context::Permission::new("read:public")],
+            raw_claims: raw,
+        }))
+    }
+
+    fn report(entity_id: &str) -> proto::SubmitReportRequest {
+        proto::SubmitReportRequest {
+            entity_type: proto::EntityType::Post as i32,
+            entity_id: entity_id.into(),
+            category: proto::PolicyCategory::Spam as i32,
+            reason: "spam".into(),
+            surface: "post_menu".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_report_rpc_takes_the_reporter_from_the_token_guests_included() {
+        let fx = Fixture::new();
+        fx.subjects.own("post-1", ActorId::from_uuid(Uuid::from_u128(7)));
+        let handler = handler_from_fakes(&fx);
+
+        let guest = Uuid::now_v7();
+        let mut request = Request::new(report("post-1"));
+        request.extensions_mut().insert(principal(&format!("guest:{guest}"), Some("guest")));
+        let resp = handler.submit_report(request).await.expect("a guest may report").into_inner();
+        assert!(!resp.report_id.is_empty());
+        assert_eq!(fx.cases.count(), 1);
+
+        let mut request = Request::new(report("post-1"));
+        request.extensions_mut().insert(principal(&Uuid::now_v7().to_string(), None));
+        handler.submit_report(request).await.expect("a member may report");
+
+        // No principal (a mesh call): no reporter, refused.
+        let status = handler.submit_report(Request::new(report("post-1"))).await.unwrap_err();
+        assert_eq!(status.code(), Code::FailedPrecondition);
+        // Unknown content.
+        let mut request = Request::new(report("missing"));
+        request.extensions_mut().insert(principal(&format!("guest:{guest}"), Some("guest")));
+        assert_eq!(handler.submit_report(request).await.unwrap_err().code(), Code::NotFound);
     }
 }

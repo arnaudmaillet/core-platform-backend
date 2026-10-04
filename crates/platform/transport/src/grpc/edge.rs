@@ -85,6 +85,14 @@ pub const fn permission(method: &'static str, permission: &'static str) -> EdgeR
 /// account.
 pub const READ_PUBLIC: &str = "read:public";
 
+/// A write open to every client session, member **or guest** (e.g. reporting
+/// content, which anyone may do): `permission(method, READ_PUBLIC)`, the
+/// permission every client token holds. The handler must take its actor from
+/// the principal — a guest has no profile, so `require_profile` cannot bind it.
+pub const fn member_or_guest(method: &'static str) -> EdgeRule {
+    permission(method, READ_PUBLIC)
+}
+
 /// A public read: `permission(method, READ_PUBLIC)`. Guests and members both
 /// pass; the handler must still be viewer-aware (`viewer`), since the reader
 /// may be anonymous.

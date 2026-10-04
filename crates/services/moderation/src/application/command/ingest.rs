@@ -39,6 +39,25 @@ async fn open_or_load(
 
 // ─── Ingest a user report ─────────────────────────────────────────────────────
 
+/// Where a report came from: the intake pipeline (`moderation.reports`), a
+/// member in the app, or a guest (DSA Art. 16: anyone may report).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportOrigin {
+    Pipeline,
+    Member,
+    Guest,
+}
+
+impl ReportOrigin {
+    /// The evidence signal a report of this origin adds to its case.
+    pub fn signal(self) -> (&'static str, f64) {
+        match self {
+            Self::Pipeline | Self::Member => ("report", 0.5),
+            Self::Guest => ("guest_report", 0.3),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IngestReportCommand {
     pub reporter_id: ActorId,
@@ -68,13 +87,25 @@ impl IngestReportHandler {
         envelope: Envelope<IngestReportCommand>,
         now: DateTime<Utc>,
     ) -> Result<CaseId, ModerationError> {
+        self.handle_as(envelope, now, ReportOrigin::Pipeline).await
+    }
+
+    /// As [`handle`](Self::handle), weighting the report by where it came from:
+    /// a guest's report is a weaker signal than a member's.
+    pub async fn handle_as(
+        &self,
+        envelope: Envelope<IngestReportCommand>,
+        now: DateTime<Utc>,
+        origin: ReportOrigin,
+    ) -> Result<CaseId, ModerationError> {
         let cmd = envelope.payload;
 
         // The Report aggregate enforces the self-report invariant and dedup id.
         let _report = Report::file(cmd.reporter_id, cmd.subject.clone(), cmd.category, cmd.reason, now)?;
 
         let mut case = open_or_load(&self.cases, &cmd.subject, cmd.category, now, envelope.correlation_id).await?;
-        let signal = Signal::new("report", cmd.category, Confidence::clamped(0.5), now)?;
+        let (source, confidence) = origin.signal();
+        let signal = Signal::new(source, cmd.category, Confidence::clamped(confidence), now)?;
 
         // A report on an already-resolved case is a no-op here (it would reopen via
         // a separate re-review path); fold it into success so the consumer commits.

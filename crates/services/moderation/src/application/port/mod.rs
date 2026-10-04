@@ -8,8 +8,10 @@ pub mod account_directory;
 pub mod classifier_gateway;
 pub mod enforcement_projection;
 pub mod event_publisher;
+pub mod report_rate_limiter;
 pub mod repositories;
 pub mod screen_corpus;
+pub mod subject_resolver;
 
 pub use account_directory::AccountDirectory;
 pub use classifier_gateway::ClassifierGateway;
@@ -18,4 +20,6 @@ pub use event_publisher::EventPublisher;
 pub use repositories::{
     AppealRepository, CaseRepository, DecisionRepository, EnforcementRepository, PenaltyRepository,
 };
+pub use report_rate_limiter::ReportRateLimiter;
 pub use screen_corpus::{ContentHash, CorpusMatch, ScreenCorpus};
+pub use subject_resolver::SubjectResolver;

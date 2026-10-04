@@ -73,4 +73,11 @@ impl ModerationService for ModerationServiceHandler {
     ) -> Result<Response<proto::GetEnforcementStateResponse>, Status> {
         self.get_enforcement_state(request).await
     }
+
+    async fn submit_report(
+        &self,
+        request: Request<proto::SubmitReportRequest>,
+    ) -> Result<Response<proto::SubmitReportResponse>, Status> {
+        self.submit_report(request).await
+    }
 }

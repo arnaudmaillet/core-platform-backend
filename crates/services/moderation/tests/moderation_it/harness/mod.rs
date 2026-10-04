@@ -48,6 +48,27 @@ impl AccountDirectory for StubAccounts {
     }
 }
 
+/// Report subject resolution stub: every `post-*` id belongs to [`OWNER`];
+/// anything else does not exist.
+struct StubSubjects;
+
+/// The account every reportable `post-*` stub content belongs to.
+pub const OWNER: uuid::Uuid = uuid::Uuid::from_u128(0x0190_f0a0_0000_7000_8000_0000_0000_0007);
+
+#[async_trait]
+impl moderation::application::port::SubjectResolver for StubSubjects {
+    async fn responsible_account(
+        &self,
+        _entity_type: moderation::domain::value_object::EntityType,
+        entity_id: &str,
+    ) -> Result<Option<ActorId>, ModerationError> {
+        Ok(entity_id.starts_with("post-").then(|| ActorId::from_uuid(OWNER)))
+    }
+}
+
+/// Report quota in this suite: 3 per hour (real Redis counters).
+pub const REPORTS_PER_HOUR: u32 = 3;
+
 pub struct Harness {
     pub handler: ModerationServiceHandler,
     pub ingest_report: Arc<IngestReportHandler>,
@@ -119,6 +140,12 @@ impl Harness {
             classifiers,
             accounts: Arc::new(StubAccounts),
             publisher,
+            subjects: Arc::new(StubSubjects),
+            report_quota: Arc::new(moderation::infrastructure::cache::RedisReportRateLimiter::new(
+                redis.clone(),
+                REPORTS_PER_HOUR,
+                100,
+            )),
             policy: ModerationPolicy::standard(),
         };
 
