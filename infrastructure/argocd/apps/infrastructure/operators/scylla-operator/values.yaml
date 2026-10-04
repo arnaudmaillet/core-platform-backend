@@ -1,8 +1,0 @@
-# infrastructure/argocd/apps/infrastructure/operators/scylla-operator/values.yaml
-scylla-operator:
-  # Let the chart self-sign its (internal, cluster-only) webhook cert. With
-  # createSelfSignedCertificate=false the chart expects an externally-provided cert
-  # secret, but none was wired (no cert-manager Certificate for it), so the
-  # webhook-server Deployment rendered with an empty secretName and was invalid.
-  webhook:
-    createSelfSignedCertificate: true

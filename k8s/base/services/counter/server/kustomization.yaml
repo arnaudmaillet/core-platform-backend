@@ -1,8 +1,0 @@
-# k8s/base/services/counter/server/kustomization.yaml
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - deployment.yaml
-  - service.yaml
-  - pdb.yaml
-  - hpa.yaml

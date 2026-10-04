@@ -1,6 +1,0 @@
-# Inject the synced managed-backend creds into every service container.
-- op: add
-  path: /spec/template/spec/containers/0/envFrom/-
-  value:
-    secretRef:
-      name: backend-creds

@@ -1,9 +1,0 @@
-# Standalone shared-infra kustomization (NOT part of the dev app overlay, so its
-# namespace/service names are never rewritten by the overlay's `namePrefix`).
-# Apply directly:  kubectl apply -k k8s/base/infra/scylla
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-namespace: scylla
-resources:
-  - namespace.yaml
-  - scylla.yaml

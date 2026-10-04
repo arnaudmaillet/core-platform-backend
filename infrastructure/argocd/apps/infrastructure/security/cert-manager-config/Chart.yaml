@@ -1,5 +1,0 @@
-# infrastructure/argocd/apps/infrastructure/security/cert-manager-config/Chart.yaml
-
-apiVersion: v2
-name: cert-manager-config
-version: 0.1.0

@@ -1,9 +1,0 @@
-# infrastructure/argocd/apps/operators/cnpg-operator/Chart.yaml
-
-apiVersion: v2
-name: cnpg-wrapper
-version: 1.0.0
-dependencies:
-  - name: cloudnative-pg
-    version: "0.29.0"
-    repository: https://cloudnative-pg.github.io/charts

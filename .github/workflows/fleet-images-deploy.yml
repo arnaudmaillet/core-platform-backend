@@ -38,7 +38,9 @@
 # Each image is tagged with the immutable :<git-sha> (the deployment handle) and a
 # floating :staging (convenience only). After BOTH arches succeed, the
 # `pin-staging-images` job rewrites the staging overlay's fleet image tags to that
-# :<git-sha> and commits back to develop — so ArgoCD sees a real manifest diff and
+# :<git-sha> and commits to arnaudmaillet/core-platform-infra@develop (the GitOps
+# repo ArgoCD tracks; this repo's develop never receives bot commits) — so ArgoCD
+# sees a real manifest diff and
 # rolls out, deploys are content-addressed (IfNotPresent is correct for an
 # immutable tag), and a rollback is just `git revert`.
 name: Build & Push Fleet Images
@@ -67,9 +69,10 @@ env:
   # THE list of fleet binaries this workflow ships. Package name == binary name
   # == crates/apps/<name> == ECR repo core-platform-<name>. Consumed by the cargo
   # build, the bake matrix, the stitch loop and the staging pin — one source.
-  # Adding a binary: add it here, to infrastructure/live/global/artifacts/ecr
-  # (and APPLY it before merging — ECR does not auto-create repos, the push would
-  # fail), and to the overlays' `images:` so the pin job can rewrite its tag.
+  # Adding a binary: FIRST, in arnaudmaillet/core-platform-infra, add its ECR repo
+  # (infrastructure/live/global/artifacts/ecr — and APPLY it: ECR does not
+  # auto-create repos, the push would fail) and its overlays' `images:` entry (so
+  # the pin job can rewrite its tag); THEN add it here.
   FLEET_BINS: >-
     counter-server counter-worker audit-server audit-worker
     auth-server media-server media-worker moderation-server search-server
@@ -214,7 +217,7 @@ jobs:
   # ── Stitch per-arch images into one multi-arch manifest per binary ───────────
   # The :<git-sha> and floating tags only exist once BOTH arch builds succeeded
   # (needs: gates on the full matrix) — a half-arch fleet is never addressable
-  # by the tags the overlays and the promote workflow use. This is what lets
+  # by the tags the infra overlays and its promote workflow use. This is what lets
   # the Karpenter pools re-allow arm64: kubelet resolves the right arch from
   # the manifest list.
   stitch-manifests:
@@ -270,28 +273,34 @@ jobs:
   # ── Pin the staging overlay to the immutable tag we just built ────────────────
   # Runs once after BOTH arch builds + the stitch succeed; if anything fails, the
   # fleet is not pinned (a partial rollout is never promoted). Rewrites ONLY the
-  # images this workflow builds, then commits back to develop so ArgoCD rolls
-  # out the new revision.
+  # images this workflow builds, in the GitOps repo
+  # (arnaudmaillet/core-platform-infra, k8s/overlays/staging), and commits to its
+  # develop so ArgoCD rolls out the new revision.
   pin-staging-images:
-    name: Pin staging overlay to immutable tags
+    name: Pin staging overlay (core-platform-infra) to immutable tags
     needs: stitch-manifests
     runs-on: ubuntu-latest
     # Only auto-pin for the standard staging build (skip manual one-off tags).
     if: ${{ github.event_name == 'push' || (github.event.inputs.tag || 'staging') == 'staging' }}
+    # Two develop pushes in a row must not race on the same overlay file.
+    concurrency:
+      group: infra-staging-pin
+      cancel-in-progress: false
     permissions:
-      contents: write
+      contents: read
     steps:
-      - name: Checkout develop
+      - name: Checkout core-platform-infra@develop
         uses: actions/checkout@v4
         with:
+          repository: arnaudmaillet/core-platform-infra
           ref: develop
           fetch-depth: 0
-          # Push over SSH with the repo deploy key: develop's ruleset requires
-          # PRs but grants DeployKey bypass, so this job (and only a holder of
-          # this key) may land the sha-pin commit directly. The default
-          # GITHUB_TOKEN push is rejected by the ruleset — GitHub can't grant
-          # the Actions app a ruleset bypass on user-owned repos.
-          ssh-key: ${{ secrets.FLEET_PIN_DEPLOY_KEY }}
+          # Push over SSH with the infra repo's `fleet-pin` deploy key (write):
+          # its develop ruleset requires PRs but grants DeployKey bypass, so this
+          # job (and only a holder of this key) may land the sha-pin commit
+          # directly. A GITHUB_TOKEN can't reach another repo, and GitHub can't
+          # grant the Actions app a ruleset bypass on user-owned repos anyway.
+          ssh-key: ${{ secrets.PLATFORM_PIN_DEPLOY_KEY }}
 
       - name: Pin fleet images to the built commit SHA
         env:
@@ -307,6 +316,7 @@ jobs:
       - name: Commit & push
         env:
           TAG: ${{ github.sha }}
+          SOURCE: ${{ github.repository }}
         run: |
           set -euo pipefail
           if git diff --quiet -- k8s/overlays/staging/kustomization.yaml; then
@@ -316,7 +326,8 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add k8s/overlays/staging/kustomization.yaml
-          git commit -m "chore(deploy): pin staging fleet images to ${TAG} [skip ci]"
-          # Rebase in case develop advanced while the fleet was building.
+          git commit -m "chore(deploy): pin staging fleet images to ${TAG} [skip ci]" \
+                     -m "Built from ${SOURCE}@${TAG}."
+          # Rebase in case infra develop advanced while the fleet was building.
           git pull --rebase origin develop
           git push origin develop

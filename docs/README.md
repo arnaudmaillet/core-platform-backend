@@ -6,6 +6,11 @@ document is authored against the current `develop` state and cross-links the
 others; nothing here is aspirational unless it is explicitly marked **DEFERRED**
 or **STUB**.
 
+> **Repo split (2026-10-04):** the platform-layer guides (infrastructure, GitOps,
+> runbooks, NetworkPolicy call graph) now live in
+> [`core-platform-infra`](https://github.com/arnaudmaillet/core-platform-infra/tree/develop/docs);
+> the links below point there. Application-layer docs stay in this repo.
+
 ---
 
 ## The two audiences
@@ -16,7 +21,7 @@ document written for the other one, so each guide states its audience up top.
 | You are a… | You care about… | Start with |
 |---|---|---|
 | **Application developer** | shipping a service, its gRPC/Kafka contracts, its config and secrets, why a pod is `CrashLoopBackOff` | [Service authoring](#application-layer) → the service's own `README.md` under `crates/services/<svc>/` |
-| **DevOps / platform engineer** | provisioning AWS, the GitOps cascade, scaling, secret plumbing, standing an environment up or tearing it down | [Infrastructure master guide](infrastructure/README.md) → the operational deep-dives below |
+| **DevOps / platform engineer** | provisioning AWS, the GitOps cascade, scaling, secret plumbing, standing an environment up or tearing it down | [Infrastructure master guide](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/infrastructure/README.md) → the operational deep-dives below |
 
 If you only read one document, read the one your role points at first — it links
 onward to everything else you need.
@@ -56,7 +61,7 @@ separately so neither team has to read the other's internals.
 - A change that needs both (e.g. a new managed datastore for a new service) crosses
   the boundary: provision in Terragrunt, wire the secret through ESO, then the
   service consumes it as env — three separate, ordered edits (see the
-  [secret topology guide](infrastructure/secrets-eso.md)).
+  [secret topology guide](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/infrastructure/secrets-eso.md)).
 
 ---
 
@@ -66,18 +71,18 @@ separately so neither team has to read the other's internals.
 
 | Document | What it answers | Primary audience |
 |---|---|---|
-| **[Infrastructure master guide](infrastructure/README.md)** | The whole platform in one place: archetypes, tiers, scaling, AWS state, security boundaries, bootstrap order. **The canonical reference.** | DevOps |
-| **[GitOps & ArgoCD operations](infrastructure/gitops-argocd.md)** | The App-of-AppSets cascade, sync waves, the envsubst CMP, self-heal/drift, and day-2 ArgoCD operations with exact commands and failure modes. | DevOps |
-| **[Terragrunt units reference](infrastructure/terragrunt-units.md)** | Every unit in the live tree, its inputs/outputs/dependencies, the apply DAG, and per-unit `plan`/`apply`/`destroy` invocations. | DevOps |
-| **[Secret topology (ESO / ClusterSecretStore)](infrastructure/secrets-eso.md)** | How a value travels from Terraform → Secrets Manager → ExternalSecret → pod env, the machine-generated vs seeded split, and how to add a new secret. | DevOps + service authors |
+| **[Infrastructure master guide](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/infrastructure/README.md)** | The whole platform in one place: archetypes, tiers, scaling, AWS state, security boundaries, bootstrap order. **The canonical reference.** | DevOps |
+| **[GitOps & ArgoCD operations](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/infrastructure/gitops-argocd.md)** | The App-of-AppSets cascade, sync waves, the envsubst CMP, self-heal/drift, and day-2 ArgoCD operations with exact commands and failure modes. | DevOps |
+| **[Terragrunt units reference](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/infrastructure/terragrunt-units.md)** | Every unit in the live tree, its inputs/outputs/dependencies, the apply DAG, and per-unit `plan`/`apply`/`destroy` invocations. | DevOps |
+| **[Secret topology (ESO / ClusterSecretStore)](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/infrastructure/secrets-eso.md)** | How a value travels from Terraform → Secrets Manager → ExternalSecret → pod env, the machine-generated vs seeded split, and how to add a new secret. | DevOps + service authors |
 
 ### Lifecycle — runbooks
 
 | Runbook | When you reach for it |
 |---|---|
-| **[Environment lifecycle](runbooks/environment-lifecycle.md)** | The full disposable-environment loop: **preflight → provision → validate → graceful teardown → rebuild**, with the ordering constraints that make it safe. |
-| **[Disposable staging rebuild](runbooks/staging-disposable-rebuild.md)** | The narrow Secrets-Manager/KMS deletion-state gotchas that block a `destroy → apply` cycle. |
-| **[Audit remediation rollout](runbooks/audit-remediation-rollout.md)** | The apply-order-sensitive rollout of the TIER-0 audit/compliance plane. |
+| **[Environment lifecycle](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/runbooks/environment-lifecycle.md)** | The full disposable-environment loop: **preflight → provision → validate → graceful teardown → rebuild**, with the ordering constraints that make it safe. |
+| **[Disposable staging rebuild](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/runbooks/staging-disposable-rebuild.md)** | The narrow Secrets-Manager/KMS deletion-state gotchas that block a `destroy → apply` cycle. |
+| **[Audit remediation rollout](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/runbooks/audit-remediation-rollout.md)** | The apply-order-sensitive rollout of the TIER-0 audit/compliance plane. |
 
 ### Application layer — service authoring
 
@@ -91,7 +96,7 @@ separately so neither team has to read the other's internals.
 
 ### Cross-cutting standards
 
-- **[Security](security/)** — NetworkPolicy call graph, TIER-0 control boundaries.
+- **[Security](https://github.com/arnaudmaillet/core-platform-infra/tree/develop/docs/security)** — NetworkPolicy call graph, TIER-0 control boundaries.
 - **[i18n](i18n/)** — English is canonical; `*.fr.md` co-translations record the
   SHA-256 of their source and are gated in CI (`tools/i18n/i18n-drift.sh`).
 
@@ -108,7 +113,7 @@ separately so neither team has to read the other's internals.
 - Environment focus is **`staging`** (the live GitOps path); `dev` and `prod`
   deltas are called out inline.
 
-> New to the platform? Read the [master guide](infrastructure/README.md) end to
-> end once, then keep the [GitOps guide](infrastructure/gitops-argocd.md) and
-> [environment lifecycle runbook](runbooks/environment-lifecycle.md) open as
+> New to the platform? Read the [master guide](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/infrastructure/README.md) end to
+> end once, then keep the [GitOps guide](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/infrastructure/gitops-argocd.md) and
+> [environment lifecycle runbook](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/runbooks/environment-lifecycle.md) open as
 > working references.

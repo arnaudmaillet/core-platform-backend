@@ -1,6 +1,6 @@
 # Fleet-wide externalized infrastructure config (local docker-compose).
 # Mounted into every service as /etc/infra/infrastructure.toml (INFRA_CONFIG_PATH)
-# and hot-reloaded by the runtime. Mirrors k8s/overlays/dev/infrastructure.toml.
+# and hot-reloaded by the runtime. Mirrors core-platform-infra: k8s/overlays/dev/infrastructure.toml.
 
 [resilience]
 default_profile = "standard"

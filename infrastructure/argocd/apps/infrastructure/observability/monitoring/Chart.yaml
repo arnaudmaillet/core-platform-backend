@@ -1,9 +1,0 @@
-# infrastructure/argocd/apps/observability/monitoring/Chart.yaml
-
-apiVersion: v2
-name: monitoring-wrapper
-version: 1.0.0
-dependencies:
-  - name: kube-prometheus-stack
-    version: "91.4.0"
-    repository: https://prometheus-community.github.io/helm-charts

@@ -1,9 +1,0 @@
-# infrastructure/argocd/apps/infrastructure/security/cert-manager/values.yaml
-
-cert-manager:
-  crds:
-    enabled: true
-    keep: true
-  serviceAccount:
-    annotations:
-      eks.amazonaws.com/role-arn: ""
