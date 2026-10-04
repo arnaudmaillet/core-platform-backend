@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: db58eac5ad95bda6332a81caef3c52ffd7b4bb3d0ec7534535bc7207e65cacdd
-  translated_at: 2026-06-25
+  source_sha256: 6cf6f02edf29348f6aede548d4384c3305996106dec757291e2856930343fea2
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -126,8 +126,32 @@ service NotificationService {
   rpc MarkRead            (MarkReadRequest)             returns (CommandResponse);  // needs notification_id + created_at_ms
   rpc MarkAllRead         (MarkAllReadRequest)          returns (CommandResponse);  // sets read_horizon_ms
   rpc StreamNotifications (StreamNotificationsRequest)  returns (stream StreamNotificationsResponse);
+  // Appareils push et préférences (#654)
+  rpc RegisterDevice                (RegisterDeviceRequest)                returns (CommandResponse);
+  rpc UnregisterDevice              (UnregisterDeviceRequest)              returns (CommandResponse);
+  rpc GetNotificationPreferences    (GetNotificationPreferencesRequest)    returns (NotificationPreferences);
+  rpc UpdateNotificationPreferences (UpdateNotificationPreferencesRequest) returns (NotificationPreferences);
+  rpc ResolvePushTargets            (ResolvePushTargetsRequest)            returns (ResolvePushTargetsResponse);  // MESH-ONLY
 }
 ```
+
+**Appareils push et préférences (#654).** Le contrat et le stockage du push ; **rien n'envoie encore de
+push** (pas d'identifiants APNs). Toutes les RPC sauf `ResolvePushTargets` sont `authenticated` sur l'edge
+et liées à `profile_id`.
+- `RegisterDevice(device_id, token, platform, environment, timezone)` — à appeler à chaque lancement. Un
+  jeton enregistré pour un autre **compte** quitte les profils de ce compte (un téléphone transmis ne
+  reçoit jamais les push de l'ancien compte) ; le nouveau jeton d'un appareil remplace l'ancien. Tables
+  `push_devices` (par profil) et `push_device_tokens` (par jeton).
+- Préférences (`notification_preferences`, un document JSON par profil) : push et e-mail par catégorie
+  (j'aime, commentaires, mentions, nouveaux abonnés, demandes d'abonnement, messages, posts des comptes
+  suivis, lieux à proximité, portefeuille), une pause (≤ 8 h), des heures calmes lues dans le fuseau IANA du
+  titulaire. Par défaut : tous les push activés, tous les e-mails désactivés ; **13–17 ans : heures calmes
+  22:00–07:00** (d'après l'`age` du jeton en lecture, et écrites au premier `RegisterDevice` d'un adolescent
+  pour que l'émetteur les applique). L'e-mail marketing est le consentement `marketing` du compte
+  (`account.v1.UpdateConsents`), pas un second interrupteur ici.
+- `ResolvePushTargets(profile_id, category)` (mesh) est ce que l'émetteur de push interrogera : les
+  appareils, ou `allowed = false` quand la catégorie est désactivée, qu'une pause court ou que ce sont les
+  heures calmes.
 
 ### Ports Rust (contrat hexagonal)
 
@@ -136,6 +160,8 @@ pub trait NotificationRepository: Send + Sync + 'static { /* insert, list_pagina
 pub trait UnreadCounter:          Send + Sync + 'static { /* incr/decr/reset/get + read_horizon (Redis L1 + Scylla L2) */ }
 pub trait BlockCache:             Send + Sync + 'static { /* is_blocked(sender, target) — social-graph gate */ }
 pub trait StreamRegistry:         Send + Sync + 'static { /* subscribe/broadcast (broadcast::Receiver per profile) */ }
+pub trait DeviceRegistry:         Send + Sync + 'static { /* register/unregister/devices — push devices per profile */ }
+pub trait PreferenceStore:        Send + Sync + 'static { /* get/put — notification preferences per profile */ }
 ```
 
 ### Contrat d'erreur (`NTF-xxxx`)

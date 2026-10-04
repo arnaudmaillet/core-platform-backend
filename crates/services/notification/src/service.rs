@@ -49,6 +49,11 @@ impl Service for NotificationService {
         authenticated("/notification.v1.NotificationService/MarkRead"),
         authenticated("/notification.v1.NotificationService/MarkAllRead"),
         authenticated("/notification.v1.NotificationService/StreamNotifications"),
+        // Push devices and preferences (#654), bound to profile_id.
+        authenticated("/notification.v1.NotificationService/RegisterDevice"),
+        authenticated("/notification.v1.NotificationService/UnregisterDevice"),
+        authenticated("/notification.v1.NotificationService/GetNotificationPreferences"),
+        authenticated("/notification.v1.NotificationService/UpdateNotificationPreferences"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
