@@ -19,7 +19,9 @@ pub use access_token_claims::AccessTokenClaims;
 pub use account_id::AccountId;
 pub use age_bracket::AgeBracket;
 pub use device_fingerprint::DeviceFingerprint;
-pub use federated::{FederatedProvider, SignInMethod, APPLE_ISSUER, EMAIL_CODE_ISSUER, GOOGLE_ISSUERS};
+pub use federated::{
+    FederatedProvider, SignInMethod, APPLE_ISSUER, EMAIL_CODE_ISSUER, GOOGLE_ISSUERS, PHONE_CODE_ISSUER,
+};
 pub use generation::Generation;
 pub use idp_subject::IdpSubject;
 pub use permission::{Permission, READ_PUBLIC};

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::domain::aggregate::Account;
-use crate::domain::value_object::{AccountId, AccountStatus, EmailAddress, IdentityId};
+use crate::domain::value_object::{AccountId, AccountStatus, EmailAddress, IdentityId, PhoneNumber};
 use crate::error::AccountError;
 
 /// Persistence port for the Account aggregate.
@@ -45,6 +45,9 @@ pub trait AccountRepository: Send + Sync + 'static {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Account>, AccountError>;
+
+    /// Looks up the account holding `phone` (E.164).
+    async fn find_by_phone(&self, phone: &PhoneNumber) -> Result<Option<Account>, AccountError>;
 
     /// Returns `true` if an account with the given email already exists.
     async fn exists_by_email(&self, email: &EmailAddress) -> Result<bool, AccountError>;

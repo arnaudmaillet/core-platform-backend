@@ -32,7 +32,8 @@ pub struct AccountRow {
     pub suspension_reason: Option<String>,
     pub deactivated_at: Option<DateTime<Utc>>,
 
-    pub email: String,
+    /// `NULL` for a phone-only account.
+    pub email: Option<String>,
     pub email_verified: bool,
     pub email_verified_at: Option<DateTime<Utc>>,
     pub phone: Option<String>,
@@ -88,7 +89,7 @@ impl TryFrom<AccountRow> for Account {
         let status = AccountStatus::try_from(row.status.as_str())
             .map_err(|_| AccountError::InvalidAccountStatus(row.status.clone()))?;
 
-        let email = EmailAddress::new(row.email)?;
+        let email = row.email.map(EmailAddress::new).transpose()?;
 
         let phone = row.phone.map(PhoneNumber::new).transpose()?;
 

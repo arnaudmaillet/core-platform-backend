@@ -73,7 +73,9 @@ pub struct BareAccountEventWire {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AccountCreatedWire {
     pub account_id: String,
-    pub email: String,
+    /// Absent for a phone-only account.
+    #[serde(default)]
+    pub email: Option<String>,
     #[serde(default)]
     pub role: String,
     #[serde(default)]
@@ -88,7 +90,9 @@ pub struct AccountCreatedWire {
 #[derive(Debug, Clone, Deserialize)]
 pub struct EmailChangedWire {
     pub account_id: String,
-    pub old_email: String,
+    /// Absent when the account had no email (a phone-only account adding one).
+    #[serde(default)]
+    pub old_email: Option<String>,
     pub new_email: String,
     pub occurred_at: DateTime<Utc>,
     #[serde(default)]
@@ -213,13 +217,17 @@ pub struct GdprDataExportRequestedWire {
 
 impl AccountCreatedWire {
     pub fn pii_plaintext(&self) -> String {
-        format!("email={};country={}", self.email, self.country_of_residence.as_deref().unwrap_or(""))
+        format!(
+            "email={};country={}",
+            self.email.as_deref().unwrap_or(""),
+            self.country_of_residence.as_deref().unwrap_or("")
+        )
     }
 }
 
 impl EmailChangedWire {
     pub fn pii_plaintext(&self) -> String {
-        format!("old_email={};new_email={}", self.old_email, self.new_email)
+        format!("old_email={};new_email={}", self.old_email.as_deref().unwrap_or(""), self.new_email)
     }
 }
 
@@ -612,7 +620,7 @@ mod tests {
     fn account_created_seals_pii_out_of_attributes() {
         let wire = AccountCreatedWire {
             account_id: "acc-1".to_owned(),
-            email: "user@example.com".to_owned(),
+            email: Some("user@example.com".to_owned()),
             role: "user".to_owned(),
             status: "active".to_owned(),
             country_of_residence: Some("FR".to_owned()),
@@ -744,5 +752,20 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(consents, AccountEventWire::ConsentsUpdated(c) if c.changes.len() == 1));
+    }
+
+    #[test]
+    fn a_phone_only_account_has_no_email_on_the_wire() {
+        let wire: AccountCreatedWire = serde_json::from_str(
+            r#"{"account_id":"acc-2","role":"user","status":"pending_verification","country_of_residence":"FR","occurred_at":"2026-06-27T12:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(wire.email, None);
+        assert_eq!(wire.pii_plaintext(), "email=;country=FR");
+        let changed: EmailChangedWire = serde_json::from_str(
+            r#"{"account_id":"acc-2","new_email":"a@b.co","occurred_at":"2026-06-27T12:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(changed.pii_plaintext(), "old_email=;new_email=a@b.co");
     }
 }

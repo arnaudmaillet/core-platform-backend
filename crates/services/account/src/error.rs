@@ -11,6 +11,7 @@ use thiserror::Error;
 /// | ACC-1001 | AccountNotFound            | 404  | Low      | No        |
 /// | ACC-1002 | IdentityAlreadyRegistered  | 409  | Low      | No        |
 /// | ACC-1003 | EmailAlreadyRegistered     | 409  | Low      | No        |
+/// | ACC-1004 | PhoneAlreadyRegistered     | 409  | Low      | No        |
 /// | ACC-2001 | AccountNotActive           | 422  | Medium   | No        |
 /// | ACC-2002 | InvalidStatusTransition    | 422  | Medium   | No        |
 /// | ACC-2003 | EmailAlreadyVerified       | 409  | Low      | No        |
@@ -58,6 +59,9 @@ pub enum AccountError {
 
     #[error("email '{email}' is already registered to an existing account")]
     EmailAlreadyRegistered { email: String },
+
+    #[error("this phone number is already registered to an existing account")]
+    PhoneAlreadyRegistered,
 
     // ── Lifecycle state machine (ACC-2xxx) ────────────────────────────────────
 
@@ -162,6 +166,7 @@ impl AppError for AccountError {
             AccountError::AccountNotFound { .. }           => "ACC-1001",
             AccountError::IdentityAlreadyRegistered { .. } => "ACC-1002",
             AccountError::EmailAlreadyRegistered { .. }    => "ACC-1003",
+            AccountError::PhoneAlreadyRegistered           => "ACC-1004",
 
             AccountError::AccountNotActive { .. }          => "ACC-2001",
             AccountError::InvalidStatusTransition { .. }   => "ACC-2002",
@@ -206,6 +211,7 @@ impl AppError for AccountError {
 
             AccountError::IdentityAlreadyRegistered { .. }
             | AccountError::EmailAlreadyRegistered { .. }
+            | AccountError::PhoneAlreadyRegistered
             | AccountError::EmailAlreadyVerified
             | AccountError::ConcurrentModification
             | AccountError::MfaAlreadyEnrolled
@@ -259,6 +265,7 @@ impl AppError for AccountError {
             AccountError::AccountNotFound { .. }           => "The requested account does not exist.",
             AccountError::IdentityAlreadyRegistered { .. } => "This identity is already associated with an account.",
             AccountError::EmailAlreadyRegistered { .. }    => "This email address is already registered.",
+            AccountError::PhoneAlreadyRegistered           => "This phone number is already registered.",
             AccountError::AccountNotActive { .. }          => "This operation is not permitted for the account's current status.",
             AccountError::InvalidStatusTransition { .. }   => "This status transition is not permitted.",
             AccountError::EmailAlreadyVerified             => "The email address for this account is already verified.",

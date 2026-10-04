@@ -120,6 +120,10 @@ service AccountService {
     // so a client can never enumerate addresses through it.
     rpc GetAccountByEmail(GetAccountByEmailRequest) returns (AccountView);
 
+    // Fetch the account holding a phone number (E.164). Mesh only, like
+    // GetAccountByEmail (auth's phone sign-up).
+    rpc GetAccountByPhone(GetAccountByPhoneRequest) returns (AccountView);
+
     // Lightweight status check used by auth middleware and gateway.
     rpc GetAccountStatus(GetAccountStatusRequest) returns (AccountStatusView);
 

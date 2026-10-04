@@ -8,7 +8,9 @@ use crate::domain::value_object::{AccountId, AccountRole, AccountStatus, Country
 pub struct AccountCreated {
     pub account_id: AccountId,
     pub identity_id: IdentityId,
-    pub email: EmailAddress,
+    /// Absent for a phone-only account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<EmailAddress>,
     pub role: AccountRole,
     pub status: AccountStatus,
     pub country_of_residence: Option<CountryCode>,

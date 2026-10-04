@@ -2,6 +2,7 @@
 //! axes: concurrency (uniqueness race) and durable persistence.
 
 mod persistence_roundtrip;
+mod phone_accounts;
 mod uniqueness_race;
 mod mutation_roundtrip;
 mod consents;

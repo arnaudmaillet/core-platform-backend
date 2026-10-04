@@ -39,7 +39,7 @@ enum GrantType {
 enum VerificationChannel {
     VERIFICATION_CHANNEL_UNSPECIFIED = 0;
     VERIFICATION_CHANNEL_EMAIL       = 1;
-    // Not available yet (phone accounts come later): FAILED_PRECONDITION.
+    // A phone number (E.164), for phone-only accounts.
     VERIFICATION_CHANNEL_SMS         = 2;
 }
 
@@ -59,4 +59,6 @@ enum SignInMethod {
     SIGN_IN_METHOD_PASSWORD    = 3;
     // A one-time code sent to the email address (no password).
     SIGN_IN_METHOD_EMAIL_CODE  = 4;
+    // A one-time code sent by SMS to the phone number (no password, no email).
+    SIGN_IN_METHOD_PHONE_CODE  = 5;
 }

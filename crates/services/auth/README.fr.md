@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: b7c22830f0ba6f6b1915106d679eaa2597c0aa6b97d97cfc31117771c8294836
+  source_sha256: 41a1bb92c7ee439fe6b8934c45ec927a1fd81ceda1598cd616f14287e24f3422
   translated_at: 2026-10-04
   status: complete
 ---
@@ -118,8 +118,15 @@ de la fenêtre. **Rien à énumérer :** la réponse de StartVerification est
 la même pour toute adresse ; qu'elle ait un compte (ou un compte Apple / Google) n'est dit qu'à celui
 qui saisit le code. L'e-mail part en SMTP vers **Amazon SES** (`AUTH_VERIFICATION_SENDER=smtp`,
 `AUTH_SMTP_*`) ; `log` écrit le code dans les logs (exécutions locales uniquement) ; non défini =
-désactivé (`AUT-5012`). Le SMS (comptes téléphone) viendra plus tard : `account` doit d'abord rendre
-l'e-mail facultatif.
+désactivé (`AUT-5012`).
+
+**Comptes téléphone seul (SMS).** Les mêmes codes partent par SMS (`channel = SMS`, tout numéro
+international — normalisé en E.164) : identité = le numéro sous `urn:core-platform:phone`, un compte
+**sans e-mail** (`account` l'active sur le numéro vérifié), qui se reconnecte avec un nouveau code SMS
+(`SIGN_IN_METHOD_PHONE_CODE`). Un numéro déjà détenu par un autre compte répond `existing_account`
+avec la méthode de ce compte. Le SMS part via **Amazon SNS** (`Publish`, transactionnel, SigV4 avec
+des clés statiques : `AUTH_SMS_SENDER=sns`, `AUTH_SNS_*`) ; avec `AUTH_VERIFICATION_SENDER=log` les
+codes SMS sont aussi journalisés.
 
 ### Identifiants et step-up
 
@@ -232,6 +239,8 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_FEDERATED_JWKS_TIMEOUT_MS` | Délai de récupération des JWKS d'un fournisseur. | `3000` |
 | `AUTH_VERIFICATION_SENDER` | Mode d'envoi des codes : `smtp` (Amazon SES), `log` (exécutions locales uniquement — le code est journalisé), non défini = désactivé (`AUT-5012`). | — |
 | `AUTH_SMTP_HOST` · `AUTH_SMTP_PORT` · `AUTH_SMTP_USERNAME` · `AUTH_SMTP_PASSWORD` · `AUTH_SMTP_FROM` | Relais SMTP des codes e-mail (SES : `email-smtp.<region>.amazonaws.com`, `587`, STARTTLS, identifiants SMTP SES, un expéditeur vérifié). | — · `587` |
+| `AUTH_SMS_SENDER` | Mode d'envoi des codes SMS : `sns`, non défini = désactivé (ou journalisés si `AUTH_VERIFICATION_SENDER=log`). | — |
+| `AUTH_SNS_REGION` · `AUTH_SNS_ACCESS_KEY_ID` · `AUTH_SNS_SECRET_ACCESS_KEY` · `AUTH_SNS_SENDER_ID` | Amazon SNS pour les codes SMS (un utilisateur IAM autorisé à `sns:Publish` ; sender id alphanumérique facultatif là où les pays l'autorisent). | — |
 | `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES` | Durée de vie d'un code, essais par code, codes par adresse par heure / par jour, délai avant renvoi, codes faux par adresse en 24 h avant verrouillage. | `600` · `5` · `5` · `20` · `30` · `15` |
 | Postgres / Redis / Kafka | via les `from_env()` des crates de stockage partagées | — |
 

@@ -1,8 +1,8 @@
 use account_api::account_service_client::AccountServiceClient;
 use account_api::{
     AccountStatus, AgeBracket as ProtoAgeBracket, CreateAccountRequest, GetAccountByEmailRequest,
-    GetAccountByIdRequest, GetAccountByIdentityIdRequest, ResumeDeactivatedAccountRequest,
-    UpdateConsentsRequest, VerifyEmailRequest,
+    GetAccountByIdRequest, GetAccountByIdentityIdRequest, GetAccountByPhoneRequest,
+    ResumeDeactivatedAccountRequest, UpdateConsentsRequest, VerifyEmailRequest, VerifyPhoneRequest,
 };
 use async_trait::async_trait;
 use tonic::transport::Channel;
@@ -129,7 +129,8 @@ impl AccountDirectory for GrpcAccountDirectory {
         let created = client
             .create_account(CreateAccountRequest {
                 identity_id: identity.clone(),
-                email: account.email.clone(),
+                email: account.email.clone().unwrap_or_default(),
+                phone: account.phone.clone().unwrap_or_default(),
                 country_of_residence: account.country.clone().unwrap_or_default(),
                 date_of_birth: account.date_of_birth.clone(),
                 ..Default::default()
@@ -139,6 +140,7 @@ impl AccountDirectory for GrpcAccountDirectory {
             match error_code(&status) {
                 Some("ACC-1002") => {} // this subject's account exists: finish it
                 Some("ACC-1003") => return Err(AuthError::EmailAlreadyRegistered),
+                Some("ACC-1004") => return Err(AuthError::PhoneAlreadyRegistered),
                 Some("ACC-2004") => return Err(AuthError::AgeBelowMinimum),
                 _ if status.code() == Code::FailedPrecondition || status.code() == Code::InvalidArgument => {
                     return Err(AuthError::DomainViolation {
@@ -156,12 +158,20 @@ impl AccountDirectory for GrpcAccountDirectory {
             .ok_or(AuthError::AccountDirectoryUnavailable)?;
         let account_id = AccountId::try_from(id.as_str())?;
 
-        if account.email_verified {
+        if account.email_verified && account.email.is_some() {
             match client.verify_email(VerifyEmailRequest { account_id: id.clone() }).await {
                 Ok(_) => {}
                 Err(status) if error_code(&status) == Some("ACC-2003") => {} // already verified
                 Err(_) => return Err(AuthError::AccountDirectoryUnavailable),
             }
+        }
+        // A phone-only account: verifying the number activates it (verifying
+        // it again on a retry is harmless).
+        if account.phone_verified && account.phone.is_some() {
+            client
+                .verify_phone(VerifyPhoneRequest { account_id: id.clone() })
+                .await
+                .map_err(|_| AuthError::AccountDirectoryUnavailable)?;
         }
 
         let consent = &account.consent;
@@ -177,6 +187,27 @@ impl AccountDirectory for GrpcAccountDirectory {
             .map_err(|_| AuthError::AccountDirectoryUnavailable)?;
 
         Ok(account_id)
+    }
+
+    #[instrument(name = "auth.directory.find_by_phone", skip(self, phone))]
+    async fn find_by_phone(&self, phone: &str) -> Result<Option<EmailHolder>, AuthError> {
+        match self
+            .client
+            .clone()
+            .get_account_by_phone(GetAccountByPhoneRequest { phone: phone.to_owned() })
+            .await
+        {
+            Ok(view) => {
+                let view = view.into_inner();
+                Ok(Some(EmailHolder {
+                    account_id: AccountId::try_from(view.id.as_str())?,
+                    identity_id: view.identity_id,
+                }))
+            }
+            Err(status) if status.code() == Code::NotFound => Ok(None),
+            Err(status) if status.code() == Code::FailedPrecondition => Ok(None),
+            Err(_) => Err(AuthError::AccountDirectoryUnavailable),
+        }
     }
 
     #[instrument(name = "auth.directory.find_by_email", skip(self, email))]

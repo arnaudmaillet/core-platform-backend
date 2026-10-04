@@ -6,7 +6,7 @@ use postgres_storage::{StorageError, TransactionManager};
 use crate::application::port::account_repository::AccountRepository;
 use crate::domain::aggregate::account::Account;
 use crate::domain::event::DomainEvent;
-use crate::domain::value_object::{
+use crate::domain::value_object::{PhoneNumber, 
     account_id::AccountId, account_status::AccountStatus, email_address::EmailAddress,
     identity_id::IdentityId,
 };
@@ -66,7 +66,7 @@ impl AccountRepository for PgAccountRepository {
         let p_status             = account.status().as_str().to_owned();
         let p_suspension_reason  = account.suspension_reason().map(str::to_owned);
         let p_deactivated_at     = account.deactivated_at();
-        let p_email              = account.email().as_str().to_owned();
+        let p_email              = account.email().map(|e| e.as_str().to_owned());
         let p_email_verified     = account.email_verified();
         let p_email_verified_at  = account.email_verified_at();
         let p_phone              = account.phone().map(|p| p.as_str().to_owned());
@@ -412,7 +412,18 @@ impl AccountRepository for PgAccountRepository {
         rows.into_iter().map(Account::try_from).collect()
     }
 
-    #[instrument(name = "account.repo.exists_by_email", skip(self), fields(email = %email))]
+    async fn find_by_phone(&self, phone: &PhoneNumber) -> Result<Option<Account>, AccountError> {
+        let pool = self.tx_manager.pool();
+
+        let row = sqlx::query_as::<_, AccountRow>("SELECT * FROM accounts WHERE phone = $1")
+            .bind(phone.as_str())
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| AccountError::Storage(StorageError::from(e)))?;
+
+        row.map(Account::try_from).transpose()
+    }
+
     async fn find_by_email(&self, email: &EmailAddress) -> Result<Option<Account>, AccountError> {
         let pool = self.tx_manager.pool();
 
@@ -425,6 +436,7 @@ impl AccountRepository for PgAccountRepository {
         row.map(Account::try_from).transpose()
     }
 
+    #[instrument(name = "account.repo.exists_by_email", skip(self), fields(email = %email))]
     async fn exists_by_email(&self, email: &EmailAddress) -> Result<bool, AccountError> {
         let pool = self.tx_manager.pool();
 

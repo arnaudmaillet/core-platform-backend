@@ -47,8 +47,12 @@ impl Validate for CreateAccountCommand {
         }
 
         let email = self.email.trim();
+        let has_phone = self.phone.as_deref().is_some_and(|p| !p.trim().is_empty());
         if email.is_empty() {
-            violations.push(FieldViolation::new("email", "VAL-2002", "email must not be empty"));
+            // A phone-only account (signed up with a verified number) has none.
+            if !has_phone {
+                violations.push(FieldViolation::new("email", "VAL-2002", "an email or a phone number is required"));
+            }
         } else if !email.contains('@') || email.len() > 254 {
             violations.push(FieldViolation::new("email", "VAL-2003", "email format is invalid"));
         }
@@ -106,20 +110,33 @@ impl CommandHandler<CreateAccountCommand> for CreateAccountHandler {
         let cmd = &envelope.payload;
 
         let identity_id = IdentityId::new(cmd.identity_id.trim().to_owned())?;
-        let email = EmailAddress::new(cmd.email.trim())?;
+        let email = Some(cmd.email.trim()).filter(|e| !e.is_empty()).map(EmailAddress::new).transpose()?;
 
         if self.repo.exists_by_identity_id(&identity_id).await? {
             return Err(AccountError::IdentityAlreadyRegistered {
                 identity_id: cmd.identity_id.clone(),
             });
         }
-        if self.repo.exists_by_email(&email).await? {
+        if let Some(email) = &email
+            && self.repo.exists_by_email(email).await?
+        {
             return Err(AccountError::EmailAlreadyRegistered {
                 email: cmd.email.clone(),
             });
         }
 
-        let phone = cmd.phone.as_deref().map(PhoneNumber::new).transpose()?;
+        let phone = cmd.phone.as_deref().filter(|p| !p.trim().is_empty()).map(PhoneNumber::new).transpose()?;
+        if email.is_none() && phone.is_none() {
+            return Err(AccountError::DomainViolation {
+                field: "email".into(),
+                message: "an email or a phone number is required".into(),
+            });
+        }
+        if let Some(phone) = &phone
+            && self.repo.find_by_phone(phone).await?.is_some()
+        {
+            return Err(AccountError::PhoneAlreadyRegistered);
+        }
         let password_hash = cmd.password_hash.as_deref().map(PasswordHash::from_hash);
 
         let country_of_residence = cmd

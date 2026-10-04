@@ -14,7 +14,8 @@ use crate::application::port::{
     SubjectLinkRepository, TokenMinter,
 };
 use crate::domain::aggregate::SubjectLink;
-use crate::domain::value_object::{AccountId, DeviceFingerprint, IdpSubject, EMAIL_CODE_ISSUER};
+use crate::application::port::VerificationChannel;
+use crate::domain::value_object::{AccountId, DeviceFingerprint, IdpSubject, EMAIL_CODE_ISSUER, PHONE_CODE_ISSUER};
 use crate::error::AuthError;
 
 /// Establish a session by brokering a credential to the IdP, or by verifying a
@@ -185,7 +186,11 @@ impl LoginHandler {
                     .as_ref()
                     .ok_or_else(|| AuthError::VerificationChannelUnavailable { channel: "email".into() })?;
                 let proven = codes.verify(&challenge_id, &code).await?;
-                let subject = IdpSubject::new(EMAIL_CODE_ISSUER, proven.destination)?;
+                let issuer = match proven.channel {
+                    VerificationChannel::Email => EMAIL_CODE_ISSUER,
+                    VerificationChannel::Sms => PHONE_CODE_ISSUER,
+                };
+                let subject = IdpSubject::new(issuer, proven.destination)?;
                 let link = self.links.find_by_subject(&subject).await?.ok_or(AuthError::NoAccountForIdentity)?;
                 (subject, link.account_id(), false)
             }

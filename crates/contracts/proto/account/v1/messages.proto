@@ -192,6 +192,11 @@ message GetAccountByEmailRequest {
     string email = 1;
 }
 
+message GetAccountByPhoneRequest {
+    // E.164 (e.g. +33612345678).
+    string phone = 1;
+}
+
 message GetAccountStatusRequest {
     string account_id = 1;
 }
