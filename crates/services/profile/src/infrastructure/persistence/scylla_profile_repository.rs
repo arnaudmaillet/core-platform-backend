@@ -62,6 +62,7 @@ struct ProfileInsert {
     location_settings: String,
     discovery_settings: String,
     comment_filters: String,
+    tab_settings: String,
 }
 
 /// Values for the 21-column LWT UPDATE of `profile.profiles`.
@@ -98,6 +99,7 @@ struct ProfileUpdate {
     location_settings: String,
     discovery_settings: String,
     comment_filters: String,
+    tab_settings: String,
     new_version:       i64,
     profile_id:        Uuid,
     expected_version:  i64,
@@ -197,8 +199,8 @@ impl ProfileRepository for ScyllaProfileRepository {
                  (profile_id, account_id, version, handle, display_name, bio, avatar_url, \
                   banner_url, website_url, custom_links, profile_kind, visibility, verified, \
                   verification_kind, locale, timezone, status, suspension_reason, masked_at, \
-                  masking_reason, created_at, updated_at, deleted_at, tier, interaction_settings, location_settings, discovery_settings, comment_filters) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  masking_reason, created_at, updated_at, deleted_at, tier, interaction_settings, location_settings, discovery_settings, comment_filters, tab_settings) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             );
             let values = ProfileInsert {
                 profile_id:        profile.id().as_uuid(),
@@ -229,6 +231,7 @@ impl ProfileRepository for ScyllaProfileRepository {
                 location_settings: profile.location().to_json(),
                 discovery_settings: profile.discovery().to_json(),
                 comment_filters: profile.comment_filters().to_json(),
+                tab_settings: profile.tab_settings().to_json(),
             };
             self.client.session.execute_unpaged(stmt, values).await.map_err(scylla_err)?;
         } else {
@@ -239,7 +242,7 @@ impl ProfileRepository for ScyllaProfileRepository {
                      website_url = ?, custom_links = ?, visibility = ?, verified = ?, \
                      verification_kind = ?, locale = ?, timezone = ?, status = ?, \
                      suspension_reason = ?, masked_at = ?, masking_reason = ?, \
-                     updated_at = ?, deleted_at = ?, tier = ?, interaction_settings = ?, location_settings = ?, discovery_settings = ?, comment_filters = ?, version = ? \
+                     updated_at = ?, deleted_at = ?, tier = ?, interaction_settings = ?, location_settings = ?, discovery_settings = ?, comment_filters = ?, tab_settings = ?, version = ? \
                  WHERE profile_id = ? \
                  IF version = ?",
             );
@@ -267,6 +270,7 @@ impl ProfileRepository for ScyllaProfileRepository {
                 location_settings: profile.location().to_json(),
                 discovery_settings: profile.discovery().to_json(),
                 comment_filters: profile.comment_filters().to_json(),
+                tab_settings: profile.tab_settings().to_json(),
                 new_version:       profile.version(),
                 profile_id:        profile.id().as_uuid(),
                 expected_version:  profile.version() - 1,
@@ -289,7 +293,7 @@ impl ProfileRepository for ScyllaProfileRepository {
             "SELECT profile_id, account_id, version, handle, display_name, bio, avatar_url, \
                     banner_url, website_url, custom_links, profile_kind, visibility, verified, \
                     verification_kind, tier, locale, timezone, status, suspension_reason, masked_at, \
-                    masking_reason, created_at, updated_at, deleted_at, interaction_settings, location_settings, discovery_settings, comment_filters \
+                    masking_reason, created_at, updated_at, deleted_at, interaction_settings, location_settings, discovery_settings, comment_filters, tab_settings \
              FROM profile.profiles WHERE profile_id = ?",
         );
         let result = self.client.session

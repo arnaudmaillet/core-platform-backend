@@ -53,6 +53,9 @@ service ProfileService {
     // Hidden words and the offensive-comment filter (owner only).
     rpc SetCommentFilters(SetCommentFiltersRequest) returns (CommandResponse);
 
+    // Post history window and tab visibility (owner only).
+    rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse);
+
     // Grant a platform verification badge (admin only).
     rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
 

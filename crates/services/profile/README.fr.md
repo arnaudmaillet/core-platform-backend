@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: c13794bebd2a733b907a042ea529afc6ce58098d27a90f47a3b6893f7a7f9a03
-  translated_at: 2026-10-04
+  source_sha256: 70c988f1feee2df1836c77d337632a4f7ff72547be5b4e23a5b0b035c821533b
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -130,6 +130,7 @@ service ProfileService {
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
   rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // qui peut commenter / mentionner / écrire, téléchargements, compteurs de likes ; les ados démarrent abonnés uniquement
   rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse); // mode fantôme + précis / niveau ville (réservé au propriétaire sur la vue) ; les ados démarrent fantômes ; geo-discovery l'applique
+  rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse); // #664 fenêtre de posts (tout / 6 mois / 1 mois / 3 jours ; post masque les posts plus anciens aux visiteurs) + visibilité des onglets j'aime / enregistrés / republications / lieux (stockée ; aucun onglet servi pour l'instant) ; partiel ; réservé au propriétaire sur la vue
   rpc SetCommentFilters(SetCommentFiltersRequest) returns (CommandResponse); // #660 mots masqués (≤ 200, normalisés) + filtre offensant (activé par défaut) ; réservé au propriétaire sur la vue ; comment les applique
   rpc SetDiscoverySettings(SetDiscoverySettingsRequest) returns (CommandResponse); // #661 statut d'activité, accusés de lecture, trouvable par téléphone / e-mail / recherche de handle / QR / suggestions (partiel ; réservé au propriétaire sur la vue) ; les ados démarrent introuvables par téléphone, e-mail, suggestions ; search applique by_handle_search
   rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);

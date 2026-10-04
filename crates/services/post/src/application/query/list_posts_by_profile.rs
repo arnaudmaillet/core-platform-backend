@@ -3,7 +3,9 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::{
-    application::port::{author_visible_to, AudienceGate, PostRepository, PostSummary},
+    application::port::{
+        author_visible_to, window_start, AudienceGate, AuthorWindowStore, PostRepository, PostSummary,
+    },
     domain::value_object::{ProfileId, Viewer},
     error::PostError,
 };
@@ -24,6 +26,7 @@ impl Query for ListPostsByProfileQuery {
 pub struct ListPostsByProfileHandler<R> {
     pub repository: Arc<R>,
     pub audience:   Arc<dyn AudienceGate>,
+    pub windows:    Arc<dyn AuthorWindowStore>,
 }
 
 impl<R: PostRepository> QueryHandler<ListPostsByProfileQuery> for ListPostsByProfileHandler<R> {
@@ -48,6 +51,19 @@ impl<R: PostRepository> QueryHandler<ListPostsByProfileQuery> for ListPostsByPro
             .list_by_profile(&profile_id, query.limit, query.page_token.as_deref())
             .await?;
         posts.retain(|post| query.viewer.may_see(&profile_id, post.status, post.moderation));
+
+        // The author's post window (#664): clients other than the author see
+        // posts created within it only. The list is newest first, so the first
+        // older post ends it.
+        if !query.viewer.sees_every_post_of(&profile_id) {
+            let days = self.windows.get(&profile_id).await?;
+            if let Some(start) = window_start(days, chrono::Utc::now())
+                && posts.iter().any(|p| p.created_at < start)
+            {
+                posts.retain(|p| p.created_at >= start);
+                return Ok((posts, None));
+            }
+        }
         Ok((posts, next))
     }
 }

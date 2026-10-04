@@ -3,7 +3,9 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::{
-    application::port::{author_visible_to, AudienceGate, AuthorLocationStore, PostRepository},
+    application::port::{
+        author_visible_to, window_start, AudienceGate, AuthorLocationStore, AuthorWindowStore, PostRepository,
+    },
     domain::{aggregate::Post, value_object::{PostId, Viewer}},
     error::PostError,
 };
@@ -23,6 +25,7 @@ pub struct GetPostHandler<R> {
     pub repository: Arc<R>,
     pub audience:   Arc<dyn AudienceGate>,
     pub locations:  Arc<dyn AuthorLocationStore>,
+    pub windows:    Arc<dyn AuthorWindowStore>,
 }
 
 impl<R: PostRepository> QueryHandler<GetPostQuery> for GetPostHandler<R> {
@@ -40,6 +43,14 @@ impl<R: PostRepository> QueryHandler<GetPostQuery> for GetPostHandler<R> {
             .ok_or_else(not_found)?;
         if !author_visible_to(self.audience.as_ref(), &query.viewer, post.profile_id()).await? {
             return Err(not_found());
+        }
+        // The author's post window hides older posts from clients other than
+        // the author (#664); the mesh reads them as stored.
+        if !query.viewer.sees_every_post_of(post.profile_id()) {
+            let days = self.windows.get(post.profile_id()).await?;
+            if window_start(days, chrono::Utc::now()).is_some_and(|start| post.created_at() < start) {
+                return Err(not_found());
+            }
         }
         // The author's location sharing applies to everyone else, the mesh
         // included (fail closed: a store error fails the read).

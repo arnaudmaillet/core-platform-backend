@@ -52,6 +52,13 @@ where
         self.update_banner(request).await
     }
 
+    async fn set_tab_settings(
+        &self,
+        request: Request<proto::SetTabSettingsRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.set_tab_settings(request).await
+    }
+
     async fn set_comment_filters(
         &self,
         request: Request<proto::SetCommentFiltersRequest>,

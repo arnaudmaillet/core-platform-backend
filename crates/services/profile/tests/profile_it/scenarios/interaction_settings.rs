@@ -114,3 +114,29 @@ async fn comment_filters_are_normalised_owner_only_and_announced() {
     assert_eq!(h.get_by_handle_as(&handle, other).await.unwrap().comment_filters, None, "owner-only");
     assert!(h.publisher.published().iter().any(|t| t == "ProfileCommentFiltersChanged"));
 }
+
+#[tokio::test]
+async fn tab_settings_update_partially_stay_owner_only_and_are_announced() {
+    use profile::application::command::SetTabSettingsCommand;
+    use profile::domain::value_object::{PostWindow, TabSettings, Viewer};
+
+    let h = TestHarness::start().await;
+    let (account, handle) = (harness::random_account_id(), harness::random_handle());
+    h.create(&account, &handle, "Alice").await;
+    let profile = h.get_by_handle(&handle).await.expect("created");
+    assert_eq!(profile.tab_settings, Some(TabSettings::default()));
+
+    let cmd = SetTabSettingsCommand {
+        profile_id: profile.id.clone(),
+        post_window: Some(PostWindow::OneMonth),
+        show_likes: Some(false),
+        ..Default::default()
+    };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("set");
+
+    let expected = TabSettings { post_window: PostWindow::OneMonth, show_likes: false, ..TabSettings::default() };
+    assert_eq!(h.get_by_id(&profile.id).await.unwrap().tab_settings, Some(expected));
+    let other = Viewer::Account(harness::random_account_id());
+    assert_eq!(h.get_by_handle_as(&handle, other).await.unwrap().tab_settings, None, "owner-only");
+    assert!(h.publisher.published().iter().any(|t| t == "ProfileTabSettingsChanged"));
+}

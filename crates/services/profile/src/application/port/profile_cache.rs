@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::value_object::{CommentFilters, DiscoverySettings, InteractionSettings, LocationSettings};
+use crate::domain::value_object::{
+    CommentFilters, DiscoverySettings, InteractionSettings, LocationSettings, TabSettings,
+};
 use crate::domain::aggregate::Profile;
 use crate::domain::entity::ProfileLink;
 use crate::domain::value_object::{AccountId, ProfileId, ProfileStatus, Viewer};
@@ -63,6 +65,9 @@ pub struct ProfileView {
     /// Owner-only (cleared for others): hidden words, offensive filter.
     #[serde(default)]
     pub comment_filters: Option<CommentFilters>,
+    /// Owner-only (cleared for others): post window, tab visibility.
+    #[serde(default)]
+    pub tab_settings: Option<TabSettings>,
 }
 
 impl From<&Profile> for ProfileView {
@@ -93,6 +98,7 @@ impl From<&Profile> for ProfileView {
             location: Some(p.location()),
             discovery: Some(p.discovery()),
             comment_filters: Some(p.comment_filters().clone()),
+            tab_settings: Some(p.tab_settings()),
         }
     }
 }
@@ -122,6 +128,7 @@ impl ProfileView {
         self.location = None;
         self.discovery = None;
         self.comment_filters = None;
+        self.tab_settings = None;
         Some(self)
     }
 }
@@ -187,6 +194,7 @@ mod viewer_tests {
             location: Some(LocationSettings::teen()),
             discovery: Some(DiscoverySettings::teen()),
             comment_filters: None,
+            tab_settings: None,
         }
     }
 

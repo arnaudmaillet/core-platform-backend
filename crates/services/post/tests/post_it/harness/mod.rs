@@ -27,7 +27,8 @@ use post::application::query::list_posts_by_profile::ListPostsByProfileQuery;
 
 pub use post::application::port::PostSummary;
 pub use post::domain::aggregate::Post;
-pub use post::application::port::AuthorLocationStore;
+pub use post::application::port::{AuthorLocationStore, AuthorWindowStore, PostRepository};
+use post::infrastructure::persistence::ScyllaPostRepository;
 pub use post::domain::value_object::{
     ContentAccess, LocationSharing, ModerationRestriction, PostStatus, ProfileId, Viewer,
 };
@@ -56,6 +57,10 @@ pub struct TestHarness {
     pub gate:        Arc<ScriptedGate>,
     /// The authors' location sharing (the `profile.v1.events` projection).
     pub locations:   Arc<dyn AuthorLocationStore>,
+    /// The authors' post window (the `profile.v1.events` projection).
+    pub windows:     Arc<dyn AuthorWindowStore>,
+    /// Direct store access, to seed posts dated in the past.
+    pub repository:  Arc<ScyllaPostRepository>,
 }
 
 impl TestHarness {
@@ -84,6 +89,8 @@ impl TestHarness {
             publisher,
             gate,
             locations:   app.author_location_store,
+            windows:     app.author_window_store,
+            repository:  Arc::new(ScyllaPostRepository::new(Arc::clone(&app.scylla))),
         }
     }
 
@@ -102,6 +109,30 @@ impl TestHarness {
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await
             .expect("create_post");
+    }
+
+    /// Stores a published `TextOnly` post by `profile_id` created `days_ago`.
+    pub async fn seed_published(&self, post_id: &str, profile_id: &str, days_ago: i64) {
+        use post::domain::value_object::{Caption, ModerationState, PostId, PostKind};
+        let at = chrono::Utc::now() - chrono::Duration::days(days_ago);
+        let post = Post::reconstitute(
+            PostId::try_from(post_id).expect("post id"),
+            ProfileId::try_from(profile_id).expect("profile id"),
+            PostKind::TextOnly,
+            PostStatus::Published,
+            Caption::new("old".to_owned()).expect("caption"),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            at,
+            at,
+            Some(at),
+            None,
+            ModerationState::default(),
+        );
+        self.repository.insert(&post).await.expect("seed post");
     }
 
     /// Publishes a draft post.

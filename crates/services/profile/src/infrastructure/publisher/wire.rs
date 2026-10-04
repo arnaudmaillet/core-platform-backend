@@ -93,6 +93,17 @@ pub enum ProfileEventWire {
         filter_offensive: bool,
         occurred_at_ms: i64,
     },
+    /// Post history window (`all` | `six_months` | `one_month` | `three_days`)
+    /// and tab visibility (#664); `post` applies the window.
+    ProfileTabSettingsChanged {
+        profile_id: String,
+        post_window: String,
+        show_likes: bool,
+        show_saved: bool,
+        show_reposts: bool,
+        show_places: bool,
+        occurred_at_ms: i64,
+    },
     ProfileDiscoverySettingsChanged {
         profile_id: String,
         activity_status: bool,
@@ -122,7 +133,8 @@ impl ProfileEventWire {
             | ProfileEventWire::ProfileInteractionSettingsChanged { profile_id, .. }
             | ProfileEventWire::ProfileLocationSettingsChanged { profile_id, .. }
             | ProfileEventWire::ProfileDiscoverySettingsChanged { profile_id, .. }
-            | ProfileEventWire::ProfileCommentFiltersChanged { profile_id, .. } => profile_id,
+            | ProfileEventWire::ProfileCommentFiltersChanged { profile_id, .. }
+            | ProfileEventWire::ProfileTabSettingsChanged { profile_id, .. } => profile_id,
         }
     }
 
@@ -144,6 +156,7 @@ impl ProfileEventWire {
             ProfileEventWire::ProfileLocationSettingsChanged { .. } => "ProfileLocationSettingsChanged",
             ProfileEventWire::ProfileDiscoverySettingsChanged { .. } => "ProfileDiscoverySettingsChanged",
             ProfileEventWire::ProfileCommentFiltersChanged { .. } => "ProfileCommentFiltersChanged",
+            ProfileEventWire::ProfileTabSettingsChanged { .. } => "ProfileTabSettingsChanged",
         }
     }
 }
@@ -205,6 +218,15 @@ impl From<&DomainEvent> for ProfileEventWire {
                     occurred_at_ms: e.occurred_at.timestamp_millis(),
                 }
             }
+            DomainEvent::TabSettingsChanged(e) => ProfileEventWire::ProfileTabSettingsChanged {
+                profile_id: e.profile_id.to_string(),
+                post_window: e.settings.post_window.as_str().to_owned(),
+                show_likes: e.settings.show_likes,
+                show_saved: e.settings.show_saved,
+                show_reposts: e.settings.show_reposts,
+                show_places: e.settings.show_places,
+                occurred_at_ms: e.occurred_at.timestamp_millis(),
+            },
             DomainEvent::CommentFiltersChanged(e) => ProfileEventWire::ProfileCommentFiltersChanged {
                 profile_id: e.profile_id.to_string(),
                 hidden_words: e.filters.hidden_words.clone(),

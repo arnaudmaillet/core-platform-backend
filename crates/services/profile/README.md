@@ -117,6 +117,7 @@ service ProfileService {
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
   rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // who may comment / mention / message, downloads, like counts; teens start with followers-only
   rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse); // ghost mode + precise / city level (owner-only on the view); teens start ghosted; geo-discovery applies it
+  rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse); // #664 post window (all / 6 months / 1 month / 3 days; post hides older posts from visitors) + likes / saved / reposts / places tab visibility (stored; no tab served yet); partial; owner-only on the view
   rpc SetCommentFilters(SetCommentFiltersRequest) returns (CommandResponse); // #660 hidden words (≤ 200, normalised) + offensive filter (on by default); owner-only on the view; comment applies them
   rpc SetDiscoverySettings(SetDiscoverySettingsRequest) returns (CommandResponse); // #661 activity status, read receipts, findable by phone / email / handle search / QR / suggestions (partial; owner-only on the view); teens start unfindable by phone, email, suggestions; search applies by_handle_search
   rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
