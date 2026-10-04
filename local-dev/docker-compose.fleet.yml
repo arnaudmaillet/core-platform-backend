@@ -506,9 +506,11 @@ services:
         condition: service_completed_successfully
 
   minio:
-    # Docker Hub's minio/* repositories were removed (2026-09); the same tags
-    # are published on quay.io.
-    image: quay.io/minio/minio:RELEASE.2024-09-13T20-26-02Z
+    # Upstream MinIO images are no longer anonymously pullable (Docker Hub
+    # minio/* removed 2026-09-16, quay.io/minio/* 401 since 2026-10-04); use the
+    # community-maintained pgsty/minio build, pinned by digest. Same CLI, env
+    # and defaults as upstream; it also bundles `mc` (used by minio-init).
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -526,7 +528,7 @@ services:
 
   # One-shot: create the media bucket (retries until MinIO answers).
   minio-init:
-    image: quay.io/minio/mc:RELEASE.2024-09-16T17-43-14Z
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
     depends_on:
       minio:
         condition: service_started
