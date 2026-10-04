@@ -68,6 +68,17 @@ fn project_profile(event: ProfileEvent, now: DateTime<Utc>) -> Result<IndexMutat
             profile_id,
             occurred_at,
         } => owner_visibility(profile_id, occurred_at, Searchable::VISIBLE),
+        ProfileEvent::DiscoverabilityChanged {
+            profile_id,
+            searchable,
+            occurred_at,
+        } => Ok(IndexMutation::SetSearchable {
+            authority: VisibilityAuthority::Discovery,
+            kind: EntityKind::Profile,
+            id: non_empty_id(profile_id)?,
+            searchable: if searchable { Searchable::VISIBLE } else { Searchable::HIDDEN },
+            version: DocVersion::from_event_time(occurred_at),
+        }),
     }
 }
 
@@ -353,6 +364,30 @@ mod tests {
             m,
             IndexMutation::SetSearchable {
                 authority: VisibilityAuthority::Owner,
+                kind: EntityKind::Profile,
+                id: "prof-1".to_owned(),
+                searchable: Searchable::HIDDEN,
+                version: DocVersion::from_event_time(occurred),
+            }
+        );
+    }
+
+    #[test]
+    fn discoverability_flips_its_own_flag() {
+        let occurred = Utc.timestamp_opt(1_700_000_500, 0).unwrap();
+        let m = project(
+            SourceEvent::Profile(ProfileEvent::DiscoverabilityChanged {
+                profile_id: "prof-1".to_owned(),
+                searchable: false,
+                occurred_at: occurred,
+            }),
+            now(),
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            IndexMutation::SetSearchable {
+                authority: VisibilityAuthority::Discovery,
                 kind: EntityKind::Profile,
                 id: "prof-1".to_owned(),
                 searchable: Searchable::HIDDEN,

@@ -46,6 +46,10 @@ service ProfileService {
     // Ghost mode and location precision (owner only).
     rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse);
 
+    // Activity status, read receipts and how people can find this profile
+    // (owner only).
+    rpc SetDiscoverySettings(SetDiscoverySettingsRequest) returns (CommandResponse);
+
     // Grant a platform verification badge (admin only).
     rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
 

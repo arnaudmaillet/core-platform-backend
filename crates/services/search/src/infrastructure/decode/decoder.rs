@@ -176,6 +176,15 @@ pub fn map_profile(event: ProfileWireEvent) -> Decoded {
             profile_id,
             occurred_at: ms_to_dt(occurred_at_ms),
         })),
+        ProfileWireEvent::ProfileDiscoverySettingsChanged {
+            profile_id,
+            by_handle_search,
+            occurred_at_ms,
+        } => Decoded::Ready(SourceEvent::Profile(ProfileEvent::DiscoverabilityChanged {
+            profile_id,
+            searchable: by_handle_search,
+            occurred_at: ms_to_dt(occurred_at_ms),
+        })),
         ProfileWireEvent::Unknown => Decoded::Ignore,
     }
 }
@@ -304,6 +313,18 @@ mod tests {
                 assert_eq!(profile_id, "prof-1");
             }
             other => panic!("expected owner-hidden, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn discovery_settings_drive_the_discovery_flag() {
+        let json = br#"{"type":"ProfileDiscoverySettingsChanged","profile_id":"prof-1","activity_status":true,"read_receipts":true,"by_phone":false,"by_email":false,"by_handle_search":false,"by_qr":true,"in_suggestions":false,"occurred_at_ms":1700000000000}"#;
+        match decode_profile(json).unwrap() {
+            Decoded::Ready(SourceEvent::Profile(ProfileEvent::DiscoverabilityChanged { profile_id, searchable, .. })) => {
+                assert_eq!(profile_id, "prof-1");
+                assert!(!searchable);
+            }
+            other => panic!("expected discoverability, got {other:?}"),
         }
     }
 

@@ -1,7 +1,8 @@
 //! Index settings + field mappings as **versioned artifacts**.
 //!
 //! Analyzers and mappings are a schema: changing them requires a blue-green reindex
-//! (Phase 7), never an in-place edit. Each kind gets its own physical index with an
+//! (Phase 7), never an in-place edit. Only a **new** common field may be added in
+//! place (`ensure_indices` puts the common properties on every start). Each kind gets its own physical index with an
 //! analyzer chain tuned for its matchable fields. Common to all: the two version
 //! guards (`content_version`, `visibility_version`), the moderation `searchable`
 //! flag, `author_id` (for exclusion + GDPR purge), timestamps, and the coarse
@@ -38,7 +39,7 @@ fn analysis() -> Value {
 }
 
 /// Fields every index carries regardless of kind.
-fn common_properties() -> Value {
+pub(super) fn common_properties() -> Value {
     json!({
         "entity_type":                   { "type": "keyword" },
         "author_id":                     { "type": "keyword" },
@@ -49,6 +50,10 @@ fn common_properties() -> Value {
         "moderation_visibility_version": { "type": "long" },
         "owner_searchable":              { "type": "boolean" },
         "owner_visibility_version":      { "type": "long" },
+        // Third authority (#661): the profile's own "findable by search" choice.
+        // Added in place to existing indices (additive `_mapping` update).
+        "discoverable":                  { "type": "boolean" },
+        "discovery_version":             { "type": "long" },
         "content_version":               { "type": "long" },
         "created_at":                    { "type": "date" },
         "indexed_at":                    { "type": "date" },

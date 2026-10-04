@@ -51,6 +51,13 @@ pub enum ProfileEvent {
         profile_id: String,
         occurred_at: DateTime<Utc>,
     },
+    /// The owner chose whether the profile is findable by search (#661), under
+    /// the **discovery** authority.
+    DiscoverabilityChanged {
+        profile_id: String,
+        searchable: bool,
+        occurred_at: DateTime<Utc>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

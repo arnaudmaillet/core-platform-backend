@@ -181,6 +181,16 @@ impl Harness {
         .await;
     }
 
+    /// The profile's own "findable by search" setting (#661).
+    pub async fn discoverable(&self, profile_id: &str, searchable: bool, occurred_ms: i64) {
+        self.apply(SourceEvent::Profile(ProfileEvent::DiscoverabilityChanged {
+            profile_id: profile_id.to_owned(),
+            searchable,
+            occurred_at: ms(occurred_ms),
+        }))
+        .await;
+    }
+
     pub async fn purge(&self, author: &str) {
         self.apply(SourceEvent::Compliance(ComplianceEvent::ActorPurged {
             author_id: author.to_owned(),

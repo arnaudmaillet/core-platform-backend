@@ -9,7 +9,7 @@ use crate::domain::value_object::{
     InteractionAudience, InteractionSettings, LocationPrecision, LocationSettings,
 };
 use crate::application::command::{
-    SetInteractionSettingsCommand, SetLocationSettingsCommand,
+    SetDiscoverySettingsCommand, SetInteractionSettingsCommand, SetLocationSettingsCommand,
     ChangeHandleCommand, CreateProfileCommand, DeleteProfileCommand, HideProfileCommand,
     RestoreProfileCommand, SetVisibilityCommand, UpdateAvatarCommand, UpdateBannerCommand,
     UpdateProfileCommand, VerifyProfileCommand,
@@ -229,6 +229,30 @@ where
         let cmd = SetLocationSettingsCommand {
             profile_id: req.profile_id.clone(),
             settings: LocationSettings { ghost: s.ghost, precision },
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_cmd(&req.profile_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    /// The owner's presence and discoverability (edge: one of the caller's profiles).
+    pub async fn set_discovery_settings(
+        &self,
+        request: Request<proto::SetDiscoverySettingsRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let cmd = SetDiscoverySettingsCommand {
+            profile_id:       req.profile_id.clone(),
+            activity_status:  req.activity_status,
+            read_receipts:    req.read_receipts,
+            by_phone:         req.by_phone,
+            by_email:         req.by_email,
+            by_handle_search: req.by_handle_search,
+            by_qr:            req.by_qr,
+            in_suggestions:   req.in_suggestions,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -457,6 +481,15 @@ fn profile_view_to_proto(v: ProfileView) -> proto::ProfileView {
                 LocationPrecision::Precise => proto::LocationPrecision::Precise,
                 LocationPrecision::City => proto::LocationPrecision::City,
             }) as i32,
+        }),
+        discovery_settings: v.discovery.map(|d| proto::DiscoverySettings {
+            activity_status:  d.activity_status,
+            read_receipts:    d.read_receipts,
+            by_phone:         d.by_phone,
+            by_email:         d.by_email,
+            by_handle_search: d.by_handle_search,
+            by_qr:            d.by_qr,
+            in_suggestions:   d.in_suggestions,
         }),
     }
 }

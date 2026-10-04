@@ -5,11 +5,11 @@ use uuid::Uuid;
 use crate::domain::entity::ProfileLink;
 use crate::domain::event::{
     DomainEvent, HandleChanged, ProfileCreated, ProfileDeleted, ProfileHidden, ProfileRestored,
-    InteractionSettingsChanged, LocationSettingsChanged, ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
+    DiscoverySettingsChanged, InteractionSettingsChanged, LocationSettingsChanged, ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
 };
 use crate::domain::value_object::{
-    AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, InteractionSettings, Locale,
-    LocationSettings,
+    AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, DiscoverySettings, Handle, InteractionSettings,
+    Locale, LocationSettings,
     MaskingReason, ProfileId, ProfileKind, ProfileStatus, ProfileVisibility, VerificationKind,
     WebsiteUrl,
 };
@@ -30,6 +30,8 @@ pub struct ProfileCreateParams {
     pub interaction: InteractionSettings,
     /// [`LocationSettings::teen`] (ghost) for a 13–17 holder; the defaults otherwise.
     pub location: LocationSettings,
+    /// [`DiscoverySettings::teen`] for a 13–17 holder; the defaults otherwise.
+    pub discovery: DiscoverySettings,
     pub correlation_id: Uuid,
 }
 
@@ -65,6 +67,9 @@ pub struct Profile {
     /// Ghost mode and location precision (geo-discovery applies them).
     #[serde(default)]
     location: LocationSettings,
+    /// Activity status, read receipts and how people can find the profile.
+    #[serde(default)]
+    discovery: DiscoverySettings,
     verified: bool,
     verification_kind: Option<VerificationKind>,
     /// Author tier (0=Standard, 1=Premium, 2=Vip), denormalized from
@@ -115,6 +120,7 @@ impl Profile {
             visibility: params.visibility,
             interaction: params.interaction,
             location: params.location,
+            discovery: params.discovery,
             verified: false,
             verification_kind: None,
             tier: 0,
@@ -147,6 +153,14 @@ impl Profile {
             profile.pending_events.push(DomainEvent::LocationSettingsChanged(LocationSettingsChanged {
                 profile_id: id,
                 settings: params.location,
+                occurred_at: now,
+                correlation_id: params.correlation_id,
+            }));
+        }
+        if params.discovery != DiscoverySettings::default() {
+            profile.pending_events.push(DomainEvent::DiscoverySettingsChanged(DiscoverySettingsChanged {
+                profile_id: id,
+                settings: params.discovery,
                 occurred_at: now,
                 correlation_id: params.correlation_id,
             }));
@@ -204,6 +218,7 @@ impl Profile {
             visibility,
             interaction: InteractionSettings::default(),
             location: LocationSettings::default(),
+            discovery: DiscoverySettings::default(),
             verified,
             verification_kind,
             tier,
@@ -369,6 +384,42 @@ impl Profile {
 
     pub fn location(&self) -> LocationSettings {
         self.location
+    }
+
+    /// Changes presence / discoverability. Unchanged ⇒ no-op.
+    pub fn set_discovery_settings(
+        &mut self,
+        settings: DiscoverySettings,
+        correlation_id: Uuid,
+    ) -> Result<bool, ProfileError> {
+        if self.status == ProfileStatus::Deleted {
+            return Err(ProfileError::ProfileNotActive {
+                current: self.status.as_str().to_owned(),
+            });
+        }
+        if settings == self.discovery {
+            return Ok(false);
+        }
+        self.discovery = settings;
+        let now = self.touch_now();
+        self.pending_events.push(DomainEvent::DiscoverySettingsChanged(DiscoverySettingsChanged {
+            profile_id: self.id,
+            settings,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(true)
+    }
+
+    /// Restores the stored discovery settings (a column added after
+    /// [`Self::reconstitute`]'s set).
+    pub fn with_discovery(mut self, settings: DiscoverySettings) -> Self {
+        self.discovery = settings;
+        self
+    }
+
+    pub fn discovery(&self) -> DiscoverySettings {
+        self.discovery
     }
 
     /// Restores the stored interaction settings (a column added after
@@ -583,6 +634,7 @@ mod tests {
             visibility: ProfileVisibility::Public,
             interaction: InteractionSettings::default(),
             location: LocationSettings::default(),
+            discovery: DiscoverySettings::default(),
             correlation_id: Uuid::now_v7(),
         });
         p.drain_events(); // discard the ProfileCreated event
@@ -604,6 +656,7 @@ mod tests {
             visibility: ProfileVisibility::Private,
             interaction: InteractionSettings::teen(),
             location: LocationSettings::teen(),
+            discovery: DiscoverySettings::teen(),
             correlation_id: Uuid::now_v7(),
         });
         assert_eq!(p.visibility(), ProfileVisibility::Private);
@@ -613,6 +666,7 @@ mod tests {
             DomainEvent::ProfileCreated(_),
             DomainEvent::InteractionSettingsChanged(_),
             DomainEvent::LocationSettingsChanged(_),
+            DomainEvent::DiscoverySettingsChanged(_),
             DomainEvent::VisibilityChanged(VisibilityChanged { visibility: ProfileVisibility::Private, .. })
         ]));
     }

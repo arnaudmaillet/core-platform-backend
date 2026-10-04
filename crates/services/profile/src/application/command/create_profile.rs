@@ -6,7 +6,7 @@ use validate_core::{FieldViolation, Validate};
 use crate::application::port::{EventPublisher, ProfileCache, ProfileRepository};
 use crate::domain::aggregate::{Profile, ProfileCreateParams};
 use crate::domain::value_object::{
-    AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, InteractionSettings, Locale, LocationSettings, ProfileKind,
+    AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, InteractionSettings, Locale, LocationSettings, DiscoverySettings, ProfileKind,
     ProfileVisibility,
 };
 use crate::error::ProfileError;
@@ -92,6 +92,7 @@ impl CommandHandler<CreateProfileCommand> for CreateProfileHandler {
             visibility: if cmd.minor { ProfileVisibility::Private } else { ProfileVisibility::Public },
             interaction: if cmd.minor { InteractionSettings::teen() } else { InteractionSettings::default() },
             location: if cmd.minor { LocationSettings::teen() } else { LocationSettings::default() },
+            discovery: if cmd.minor { DiscoverySettings::teen() } else { DiscoverySettings::default() },
             correlation_id: envelope.correlation_id,
         });
 

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::value_object::{InteractionSettings, LocationSettings};
+use crate::domain::value_object::{DiscoverySettings, InteractionSettings, LocationSettings};
 use crate::domain::aggregate::Profile;
 use crate::domain::entity::ProfileLink;
 use crate::domain::value_object::{AccountId, ProfileId, ProfileStatus, Viewer};
@@ -57,6 +57,9 @@ pub struct ProfileView {
     /// Owner-only (cleared for others): whether they ghost the map.
     #[serde(default)]
     pub location: Option<LocationSettings>,
+    /// Owner-only (cleared for others): presence and discoverability.
+    #[serde(default)]
+    pub discovery: Option<DiscoverySettings>,
 }
 
 impl From<&Profile> for ProfileView {
@@ -85,6 +88,7 @@ impl From<&Profile> for ProfileView {
             version: p.version(),
             interaction: p.interaction(),
             location: Some(p.location()),
+            discovery: Some(p.discovery()),
         }
     }
 }
@@ -112,6 +116,7 @@ impl ProfileView {
         self.masked_at = None;
         self.masking_reason = None;
         self.location = None;
+        self.discovery = None;
         Some(self)
     }
 }
@@ -175,6 +180,7 @@ mod viewer_tests {
             version: 3,
             interaction: InteractionSettings::default(),
             location: Some(LocationSettings::teen()),
+            discovery: Some(DiscoverySettings::teen()),
         }
     }
 

@@ -83,6 +83,19 @@ pub enum ProfileEventWire {
         precision: String,
         occurred_at_ms: i64,
     },
+    /// Activity status, read receipts and how people can find the profile.
+    /// `search` projects `by_handle_search`; chat, the presence flags.
+    ProfileDiscoverySettingsChanged {
+        profile_id: String,
+        activity_status: bool,
+        read_receipts: bool,
+        by_phone: bool,
+        by_email: bool,
+        by_handle_search: bool,
+        by_qr: bool,
+        in_suggestions: bool,
+        occurred_at_ms: i64,
+    },
 }
 
 impl ProfileEventWire {
@@ -99,7 +112,8 @@ impl ProfileEventWire {
             | ProfileEventWire::ProfileTierChanged { profile_id, .. }
             | ProfileEventWire::ProfileVisibilityChanged { profile_id, .. }
             | ProfileEventWire::ProfileInteractionSettingsChanged { profile_id, .. }
-            | ProfileEventWire::ProfileLocationSettingsChanged { profile_id, .. } => profile_id,
+            | ProfileEventWire::ProfileLocationSettingsChanged { profile_id, .. }
+            | ProfileEventWire::ProfileDiscoverySettingsChanged { profile_id, .. } => profile_id,
         }
     }
 
@@ -119,6 +133,7 @@ impl ProfileEventWire {
                 "ProfileInteractionSettingsChanged"
             }
             ProfileEventWire::ProfileLocationSettingsChanged { .. } => "ProfileLocationSettingsChanged",
+            ProfileEventWire::ProfileDiscoverySettingsChanged { .. } => "ProfileDiscoverySettingsChanged",
         }
     }
 }
@@ -180,6 +195,17 @@ impl From<&DomainEvent> for ProfileEventWire {
                     occurred_at_ms: e.occurred_at.timestamp_millis(),
                 }
             }
+            DomainEvent::DiscoverySettingsChanged(e) => ProfileEventWire::ProfileDiscoverySettingsChanged {
+                profile_id: e.profile_id.to_string(),
+                activity_status: e.settings.activity_status,
+                read_receipts: e.settings.read_receipts,
+                by_phone: e.settings.by_phone,
+                by_email: e.settings.by_email,
+                by_handle_search: e.settings.by_handle_search,
+                by_qr: e.settings.by_qr,
+                in_suggestions: e.settings.in_suggestions,
+                occurred_at_ms: e.occurred_at.timestamp_millis(),
+            },
             DomainEvent::LocationSettingsChanged(e) => ProfileEventWire::ProfileLocationSettingsChanged {
                 profile_id: e.profile_id.to_string(),
                 ghost: e.settings.ghost,

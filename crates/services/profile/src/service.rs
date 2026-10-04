@@ -75,6 +75,7 @@ impl Service for ProfileService {
         authenticated("/profile.v1.ProfileService/SetVisibility"),
         authenticated("/profile.v1.ProfileService/SetInteractionSettings"),
         authenticated("/profile.v1.ProfileService/SetLocationSettings"),
+        authenticated("/profile.v1.ProfileService/SetDiscoverySettings"),
         authenticated("/profile.v1.ProfileService/DeleteProfile"),
         public_read("/profile.v1.ProfileService/GetProfileById"),
         public_read("/profile.v1.ProfileService/GetProfileByHandle"),

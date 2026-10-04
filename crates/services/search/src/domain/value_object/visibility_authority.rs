@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 /// Which authority a visibility decision comes from.
 ///
 /// A document is searchable only when **every** authority permits it:
-/// `searchable = moderation_visible AND owner_visible`. The two are independent —
+/// `searchable = moderation_visible AND owner_visible AND discoverable`. They are
+/// independent —
 /// each writes its own flag, guarded by its own version — so neither can override
 /// the other. A platform-integrity moderation hide can't be undone by the profile
 /// owner restoring their own visibility, and vice-versa.
@@ -13,6 +14,9 @@ pub enum VisibilityAuthority {
     Moderation,
     /// The entity's own owner (e.g. a profile masking itself, via `profile.v1.events`).
     Owner,
+    /// The profile's own discoverability setting (#661, `by_handle_search`),
+    /// separate from masking so neither undoes the other.
+    Discovery,
 }
 
 impl VisibilityAuthority {
@@ -21,6 +25,7 @@ impl VisibilityAuthority {
         match self {
             VisibilityAuthority::Moderation => "moderation_searchable",
             VisibilityAuthority::Owner => "owner_searchable",
+            VisibilityAuthority::Discovery => "discoverable",
         }
     }
 
@@ -29,6 +34,7 @@ impl VisibilityAuthority {
         match self {
             VisibilityAuthority::Moderation => "moderation_visibility_version",
             VisibilityAuthority::Owner => "owner_visibility_version",
+            VisibilityAuthority::Discovery => "discovery_version",
         }
     }
 }
