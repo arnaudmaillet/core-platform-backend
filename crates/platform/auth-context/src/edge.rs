@@ -40,9 +40,15 @@ pub const EDGE_KIND_CLAIM: &str = "kind";
 /// The `kind` value of a guest token.
 pub const GUEST_KIND: &str = "guest";
 
-/// `true` when the verified token is a guest's (anonymous, read-only).
+/// The prefix of a guest token's `sub` (`guest:<id>`).
+pub const GUEST_SUB_PREFIX: &str = "guest:";
+
+/// `true` when the verified token is a guest's (anonymous, read-only): it says
+/// so in `kind`, **or** its subject has the guest prefix. Either alone is
+/// enough, so a token missing one of the two still never passes for a member.
 pub fn is_guest(claims: &OidcClaims) -> bool {
     claims.extra.get(EDGE_KIND_CLAIM).and_then(|v| v.as_str()) == Some(GUEST_KIND)
+        || claims.sub.starts_with(GUEST_SUB_PREFIX)
 }
 
 /// The claim carrying the device id the session was bound to at login
@@ -145,5 +151,23 @@ mod tests {
         assert_eq!(session_id(&claims(json!({ "sid": "s-1" }))), Some("s-1"));
         assert_eq!(session_id(&claims(json!({ "sid": "" }))), None);
         assert_eq!(session_id(&claims(json!({}))), None);
+    }
+}
+
+#[cfg(test)]
+mod guest_tests {
+    use super::*;
+
+    fn claims(json: serde_json::Value) -> OidcClaims {
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn either_the_kind_claim_or_the_subject_prefix_marks_a_guest() {
+        let exp = 4_102_444_800_i64;
+        assert!(is_guest(&claims(serde_json::json!({"sub": "guest:g-1", "exp": exp, "kind": "guest"}))));
+        assert!(is_guest(&claims(serde_json::json!({"sub": "guest:g-1", "exp": exp}))), "no kind");
+        assert!(is_guest(&claims(serde_json::json!({"sub": "acct-1", "exp": exp, "kind": "guest"}))), "no prefix");
+        assert!(!is_guest(&claims(serde_json::json!({"sub": "acct-1", "exp": exp}))));
     }
 }

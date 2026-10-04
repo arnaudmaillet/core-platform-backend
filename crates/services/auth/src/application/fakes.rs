@@ -498,6 +498,7 @@ impl Fixture {
             Arc::clone(&self.minter) as _,
             Arc::clone(&self.guests) as _,
             self.policy.clone(),
+            true,
         )
     }
 

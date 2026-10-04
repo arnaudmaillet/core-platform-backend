@@ -63,7 +63,8 @@ once per device at sign-up). The client edge refuses a guest token on every `aut
 (`PERMISSION_DENIED`), so guests only reach `permission(…, "read:public")` routes; realtime refuses
 guest handshakes. **Members carry `read:public` too** (added at every mint). Guest session issuance
 is not published to the outbox (the audit plane records accounts). App Attest verification and
-per-IP / per-device limits on `StartGuestSession` are the abuse-control slice (B5).
+per-IP / per-device limits on `StartGuestSession` are the abuse-control slice (B5); until then the
+RPC is **off by default** (`AUTH_GUEST_SESSIONS_ENABLED`; the local fleet turns it on).
 
 ## 📐 Architecture & Concepts
 
@@ -145,6 +146,7 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | `AUTH_ACCOUNT_GRPC_ENDPOINT` | `account` service endpoint | `http://localhost:50059` |
 | `AUTH_ACCOUNT_RPC_TIMEOUT_MS` · `AUTH_ACCOUNT_CONNECT_TIMEOUT_MS` | Per-request / connect deadlines on the `account` channel (login hot path — fail fast, never hang) | `2000` · `2000` |
 | `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Request / connect deadlines on Keycloak HTTP calls (token exchange) | `5000` · `2000` |
+| `AUTH_GUEST_SESSIONS_ENABLED` | `StartGuestSession` kill switch. **Off by default**: it writes a session per call with no credential, so keep it off wherever the abuse controls (per-IP / per-device limits, App Attest) are not in front of it. Off → `AUT-1005` (`PERMISSION_DENIED`). | `false` |
 | Postgres / Redis / Kafka | via the shared storage crates' own `from_env()` | — |
 
 ## 🧪 Local Development

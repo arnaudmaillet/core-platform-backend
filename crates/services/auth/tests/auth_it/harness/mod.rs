@@ -157,6 +157,7 @@ impl Harness {
             minter: Arc::new(minter),
             publisher: Arc::new(LogEventPublisher) as Arc<dyn EventPublisher>,
             guests: Arc::new(PgGuestRegistry::new(tx.clone())),
+            guest_sessions_enabled: true,
             policy: SessionPolicy::new(
                 ChronoDuration::minutes(10),
                 ChronoDuration::minutes(30),

@@ -60,6 +60,10 @@ pub struct StartGuestSessionHandler {
     minter: Arc<dyn TokenMinter>,
     guests: Arc<dyn GuestRegistry>,
     policy: SessionPolicy,
+    /// Kill switch: `StartGuestSession` is a credential-free, edge-public write
+    /// into this TIER-0 store; until the abuse controls (B5) front it, an
+    /// environment can turn it off.
+    enabled: bool,
 }
 
 impl StartGuestSessionHandler {
@@ -70,8 +74,9 @@ impl StartGuestSessionHandler {
         minter: Arc<dyn TokenMinter>,
         guests: Arc<dyn GuestRegistry>,
         policy: SessionPolicy,
+        enabled: bool,
     ) -> Self {
-        Self { sessions, refresh_tokens, cache, minter, guests, policy }
+        Self { sessions, refresh_tokens, cache, minter, guests, policy, enabled }
     }
 
     pub async fn handle(
@@ -79,6 +84,9 @@ impl StartGuestSessionHandler {
         envelope: Envelope<StartGuestSessionCommand>,
         now: DateTime<Utc>,
     ) -> Result<IssuedSession, AuthError> {
+        if !self.enabled {
+            return Err(AuthError::GuestSessionsDisabled);
+        }
         ensure_valid(&envelope.payload)?;
         let cmd = envelope.payload;
         let correlation_id = envelope.correlation_id;
@@ -215,6 +223,26 @@ mod tests {
         assert_eq!(claims.permissions.iter().map(Permission::as_str).collect::<Vec<_>>(), vec![READ_PUBLIC]);
         assert!(claims.profile_ids.is_empty());
         assert!(fx.directory.lookups().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_kill_switch_refuses_guest_sessions_and_writes_nothing() {
+        let fx = Fixture::new();
+        let handler = StartGuestSessionHandler::new(
+            Arc::clone(&fx.sessions) as _,
+            Arc::clone(&fx.refresh_tokens) as _,
+            Arc::clone(&fx.cache) as _,
+            Arc::clone(&fx.minter) as _,
+            Arc::clone(&fx.guests) as _,
+            fx.policy.clone(),
+            false,
+        );
+        let err = handler
+            .handle(Envelope::new(Uuid::now_v7(), cmd(Some("install-1"))), Utc::now())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AuthError::GuestSessionsDisabled));
+        assert!(fx.guests.records.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
