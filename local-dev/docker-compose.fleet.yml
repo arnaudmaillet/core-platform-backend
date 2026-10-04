@@ -319,6 +319,9 @@ services:
       SCYLLA_LOCAL_DC: datacenter1
       SCYLLA_KEYSPACE: comment
       KAFKA_BROKERS: redpanda:9092
+      # Read gate (GetPost + CheckAccess). Non-mesh reads fail closed without it.
+      COMMENT_POST_GRPC_ENDPOINT: http://post-server:50056
+      COMMENT_SOCIAL_GRAPH_GRPC_ENDPOINT: http://social-graph-server:50053
     ports:
       - "50057:50057"
     depends_on:

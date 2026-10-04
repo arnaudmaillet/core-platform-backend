@@ -15,7 +15,7 @@ use crate::application::query::{
     list_top_level::ListTopLevelQuery,
 };
 use crate::domain::aggregate::Comment;
-use crate::domain::value_object::CommentStatus;
+use crate::domain::value_object::{CommentStatus, ProfileId, Viewer};
 
 // ── Proto inclusion ───────────────────────────────────────────────────────────
 
@@ -113,7 +113,8 @@ where
         &self,
         request: Request<proto::GetCommentRequest>,
     ) -> Result<Response<proto::CommentView>, Status> {
-        let query = GetCommentQuery { comment_id: request.into_inner().comment_id };
+        let viewer = viewer_of(&request);
+        let query  = GetCommentQuery { comment_id: request.into_inner().comment_id, viewer };
         let comment: Comment = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
@@ -127,11 +128,13 @@ where
         &self,
         request: Request<proto::ListTopLevelRequest>,
     ) -> Result<Response<proto::ListCommentsResponse>, Status> {
-        let req   = request.into_inner();
-        let query = ListTopLevelQuery {
+        let viewer = viewer_of(&request);
+        let req    = request.into_inner();
+        let query  = ListTopLevelQuery {
             post_id:    req.post_id,
             limit:      req.limit,
             page_token: Some(req.page_token).filter(|s| !s.is_empty()),
+            viewer,
         };
         let (summaries, next): (Vec<CommentSummary>, Option<String>) = self
             .query_bus
@@ -149,12 +152,14 @@ where
         &self,
         request: Request<proto::ListRepliesRequest>,
     ) -> Result<Response<proto::ListCommentsResponse>, Status> {
-        let req   = request.into_inner();
-        let query = ListRepliesQuery {
+        let viewer = viewer_of(&request);
+        let req    = request.into_inner();
+        let query  = ListRepliesQuery {
             post_id:    req.post_id,
             comment_id: req.comment_id,
             limit:      req.limit,
             page_token: Some(req.page_token).filter(|s| !s.is_empty()),
+            viewer,
         };
         let (summaries, next): (Vec<CommentSummary>, Option<String>) = self
             .query_bus
@@ -214,6 +219,18 @@ where
 }
 
 // ── Conversion helpers ────────────────────────────────────────────────────────
+
+/// The reader of a viewer-aware RPC, from how the request arrived. A `pids`
+/// entry that is not a profile id is dropped.
+fn viewer_of<T>(request: &Request<T>) -> Viewer {
+    match edge::viewer(request) {
+        edge::Viewer::Internal => Viewer::Internal,
+        edge::Viewer::Anonymous => Viewer::Profiles(Vec::new()),
+        edge::Viewer::Member { profile_ids, .. } => Viewer::Profiles(
+            profile_ids.iter().filter_map(|id| ProfileId::try_from(id.as_str()).ok()).collect(),
+        ),
+    }
+}
 
 fn comment_to_proto(c: Comment) -> proto::CommentView {
     let gif = c.gif().map(|g| proto::GifMetadata {

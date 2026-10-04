@@ -116,6 +116,18 @@ service CommentService {
 > reply) — the flat-tree allows exactly one nesting level. Pagination cursors are `created_at DESC`;
 > inserts after the cursor are never returned (monotonically stable pages).
 
+**Viewer-aware reads.** `GetComment` / `ListTopLevel` / `ListReplies` take the reader from the
+transport (`edge::viewer`). For anyone but a mesh caller, a **read gate** decides with one post
+`GetPost` and one social-graph `CheckAccess` per call (post author + every comment author on the page):
+- the **post** must be readable: published and not removed by moderation (its author sees it
+  regardless), and its author `VISIBLE` to the reader (not a private author they don't follow, not
+  blocked either way, not hidden). Otherwise `GetComment` is `CMT-1001` and the lists are empty;
+- comments by an author **hidden** to the reader (a block either way, a hidden profile) are dropped;
+  a private commenter's comment on a readable post stays. A page can come back short while
+  `next_token` stays valid.
+
+The gate fails closed: an outage is `CMT-5001` (`UNAVAILABLE`), never the comments.
+
 ### Error contract (`CMT-xxxx`)
 
 | Code | Error | HTTP |
@@ -123,6 +135,7 @@ service CommentService {
 | CMT-1001/1002/1003 | not found / already deleted / author mismatch | 404 / 409 / 403 |
 | CMT-2001/2002/2003 | nesting depth / parent not found / parent deleted | 422 / 404 / 422 |
 | CMT-3001/3002 | empty content / incomplete GIF metadata | 422 |
+| CMT-5001 | `AccessCheckUnavailable` (read gate down; retryable) | 503 → `UNAVAILABLE` |
 | CMT-4001 | Kafka publish failed | 500 |
 | CMT-9001..9004 | invalid ids / domain violation | 422 |
 
@@ -198,6 +211,8 @@ async fn main() -> anyhow::Result<()> {
 | `KAFKA_BOOTSTRAP_SERVERS` | **Yes** | — | Kafka brokers. |
 | `KAFKA_SECURITY_PROTOCOL` / `KAFKA_SASL_*` | No | `PLAINTEXT` | Auth for managed Kafka. |
 | `COMMENT_GRPC_ADDR` | No | `0.0.0.0:50057` | gRPC bind address. |
+| `COMMENT_POST_GRPC_ENDPOINT` / `COMMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Yes** (prod) | `http://localhost:50056` / `:50053` | Mesh endpoints of the read gate (`GetPost`, `CheckAccess`). Non-mesh reads fail closed (`CMT-5001`) without them. |
+| `COMMENT_GATE_RPC_TIMEOUT_MS` / `COMMENT_GATE_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Deadlines for those calls. |
 
 > Full `SCYLLA_*` / `KAFKA_*` tuning lives in the shared storage/transport crates.
 

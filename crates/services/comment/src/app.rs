@@ -18,7 +18,7 @@ use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 
 use crate::application::command::create_comment::{CreateCommentCommand, CreateCommentHandler};
 use crate::application::command::delete_comment::{DeleteCommentCommand, DeleteCommentHandler};
-use crate::application::port::CommentEventPublisher;
+use crate::application::port::{CommentEventPublisher, ReadGate};
 use crate::application::query::get_comment::{GetCommentHandler, GetCommentQuery};
 use crate::application::query::list_replies::{ListRepliesHandler, ListRepliesQuery};
 use crate::application::query::list_top_level::{ListTopLevelHandler, ListTopLevelQuery};
@@ -48,6 +48,7 @@ impl App {
     pub async fn build<P: CommentEventPublisher>(
         backends:  Backends,
         publisher: Arc<P>,
+        gate:      Arc<dyn ReadGate>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let scylla_client = Arc::new(ScyllaSessionBuilder::new(backends.scylla).build().await?);
         let repository = Arc::new(ScyllaCommentRepository::new(Arc::clone(&scylla_client)));
@@ -69,12 +70,15 @@ impl App {
             QueryBusBuilder::new()
                 .register::<GetCommentQuery, _>(GetCommentHandler {
                     repository: Arc::clone(&repository),
+                    gate:       Arc::clone(&gate),
                 })?
                 .register::<ListTopLevelQuery, _>(ListTopLevelHandler {
                     repository: Arc::clone(&repository),
+                    gate:       Arc::clone(&gate),
                 })?
                 .register::<ListRepliesQuery, _>(ListRepliesHandler {
                     repository: Arc::clone(&repository),
+                    gate,
                 })?
                 .build(),
         );
