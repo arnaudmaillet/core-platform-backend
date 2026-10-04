@@ -119,6 +119,7 @@ impl VerifyCredentialsHandler {
 
         // Re-read the authoritative grants, as a refresh would.
         let snapshot = self.directory.lookup(&account_id).await?;
+        let age_bracket = snapshot.age_bracket;
         let permissions = match snapshot.activation {
             AccountActivation::Active => Permission::with_read_public(snapshot.permissions),
             AccountActivation::Deactivated => {
@@ -132,6 +133,7 @@ impl VerifyCredentialsHandler {
         let mut claims =
             session.mint_access_token(now, self.policy.access_ttl, permissions, profile_ids)?;
         claims.auth_time = Some(now);
+        claims.age_bracket = age_bracket;
         let access_token = self.minter.mint_access(&claims).await?;
 
         let access_expires_in = claims.expires_in_secs(now);

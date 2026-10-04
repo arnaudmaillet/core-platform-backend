@@ -155,6 +155,12 @@ impl EdgePrincipal {
         edge::is_guest(&self.0.raw_claims)
     }
 
+    /// `true` for a 13–17 holder (the token's `age` claim): apply the teen
+    /// protections. An unknown age is not a minor.
+    pub fn is_minor(&self) -> bool {
+        edge::is_minor(&self.0.raw_claims)
+    }
+
     /// `true` when the token carries `permission`.
     pub fn has_permission(&self, permission: &str) -> bool {
         self.0.has_permission(permission)

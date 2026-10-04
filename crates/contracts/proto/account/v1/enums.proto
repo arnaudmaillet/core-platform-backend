@@ -52,3 +52,13 @@ enum AccountRole {
     // Unrestricted access including destructive operations.
     SUPER_ADMIN              = 6;
 }
+
+// The holder's age bracket, computed from the date of birth on the day it is
+// read (minimum age 13; 16 where the country of residence requires it).
+enum AgeBracket {
+    // No date of birth on file.
+    AGE_BRACKET_UNSPECIFIED = 0;
+    AGE_BRACKET_13_15       = 1;
+    AGE_BRACKET_16_17       = 2;
+    AGE_BRACKET_ADULT       = 3;
+}

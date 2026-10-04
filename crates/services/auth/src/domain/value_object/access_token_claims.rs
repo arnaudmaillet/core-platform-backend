@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{AccountId, Generation, Permission, ProfileId, SessionId, SessionKind};
+use super::{AccountId, AgeBracket, Generation, Permission, ProfileId, SessionId, SessionKind};
 
 /// The normalized claim set for an edge access token, produced by
 /// [`Session::mint_access_token`](crate::domain::aggregate::Session::mint_access_token).
@@ -40,6 +40,10 @@ pub struct AccessTokenClaims {
     /// it (`transport::grpc::edge::require_recent_auth`).
     #[serde(default)]
     pub auth_time: Option<DateTime<Utc>>,
+    /// `age` — the holder's age bracket, re-read from `account` at every
+    /// member mint; `None` for a guest or when no date of birth is on file.
+    #[serde(default)]
+    pub age_bracket: Option<AgeBracket>,
     pub issued_at: DateTime<Utc>,
     /// Always ≤ the session's sliding and absolute expiry.
     pub expires_at: DateTime<Utc>,
@@ -67,6 +71,7 @@ impl AccessTokenClaims {
             device_id,
             kind,
             auth_time: None,
+            age_bracket: None,
             issued_at,
             expires_at,
         }

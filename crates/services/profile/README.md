@@ -109,7 +109,7 @@ it at the application layer).
 ```protobuf
 service ProfileService {
   // Lifecycle (all return CommandResponse)
-  rpc CreateProfile(CreateProfileRequest) returns (CommandResponse);
+  rpc CreateProfile(CreateProfileRequest) returns (CommandResponse); // private when the token's `age` is 13–17
   rpc UpdateProfile(UpdateProfileRequest) returns (CommandResponse);
   rpc ChangeHandle(ChangeHandleRequest) returns (CommandResponse);   // LWT
   rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);

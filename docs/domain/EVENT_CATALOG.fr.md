@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: a3e6ed42c882bf7aa7545d48c6a30b4098ddf10c1aa5437103c0ac8058ce73c9
+  source_sha256: 71a78504cb6cb31ae6542c1ab9f77bb7251d1f6fadcf57199fec172703040d57
   translated_at: 2026-10-04
   status: complete
 ---
@@ -102,6 +102,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `gdpr_deletion_requested` | le droit à l'effacement (Art. 17) a été invoqué ; effacement programmé à 30 jours (un compte actif est désactivé entre-temps) | demande utilisateur/DPO | `audit` (preuve DataErasure) |
 | `gdpr_deletion_cancelled` | un effacement en attente a été retiré pendant son délai de grâce | le titulaire se reconnecte / `CancelGdprDeletion` | `audit` (preuve DataErasure) |
 | `gdpr_data_export_requested` | le droit d'accès/portabilité a été invoqué | demande utilisateur/DPO | exécution de l'export (en aval) |
+| `date_of_birth_set` | le titulaire a enregistré une date de naissance (≥ l'âge minimum ; la date reste dans account) | `CreateAccount` avec une date / `SetDateOfBirth` | aucun (la tranche d'âge voyage dans le claim `age` du jeton edge) |
 | `consents_updated` | le titulaire a donné ou retiré des consentements (art. 7), changements effectifs seulement, avec la version de la politique | `UpdateConsents` change quelque chose | `audit` (Consent — la copie inviolable de `account_consent_history`) |
 
 ## Authentification — `auth.v1.events` (producteur : `auth`)

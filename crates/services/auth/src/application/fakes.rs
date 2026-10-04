@@ -19,7 +19,7 @@ use super::port::{
 use crate::domain::aggregate::{RefreshToken, Session, SubjectLink};
 use crate::domain::event::DomainEvent;
 use crate::domain::value_object::{
-    AccessTokenClaims, AccountId, Generation, IdpSubject, Permission, ProfileId,
+    AccessTokenClaims, AccountId, AgeBracket, Generation, IdpSubject, Permission, ProfileId,
     RefreshTokenHash, SessionId, SessionStatus,
 };
 use crate::error::AuthError;
@@ -117,6 +117,13 @@ impl StubAccountDirectory {
         }
     }
 
+    /// Sets a known account's age bracket (as `account` would compute it).
+    pub fn set_age_bracket(&self, account_id: &AccountId, age_bracket: Option<AgeBracket>) {
+        if let Some(snapshot) = self.snapshots.lock().unwrap().get_mut(account_id) {
+            snapshot.age_bracket = age_bracket;
+        }
+    }
+
     /// Makes every later resume fail (the account left `Deactivated`).
     pub fn refuse_resume(&self) {
         self.refuse_resume.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -139,7 +146,7 @@ impl StubAccountDirectory {
         self.snapshots
             .lock()
             .unwrap()
-            .insert(account_id, AccountSnapshot { activation, permissions });
+            .insert(account_id, AccountSnapshot { activation, permissions, age_bracket: None });
     }
 }
 
@@ -154,7 +161,11 @@ impl AccountDirectory for StubAccountDirectory {
         subjects.insert(subject.clone(), id);
         self.snapshots.lock().unwrap().insert(
             id,
-            AccountSnapshot { activation: AccountActivation::Active, permissions: Vec::new() },
+            AccountSnapshot {
+                activation: AccountActivation::Active,
+                permissions: Vec::new(),
+                age_bracket: None,
+            },
         );
         Ok(id)
     }
@@ -164,6 +175,7 @@ impl AccountDirectory for StubAccountDirectory {
         Ok(self.snapshots.lock().unwrap().get(account_id).cloned().unwrap_or(AccountSnapshot {
             activation: AccountActivation::Active,
             permissions: Vec::new(),
+            age_bracket: None,
         }))
     }
 

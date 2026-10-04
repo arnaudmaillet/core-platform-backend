@@ -5,12 +5,13 @@ use uuid::Uuid;
 use crate::domain::entity::{GdprRecord, MfaState};
 use crate::domain::event::{
     AccountActivated, AccountCreated, AccountDeactivated, AccountDeleted, AccountSuspended,
-    ConsentChange, ConsentsUpdated, DomainEvent, EmailChanged, EmailVerified,
+    ConsentChange, ConsentsUpdated, DateOfBirthSet, DomainEvent, EmailChanged, EmailVerified,
     GdprDataExportRequested, GdprDeletionCancelled, GdprDeletionRequested, KycStatusChanged, MfaEnrolled, MfaRevoked, PasswordChanged, PhoneChanged, RoleAssigned,
     RoleRevoked,
 };
 use crate::domain::value_object::{
-    AccountId, AccountRole, AccountStatus, ConsentPurpose, CountryCode, EmailAddress, EncryptedBytes, IdentityId,
+    check_date_of_birth, AccountId, AccountRole, AccountStatus, AgeBracket, ConsentPurpose,
+    CountryCode, EmailAddress, EncryptedBytes, IdentityId,
     KycStatus, PasswordHash, PhoneNumber, RecoveryCodeHash,
 };
 use crate::error::AccountError;
@@ -29,6 +30,9 @@ pub struct AccountCreateParams {
     pub country_of_residence: Option<CountryCode>,
     /// UUID of the admin account that provisioned this account; `None` for self-registration.
     pub created_by: Option<AccountId>,
+    /// Checked against the minimum age by the caller
+    /// ([`check_date_of_birth`](crate::domain::value_object::check_date_of_birth)).
+    pub date_of_birth: Option<NaiveDate>,
     pub correlation_id: Uuid,
 }
 
@@ -136,7 +140,7 @@ impl Account {
             kyc_status: KycStatus::NotStarted,
             kyc_reviewed_at: None,
             kyc_reviewer_id: None,
-            date_of_birth: None,
+            date_of_birth: params.date_of_birth,
             country_of_residence: params.country_of_residence,
             gdpr: GdprRecord::default(),
             roles: vec![params.role],
@@ -683,7 +687,11 @@ impl Account {
         self.password_hash = None;
         self.date_of_birth = None;
         self.mfa.revoke();
-        let _ = self.transition_status(AccountStatus::Deleted);
+        // Every status may end in Deleted; one already there (an admin delete)
+        // stays there.
+        if self.status != AccountStatus::Deleted {
+            self.transition_status(AccountStatus::Deleted)?;
+        }
         self.touch(now);
         self.pending_events.push(DomainEvent::AccountDeleted(AccountDeleted {
             account_id: self.id,
@@ -692,6 +700,37 @@ impl Account {
             correlation_id,
         }));
         Ok(())
+    }
+
+    /// Records the holder's date of birth when none is on file (afterwards only
+    /// support may change it). It must pass the minimum age for the holder's
+    /// country of residence. Emits [`DateOfBirthSet`] — without the date.
+    pub fn set_date_of_birth(
+        &mut self,
+        date_of_birth: NaiveDate,
+        today: NaiveDate,
+        correlation_id: Uuid,
+    ) -> Result<(), AccountError> {
+        if self.gdpr.is_anonymized() {
+            return Err(AccountError::AccountAlreadyAnonymized);
+        }
+        if self.date_of_birth.is_some() {
+            return Err(AccountError::DateOfBirthAlreadySet);
+        }
+        check_date_of_birth(date_of_birth, self.country_of_residence.as_ref(), today)?;
+        self.date_of_birth = Some(date_of_birth);
+        let now = self.touch_now();
+        self.pending_events.push(DomainEvent::DateOfBirthSet(DateOfBirthSet {
+            account_id: self.id,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(())
+    }
+
+    /// The holder's age bracket on `today`; `None` without a date of birth.
+    pub fn age_bracket(&self, today: NaiveDate) -> Option<AgeBracket> {
+        self.date_of_birth.map(|dob| AgeBracket::on(dob, today))
     }
 
     /// Records a successful login: resets the failure counter and updates `last_login_at`.
@@ -1194,5 +1233,49 @@ mod tests {
             account.request_gdpr_deletion(30, Uuid::now_v7()).unwrap_err(),
             AccountError::AccountAlreadyAnonymized
         ));
+    }
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    #[test]
+    fn a_date_of_birth_is_recorded_once_and_must_pass_the_minimum_age() {
+        let today = d(2026, 10, 4);
+        let mut account = account_in(AccountStatus::Active, None);
+        // Nothing on file yet (the helper reconstitutes without one).
+        assert_eq!(account.age_bracket(today), None);
+
+        let err = account.set_date_of_birth(d(2014, 1, 1), today, Uuid::now_v7()).unwrap_err();
+        assert!(matches!(err, AccountError::AgeBelowMinimum { minimum: 13 }));
+        assert_eq!(account.date_of_birth(), None, "nothing stored for an under-13");
+
+        account.set_date_of_birth(d(2011, 3, 1), today, Uuid::now_v7()).unwrap();
+        assert_eq!(account.age_bracket(today), Some(AgeBracket::Teen13To15));
+        assert_eq!(account.age_bracket(d(2027, 3, 1)), Some(AgeBracket::Teen16To17));
+        assert!(account
+            .drain_events()
+            .iter()
+            .any(|e| matches!(e, DomainEvent::DateOfBirthSet(_))));
+
+        let err = account.set_date_of_birth(d(1990, 1, 1), today, Uuid::now_v7()).unwrap_err();
+        assert!(matches!(err, AccountError::DateOfBirthAlreadySet));
+    }
+
+    /// Anonymization ends in Deleted from every status — none is skipped
+    /// silently.
+    #[test]
+    fn anonymization_ends_in_deleted_from_every_status() {
+        for status in [
+            AccountStatus::PendingVerification,
+            AccountStatus::Active,
+            AccountStatus::Suspended,
+            AccountStatus::Deactivated,
+            AccountStatus::Deleted,
+        ] {
+            let mut account = account_in(status, None);
+            account.anonymize(Uuid::now_v7()).unwrap();
+            assert_eq!(account.status(), AccountStatus::Deleted, "{status}");
+        }
     }
 }

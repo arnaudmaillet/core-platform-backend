@@ -1,6 +1,6 @@
 use account_api::account_service_client::AccountServiceClient;
 use account_api::{
-    AccountStatus, GetAccountByIdRequest, GetAccountByIdentityIdRequest,
+    AccountStatus, AgeBracket as ProtoAgeBracket, GetAccountByIdRequest, GetAccountByIdentityIdRequest,
     ResumeDeactivatedAccountRequest,
 };
 use async_trait::async_trait;
@@ -9,7 +9,7 @@ use tonic::Code;
 use tracing::instrument;
 
 use crate::application::port::{AccountActivation, AccountDirectory, AccountSnapshot};
-use crate::domain::value_object::{AccountId, IdpSubject, Permission};
+use crate::domain::value_object::{AccountId, AgeBracket, IdpSubject, Permission};
 use crate::error::AuthError;
 
 /// gRPC implementation of [`AccountDirectory`], backed by the `account` service.
@@ -84,7 +84,15 @@ impl AccountDirectory for GrpcAccountDirectory {
         grants.dedup();
         let permissions = grants.into_iter().map(Permission::new).collect();
 
-        Ok(AccountSnapshot { activation, permissions })
+        // UNSPECIFIED (no date of birth, or a server predating the field) ⇒ none.
+        let age_bracket = match ProtoAgeBracket::try_from(view.age_bracket) {
+            Ok(ProtoAgeBracket::AgeBracket1315) => Some(AgeBracket::Teen13To15),
+            Ok(ProtoAgeBracket::AgeBracket1617) => Some(AgeBracket::Teen16To17),
+            Ok(ProtoAgeBracket::Adult) => Some(AgeBracket::Adult),
+            _ => None,
+        };
+
+        Ok(AccountSnapshot { activation, permissions, age_bracket })
     }
 
     #[instrument(name = "auth.directory.resume", skip(self), fields(account.id = %account_id))]

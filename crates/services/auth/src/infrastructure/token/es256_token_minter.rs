@@ -12,7 +12,8 @@ use sha2::{Digest, Sha256};
 
 use crate::application::port::{GeneratedRefresh, TokenMinter};
 use crate::domain::value_object::{
-    AccessTokenClaims, AccountId, Generation, Permission, ProfileId, RefreshTokenHash, SessionId,
+    AccessTokenClaims, AccountId, AgeBracket, Generation, Permission, ProfileId, RefreshTokenHash,
+    SessionId,
     SessionKind,
 };
 use crate::error::AuthError;
@@ -72,6 +73,10 @@ struct EdgeClaims {
     /// omitted on refreshed tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auth_time: Option<i64>,
+    /// The holder's age bracket (`auth_context::edge::EDGE_AGE_CLAIM`); omitted
+    /// when unknown and on guest tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    age: Option<String>,
 }
 
 /// A guest token's `sub`: the guest id under a prefix no account id can take,
@@ -230,6 +235,7 @@ impl TokenMinter for Es256TokenMinter {
             did: claims.device_id.clone(),
             kind,
             auth_time: claims.auth_time.map(|t| t.timestamp()),
+            age: claims.age_bracket.map(|a| a.as_claim().to_owned()),
         };
         encode(&self.header, &edge, &self.encoding_key).map_err(|_| AuthError::TokenSigningFailed)
     }
@@ -280,6 +286,7 @@ impl TokenMinter for Es256TokenMinter {
             device_id: c.did,
             kind,
             auth_time,
+            age_bracket: c.age.as_deref().and_then(AgeBracket::from_claim),
             issued_at,
             expires_at,
         })
@@ -342,6 +349,7 @@ mod tests {
             device_id: Some("ios-install-1".into()),
             kind: SessionKind::Member,
             auth_time: None,
+            age_bracket: None,
             issued_at: now,
             expires_at: now + ttl,
         }

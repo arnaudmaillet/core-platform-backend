@@ -89,6 +89,7 @@ producer's `DOMAIN.md §8`.
 | `gdpr_deletion_requested` | the right to erasure (Art. 17) was invoked; erasure scheduled 30 days out (an active account is deactivated meanwhile) | user/DPO request | `audit` (DataErasure evidence) |
 | `gdpr_deletion_cancelled` | a pending erasure was withdrawn within its grace period | the holder signs back in / `CancelGdprDeletion` | `audit` (DataErasure evidence) |
 | `gdpr_data_export_requested` | the right to access/portability was invoked | user/DPO request | export fulfilment (downstream) |
+| `date_of_birth_set` | the holder recorded a date of birth (≥ the minimum age; the date itself stays in account) | `CreateAccount` with one / `SetDateOfBirth` | none (the age bracket travels in the edge token's `age` claim) |
 | `consents_updated` | the holder gave or withdrew consents (Art. 7), effective changes only, with the policy version | `UpdateConsents` changes something | `audit` (Consent — the tamper-evident copy of `account_consent_history`) |
 
 ## Authentication — `auth.v1.events` (producer: `auth`)

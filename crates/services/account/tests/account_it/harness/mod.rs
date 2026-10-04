@@ -123,6 +123,7 @@ pub async fn dispatch_create(
         country_of_residence: None,
         role:                 None,
         created_by:           None,
+        date_of_birth:        None,
     };
     command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await
 }

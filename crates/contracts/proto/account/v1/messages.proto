@@ -31,6 +31,12 @@ message AccountView {
     // e.g. audit:read — minted verbatim into edge tokens by auth. Additive:
     // absent on old servers, in which case callers fall back to roles only.
     repeated string                 permissions          = 15;
+    // From the date of birth, today. 13–17 ⇒ teen protections (auth mints it
+    // into the edge token's `age` claim).
+    AgeBracket                      age_bracket          = 16;
+    // ISO 8601 (YYYY-MM-DD); empty when none is on file. Private: the holder's
+    // own view (edge) or the mesh.
+    string                          date_of_birth        = 17;
 }
 
 // GDPR record: the holder's own (client edge, account_id = the caller) or any
@@ -78,6 +84,16 @@ message CreateAccountRequest {
     string  country_of_residence = 5;
     // UUID of the admin account that created this account; empty for self-registration.
     string  created_by           = 6;
+    // ISO 8601 (YYYY-MM-DD). Under the minimum age (13; 16 where the country of
+    // residence requires it) the account is refused (ACC-2004).
+    string  date_of_birth        = 7;
+}
+
+// Record the holder's date of birth when none is on file (once; afterwards
+// only support can change it). Under the minimum age: ACC-2004, nothing stored.
+message SetDateOfBirthRequest {
+    string  account_id     = 1;
+    string  date_of_birth  = 2;
 }
 
 message VerifyEmailRequest {

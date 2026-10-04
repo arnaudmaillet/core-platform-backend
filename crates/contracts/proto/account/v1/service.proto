@@ -75,6 +75,10 @@ service AccountService {
     // Increment failed_login_attempts; may set locked_until if threshold reached.
     rpc RecordFailedLogin(RecordFailedLoginRequest) returns (CommandResponse);
 
+    // Record the holder's date of birth when none is on file (accounts created
+    // before it was collected). On the client edge, the caller's own only.
+    rpc SetDateOfBirth(SetDateOfBirthRequest) returns (AccountView);
+
     // ── GDPR / compliance ─────────────────────────────────────────────────────
 
     // Initiate an Art. 17 GDPR right-to-erasure request. The account is erased

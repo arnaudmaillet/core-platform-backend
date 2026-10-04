@@ -145,6 +145,7 @@ impl LoginHandler {
         //    credential was just proven, so the account resumes (a suspension
         //    is never lifted here).
         let snapshot = self.directory.lookup(&account_id).await?;
+        let age_bracket = snapshot.age_bracket;
         let (permissions, reactivated) = match snapshot.activation {
             AccountActivation::Active => (snapshot.permissions, false),
             AccountActivation::Deactivated => {
@@ -203,6 +204,7 @@ impl LoginHandler {
         // The credential was proved just now: the token counts as a recent
         // authentication for step-up-gated RPCs (until it is refreshed).
         claims.auth_time = Some(now);
+        claims.age_bracket = age_bracket;
         let access_token = self.minter.mint_access(&claims).await?;
 
         Ok(IssuedSession {

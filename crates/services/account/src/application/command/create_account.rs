@@ -6,7 +6,8 @@ use validate_core::{FieldViolation, Validate};
 use crate::application::port::AccountRepository;
 use crate::domain::aggregate::{Account, AccountCreateParams};
 use crate::domain::value_object::{
-    AccountId, AccountRole, CountryCode, EmailAddress, IdentityId, PasswordHash, PhoneNumber,
+    check_date_of_birth, AccountId, AccountRole, CountryCode, EmailAddress, IdentityId,
+    PasswordHash, PhoneNumber,
 };
 use crate::error::AccountError;
 
@@ -26,6 +27,9 @@ pub struct CreateAccountCommand {
     /// UUID string of the admin account that provisioned this account; `None` for
     /// self-registration.
     pub created_by: Option<String>,
+    /// ISO 8601 (`YYYY-MM-DD`); refused under the minimum age (13; 16 where the
+    /// country of residence requires it).
+    pub date_of_birth: Option<String>,
 }
 
 impl Command for CreateAccountCommand {}
@@ -66,6 +70,16 @@ impl Validate for CreateAccountCommand {
                     "country_of_residence must be an ISO 3166-1 alpha-2 code",
                 ));
             }
+
+        if let Some(dob) = &self.date_of_birth
+            && chrono::NaiveDate::parse_from_str(dob, "%Y-%m-%d").is_err()
+        {
+            violations.push(FieldViolation::new(
+                "date_of_birth",
+                "VAL-2006",
+                "date_of_birth must be an ISO 8601 date (YYYY-MM-DD)",
+            ));
+        }
 
         if violations.is_empty() { Ok(()) } else { Err(violations) }
     }
@@ -114,6 +128,14 @@ impl CommandHandler<CreateAccountCommand> for CreateAccountHandler {
             .map(CountryCode::new)
             .transpose()?;
 
+        let date_of_birth = cmd
+            .date_of_birth
+            .as_deref()
+            .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+        if let Some(dob) = date_of_birth {
+            check_date_of_birth(dob, country_of_residence.as_ref(), chrono::Utc::now().date_naive())?;
+        }
+
         let role = cmd
             .role
             .as_deref()
@@ -145,6 +167,7 @@ impl CommandHandler<CreateAccountCommand> for CreateAccountHandler {
             role,
             country_of_residence,
             created_by,
+            date_of_birth,
             correlation_id: envelope.correlation_id,
         };
 

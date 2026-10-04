@@ -22,6 +22,8 @@ pub struct ProfileCreateParams {
     pub banner_url: Option<BannerUrl>,
     pub profile_kind: ProfileKind,
     pub locale: Locale,
+    /// `Private` for a 13–17 holder (the teen default); `Public` otherwise.
+    pub visibility: ProfileVisibility,
     pub correlation_id: Uuid,
 }
 
@@ -98,7 +100,7 @@ impl Profile {
             website_url: None,
             custom_links: Vec::new(),
             profile_kind: params.profile_kind,
-            visibility: ProfileVisibility::Public,
+            visibility: params.visibility,
             verified: false,
             verification_kind: None,
             tier: 0,
@@ -114,6 +116,17 @@ impl Profile {
             pending_events: Vec::new(),
         };
         profile.pending_events.push(event);
+        // ProfileCreated carries no visibility; projections (social-graph's
+        // audience, search) assume public until told otherwise, so a profile
+        // born private says so right away.
+        if params.visibility == ProfileVisibility::Private {
+            profile.pending_events.push(DomainEvent::VisibilityChanged(VisibilityChanged {
+                profile_id: id,
+                visibility: ProfileVisibility::Private,
+                occurred_at: now,
+                correlation_id: params.correlation_id,
+            }));
+        }
         profile
     }
 
@@ -460,10 +473,34 @@ mod tests {
             banner_url: None,
             profile_kind: ProfileKind::try_from("personal").unwrap(),
             locale: Locale::new("en-US").unwrap(),
+            visibility: ProfileVisibility::Public,
             correlation_id: Uuid::now_v7(),
         });
         p.drain_events(); // discard the ProfileCreated event
         p
+    }
+
+    /// A 13–17 holder's profile is born private, and says so to projections.
+    #[test]
+    fn a_profile_created_private_announces_its_visibility() {
+        let mut p = Profile::create(ProfileCreateParams {
+            account_id: AccountId::try_from(uuid::Uuid::now_v7().to_string().as_str()).unwrap(),
+            handle: Handle::new("teenhandle").unwrap(),
+            display_name: DisplayName::new("Teen").unwrap(),
+            bio: None,
+            avatar_url: None,
+            banner_url: None,
+            profile_kind: ProfileKind::try_from("personal").unwrap(),
+            locale: Locale::new("en-US").unwrap(),
+            visibility: ProfileVisibility::Private,
+            correlation_id: Uuid::now_v7(),
+        });
+        assert_eq!(p.visibility(), ProfileVisibility::Private);
+        let events = p.drain_events();
+        assert!(matches!(events.as_slice(), [
+            DomainEvent::ProfileCreated(_),
+            DomainEvent::VisibilityChanged(VisibilityChanged { visibility: ProfileVisibility::Private, .. })
+        ]));
     }
 
     #[test]

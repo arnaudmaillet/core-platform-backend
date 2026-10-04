@@ -175,6 +175,13 @@ where
         self.get_account_by_id(request).await
     }
 
+    async fn set_date_of_birth(
+        &self,
+        request: Request<proto::SetDateOfBirthRequest>,
+    ) -> Result<Response<proto::AccountView>, Status> {
+        self.set_date_of_birth(request).await
+    }
+
     async fn get_account_by_identity_id(
         &self,
         request: Request<proto::GetAccountByIdentityIdRequest>,

@@ -1,5 +1,6 @@
 pub mod access_token_claims;
 pub mod account_id;
+pub mod age_bracket;
 pub mod device_fingerprint;
 pub mod generation;
 pub mod idp_subject;
@@ -15,6 +16,7 @@ pub mod session_status;
 
 pub use access_token_claims::AccessTokenClaims;
 pub use account_id::AccountId;
+pub use age_bracket::AgeBracket;
 pub use device_fingerprint::DeviceFingerprint;
 pub use generation::Generation;
 pub use idp_subject::IdpSubject;

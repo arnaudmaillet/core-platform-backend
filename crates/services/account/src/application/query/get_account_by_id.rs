@@ -5,7 +5,7 @@ use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::application::port::AccountRepository;
 use crate::domain::aggregate::Account;
-use crate::domain::value_object::AccountId;
+use crate::domain::value_object::{AccountId, AgeBracket};
 use crate::error::AccountError;
 use uuid::Uuid;
 
@@ -39,6 +39,10 @@ pub struct AccountView {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub created_by: Option<String>,
+    /// Private: the holder's own view, or the mesh.
+    pub date_of_birth: Option<chrono::NaiveDate>,
+    /// From the date of birth, today.
+    pub age_bracket: Option<AgeBracket>,
 }
 
 impl From<&Account> for AccountView {
@@ -70,6 +74,8 @@ impl From<&Account> for AccountView {
             created_at: a.created_at(),
             updated_at: a.updated_at(),
             created_by: a.created_by().map(|id| id.as_uuid().to_string()),
+            date_of_birth: a.date_of_birth(),
+            age_bracket: a.age_bracket(Utc::now().date_naive()),
         }
     }
 }

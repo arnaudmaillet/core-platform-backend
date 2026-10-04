@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8329e79c050dba400360ffeb545c8de6f10afae92e6eb2290aba9c1dd3e1be2d
+  source_sha256: e7f9539d5743c001e2a5df87d269f2a6a9fb96cc057013476b0c86d68a337d59
   translated_at: 2026-10-04
   status: complete
 ---
@@ -122,7 +122,7 @@ empêchant le détournement rapide d'identité (`handle_is_available()` l'impose
 ```protobuf
 service ProfileService {
   // Lifecycle (all return CommandResponse)
-  rpc CreateProfile(CreateProfileRequest) returns (CommandResponse);
+  rpc CreateProfile(CreateProfileRequest) returns (CommandResponse); // privé quand l'`age` du jeton est 13–17
   rpc UpdateProfile(UpdateProfileRequest) returns (CommandResponse);
   rpc ChangeHandle(ChangeHandleRequest) returns (CommandResponse);   // LWT
   rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);
