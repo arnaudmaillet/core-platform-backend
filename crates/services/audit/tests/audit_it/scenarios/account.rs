@@ -8,7 +8,7 @@
 use audit::application::IntegrityStatus;
 use audit::domain::{EventCategory, PartitionKey, SubjectKeyRef, SubjectPseudonym};
 use audit::infrastructure::account_decode::{
-    AccountCreatedWire, AccountDeletedWire, GdprDeletionRequestedWire,
+    AccountCreatedWire, AccountDeletedWire, AccountEventWire, GdprDeletionRequestedWire,
 };
 use audit::infrastructure::{map_account_created, map_account_deleted, map_gdpr_deletion_requested};
 use uuid::Uuid;
@@ -25,7 +25,7 @@ async fn account_pii_is_sealed_and_gdpr_deletion_shreds_the_subject() {
     // 1. account.created — PII sealed over real Postgres, then chained.
     let created = AccountCreatedWire {
         account_id: account.clone(),
-        email: "user@example.com".to_owned(),
+        email: Some("user@example.com".to_owned()),
         role: "user".to_owned(),
         status: "pending_verification".to_owned(),
         country_of_residence: Some("FR".to_owned()),
@@ -73,6 +73,39 @@ async fn account_pii_is_sealed_and_gdpr_deletion_shreds_the_subject() {
     );
     assert_eq!(
         h.verify().verify_partition(&erasure).await.unwrap().status,
+        IntegrityStatus::Verified
+    );
+}
+
+#[tokio::test]
+async fn a_phone_only_account_created_event_is_sealed_and_chained() {
+    let h = Harness::start().await;
+    let account = Uuid::now_v7().to_string();
+    let subject = SubjectPseudonym::new(account.clone()).unwrap();
+    let key = SubjectKeyRef::new(format!("dek:{account}")).unwrap();
+
+    // account omits `email` for a phone-only account: decode the payload as the
+    // consumer receives it, then seal → map → ingest.
+    let payload = serde_json::json!({
+        "type": "account_created",
+        "account_id": account,
+        "role": "user",
+        "status": "pending_verification",
+        "country_of_residence": "FR",
+        "occurred_at": "2026-10-04T12:00:00Z",
+        "correlation_id": Uuid::now_v7().to_string(),
+    });
+    let AccountEventWire::AccountCreated(created) = serde_json::from_value(payload).unwrap() else {
+        panic!("an account_created event");
+    };
+    assert_eq!(created.email, None);
+    let pii = h.cipher.seal(&subject, &created.pii_plaintext()).await.unwrap();
+    h.ingest().ingest(map_account_created(&created, pii).unwrap()).await.unwrap();
+
+    assert!(h.key_vault.key_exists(&key).await.unwrap());
+    let identity = PartitionKey::derive(None, EventCategory::Identity);
+    assert_eq!(
+        h.verify().verify_partition(&identity).await.unwrap().status,
         IntegrityStatus::Verified
     );
 }
