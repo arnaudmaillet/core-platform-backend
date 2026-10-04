@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 6cf6f02edf29348f6aede548d4384c3305996106dec757291e2856930343fea2
-  translated_at: 2026-10-04
+  source_sha256: e71942373859f51b099d6a852e2085a41d2d819c75bc9e3da2dd03cef86e7640
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -180,7 +180,7 @@ identifiers — via le crate partagé `error`.
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `engagement.reactions` | `notification-reaction-consumer` | reaction notifications (collapsed) | DLQ `{topic}.dlq` |
-| `comment.created` | `notification-comment-consumer` | comment notifications (block-gated, self-guarded) | DLQ `{topic}.dlq` |
+| `comment.created` | `notification-comment-consumer` | comment notifications (block-gated, self-guarded; none for a `quiet` event: a restricted author, #659) | DLQ `{topic}.dlq` |
 | `post.published` | `notification-mention-consumer` | parse `@mentions`, cache post author | DLQ `{topic}.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** tous les workers s'exécutent sous `run_consumer` — commit manuel

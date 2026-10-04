@@ -7,7 +7,7 @@
 //! harness assemble the exact same graph.
 //!
 //! The event publisher is a generic parameter (the chat/post pattern): production
-//! passes the Kafka publisher; the integration harness passes an in-process no-op,
+//! passes the Kafka publisher; the integration harness passes an in-process recorder,
 //! so the dual-table and tombstone-vs-purge scenarios run without a broker.
 
 use std::sync::Arc;

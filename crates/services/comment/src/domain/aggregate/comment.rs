@@ -70,6 +70,7 @@ impl Comment {
             author_id:     author_id.as_str(),
             parent_id:     parent_id.as_ref().map(CommentId::as_str),
             created_at_ms: now.timestamp_millis(),
+            quiet:         false,
         });
 
         Ok(Self {
@@ -186,8 +187,19 @@ impl Comment {
             author_id:     self.author_id.as_str(),
             parent_id:     self.parent_id.as_ref().map(CommentId::as_str),
             created_at_ms: self.created_at.timestamp_millis(),
+            quiet:         false,
         }));
         Ok(())
+    }
+
+    /// Announces the pending `CommentCreated` without notifications: the post's
+    /// owner restricted the author (#659).
+    pub fn announce_quietly(&mut self) {
+        for event in &mut self.pending_events {
+            if let DomainEvent::CommentCreated(created) = event {
+                created.quiet = true;
+            }
+        }
     }
 
     pub fn held(&self) -> bool {
@@ -249,5 +261,26 @@ mod held_tests {
         assert!(!c.held());
         assert!(matches!(c.take_events().as_slice(), [DomainEvent::CommentCreated(_)]));
         assert!(c.release().is_err(), "only a held comment is released");
+    }
+
+    #[test]
+    fn a_restricted_authors_comment_is_announced_quietly() {
+        let created = |c: &mut Comment| match c.take_events().as_slice() {
+            [DomainEvent::CommentCreated(e)] => e.quiet,
+            other => panic!("unexpected events {other:?}"),
+        };
+        let mut plain = comment();
+        assert!(!created(&mut plain), "loud by default");
+
+        let mut quiet = comment();
+        quiet.announce_quietly();
+        assert!(created(&mut quiet));
+
+        // Released after review: quiet too when asked.
+        let mut held = comment();
+        held.hold();
+        held.release().unwrap();
+        held.announce_quietly();
+        assert!(created(&mut held));
     }
 }

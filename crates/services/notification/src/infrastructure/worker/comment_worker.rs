@@ -35,6 +35,10 @@ pub struct CommentEventPayload {
     /// `None` for top-level comments; `Some(comment_id)` for replies.
     pub parent_id:     Option<String>,
     pub created_at_ms: i64,
+    /// The post's owner restricted the author (#659): nobody is notified.
+    /// Absent from older events (`false`).
+    #[serde(default)]
+    pub quiet:         bool,
 }
 
 // ── Key builders ──────────────────────────────────────────────────────────────
@@ -159,6 +163,13 @@ where
         // Always cache this comment's author for future reply lookups.
         self.cache_comment_author(&event.comment_id, &sender_id).await;
 
+        // A restricted author's comment (#659) is seen by them and the post's
+        // owner only, and notifies nobody — an intentional suppression.
+        if event.quiet {
+            tracing::debug!(comment_id = %event.comment_id, "comment notification suppressed: restricted author");
+            return Ok(());
+        }
+
         let (target_id, kind) = if let Some(ref parent_id_str) = event.parent_id {
             // REPLY: find the parent comment's author.
             let parent_author_key = comment_author_key(parent_id_str);
@@ -264,5 +275,18 @@ where
                 false,
             )
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_quiet_flag_reads_false_on_events_from_before_it() {
+        let old = r#"{"comment_id":"c","post_id":"p","author_id":"a","parent_id":null,"created_at_ms":1}"#;
+        assert!(!serde_json::from_str::<CommentEventPayload>(old).unwrap().quiet);
+        let quiet = r#"{"comment_id":"c","post_id":"p","author_id":"a","parent_id":null,"created_at_ms":1,"quiet":true}"#;
+        assert!(serde_json::from_str::<CommentEventPayload>(quiet).unwrap().quiet);
     }
 }

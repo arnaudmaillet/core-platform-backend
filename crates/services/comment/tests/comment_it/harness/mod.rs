@@ -1,6 +1,6 @@
 //! Integration harness: boots an ephemeral ScyllaDB container, wires a real
 //! comment graph against it through the production composition root, and exposes
-//! the buses for assertions. The event publisher is an in-process no-op.
+//! the buses for assertions. The event publisher records in process.
 #![allow(dead_code)]
 
 use std::collections::HashSet;
@@ -25,7 +25,7 @@ use comment::domain::comment_filter::TermList;
 use comment::application::query::get_comment::GetCommentQuery;
 use comment::application::query::list_replies::ListRepliesQuery;
 use comment::application::query::list_top_level::ListTopLevelQuery;
-use comment::domain::event::DomainEvent;
+use comment::domain::event::{CommentCreatedEvent, DomainEvent};
 use comment::error::CommentError;
 
 pub use comment::domain::aggregate::Comment;
@@ -44,13 +44,26 @@ const KEYSPACE: &str = "comment";
 /// On-disk migration assets, resolved against *this* crate's manifest.
 const MIGRATIONS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
 
-/// A no-op event publisher: these scenarios assert on ScyllaDB, not on the Kafka
-/// contract.
-struct NoopPublisher;
+/// An in-process event publisher: records what would go to Kafka.
+#[derive(Default)]
+pub struct RecordingPublisher {
+    events: Mutex<Vec<DomainEvent>>,
+}
+
+impl RecordingPublisher {
+    /// The `CommentCreated` announced for `comment_id`, if any.
+    pub fn created(&self, comment_id: &str) -> Option<CommentCreatedEvent> {
+        self.events.lock().unwrap().iter().find_map(|e| match e {
+            DomainEvent::CommentCreated(c) if c.comment_id == comment_id => Some(c.clone()),
+            _ => None,
+        })
+    }
+}
 
 #[async_trait]
-impl CommentEventPublisher for NoopPublisher {
-    async fn publish(&self, _event: &DomainEvent) -> Result<(), CommentError> {
+impl CommentEventPublisher for RecordingPublisher {
+    async fn publish(&self, event: &DomainEvent) -> Result<(), CommentError> {
+        self.events.lock().unwrap().push(event.clone());
         Ok(())
     }
 }
@@ -66,6 +79,8 @@ pub struct ScriptedGate {
     post_authors:     Mutex<std::collections::HashMap<String, ProfileId>>,
     /// Posts whose author's temporary limit holds other profiles' comments.
     limited_posts:    Mutex<HashSet<String>>,
+    /// (owner, author) pairs: the owner restricted the author (#659).
+    restrictions:     Mutex<HashSet<(String, String)>>,
     down:             Mutex<bool>,
 }
 
@@ -86,6 +101,10 @@ impl ScriptedGate {
     /// The post's author has a temporary limit on: others' comments are held.
     pub fn limit(&self, post_id: &str) {
         self.limited_posts.lock().unwrap().insert(post_id.to_owned());
+    }
+    /// `owner` restricts `author` (#659).
+    pub fn restrict(&self, owner: &str, author: &str) {
+        self.restrictions.lock().unwrap().insert((owner.to_owned(), author.to_owned()));
     }
     pub fn set_down(&self, down: bool) {
         *self.down.lock().unwrap() = down;
@@ -114,7 +133,7 @@ impl ReadGate for ScriptedGate {
         }))
     }
 
-    async fn may_comment(&self, _author: &ProfileId, post_id: &PostId) -> Result<CommentAdmission, CommentError> {
+    async fn may_comment(&self, author: &ProfileId, post_id: &PostId) -> Result<CommentAdmission, CommentError> {
         if *self.down.lock().unwrap() {
             return Err(CommentError::AccessCheckUnavailable { reason: "scripted outage".into() });
         }
@@ -124,15 +143,26 @@ impl ReadGate for ScriptedGate {
         if self.restricted_posts.lock().unwrap().contains(&post_id.as_str()) {
             return Ok(CommentAdmission::Restricted);
         }
-        let own = self.post_authors.lock().unwrap().get(&post_id.as_str()) == Some(_author);
+        let owner = self.post_authors.lock().unwrap().get(&post_id.as_str()).cloned();
+        let own = owner.as_ref() == Some(author);
         if !own && self.limited_posts.lock().unwrap().contains(&post_id.as_str()) {
             return Ok(CommentAdmission::Held);
         }
-        Ok(CommentAdmission::Allowed)
+        match owner {
+            Some(owner) if !own && self.restricted_by(&owner, author).await? => Ok(CommentAdmission::Quiet),
+            _ => Ok(CommentAdmission::Allowed),
+        }
     }
 
     async fn post_author(&self, post_id: &PostId) -> Result<Option<ProfileId>, CommentError> {
         Ok(self.post_authors.lock().unwrap().get(&post_id.as_str()).cloned())
+    }
+
+    async fn restricted_by(&self, owner: &ProfileId, author: &ProfileId) -> Result<bool, CommentError> {
+        if *self.down.lock().unwrap() {
+            return Err(CommentError::AccessCheckUnavailable { reason: "scripted outage".into() });
+        }
+        Ok(self.restrictions.lock().unwrap().contains(&(owner.as_str(), author.as_str())))
     }
 }
 
@@ -141,6 +171,8 @@ pub struct TestHarness {
     pub command_bus: Arc<InMemoryCommandBus>,
     pub query_bus:   Arc<InMemoryQueryBus>,
     pub gate:        Arc<ScriptedGate>,
+    /// What would have gone to Kafka.
+    pub published:   Arc<RecordingPublisher>,
     /// The post owners' comment filters (the `profile.v1.events` projection).
     pub filters:     Arc<dyn CommentFilterStore>,
 }
@@ -161,11 +193,12 @@ impl TestHarness {
 
         let gate = Arc::new(ScriptedGate::default());
         let offensive = Arc::new(TermList::new([OFFENSIVE_TERM.to_owned()]));
-        let app = App::build(backends, Arc::new(NoopPublisher), Arc::clone(&gate) as _, offensive)
+        let published = Arc::new(RecordingPublisher::default());
+        let app = App::build(backends, Arc::clone(&published), Arc::clone(&gate) as _, offensive)
             .await
             .expect("integration: build comment app");
 
-        Self { command_bus: app.command_bus, query_bus: app.query_bus, gate, filters: app.filter_store }
+        Self { command_bus: app.command_bus, query_bus: app.query_bus, gate, published, filters: app.filter_store }
     }
 
     /// Creates a comment (top-level when `parent` is `None`, else a reply) authored

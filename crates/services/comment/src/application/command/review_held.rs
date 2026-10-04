@@ -74,6 +74,11 @@ where
 
         if cmd.approve {
             comment.release()?;
+            // Approving does not lift a restriction (#659): still no
+            // notifications for a restricted author's comment.
+            if self.gate.restricted_by(&owner, comment.author_id()).await? {
+                comment.announce_quietly();
+            }
             self.repository.set_held(&comment, false).await?;
             for event in comment.take_events() {
                 self.publisher.publish(&event).await?;

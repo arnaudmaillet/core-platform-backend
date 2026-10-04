@@ -13,4 +13,9 @@ pub struct CommentCreatedEvent {
     /// None when the comment is top-level.
     pub parent_id:     Option<String>,
     pub created_at_ms: i64,
+    /// Announced without notifying anyone: the post's owner restricted the
+    /// author (#659), so the comment is seen only by its author and the owner.
+    /// Absent from events published before the field existed (`false`).
+    #[serde(default)]
+    pub quiet:         bool,
 }

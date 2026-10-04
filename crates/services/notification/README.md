@@ -163,7 +163,7 @@ identifiers — via the shared `error` crate.
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `engagement.reactions` | `notification-reaction-consumer` | reaction notifications (collapsed) | DLQ `{topic}.dlq` |
-| `comment.created` | `notification-comment-consumer` | comment notifications (block-gated, self-guarded) | DLQ `{topic}.dlq` |
+| `comment.created` | `notification-comment-consumer` | comment notifications (block-gated, self-guarded; none for a `quiet` event: a restricted author, #659) | DLQ `{topic}.dlq` |
 | `post.published` | `notification-mention-consumer` | parse `@mentions`, cache post author | DLQ `{topic}.dlq` |
 
 > **Runtime contract (mandatory):** all workers run under `run_consumer` — manual commit after success

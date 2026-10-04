@@ -282,16 +282,21 @@ impl ReadGate for GrpcReadGate {
             .clone()
             .check_interaction(CheckInteractionRequest {
                 actor_profile_id: author.as_str(),
-                target_profile_id: view.profile_id,
+                target_profile_id: view.profile_id.clone(),
                 kind: InteractionKind::Comment as i32,
             })
             .await
             .map_err(unavailable)?
             .into_inner();
+        let owner = ProfileId::try_from(view.profile_id.as_str()).ok();
         Ok(match (answer.allowed, answer.held) {
             (false, _) => CommentAdmission::Restricted,
+            // Held: not announced before the owner's review anyway.
             (true, true) => CommentAdmission::Held,
-            (true, false) => CommentAdmission::Allowed,
+            (true, false) => match owner {
+                Some(owner) if self.restricted_by(&owner, author).await? => CommentAdmission::Quiet,
+                _ => CommentAdmission::Allowed,
+            },
         })
     }
 
@@ -301,6 +306,20 @@ impl ReadGate for GrpcReadGate {
             Err(status) if status.code() == Code::NotFound => Ok(None),
             Err(status) => Err(unavailable(status)),
         }
+    }
+
+    async fn restricted_by(&self, owner: &ProfileId, author: &ProfileId) -> Result<bool, CommentError> {
+        let response = self
+            .social_graph
+            .clone()
+            .list_restricted_among(ListRestrictedAmongRequest {
+                owner_id:      owner.as_str(),
+                candidate_ids: vec![author.as_str()],
+            })
+            .await
+            .map_err(unavailable)?
+            .into_inner();
+        Ok(response.restricted_ids.iter().any(|id| *id == author.as_str()))
     }
 }
 
