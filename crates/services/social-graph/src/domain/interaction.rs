@@ -39,6 +39,17 @@ impl InteractionAudience {
             _ => None,
         }
     }
+
+    /// Does this audience take a profile that follows the owner (`follows`)
+    /// and that the owner follows back (`followed_back`)?
+    pub fn admits(self, follows: bool, followed_back: bool) -> bool {
+        match self {
+            Self::Everyone => true,
+            Self::Followers => follows,
+            Self::Mutuals => follows && followed_back,
+            Self::NoOne => false,
+        }
+    }
 }
 
 /// A profile's interaction policy; absent ⇒ everyone for everything.
@@ -74,13 +85,10 @@ pub fn may_interact(relation: &Relation, policy: &InteractionPolicy, kind: Inter
     if relation.actor_blocks_target() || relation.target_blocks_actor() {
         return false;
     }
-    let follows = relation.actor_follows_target_since().is_some();
-    match policy.audience(kind) {
-        InteractionAudience::Everyone => true,
-        InteractionAudience::Followers => follows,
-        InteractionAudience::Mutuals => follows && relation.target_follows_actor_since().is_some(),
-        InteractionAudience::NoOne => false,
-    }
+    policy.audience(kind).admits(
+        relation.actor_follows_target_since().is_some(),
+        relation.target_follows_actor_since().is_some(),
+    )
 }
 
 #[cfg(test)]

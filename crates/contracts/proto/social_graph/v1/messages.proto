@@ -60,6 +60,13 @@ message UnfollowRequest {
     string target_id = 2;
 }
 
+// The owner removes a profile from their followers (an unfollow on the
+// follower's behalf; it is not notified). SGR-1002 if it does not follow.
+message RemoveFollowerRequest {
+    string profile_id  = 1;
+    string follower_id = 2;
+}
+
 message BlockRequest {
     string actor_id  = 1;
     string target_id = 2;
@@ -86,6 +93,9 @@ message ListFollowersRequest {
 message ListFollowersResponse {
     repeated EdgeSummary followers        = 1;
     string               next_page_token  = 2;
+    // The reader may not see this list (a private profile they do not follow,
+    // a block, a hidden profile, or the owner's list privacy); it is empty.
+    bool                 hidden           = 3;
 }
 
 message ListFollowingRequest {
@@ -97,6 +107,9 @@ message ListFollowingRequest {
 message ListFollowingResponse {
     repeated EdgeSummary following        = 1;
     string               next_page_token  = 2;
+    // The reader may not see this list (a private profile they do not follow,
+    // a block, a hidden profile, or the owner's list privacy); it is empty.
+    bool                 hidden           = 3;
 }
 
 message ListBlocksRequest {
@@ -167,4 +180,23 @@ message CheckInteractionResponse {
     // false: a block either way, or the target's audience for `kind` excludes
     // the actor (followers / mutuals / no one).
     bool allowed = 1;
+}
+
+// ── List privacy (#659) ───────────────────────────────────────────────────────
+
+// Who may see the profile's lists. The owner and mesh callers always may.
+message ListPrivacy {
+    ListAudience followers = 1;
+    ListAudience following = 2;
+}
+
+message GetListPrivacyRequest {
+    string profile_id = 1;
+}
+
+// An UNSPECIFIED list keeps its audience. Returns the resulting privacy.
+message SetListPrivacyRequest {
+    string       profile_id = 1;
+    ListAudience followers  = 2;
+    ListAudience following  = 3;
 }

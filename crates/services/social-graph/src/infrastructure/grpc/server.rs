@@ -104,6 +104,27 @@ where
         self.list_following(request).await
     }
 
+    async fn remove_follower(
+        &self,
+        request: Request<proto::RemoveFollowerRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.remove_follower(request).await
+    }
+
+    async fn set_list_privacy(
+        &self,
+        request: Request<proto::SetListPrivacyRequest>,
+    ) -> Result<Response<proto::ListPrivacy>, Status> {
+        self.set_list_privacy(request).await
+    }
+
+    async fn get_list_privacy(
+        &self,
+        request: Request<proto::GetListPrivacyRequest>,
+    ) -> Result<Response<proto::ListPrivacy>, Status> {
+        self.get_list_privacy(request).await
+    }
+
     async fn list_blocks(
         &self,
         request: Request<proto::ListBlocksRequest>,

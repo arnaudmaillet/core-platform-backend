@@ -52,3 +52,16 @@ enum InteractionKind {
     // Messaging the target directly.
     INTERACTION_KIND_MESSAGE     = 3;
 }
+
+// Who may see one of a profile's relationship lists (followers, following).
+enum ListAudience {
+    // On a SetListPrivacy request: leave this list unchanged.
+    LIST_AUDIENCE_UNSPECIFIED = 0;
+    LIST_AUDIENCE_EVERYONE    = 1;
+    // Profiles that follow the owner.
+    LIST_AUDIENCE_FOLLOWERS   = 2;
+    // Followers the owner follows back.
+    LIST_AUDIENCE_MUTUALS     = 3;
+    // The owner alone.
+    LIST_AUDIENCE_ONLY_ME     = 4;
+}

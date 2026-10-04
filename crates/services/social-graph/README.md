@@ -114,12 +114,15 @@ service SocialGraphService {
   rpc DeclineFollowRequest(AnswerFollowRequestRequest) returns (CommandResponse);   // owner
   rpc CancelFollowRequest(CancelFollowRequestRequest) returns (CommandResponse);   // requester
   rpc Unfollow(UnfollowRequest) returns (CommandResponse);
+  rpc RemoveFollower(RemoveFollowerRequest) returns (CommandResponse);   // owner: undoes the follower's follow
+  rpc SetListPrivacy(SetListPrivacyRequest) returns (ListPrivacy);   // owner: who sees the follower / following lists
   rpc Block(BlockRequest) returns (CommandResponse);
   rpc Unblock(UnblockRequest) returns (CommandResponse);
   // Queries
   rpc GetRelationStatus(GetRelationStatusRequest) returns (RelationStatusView);
   rpc ListFollowers(ListFollowersRequest) returns (ListFollowersResponse);
   rpc ListFollowing(ListFollowingRequest) returns (ListFollowingResponse);
+  rpc GetListPrivacy(GetListPrivacyRequest) returns (ListPrivacy);   // owner
   rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
   rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY
   rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);   // MESH-ONLY: may actor comment / mention / message target (its profile interaction settings, blocks)
@@ -136,7 +139,16 @@ queries per call whatever the sizes (`IN` over `follow_status`, `blocks` both wa
 this RPC is unavailable.
 
 **Viewer-aware lists.** `ListFollowers` / `ListFollowing` of a profile that is not `VISIBLE` to the
-reader come back empty (the owner and mesh callers always get them).
+reader come back empty with `hidden = true` (the owner and mesh callers always get them).
+
+**List privacy (#659).** The owner picks who else sees each list (`SetListPrivacy`, both bound to
+the owner's `profile_id` on the edge): `EVERYONE` (default), `FOLLOWERS`, `MUTUALS` (followers the
+owner follows back) or `ONLY_ME`. A reader outside the audience gets an empty page with `hidden =
+true`, on every device: the setting lives in `profile_audience.lists` (owned by social-graph,
+unlike the other columns of that projection). A reader with several profiles is judged by its
+best-placed one. **`RemoveFollower`** undoes a follower's follow exactly as its own `Unfollow`
+would (counts, `social-graph.unfollowed`, timeline pruning); the follower is not notified and, on a
+private profile, has to ask again.
 
 > **Wire contract:** `RelationStatus` (actor's perspective): `NONE`, `FOLLOWING`, `FOLLOWED_BY`,
 > `MUTUAL` (implicit friendship), `BLOCKING`, `BLOCKED_BY`.

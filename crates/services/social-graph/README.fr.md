@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8456ace739c5c3527c7b3576267ac924281ffd2a68797f9cf12ff8240328a8cb
+  source_sha256: 9f5401d3d2b49b3b471fa9a44e1b6b36d9adc6700b8d84304b06ab7675e37b09
   translated_at: 2026-10-04
   status: complete
 ---
@@ -131,12 +131,15 @@ service SocialGraphService {
   rpc DeclineFollowRequest(AnswerFollowRequestRequest) returns (CommandResponse);   // propriétaire
   rpc CancelFollowRequest(CancelFollowRequestRequest) returns (CommandResponse);   // demandeur
   rpc Unfollow(UnfollowRequest) returns (CommandResponse);
+  rpc RemoveFollower(RemoveFollowerRequest) returns (CommandResponse);   // propriétaire : défait l'abonnement de l'abonné
+  rpc SetListPrivacy(SetListPrivacyRequest) returns (ListPrivacy);   // propriétaire : qui voit les listes d'abonnés / d'abonnements
   rpc Block(BlockRequest) returns (CommandResponse);
   rpc Unblock(UnblockRequest) returns (CommandResponse);
   // Queries
   rpc GetRelationStatus(GetRelationStatusRequest) returns (RelationStatusView);
   rpc ListFollowers(ListFollowersRequest) returns (ListFollowersResponse);
   rpc ListFollowing(ListFollowingRequest) returns (ListFollowingResponse);
+  rpc GetListPrivacy(GetListPrivacyRequest) returns (ListPrivacy);   // propriétaire
   rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
   rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY
   rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);   // MESH-ONLY : l'acteur peut-il commenter / mentionner / écrire à la cible (ses réglages d'interaction profile, blocages)
@@ -154,7 +157,18 @@ appelants prennent le lecteur de leur propre requête edge et échouent fermé s
 indisponible.
 
 **Listes selon le lecteur.** `ListFollowers` / `ListFollowing` d'un profil qui n'est pas `VISIBLE`
-pour le lecteur reviennent vides (le propriétaire et les appelants du mesh les reçoivent toujours).
+pour le lecteur reviennent vides avec `hidden = true` (le propriétaire et les appelants du mesh les
+reçoivent toujours).
+
+**Confidentialité des listes (#659).** Le propriétaire choisit qui d'autre voit chaque liste
+(`SetListPrivacy`, les deux liés au `profile_id` du propriétaire sur l'edge) : `EVERYONE` (par
+défaut), `FOLLOWERS`, `MUTUALS` (les abonnés auxquels le propriétaire est abonné en retour) ou
+`ONLY_ME`. Un lecteur hors de l'audience reçoit une page vide avec `hidden = true`, sur tous les
+appareils : le réglage vit dans `profile_audience.lists` (propriété de social-graph, contrairement
+aux autres colonnes de cette projection). Un lecteur à plusieurs profils est jugé sur le mieux
+placé. **`RemoveFollower`** défait l'abonnement d'un abonné exactement comme son propre `Unfollow`
+(compteurs, `social-graph.unfollowed`, élagage de la timeline) ; l'abonné n'est pas notifié et, sur
+un profil privé, doit redemander.
 
 > **Contrat de sérialisation :** `RelationStatus` (du point de vue de l'acteur) : `NONE`, `FOLLOWING`,
 > `FOLLOWED_BY`, `MUTUAL` (amitié implicite), `BLOCKING`, `BLOCKED_BY`.

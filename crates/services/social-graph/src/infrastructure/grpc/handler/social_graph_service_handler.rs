@@ -7,14 +7,15 @@ use cqrs::{CommandBus, Envelope, QueryBus};
 use transport::grpc::edge;
 use crate::application::command::{
     ApproveFollowRequestCommand, BlockProfileCommand, FollowProfileCommand, UnblockProfileCommand,
-    UnfollowProfileCommand, WithdrawFollowRequestCommand,
+    SetListPrivacyCommand, UnfollowProfileCommand, WithdrawFollowRequestCommand,
 };
 use crate::application::query::{
-    CheckAccessQuery, CheckInteractionQuery, GetRelationStatusQuery, ListBlocksQuery, ListFollowRequestsQuery,
+    CheckAccessQuery, CheckInteractionQuery, FollowListPage, GetListPrivacyQuery, GetRelationStatusQuery, ListBlocksQuery, ListFollowRequestsQuery,
     ListFollowersQuery, ListFollowingQuery,
 };
 use crate::domain::access::{ContentAccess, Viewer};
-use crate::domain::interaction::InteractionKind;
+use crate::domain::interaction::{InteractionAudience, InteractionKind};
+use crate::domain::list_privacy::ListPrivacy;
 use crate::application::query::get_relation_status::RelationStatusView;
 use crate::domain::entity::{BlockEdge, FollowEdge};
 use crate::domain::value_object::RelationStatus;
@@ -219,6 +220,63 @@ where
             .map_err(cqrs_to_status)
     }
 
+    /// The owner (`profile_id`) removes `follower_id`: the follower's follow
+    /// is undone exactly as its own Unfollow would (counts, feeds, events).
+    pub async fn remove_follower(
+        &self,
+        request: Request<proto::RemoveFollowerRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let cmd = UnfollowProfileCommand {
+            actor_id:  req.follower_id.clone(),
+            target_id: req.profile_id.clone(),
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_response(&req.profile_id, &req.follower_id))
+            .map_err(cqrs_to_status)
+    }
+
+    pub async fn set_list_privacy(
+        &self,
+        request: Request<proto::SetListPrivacyRequest>,
+    ) -> Result<Response<proto::ListPrivacy>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let cmd = SetListPrivacyCommand {
+            profile_id: req.profile_id.clone(),
+            followers:  list_audience_from_proto(req.followers)?,
+            following:  list_audience_from_proto(req.following)?,
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map_err(cqrs_to_status)?;
+        self.list_privacy_of(req.profile_id).await
+    }
+
+    pub async fn get_list_privacy(
+        &self,
+        request: Request<proto::GetListPrivacyRequest>,
+    ) -> Result<Response<proto::ListPrivacy>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        self.list_privacy_of(request.into_inner().profile_id).await
+    }
+
+    async fn list_privacy_of(&self, profile_id: String) -> Result<Response<proto::ListPrivacy>, Status> {
+        let privacy: ListPrivacy = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), GetListPrivacyQuery { profile_id }))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListPrivacy {
+            followers: list_audience_to_proto(privacy.followers) as i32,
+            following: list_audience_to_proto(privacy.following) as i32,
+        }))
+    }
+
     pub async fn block(
         &self,
         request: Request<proto::BlockRequest>,
@@ -293,15 +351,16 @@ where
             page_token: Some(req.page_token).filter(|s| !s.is_empty()),
             viewer,
         };
-        let (edges, next): (Vec<FollowEdge>, Option<String>) = self
+        let page: FollowListPage = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
 
         Ok(Response::new(proto::ListFollowersResponse {
-            followers:       edges.into_iter().map(follow_edge_to_proto).collect(),
-            next_page_token: next.unwrap_or_default(),
+            followers:       page.edges.into_iter().map(follow_edge_to_proto).collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+            hidden:          page.hidden,
         }))
     }
 
@@ -318,15 +377,16 @@ where
             page_token: Some(req.page_token).filter(|s| !s.is_empty()),
             viewer,
         };
-        let (edges, next): (Vec<FollowEdge>, Option<String>) = self
+        let page: FollowListPage = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
 
         Ok(Response::new(proto::ListFollowingResponse {
-            following:       edges.into_iter().map(follow_edge_to_proto).collect(),
-            next_page_token: next.unwrap_or_default(),
+            following:       page.edges.into_iter().map(follow_edge_to_proto).collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+            hidden:          page.hidden,
         }))
     }
 
@@ -475,5 +535,28 @@ pub fn cqrs_to_status(err: cqrs::error::CqrsError) -> Status {
                 _         => Status::internal(msg),
             }
         }
+    }
+}
+
+// ── List privacy ──────────────────────────────────────────────────────────────
+
+/// `None` for UNSPECIFIED (keep the list's audience).
+fn list_audience_from_proto(value: i32) -> Result<Option<InteractionAudience>, Status> {
+    match proto::ListAudience::try_from(value) {
+        Ok(proto::ListAudience::Unspecified) => Ok(None),
+        Ok(proto::ListAudience::Everyone) => Ok(Some(InteractionAudience::Everyone)),
+        Ok(proto::ListAudience::Followers) => Ok(Some(InteractionAudience::Followers)),
+        Ok(proto::ListAudience::Mutuals) => Ok(Some(InteractionAudience::Mutuals)),
+        Ok(proto::ListAudience::OnlyMe) => Ok(Some(InteractionAudience::NoOne)),
+        Err(_) => Err(Status::invalid_argument(format!("unknown list audience {value}"))),
+    }
+}
+
+fn list_audience_to_proto(audience: InteractionAudience) -> proto::ListAudience {
+    match audience {
+        InteractionAudience::Everyone => proto::ListAudience::Everyone,
+        InteractionAudience::Followers => proto::ListAudience::Followers,
+        InteractionAudience::Mutuals => proto::ListAudience::Mutuals,
+        InteractionAudience::NoOne => proto::ListAudience::OnlyMe,
     }
 }

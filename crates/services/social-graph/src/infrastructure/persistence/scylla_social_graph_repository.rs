@@ -15,6 +15,7 @@ use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStora
 use crate::application::port::SocialGraphRepository;
 use crate::domain::access::AccessFacts;
 use crate::domain::interaction::InteractionPolicy;
+use crate::domain::list_privacy::ListPrivacy;
 use crate::domain::aggregate::{Relation, RelationContext};
 use crate::domain::entity::{BlockEdge, FollowEdge};
 use crate::domain::value_object::ProfileId;
@@ -858,6 +859,38 @@ impl SocialGraphRepository for ScyllaSocialGraphRepository {
             .maybe_first_row::<Row>()
             .map_err(|e| row_err("load_interaction_policy:deser", e))?;
         Ok(InteractionPolicy::from_json(row.and_then(|r| r.interaction).as_deref()))
+    }
+
+    async fn set_list_privacy(&self, profile_id: &ProfileId, privacy: &ListPrivacy) -> Result<(), SocialGraphError> {
+        let stmt = self.strict_stmt(
+            "UPDATE social_graph.profile_audience SET lists = ? WHERE profile_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt, (privacy.to_json(), profile_id.as_uuid()))
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn load_list_privacy(&self, profile_id: &ProfileId) -> Result<ListPrivacy, SocialGraphError> {
+        #[derive(DeserializeRow)]
+        struct Row { lists: Option<String> }
+
+        let stmt = self.fast_stmt(
+            "SELECT lists FROM social_graph.profile_audience WHERE profile_id = ?",
+        );
+        let row = self
+            .client
+            .session
+            .execute_unpaged(stmt, (profile_id.as_uuid(),))
+            .await
+            .map_err(scylla_err)?
+            .into_rows_result()
+            .map_err(|e| row_err("load_list_privacy:rows", e))?
+            .maybe_first_row::<Row>()
+            .map_err(|e| row_err("load_list_privacy:deser", e))?;
+        Ok(ListPrivacy::from_json(row.and_then(|r| r.lists).as_deref()))
     }
 }
 

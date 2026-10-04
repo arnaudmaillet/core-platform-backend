@@ -49,6 +49,14 @@ service SocialGraphService {
     // Rejected if no follow exists.
     rpc Unfollow(UnfollowRequest) returns (CommandResponse);
 
+    // The owner (profile_id) removes follower_id from their followers.
+    // CommandResponse: actor_id = the owner, target_id = the removed follower.
+    rpc RemoveFollower(RemoveFollowerRequest) returns (CommandResponse);
+
+    // Who may see the owner's follower / following lists (everyone, followers,
+    // mutuals, only me), enforced by ListFollowers / ListFollowing.
+    rpc SetListPrivacy(SetListPrivacyRequest) returns (ListPrivacy);
+
     // Record that actor blocks target.
     // Severs any existing follow between them (in both directions).
     // Rejected if actor == target or if actor already blocks target.
@@ -69,6 +77,9 @@ service SocialGraphService {
 
     // Paginated list of profiles that the given profile follows (fan-out).
     rpc ListFollowing(ListFollowingRequest) returns (ListFollowingResponse);
+
+    // The owner's list privacy (defaults: everyone).
+    rpc GetListPrivacy(GetListPrivacyRequest) returns (ListPrivacy);
 
     // Paginated list of profiles blocked by the given profile.
     rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
