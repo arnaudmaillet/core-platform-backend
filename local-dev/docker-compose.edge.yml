@@ -1,0 +1,77 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Edge-mode overlay for the local fleet: turns on the client edge listener
+# (`GRPC_EDGE_ADDR`) on every client-facing server, as staging and prod run it.
+#
+#   docker compose -f local-dev/docker-compose.fleet.yml \
+#                  -f local-dev/docker-compose.edge.yml up -d
+#
+# Without it, local services serve the mesh port only: no token check and no
+# `EDGE_POLICY` allow-list, so a call that staging refuses with UNAUTHENTICATED or
+# UNIMPLEMENTED succeeds locally. With it, each server also listens on :9443
+# (container port, same as prod) and verifies the auth-minted ES256 token against
+# auth's JWKS, exactly like the ALB-facing listener.
+#
+# - Clients inside the fleet network (the iOS Envoy in `dev/fleet-gateway.sh`)
+#   target `<service>-server:9443` instead of the mesh port.
+# - From the host, edge port = mesh port + 10000 (post 50056 → 60056), for
+#   grpcurl. The mesh ports stay published and unauthenticated, as in-cluster.
+#
+# Issuer and audience must match what auth-server mints (AUTH_TOKEN_ISSUER /
+# AUTH_TOKEN_AUDIENCE in the fleet file). Until auth's JWKS answers, the edge
+# fails closed (unknown `kid`) and the refresher retries with backoff.
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-edge-env: &edge-env
+  GRPC_EDGE_ADDR: 0.0.0.0:9443
+  EDGE_JWKS_URL: http://auth-server:8081/.well-known/jwks.json
+  EDGE_TOKEN_ISSUER: http://localhost:50060
+  EDGE_TOKEN_AUDIENCE: core-platform
+  # Pick up a regenerated local signing key within a minute, not five.
+  EDGE_JWKS_REFRESH_SECS: "60"
+
+services:
+  account-server:
+    environment: *edge-env
+    ports: ["60059:9443"]
+  auth-server:
+    environment: *edge-env
+    ports: ["60060:9443"]
+  chat-server:
+    environment: *edge-env
+    ports: ["60051:9443"]
+  comment-server:
+    environment: *edge-env
+    ports: ["60057:9443"]
+  counter-server:
+    environment: *edge-env
+    ports: ["60064:9443"]
+  engagement-server:
+    environment: *edge-env
+    ports: ["60058:9443"]
+  geo-discovery-server:
+    environment: *edge-env
+    ports: ["60054:9443"]
+  media-server:
+    environment: *edge-env
+    ports: ["60063:9443"]
+  moderation-server:
+    environment: *edge-env
+    ports: ["60061:9443"]
+  notification-server:
+    environment: *edge-env
+    ports: ["60055:9443"]
+  post-server:
+    environment: *edge-env
+    ports: ["60056:9443"]
+  profile-server:
+    environment: *edge-env
+    ports: ["60052:9443"]
+  search-server:
+    environment: *edge-env
+    ports: ["60062:9443"]
+  social-graph-server:
+    environment: *edge-env
+    ports: ["60053:9443"]
+  timeline-server:
+    environment: *edge-env
+    ports: ["60070:9443"]
