@@ -5,5 +5,6 @@
 mod fanout_ordering;
 mod discovery;
 mod following_cache;
+mod mutes;
 mod vip_routing;
 mod warmup_lifecycle;

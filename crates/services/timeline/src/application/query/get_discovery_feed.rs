@@ -4,7 +4,7 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::port::{visible_authors, DiscoveryPool, NearbyPosts, PoolEntry, SocialGraphClient};
+use crate::application::port::{muted_authors, visible_authors, DiscoveryPool, NearbyPosts, PoolEntry, SocialGraphClient};
 use crate::domain::aggregate::FeedEntry;
 use crate::domain::value_object::{
     hot_score, ContentLevel, DiscoveryCursor, DiscoveryRanking, DiscoveryStream, PostId,
@@ -72,12 +72,14 @@ pub struct GetDiscoveryFeedHandler<SG> {
 }
 
 /// What a page shows: the reader's level, and the authors it may see (`None` =
-/// all, the mesh). Audience answers are cached for the request.
+/// all, the mesh) minus those it muted. Audience answers are cached for the
+/// request.
 struct Filter<'a, SG: ?Sized> {
     social_graph: &'a SG,
     viewer:       &'a Viewer,
     level:        ContentLevel,
     visible:      HashMap<crate::domain::value_object::AuthorId, bool>,
+    muted:        HashSet<crate::domain::value_object::AuthorId>,
 }
 
 impl<SG: SocialGraphClient + ?Sized> Filter<'_, SG> {
@@ -89,8 +91,11 @@ impl<SG: SocialGraphClient + ?Sized> Filter<'_, SG> {
     ) -> Result<Vec<(StreamPosition, Option<FeedEntry>)>, TimelineError> {
         let ids: Vec<PostId> = entries.iter().map(|e| e.post_id).collect();
         let meta = pool.meta(&ids).await?;
+        let muted = &self.muted;
         let shown = |e: &PoolEntry| {
-            meta.get(&e.post_id).filter(|m| m.shown_at(self.level) && m.author_id == Some(e.author_id))
+            meta.get(&e.post_id)
+                .filter(|m| m.shown_at(self.level) && m.author_id == Some(e.author_id))
+                .filter(|_| !muted.contains(&e.author_id))
         };
         let unknown: Vec<_> = entries
             .iter()
@@ -299,11 +304,16 @@ impl<SG: SocialGraphClient> QueryHandler<GetDiscoveryFeedQuery> for GetDiscovery
             None => DiscoveryCursor::default(),
         };
         let size = self.page_size(query.limit);
+        let muted = match &query.viewer {
+            Viewer::Profiles(own) => muted_authors(self.social_graph.as_ref(), own).await,
+            Viewer::Internal => HashSet::new(),
+        };
         let mut filter = Filter {
             social_graph: self.social_graph.as_ref(),
             viewer:       &query.viewer,
             level:        query.content_level,
             visible:      HashMap::new(),
+            muted,
         };
         match query.ranking {
             DiscoveryRanking::Nearby => self.nearby_page(query, &cursor, &mut filter, size).await,
@@ -384,7 +394,9 @@ mod tests {
     #[derive(Default)]
     struct Graph {
         hidden: Mutex<HashSet<AuthorId>>,
+        muted:  Mutex<HashSet<AuthorId>>,
         down:   bool,
+        mutes_down: bool,
         calls:  Mutex<usize>,
     }
 
@@ -402,6 +414,12 @@ mod tests {
                 .iter()
                 .map(|a| (*a, if hidden.contains(a) { ContentAccess::HeaderOnly } else { ContentAccess::Visible }))
                 .collect())
+        }
+        async fn muted_authors(&self, _: &[String]) -> Result<HashSet<AuthorId>, TimelineError> {
+            if self.down || self.mutes_down {
+                return Err(TimelineError::AccessCheckUnavailable { reason: "down".into() });
+            }
+            Ok(self.muted.lock().unwrap().clone())
         }
     }
 
@@ -493,6 +511,30 @@ mod tests {
         let calls = *graph.calls.lock().unwrap();
         assert_eq!(h.handle(internal).await.unwrap().items.len(), 2);
         assert_eq!(*graph.calls.lock().unwrap(), calls);
+    }
+
+    #[tokio::test]
+    async fn muted_authors_are_left_out_and_a_mute_outage_fails_open() {
+        let pool = Arc::new(MemPool::default());
+        let (kept, muted) = (author(), author());
+        let shown = pool.put(DiscoveryStream::Recent, kept, 9.0, Restriction::None);
+        let skipped = pool.put(DiscoveryStream::Recent, muted, 8.0, Restriction::None);
+        let member = || {
+            let mut q = query(DiscoveryRanking::Recent, 10, None);
+            q.payload.viewer = Viewer::Profiles(vec![Uuid::now_v7().to_string()]);
+            q
+        };
+        let ids = |page: DiscoveryPage| page.items.iter().map(|e| e.post_id).collect::<Vec<_>>();
+
+        let graph = Arc::new(Graph::default());
+        graph.muted.lock().unwrap().insert(muted);
+        let h = handler(Arc::clone(&pool), graph, vec![]);
+        assert_eq!(ids(h.handle(member()).await.unwrap()), vec![shown]);
+
+        let down = Arc::new(Graph { mutes_down: true, ..Graph::default() });
+        down.muted.lock().unwrap().insert(muted);
+        let h = handler(pool, down, vec![]);
+        assert_eq!(ids(h.handle(member()).await.unwrap()), vec![shown, skipped], "fails open");
     }
 
     #[tokio::test]

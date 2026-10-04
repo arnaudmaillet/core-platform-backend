@@ -6,16 +6,20 @@ use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
 use crate::application::command::{
-    ApproveFollowRequestCommand, BlockProfileCommand, FollowProfileCommand, UnblockProfileCommand,
-    SetListPrivacyCommand, UnfollowProfileCommand, WithdrawFollowRequestCommand,
+    ApproveFollowRequestCommand, BlockProfileCommand, FollowProfileCommand, MuteProfileCommand,
+    SetListPrivacyCommand, UnblockProfileCommand, UnfollowProfileCommand, UnmuteProfileCommand,
+    WithdrawFollowRequestCommand,
 };
 use crate::application::query::{
-    CheckAccessQuery, CheckInteractionQuery, FollowListPage, GetListPrivacyQuery, GetRelationStatusQuery, ListBlocksQuery, ListFollowRequestsQuery,
-    ListFollowersQuery, ListFollowingQuery,
+    CheckAccessQuery, CheckInteractionQuery, FollowListPage, GetListPrivacyQuery, GetRelationStatusQuery,
+    ListBlocksQuery, ListFollowRequestsQuery, ListFollowersQuery, ListFollowingQuery, ListMutesQuery,
+    MutedProfilesQuery,
 };
 use crate::domain::access::{ContentAccess, Viewer};
 use crate::domain::interaction::{InteractionAudience, InteractionKind};
 use crate::domain::list_privacy::ListPrivacy;
+use crate::domain::mute::{Mute, MuteScope, MuteScopes};
+use crate::domain::value_object::ProfileId;
 use crate::application::query::get_relation_status::RelationStatusView;
 use crate::domain::entity::{BlockEdge, FollowEdge};
 use crate::domain::value_object::RelationStatus;
@@ -125,6 +129,86 @@ where
             .await
             .map_err(cqrs_to_status)?;
         Ok(Response::new(proto::CheckInteractionResponse { allowed }))
+    }
+
+    /// Mesh-only (absent from the edge policy): timeline asks with the reader
+    /// it took from its own edge request.
+    pub async fn list_muted_profiles(
+        &self,
+        request: Request<proto::ListMutedProfilesRequest>,
+    ) -> Result<Response<proto::ListMutedProfilesResponse>, Status> {
+        let req = request.into_inner();
+        let scope = mute_scope_from_proto(req.scope)?;
+        let query = MutedProfilesQuery { profile_ids: req.profile_ids, scope };
+        let muted: std::collections::HashSet<ProfileId> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListMutedProfilesResponse {
+            profile_ids: muted.iter().map(ProfileId::as_str).collect(),
+        }))
+    }
+
+    pub async fn mute(
+        &self,
+        request: Request<proto::MuteRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().actor_id)?;
+        let req = request.into_inner();
+        let cmd = MuteProfileCommand {
+            actor_id:  req.actor_id.clone(),
+            target_id: req.target_id.clone(),
+            scopes:    req.scopes.map(mute_scopes_from_proto).unwrap_or_default(),
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_response(&req.actor_id, &req.target_id))
+            .map_err(cqrs_to_status)
+    }
+
+    pub async fn unmute(
+        &self,
+        request: Request<proto::UnmuteRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().actor_id)?;
+        let req = request.into_inner();
+        let cmd = UnmuteProfileCommand { actor_id: req.actor_id.clone(), target_id: req.target_id.clone() };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_response(&req.actor_id, &req.target_id))
+            .map_err(cqrs_to_status)
+    }
+
+    pub async fn list_mutes(
+        &self,
+        request: Request<proto::ListMutesRequest>,
+    ) -> Result<Response<proto::ListMutesResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let query = ListMutesQuery {
+            profile_id: req.profile_id,
+            limit:      req.limit.clamp(1, 100) as u32,
+            page_token: Some(req.page_token).filter(|s| !s.is_empty()),
+        };
+        let (mutes, next): (Vec<Mute>, Option<String>) = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListMutesResponse {
+            mutes: mutes
+                .into_iter()
+                .map(|m| proto::MuteSummary {
+                    profile_id: m.profile_id.as_str(),
+                    scopes:     Some(mute_scopes_to_proto(m.scopes)),
+                    muted_at:   Some(dt_to_ts(m.muted_at)),
+                })
+                .collect(),
+            next_page_token: next.unwrap_or_default(),
+        }))
     }
 
     pub async fn list_follow_requests(
@@ -494,6 +578,7 @@ fn relation_status_view_to_proto(v: RelationStatusView) -> proto::RelationStatus
         status:                 relation_status_to_i32(v.status),
         target_followers_count: v.target_followers_count,
         target_following_count: v.target_following_count,
+        muted:                  Some(mute_scopes_to_proto(v.muted)),
     }
 }
 
@@ -508,6 +593,25 @@ fn block_edge_to_proto(e: BlockEdge) -> proto::BlockSummary {
     proto::BlockSummary {
         blockee_id: e.blockee_id.as_str(),
         blocked_at: Some(dt_to_ts(e.blocked_at)),
+    }
+}
+
+// ── Mutes ─────────────────────────────────────────────────────────────────────
+
+fn mute_scopes_from_proto(s: proto::MuteScopes) -> MuteScopes {
+    MuteScopes { posts: s.posts, stories: s.stories, messages: s.messages }
+}
+
+fn mute_scopes_to_proto(s: MuteScopes) -> proto::MuteScopes {
+    proto::MuteScopes { posts: s.posts, stories: s.stories, messages: s.messages }
+}
+
+fn mute_scope_from_proto(value: i32) -> Result<MuteScope, Status> {
+    match proto::MuteScope::try_from(value) {
+        Ok(proto::MuteScope::Posts) => Ok(MuteScope::Posts),
+        Ok(proto::MuteScope::Stories) => Ok(MuteScope::Stories),
+        Ok(proto::MuteScope::Messages) => Ok(MuteScope::Messages),
+        _ => Err(Status::invalid_argument(format!("a mute scope is required (got {value})"))),
     }
 }
 

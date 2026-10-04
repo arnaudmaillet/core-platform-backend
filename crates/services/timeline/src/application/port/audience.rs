@@ -29,3 +29,22 @@ pub async fn visible_authors<SG: SocialGraphClient + ?Sized>(
     }
     Ok(Some(visible))
 }
+
+/// The authors `viewers` muted (scope posts), whose posts the feeds leave out.
+/// Fails open: when social-graph cannot answer, nothing is muted for this
+/// request (a mute is a preference, not a safety rule).
+pub async fn muted_authors<SG: SocialGraphClient + ?Sized>(
+    social_graph: &SG,
+    viewers:      &[String],
+) -> HashSet<AuthorId> {
+    if viewers.is_empty() {
+        return HashSet::new();
+    }
+    match social_graph.muted_authors(viewers).await {
+        Ok(muted) => muted,
+        Err(error) => {
+            tracing::warn!(%error, "mute lookup failed; serving the feed unfiltered by mutes");
+            HashSet::new()
+        }
+    }
+}

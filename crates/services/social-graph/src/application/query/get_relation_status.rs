@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use cqrs::{Envelope, Query, QueryHandler};
 
-use crate::application::port::{RelationCounts, SocialGraphCache, SocialGraphRepository};
+use crate::application::port::{MuteRepository, RelationCounts, SocialGraphCache, SocialGraphRepository};
+use crate::domain::mute::MuteScopes;
 use crate::domain::value_object::{ProfileId, RelationStatus};
 use crate::error::SocialGraphError;
 
@@ -32,16 +33,23 @@ pub struct RelationStatusView {
     pub status:                 RelationStatus,
     pub target_followers_count: i64,
     pub target_following_count: i64,
+    /// How the actor mutes the target (empty when it does not).
+    pub muted:                  MuteScopes,
 }
 
 pub struct GetRelationStatusHandler {
     repo:  Arc<dyn SocialGraphRepository>,
     cache: Arc<dyn SocialGraphCache>,
+    mutes: Arc<dyn MuteRepository>,
 }
 
 impl GetRelationStatusHandler {
-    pub fn new(repo: Arc<dyn SocialGraphRepository>, cache: Arc<dyn SocialGraphCache>) -> Self {
-        Self { repo, cache }
+    pub fn new(
+        repo: Arc<dyn SocialGraphRepository>,
+        cache: Arc<dyn SocialGraphCache>,
+        mutes: Arc<dyn MuteRepository>,
+    ) -> Self {
+        Self { repo, cache, mutes }
     }
 }
 
@@ -58,12 +66,14 @@ impl QueryHandler<GetRelationStatusQuery> for GetRelationStatusHandler {
         let target_id = ProfileId::try_from(q.target_id.as_str())?;
 
         // Fire ScyllaDB and Redis queries concurrently.
-        let (relation, counts) = tokio::join!(
+        let (relation, counts, muted) = tokio::join!(
             self.repo.load_relation(&actor_id, &target_id),
             self.cache.get_counts(&target_id),
+            self.mutes.scopes(&actor_id, &target_id),
         );
 
         let relation = relation?;
+        let muted = muted?;
         let counts: RelationCounts = counts.unwrap_or_default();
 
         Ok(RelationStatusView {
@@ -72,6 +82,7 @@ impl QueryHandler<GetRelationStatusQuery> for GetRelationStatusHandler {
             status:                 relation.status(),
             target_followers_count: counts.followers,
             target_following_count: counts.following,
+            muted,
         })
     }
 }

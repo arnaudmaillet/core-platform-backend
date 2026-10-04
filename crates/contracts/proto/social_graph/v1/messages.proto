@@ -20,6 +20,8 @@ message RelationStatusView {
     // Follower and following counts are for the target profile.
     int64          target_followers_count = 4;
     int64          target_following_count = 5;
+    // How the actor mutes the target (all false when it does not).
+    MuteScopes     muted                  = 6;
 }
 
 // A lightweight summary of one edge in an adjacency list.
@@ -199,4 +201,54 @@ message SetListPrivacyRequest {
     string       profile_id = 1;
     ListAudience followers  = 2;
     ListAudience following  = 3;
+}
+
+// ── Mutes (#659) ──────────────────────────────────────────────────────────────
+
+// What a mute covers. Stories and messages are stored for the client; posts
+// leave the muter's feeds.
+message MuteScopes {
+    bool posts    = 1;
+    bool stories  = 2;
+    bool messages = 3;
+}
+
+// Mute (or re-scope a mute of) target. At least one scope; the target is not
+// told and follows are untouched.
+message MuteRequest {
+    string     actor_id  = 1;
+    string     target_id = 2;
+    MuteScopes scopes    = 3;
+}
+
+message UnmuteRequest {
+    string actor_id  = 1;
+    string target_id = 2;
+}
+
+message ListMutesRequest {
+    string profile_id = 1;
+    int32  limit      = 2;
+    string page_token = 3;
+}
+
+message MuteSummary {
+    string                    profile_id = 1;
+    MuteScopes                scopes     = 2;
+    google.protobuf.Timestamp muted_at   = 3;
+}
+
+message ListMutesResponse {
+    repeated MuteSummary mutes           = 1;
+    string               next_page_token = 2;
+}
+
+// MESH-ONLY: the profiles any of a reader's profiles (≤ 10) mutes for scope.
+message ListMutedProfilesRequest {
+    repeated string profile_ids = 1;
+    MuteScope       scope       = 2;
+}
+
+message ListMutedProfilesResponse {
+    repeated string profile_ids = 1;
 }

@@ -5,8 +5,8 @@ use cqrs::{Envelope, Query, QueryHandler};
 use tokio::sync::Semaphore;
 
 use crate::application::port::{
-    AuthorPostRepository, FeedRepository, FeedStore, FollowingStore, SocialGraphClient,
-    TierCache, VipRegistry,
+    muted_authors, AuthorPostRepository, FeedRepository, FeedStore, FollowingStore,
+    SocialGraphClient, TierCache, VipRegistry,
 };
 use crate::domain::aggregate::FeedEntry;
 use crate::domain::value_object::{AuthorId, AuthorTier, FeedCursor, ProfileId};
@@ -85,8 +85,14 @@ where
             .map(|c| c.published_at_ms)
             .unwrap_or(i64::MAX);
 
-        // Ensure the following set is warm in Redis.
-        let following_ids = self.ensure_following_set(&profile_id).await?;
+        // Ensure the following set is warm in Redis; the reader's mutes in
+        // parallel (fail open).
+        let reader = [profile_id.to_string()];
+        let (following_ids, muted) = tokio::join!(
+            self.ensure_following_set(&profile_id),
+            muted_authors(self.social_graph.as_ref(), &reader),
+        );
+        let following_ids = following_ids?;
 
         if following_ids.is_empty() {
             return Ok(FollowingFeedPage {
@@ -96,8 +102,10 @@ where
             });
         }
 
-        // Split following list into regular (materialized) vs VIP (at-read merge).
-        let (_regular_ids, vip_ids) = self.split_by_tier(&following_ids).await;
+        // Split following list into regular (materialized) vs VIP (at-read
+        // merge); a muted VIP is not even read.
+        let (_regular_ids, mut vip_ids) = self.split_by_tier(&following_ids).await;
+        vip_ids.retain(|id| !muted.contains(id));
 
         // Check warm flag to route to Redis vs cold storage.
         let is_warm = self.tier_cache.is_warm(&profile_id).await?;
@@ -105,7 +113,7 @@ where
         if !is_warm {
             // Cold path: ScyllaDB → return immediately, warm Redis asynchronously.
             let page = self
-                .serve_cold(&profile_id, &vip_ids, max_score, limit)
+                .serve_cold(&profile_id, &vip_ids, max_score, limit, &muted)
                 .await?;
 
             // Trigger a bounded, de-duplicated async warm-up of the regular feed.
@@ -115,7 +123,7 @@ where
         }
 
         // Hot path: Redis merge.
-        self.serve_hot(&profile_id, &vip_ids, max_score, limit, cursor)
+        self.serve_hot(&profile_id, &vip_ids, max_score, limit, cursor, &muted)
             .await
     }
 }
@@ -254,6 +262,7 @@ where
         max_score:  i64,
         limit:      usize,
         cursor:     Option<FeedCursor>,
+        muted:      &HashSet<AuthorId>,
     ) -> Result<FollowingFeedPage, TimelineError> {
         // Overscan by 2× to absorb dedup + cursor exclusion losses.
         let overscan = (limit * 2).max(50);
@@ -283,7 +292,7 @@ where
             all_entries.extend(slice);
         }
 
-        Ok(build_page(all_entries, cursor, limit))
+        Ok(build_page(all_entries, cursor, limit, muted))
     }
 
     /// Cold path: read from ScyllaDB and merge VIP registries (or their cold-start
@@ -294,6 +303,7 @@ where
         vip_ids:    &[AuthorId],
         max_score:  i64,
         limit:      usize,
+        muted:      &HashSet<AuthorId>,
     ) -> Result<FollowingFeedPage, TimelineError> {
         let cold_limit = (limit * 2).max(50) as i32;
 
@@ -320,17 +330,20 @@ where
             all_entries.extend(slice);
         }
 
-        let mut page = build_page(all_entries, None, limit);
+        let mut page = build_page(all_entries, None, limit, muted);
         page.is_cold = true;
         Ok(page)
     }
 }
 
-/// Merges, deduplicates, applies cursor exclusion, sorts DESC, and paginates.
+/// Merges, deduplicates, applies cursor exclusion, sorts DESC, and paginates,
+/// leaving out muted authors' posts. The next cursor sits after the last entry
+/// *examined*, muted or not, so a run of muted posts is skipped, not re-read.
 fn build_page(
     mut entries:   Vec<FeedEntry>,
     cursor:        Option<FeedCursor>,
     limit:         usize,
+    muted:         &HashSet<AuthorId>,
 ) -> FollowingFeedPage {
     // Sort newest-first.
     entries.sort_unstable_by(|a, b| {
@@ -358,11 +371,21 @@ fn build_page(
         });
     }
 
-    let has_more     = entries.len() > limit;
-    let items: Vec<_> = entries.into_iter().take(limit).collect();
+    let mut items: Vec<FeedEntry> = Vec::with_capacity(limit);
+    let mut examined = 0;
+    for entry in &entries {
+        if items.len() == limit {
+            break;
+        }
+        examined += 1;
+        if !muted.contains(&entry.author_id) {
+            items.push(entry.clone());
+        }
+    }
+    let has_more = examined < entries.len();
 
     let next_page_token = if has_more {
-        items.last().map(|last| {
+        entries[..examined].last().map(|last| {
             FeedCursor::new(last.published_at_ms, &last.post_id.to_string()).encode()
         })
     } else {
@@ -402,4 +425,43 @@ where
         "feed warmed from ScyllaDB"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::domain::value_object::PostId;
+
+    fn entry(author: AuthorId, at: i64) -> FeedEntry {
+        FeedEntry::new(PostId::from_uuid(Uuid::now_v7()), author, at)
+    }
+
+    #[test]
+    fn muted_posts_are_skipped_and_the_cursor_moves_past_them() {
+        let (kept, muted) = (AuthorId::from_uuid(Uuid::now_v7()), AuthorId::from_uuid(Uuid::now_v7()));
+        let mutes: HashSet<AuthorId> = [muted].into();
+        // Newest first: a run of muted posts between two kept ones.
+        let entries = vec![entry(kept, 50), entry(muted, 40), entry(muted, 30), entry(kept, 20), entry(muted, 10)];
+
+        let page = build_page(entries.clone(), None, 2, &mutes);
+        assert_eq!(page.items.iter().map(|e| e.published_at_ms).collect::<Vec<_>>(), vec![50, 20]);
+        // The page examined down to 20; one muted entry is left, so there is more.
+        let cursor = FeedCursor::decode(page.next_page_token.as_deref().unwrap()).unwrap();
+        assert_eq!(cursor.published_at_ms, 20);
+
+        let rest = build_page(entries, Some(cursor), 2, &mutes);
+        assert!(rest.items.is_empty());
+        assert_eq!(rest.next_page_token, None);
+    }
+
+    #[test]
+    fn without_mutes_the_page_is_unchanged() {
+        let a = AuthorId::from_uuid(Uuid::now_v7());
+        let entries = vec![entry(a, 3), entry(a, 2), entry(a, 1)];
+        let page = build_page(entries, None, 2, &HashSet::new());
+        assert_eq!(page.items.iter().map(|e| e.published_at_ms).collect::<Vec<_>>(), vec![3, 2]);
+        assert!(page.next_page_token.is_some());
+    }
 }

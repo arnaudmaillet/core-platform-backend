@@ -13,7 +13,7 @@ pub mod vip_registry;
 
 pub use audio_feed_repository::{AudioFeedRepository, AudioFeedRow};
 pub use audio_feed_store::{AudioFeedMember, AudioFeedStore};
-pub use audience::visible_authors;
+pub use audience::{muted_authors, visible_authors};
 pub use author_post_repository::AuthorPostRepository;
 pub use discovery_pool::{DiscoveryPool, PoolEntry};
 pub use feed_repository::FeedRepository;

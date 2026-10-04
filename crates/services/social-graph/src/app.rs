@@ -19,22 +19,24 @@ use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 
 use crate::application::command::{
     ApproveFollowRequestCommand, ApproveFollowRequestHandler, BlockProfileCommand,
-    BlockProfileHandler, FollowProfileCommand, FollowProfileHandler, WithdrawFollowRequestCommand,
+    BlockProfileHandler, FollowProfileCommand, FollowProfileHandler, MuteProfileCommand,
+    MuteProfileHandler, UnmuteProfileCommand, UnmuteProfileHandler, WithdrawFollowRequestCommand,
     WithdrawFollowRequestHandler,
     RecordProfileAudienceCommand, RecordProfileAudienceHandler, SetListPrivacyCommand,
     SetListPrivacyHandler, UnblockProfileCommand,
     UnblockProfileHandler, UnfollowProfileCommand, UnfollowProfileHandler,
 };
-use crate::application::port::{EventPublisher, SocialGraphCache, SocialGraphRepository};
+use crate::application::port::{EventPublisher, MuteRepository, SocialGraphCache, SocialGraphRepository};
 use crate::application::query::{
     CheckAccessHandler, CheckAccessQuery, CheckInteractionHandler, CheckInteractionQuery, GetListPrivacyHandler,
     GetListPrivacyQuery, GetRelationStatusHandler, GetRelationStatusQuery,
     ListBlocksHandler, ListBlocksQuery, ListFollowRequestsHandler, ListFollowRequestsQuery,
     ListFollowersHandler, ListFollowersQuery, ListFollowingHandler, ListFollowingQuery,
+    ListMutesHandler, ListMutesQuery, MutedProfilesHandler, MutedProfilesQuery,
 };
 use crate::domain::value_object::TierThresholds;
 use crate::infrastructure::cache::RedisSocialGraphCache;
-use crate::infrastructure::persistence::ScyllaSocialGraphRepository;
+use crate::infrastructure::persistence::{ScyllaMuteRepository, ScyllaSocialGraphRepository};
 
 /// Storage endpoints the graph is wired against.
 pub struct Backends {
@@ -73,6 +75,8 @@ impl App {
             Arc::new(ScyllaSocialGraphRepository::new(Arc::clone(&scylla_client)));
         let cache: Arc<dyn SocialGraphCache> =
             Arc::new(RedisSocialGraphCache::new(Arc::clone(&redis_client)));
+        let mutes: Arc<dyn MuteRepository> =
+            Arc::new(ScyllaMuteRepository::new(Arc::clone(&scylla_client)));
 
         let command_bus = Arc::new(
             CommandBusBuilder::new()
@@ -111,6 +115,8 @@ impl App {
                 .register::<WithdrawFollowRequestCommand, _>(WithdrawFollowRequestHandler::new(
                     Arc::clone(&repo),
                 ))?
+                .register::<MuteProfileCommand, _>(MuteProfileHandler::new(Arc::clone(&mutes)))?
+                .register::<UnmuteProfileCommand, _>(UnmuteProfileHandler::new(Arc::clone(&mutes)))?
                 .build(),
         );
 
@@ -119,7 +125,10 @@ impl App {
                 .register::<GetRelationStatusQuery, _>(GetRelationStatusHandler::new(
                     Arc::clone(&repo),
                     Arc::clone(&cache),
+                    Arc::clone(&mutes),
                 ))?
+                .register::<ListMutesQuery, _>(ListMutesHandler::new(Arc::clone(&mutes)))?
+                .register::<MutedProfilesQuery, _>(MutedProfilesHandler::new(Arc::clone(&mutes)))?
                 .register::<ListFollowersQuery, _>(ListFollowersHandler::new(Arc::clone(&repo)))?
                 .register::<ListFollowingQuery, _>(ListFollowingHandler::new(Arc::clone(&repo)))?
                 .register::<ListBlocksQuery, _>(ListBlocksHandler::new(Arc::clone(&repo)))?

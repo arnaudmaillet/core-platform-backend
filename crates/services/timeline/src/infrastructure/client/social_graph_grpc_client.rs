@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use transport::grpc::client::ResilientChannel;
@@ -16,11 +16,14 @@ use social_graph_api as sg_proto;
 use sg_proto::{
     social_graph_service_client::SocialGraphServiceClient,
     CheckAccessRequest, ContentAccess as ProtoAccess, ListFollowersRequest, ListFollowingRequest,
+    ListMutedProfilesRequest, MuteScope as ProtoMuteScope,
 };
 
 /// `CheckAccess` caps: viewer profiles and target authors per call.
 const MAX_VIEWERS_PER_CALL: usize = 20;
 const MAX_TARGETS_PER_CALL: usize = 100;
+/// `ListMutedProfiles` cap: reader profiles per call.
+const MAX_MUTERS_PER_CALL: usize = 10;
 
 /// Folds one more chunk's answer into an author's running answer: a block from
 /// any profile hides; otherwise any profile that may see it opens it — exactly
@@ -176,6 +179,23 @@ impl SocialGraphClient for SocialGraphGrpcClient {
             }
         }
         Ok(answers)
+    }
+
+    async fn muted_authors(&self, viewers: &[String]) -> Result<HashSet<AuthorId>, TimelineError> {
+        let mut client = self.client();
+        let mut muted = HashSet::new();
+        for chunk in viewers.chunks(MAX_MUTERS_PER_CALL) {
+            let response = client
+                .list_muted_profiles(ListMutedProfilesRequest {
+                    profile_ids: chunk.to_vec(),
+                    scope:       ProtoMuteScope::Posts as i32,
+                })
+                .await
+                .map_err(|status| TimelineError::AccessCheckUnavailable { reason: status.to_string() })?
+                .into_inner();
+            muted.extend(response.profile_ids.iter().filter_map(|id| AuthorId::try_from(id.as_str()).ok()));
+        }
+        Ok(muted)
     }
 }
 

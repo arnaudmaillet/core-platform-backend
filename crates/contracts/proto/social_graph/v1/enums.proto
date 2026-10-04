@@ -65,3 +65,12 @@ enum ListAudience {
     // The owner alone.
     LIST_AUDIENCE_ONLY_ME     = 4;
 }
+
+// One kind of content a mute covers.
+enum MuteScope {
+    MUTE_SCOPE_UNSPECIFIED = 0;
+    // The muted profile's posts, in the muter's feeds.
+    MUTE_SCOPE_POSTS       = 1;
+    MUTE_SCOPE_STORIES     = 2;
+    MUTE_SCOPE_MESSAGES    = 3;
+}

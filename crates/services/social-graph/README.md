@@ -118,14 +118,18 @@ service SocialGraphService {
   rpc SetListPrivacy(SetListPrivacyRequest) returns (ListPrivacy);   // owner: who sees the follower / following lists
   rpc Block(BlockRequest) returns (CommandResponse);
   rpc Unblock(UnblockRequest) returns (CommandResponse);
+  rpc Mute(MuteRequest) returns (CommandResponse);   // actor: posts / stories / messages
+  rpc Unmute(UnmuteRequest) returns (CommandResponse);
   // Queries
   rpc GetRelationStatus(GetRelationStatusRequest) returns (RelationStatusView);
   rpc ListFollowers(ListFollowersRequest) returns (ListFollowersResponse);
   rpc ListFollowing(ListFollowingRequest) returns (ListFollowingResponse);
   rpc GetListPrivacy(GetListPrivacyRequest) returns (ListPrivacy);   // owner
   rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
+  rpc ListMutes(ListMutesRequest) returns (ListMutesResponse);   // owner
   rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY
   rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);   // MESH-ONLY: may actor comment / mention / message target (its profile interaction settings, blocks)
+  rpc ListMutedProfiles(ListMutedProfilesRequest) returns (ListMutedProfilesResponse);   // MESH-ONLY: a reader's mutes for one scope (timeline)
 }
 ```
 
@@ -149,6 +153,14 @@ unlike the other columns of that projection). A reader with several profiles is 
 best-placed one. **`RemoveFollower`** undoes a follower's follow exactly as its own `Unfollow`
 would (counts, `social-graph.unfollowed`, timeline pruning); the follower is not notified and, on a
 private profile, has to ask again.
+
+**Mutes (#659).** `Mute` records, per scope (posts, stories, messages), what the actor stops seeing of the
+target; re-muting replaces the scopes, `Unmute` lifts it, `ListMutes` pages the owner's mutes and
+`RelationStatusView.muted` tells the actor how it mutes a target. The target is not told and nothing is
+severed. Table `social_graph.mutes` (partitioned by muter). Enforced today for **posts**: timeline leaves a
+muted author out of the reader's following and discovery feeds through the mesh-only `ListMutedProfiles`
+(≤ 10 reader profiles, ≤ 5 000 mutes each). Stories and messages are stored for the client: there is no
+stories surface and no message notification yet.
 
 > **Wire contract:** `RelationStatus` (actor's perspective): `NONE`, `FOLLOWING`, `FOLLOWED_BY`,
 > `MUTUAL` (implicit friendship), `BLOCKING`, `BLOCKED_BY`.
