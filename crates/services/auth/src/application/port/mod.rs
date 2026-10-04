@@ -33,5 +33,6 @@ pub use session_repository::SessionRepository;
 pub use subject_link_repository::SubjectLinkRepository;
 pub use token_minter::{GeneratedRefresh, TokenMinter};
 pub use verification::{
-    CodeSender, PendingChallenge, SendAdmission, VerificationChannel, VerificationStore, VerifiedDestination,
+    CodeSender, ConsumeOutcome, PendingChallenge, SendAdmission, SendLimits, VerificationChannel,
+    VerificationStore, VerifiedDestination,
 };

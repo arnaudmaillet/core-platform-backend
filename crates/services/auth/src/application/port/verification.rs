@@ -27,6 +27,8 @@ pub struct PendingChallenge {
     pub channel:      VerificationChannel,
     /// The normalized address.
     pub destination:  String,
+    /// The address's hash, keying its send budget and failure count.
+    pub destination_key: String,
     /// `SHA-256(challenge_id ":" code)`, hex.
     pub code_hash:    String,
 }
@@ -36,6 +38,25 @@ pub struct PendingChallenge {
 pub struct VerifiedDestination {
     pub channel:     VerificationChannel,
     pub destination: String,
+}
+
+/// What checking a code found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConsumeOutcome {
+    /// The code matched: the challenge is consumed.
+    Verified { destination: VerifiedDestination, destination_key: String },
+    /// A wrong code for this challenge (an attempt was spent).
+    Miss { destination_key: String },
+    /// No such challenge (unknown, expired, used up).
+    Unknown,
+}
+
+/// Per-address send limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SendLimits {
+    pub per_hour: u32,
+    pub per_day:  u32,
+    pub resend:   Duration,
 }
 
 /// Whether another code may be sent to an address now.
@@ -51,20 +72,21 @@ pub enum SendAdmission {
 pub trait VerificationStore: Send + Sync + 'static {
     /// Counts one send to `destination_key` (a hash of the address): at most
     /// `per_hour` an hour, and not within `resend` of the previous one.
-    async fn admit_send(
-        &self,
-        destination_key: &str,
-        per_hour: u32,
-        resend: Duration,
-    ) -> Result<SendAdmission, AuthError>;
+    async fn admit_send(&self, destination_key: &str, limits: SendLimits) -> Result<SendAdmission, AuthError>;
+
+    /// Counts a wrong code for an address, across its challenges, in a window
+    /// opened by the first failure; returns the count.
+    async fn record_failure(&self, destination_key: &str, window: Duration) -> Result<u32, AuthError>;
+
+    /// The address's failures in the current window, and the seconds left in it.
+    async fn failures(&self, destination_key: &str) -> Result<(u32, i64), AuthError>;
 
     async fn save(&self, challenge: &PendingChallenge, ttl: Duration, max_attempts: u32) -> Result<(), AuthError>;
 
     /// Checks `code_hash` against the challenge: on a match the challenge is
-    /// consumed (single use) and its address returned; on a miss one attempt is
-    /// spent, and the challenge is dropped once they are all spent. `None` for a
-    /// wrong code, an unknown or an expired challenge — never told apart.
-    async fn consume(&self, challenge_id: &str, code_hash: &str) -> Result<Option<VerifiedDestination>, AuthError>;
+    /// consumed (single use); on a miss one attempt is spent, and the challenge
+    /// is dropped once they are all spent.
+    async fn consume(&self, challenge_id: &str, code_hash: &str) -> Result<ConsumeOutcome, AuthError>;
 
     async fn discard(&self, challenge_id: &str) -> Result<(), AuthError>;
 }

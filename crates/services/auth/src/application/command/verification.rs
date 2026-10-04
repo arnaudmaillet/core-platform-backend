@@ -17,22 +17,41 @@ use validate_core::{FieldViolation, Validate};
 
 use crate::application::ensure_valid;
 use crate::application::port::{
-    CodeSender, PendingChallenge, SendAdmission, VerificationChannel, VerificationStore, VerifiedDestination,
+    CodeSender, ConsumeOutcome, PendingChallenge, SendAdmission, SendLimits, VerificationChannel,
+    VerificationStore, VerifiedDestination,
 };
 use crate::error::AuthError;
 
-/// Code lifetime, attempts and the per-address send budget.
+/// Code lifetime, attempts, the per-address send budget, and the per-address
+/// failure ceiling.
+///
+/// The ceiling bounds online guessing against one address: with 5 sends an hour
+/// and 5 tries a code, an attacker would otherwise get 25 guesses an hour on a
+/// million codes, every hour. After `max_failures` wrong codes within
+/// `failure_window` (across challenges), the address gets no new code and even
+/// a right one is refused until the window ends.
 #[derive(Debug, Clone)]
 pub struct VerificationPolicy {
-    pub ttl:          Duration,
-    pub max_attempts: u32,
-    pub per_hour:     u32,
-    pub resend:       Duration,
+    pub ttl:            Duration,
+    pub max_attempts:   u32,
+    pub per_hour:       u32,
+    pub per_day:        u32,
+    pub resend:         Duration,
+    pub max_failures:   u32,
+    pub failure_window: Duration,
 }
 
 impl Default for VerificationPolicy {
     fn default() -> Self {
-        Self { ttl: Duration::minutes(10), max_attempts: 5, per_hour: 5, resend: Duration::seconds(30) }
+        Self {
+            ttl: Duration::minutes(10),
+            max_attempts: 5,
+            per_hour: 5,
+            per_day: 20,
+            resend: Duration::seconds(30),
+            max_failures: 15,
+            failure_window: Duration::hours(24),
+        }
     }
 }
 
@@ -119,11 +138,15 @@ impl VerificationCodes {
             }
         };
 
-        match self
-            .store
-            .admit_send(&destination_key(cmd.channel, &destination), self.policy.per_hour, self.policy.resend)
-            .await?
-        {
+        let key = destination_key(cmd.channel, &destination);
+        // A locked address gets no new code until its failure window ends.
+        let (failures, window_left) = self.store.failures(&key).await?;
+        if failures >= self.policy.max_failures {
+            return Err(AuthError::VerificationRateLimited { retry_after_secs: window_left.max(1) });
+        }
+        let limits =
+            SendLimits { per_hour: self.policy.per_hour, per_day: self.policy.per_day, resend: self.policy.resend };
+        match self.store.admit_send(&key, limits).await? {
             SendAdmission::Allowed => {}
             SendAdmission::Refused { retry_after_secs } => {
                 return Err(AuthError::VerificationRateLimited { retry_after_secs });
@@ -136,6 +159,7 @@ impl VerificationCodes {
             challenge_id: challenge_id.clone(),
             channel: cmd.channel,
             destination: destination.clone(),
+            destination_key: key,
             code_hash: code_hash(&challenge_id, &code),
         };
         self.store.save(&challenge, self.policy.ttl, self.policy.max_attempts).await?;
@@ -152,15 +176,30 @@ impl VerificationCodes {
     }
 
     /// The address a code proves, consuming the challenge. Any failure is the
-    /// same [`AuthError::VerificationCodeInvalid`].
+    /// same [`AuthError::VerificationCodeInvalid`]; a wrong code counts against
+    /// the address, and a locked address is refused even with the right code.
     pub async fn verify(&self, challenge_id: &str, code: &str) -> Result<VerifiedDestination, AuthError> {
         if challenge_id.trim().is_empty() || code.trim().is_empty() {
             return Err(AuthError::VerificationCodeInvalid);
         }
-        self.store
-            .consume(challenge_id.trim(), &code_hash(challenge_id.trim(), code))
-            .await?
-            .ok_or(AuthError::VerificationCodeInvalid)
+        match self.store.consume(challenge_id.trim(), &code_hash(challenge_id.trim(), code)).await? {
+            ConsumeOutcome::Verified { destination, destination_key } => {
+                let (failures, _) = self.store.failures(&destination_key).await?;
+                if failures >= self.policy.max_failures {
+                    tracing::warn!("a right code for a locked address was refused");
+                    return Err(AuthError::VerificationCodeInvalid);
+                }
+                Ok(destination)
+            }
+            ConsumeOutcome::Miss { destination_key } => {
+                let failures = self.store.record_failure(&destination_key, self.policy.failure_window).await?;
+                if failures == self.policy.max_failures {
+                    tracing::warn!("an address reached its code failure ceiling and is locked");
+                }
+                Err(AuthError::VerificationCodeInvalid)
+            }
+            ConsumeOutcome::Unknown => Err(AuthError::VerificationCodeInvalid),
+        }
     }
 }
 
@@ -170,7 +209,7 @@ mod tests {
     use crate::application::fakes::{InMemoryVerificationStore, RecordingCodeSender};
 
     fn codes(sender: Arc<RecordingCodeSender>, store: Arc<InMemoryVerificationStore>) -> VerificationCodes {
-        VerificationCodes::new(store, sender, VerificationPolicy { per_hour: 2, ..VerificationPolicy::default() })
+        VerificationCodes::new(store, sender, VerificationPolicy { per_hour: 2, max_failures: 7, ..VerificationPolicy::default() })
     }
 
     fn email(destination: &str) -> StartVerificationCommand {
@@ -240,5 +279,35 @@ mod tests {
         let before = store.len();
         assert!(matches!(codes.start(email("zed@example.com")).await, Err(AuthError::VerificationSendFailed)));
         assert_eq!(store.len(), before, "an unsent code is not kept");
+    }
+
+    #[tokio::test]
+    async fn too_many_wrong_codes_lock_the_address_even_for_a_right_code() {
+        let (sender, store) = (Arc::new(RecordingCodeSender::default()), Arc::new(InMemoryVerificationStore::default()));
+        let codes = VerificationCodes::new(
+            Arc::clone(&store) as _,
+            Arc::clone(&sender) as _,
+            VerificationPolicy { per_hour: 10, max_failures: 7, ..VerificationPolicy::default() },
+        );
+        // 5 wrong on the first challenge, 2 on the second: 7 = the ceiling.
+        let first = codes.start(email("tim@example.com")).await.unwrap();
+        let (_, code1, _) = sender.last().unwrap();
+        let wrong = |c: &str| if c == "000000" { "111111".to_owned() } else { "000000".to_owned() };
+        for _ in 0..5 {
+            let _ = codes.verify(&first.challenge_id, &wrong(&code1)).await;
+        }
+        let second = codes.start(email("tim@example.com")).await.unwrap();
+        let (_, code2, _) = sender.last().unwrap();
+        for _ in 0..2 {
+            let _ = codes.verify(&second.challenge_id, &wrong(&code2)).await;
+        }
+        // The right code is refused now, and no new code is sent.
+        assert!(matches!(codes.verify(&second.challenge_id, &code2).await, Err(AuthError::VerificationCodeInvalid)));
+        assert!(matches!(
+            codes.start(email("tim@example.com")).await,
+            Err(AuthError::VerificationRateLimited { .. })
+        ));
+        // Another address is unaffected.
+        assert!(codes.start(email("una@example.com")).await.is_ok());
     }
 }

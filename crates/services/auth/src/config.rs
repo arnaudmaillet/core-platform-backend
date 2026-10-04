@@ -129,7 +129,10 @@ impl AuthConfig {
                 ttl: chrono::Duration::seconds(env_secs("AUTH_VERIFICATION_TTL_SECS", 600)),
                 max_attempts: env_secs("AUTH_VERIFICATION_MAX_ATTEMPTS", 5).max(1) as u32,
                 per_hour: env_secs("AUTH_VERIFICATION_PER_HOUR", 5).max(1) as u32,
+                per_day: env_secs("AUTH_VERIFICATION_PER_DAY", 20).max(1) as u32,
                 resend: chrono::Duration::seconds(env_secs("AUTH_VERIFICATION_RESEND_SECS", 30)),
+                max_failures: env_secs("AUTH_VERIFICATION_MAX_FAILURES", 15).max(1) as u32,
+                failure_window: chrono::Duration::hours(24),
             },
         })
     }

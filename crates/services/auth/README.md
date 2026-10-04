@@ -93,8 +93,10 @@ its identity is the address under the issuer `urn:core-platform:email`, and it s
 new code (`SIGN_IN_METHOD_EMAIL_CODE`). Codes are stored hashed in Redis (`auth:{otp:<id>}`), live
 `AUTH_VERIFICATION_TTL_SECS` (600), allow `AUTH_VERIFICATION_MAX_ATTEMPTS` (5) tries, and are single
 use; a wrong, expired or used code is one error (`AUT-5011`). Sends are budgeted per address
-(`AUTH_VERIFICATION_PER_HOUR` 5, `AUTH_VERIFICATION_RESEND_SECS` 30 → `RESOURCE_EXHAUSTED`
-`AUT-5013` with `retry-after-secs`) and per IP at the edge. **Nothing to enumerate:** the answer to
+(`AUTH_VERIFICATION_PER_HOUR` 5, `AUTH_VERIFICATION_PER_DAY` 20, `AUTH_VERIFICATION_RESEND_SECS` 30
+→ `RESOURCE_EXHAUSTED` `AUT-5013` with `retry-after-secs`) and per IP at the edge. **Guessing is
+bounded per address:** after `AUTH_VERIFICATION_MAX_FAILURES` (15) wrong codes within 24 h, across
+challenges, the address gets no new code and even a right one is refused until the window ends. **Nothing to enumerate:** the answer to
 StartVerification is the same for any address; whether it has an account (or one made with Apple /
 Google) is only told to whoever enters the code. Email goes through SMTP to **Amazon SES**
 (`AUTH_VERIFICATION_SENDER=smtp`, `AUTH_SMTP_*`); `log` writes the code to the log (local runs only);
@@ -211,7 +213,7 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | `AUTH_FEDERATED_JWKS_TIMEOUT_MS` | Deadline on fetching a provider's JWKS. | `3000` |
 | `AUTH_VERIFICATION_SENDER` | How one-time codes are sent: `smtp` (Amazon SES), `log` (local runs only — the code is logged), unset = off (`AUT-5012`). | — |
 | `AUTH_SMTP_HOST` · `AUTH_SMTP_PORT` · `AUTH_SMTP_USERNAME` · `AUTH_SMTP_PASSWORD` · `AUTH_SMTP_FROM` | SMTP relay for email codes (SES: `email-smtp.<region>.amazonaws.com`, `587`, STARTTLS, SES SMTP credentials, a verified sender). | — · `587` |
-| `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_RESEND_SECS` | Code lifetime, tries per code, codes per address an hour, resend cooldown. | `600` · `5` · `5` · `30` |
+| `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES` | Code lifetime, tries per code, codes per address an hour / a day, resend cooldown, wrong codes per address in 24 h before it is locked. | `600` · `5` · `5` · `20` · `30` · `15` |
 | Postgres / Redis / Kafka | via the shared storage crates' own `from_env()` | — |
 
 ## 🧪 Local Development

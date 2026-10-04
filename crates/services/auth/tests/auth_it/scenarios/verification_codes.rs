@@ -40,7 +40,7 @@ async fn codes_prove_an_address_once_and_sends_are_budgeted() {
     let codes = VerificationCodes::new(
         Arc::new(RedisVerificationStore::new(h.redis.clone())),
         Arc::clone(&outbox) as _,
-        VerificationPolicy { per_hour: 3, resend: chrono::Duration::seconds(1), ..VerificationPolicy::default() },
+        VerificationPolicy { per_hour: 3, resend: chrono::Duration::seconds(1), max_failures: 6, ..VerificationPolicy::default() },
     );
     let address = format!("it.{}@example.com", uuid::Uuid::now_v7().simple());
 
@@ -68,4 +68,22 @@ async fn codes_prove_an_address_once_and_sends_are_budgeted() {
     tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
     let refused = codes.start(start(&address)).await;
     assert!(matches!(refused, Err(AuthError::VerificationRateLimited { retry_after_secs }) if retry_after_secs > 1));
+
+    // The failure ceiling (6) counts across challenges: lock another address
+    // with 5 wrong codes on one challenge and a 6th on the next.
+    let locked = format!("lock.{}@example.com", uuid::Uuid::now_v7().simple());
+    let third = codes.start(start(&locked)).await.unwrap();
+    let code = outbox.last();
+    let wrong = if code == "000000" { "111111" } else { "000000" };
+    for _ in 0..5 {
+        let _ = codes.verify(&third.challenge_id, wrong).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    let fourth = codes.start(start(&locked)).await.unwrap();
+    let code = outbox.last();
+    let wrong = if code == "000000" { "111111" } else { "000000" };
+    let _ = codes.verify(&fourth.challenge_id, wrong).await; // the 6th failure
+    assert!(matches!(codes.verify(&fourth.challenge_id, &code).await, Err(AuthError::VerificationCodeInvalid)), "a right code is refused once locked");
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    assert!(matches!(codes.start(start(&locked)).await, Err(AuthError::VerificationRateLimited { retry_after_secs }) if retry_after_secs > 3_600));
 }

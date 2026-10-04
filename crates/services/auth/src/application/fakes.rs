@@ -772,6 +772,7 @@ struct StoredChallenge {
 pub struct InMemoryVerificationStore {
     challenges: Mutex<HashMap<String, StoredChallenge>>,
     sends: Mutex<HashMap<String, u32>>,
+    failures: Mutex<HashMap<String, u32>>,
 }
 
 impl InMemoryVerificationStore {
@@ -789,13 +790,12 @@ impl super::port::VerificationStore for InMemoryVerificationStore {
     async fn admit_send(
         &self,
         destination_key: &str,
-        per_hour: u32,
-        _resend: Duration,
+        limits: super::port::SendLimits,
     ) -> Result<super::port::SendAdmission, AuthError> {
         let mut sends = self.sends.lock().unwrap();
         let n = sends.entry(destination_key.to_owned()).or_default();
         *n += 1;
-        Ok(if *n > per_hour {
+        Ok(if *n > limits.per_hour.min(limits.per_day) {
             super::port::SendAdmission::Refused { retry_after_secs: 3600 }
         } else {
             super::port::SendAdmission::Allowed
@@ -810,21 +810,36 @@ impl super::port::VerificationStore for InMemoryVerificationStore {
         Ok(())
     }
 
-    async fn consume(&self, challenge_id: &str, code_hash: &str) -> Result<Option<super::port::VerifiedDestination>, AuthError> {
+    async fn record_failure(&self, destination_key: &str, _window: Duration) -> Result<u32, AuthError> {
+        let mut failures = self.failures.lock().unwrap();
+        let n = failures.entry(destination_key.to_owned()).or_default();
+        *n += 1;
+        Ok(*n)
+    }
+
+    async fn failures(&self, destination_key: &str) -> Result<(u32, i64), AuthError> {
+        Ok((self.failures.lock().unwrap().get(destination_key).copied().unwrap_or(0), 86_400))
+    }
+
+    async fn consume(&self, challenge_id: &str, code_hash: &str) -> Result<super::port::ConsumeOutcome, AuthError> {
         let mut challenges = self.challenges.lock().unwrap();
-        let Some(stored) = challenges.get_mut(challenge_id) else { return Ok(None) };
+        let Some(stored) = challenges.get_mut(challenge_id) else { return Ok(super::port::ConsumeOutcome::Unknown) };
+        let destination_key = stored.challenge.destination_key.clone();
         if stored.challenge.code_hash == code_hash {
             let stored = challenges.remove(challenge_id).unwrap();
-            return Ok(Some(super::port::VerifiedDestination {
-                channel: stored.challenge.channel,
-                destination: stored.challenge.destination,
-            }));
+            return Ok(super::port::ConsumeOutcome::Verified {
+                destination: super::port::VerifiedDestination {
+                    channel: stored.challenge.channel,
+                    destination: stored.challenge.destination,
+                },
+                destination_key,
+            });
         }
         stored.attempts_left = stored.attempts_left.saturating_sub(1);
         if stored.attempts_left == 0 {
             challenges.remove(challenge_id);
         }
-        Ok(None)
+        Ok(super::port::ConsumeOutcome::Miss { destination_key })
     }
 
     async fn discard(&self, challenge_id: &str) -> Result<(), AuthError> {
