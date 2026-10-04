@@ -24,15 +24,15 @@ use crate::application::command::{
     UpdateViralityWithTilesCommand, UpdateViralityWithTilesHandler,
 };
 use crate::application::country_access::ResolveCountryAccess;
-use crate::application::port::{AudienceGate, CountryGrantStore, GeoIp};
+use crate::application::port::{AudienceGate, CountryGrantStore, GeoIp, LocationSettingsStore};
 use crate::domain::country_atlas::CountryAtlas;
 use crate::application::query::get_geo_timeline::{GetGeoTimelineHandler, GetGeoTimelineQuery};
 use crate::application::query::query_tile::{QueryTileHandler, QueryTileQuery};
 use crate::config::GeoDiscoveryConfig;
 use crate::infrastructure::cache::{RedisCardStore, RedisCountryGrantStore, RedisGeoSpatialIndex, RedisPinStore};
-use crate::infrastructure::persistence::ScyllaTileRepository;
+use crate::infrastructure::persistence::{ScyllaLocationSettingsStore, ScyllaTileRepository};
 use crate::infrastructure::worker::{
-    PostIndexerWorker, ScoreUpdaterWorker, TilePrunerWorker, VisibilityWorker,
+    LocationSettingsWorker, PostIndexerWorker, ScoreUpdaterWorker, TilePrunerWorker, VisibilityWorker,
 };
 
 /// Storage/transport endpoints the graph is wired against.
@@ -87,6 +87,8 @@ impl App {
         let grants: Arc<dyn CountryGrantStore> =
             Arc::new(RedisCountryGrantStore::new(redis_client.clone(), cfg.country_grant_ttl_secs));
         let atlas = CountryAtlas::embedded();
+        let location: Arc<dyn LocationSettingsStore> =
+            Arc::new(ScyllaLocationSettingsStore::new(Arc::clone(&scylla_client)));
         let country_access = Arc::new(ResolveCountryAccess { geo_ip, grants: Arc::clone(&grants), atlas });
 
         let command_bus = Arc::new(
@@ -120,6 +122,7 @@ impl App {
                     audience:      Arc::clone(&audience),
                     grants:        Arc::clone(&grants),
                     atlas,
+                    location:      Arc::clone(&location),
                 })?
                 // Focus (tap): hydrates full cards, Redis + ScyllaDB fallback.
                 .register::<GetGeoTimelineQuery, _>(GetGeoTimelineHandler {
@@ -128,6 +131,7 @@ impl App {
                     audience,
                     grants,
                     atlas,
+                    location:        Arc::clone(&location),
                 })?
                 .build(),
         );
@@ -163,6 +167,14 @@ impl App {
                     Arc::clone(&tile_repository),
                     Arc::clone(&pin_store),
                     cfg.visibility_group_id.clone(),
+                )
+                .run(),
+            );
+            tokio::spawn(
+                LocationSettingsWorker::new(
+                    kafka_config.clone(),
+                    Arc::clone(&location),
+                    cfg.location_settings_group_id.clone(),
                 )
                 .run(),
             );

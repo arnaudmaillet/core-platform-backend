@@ -4,10 +4,15 @@ use cqrs::{Envelope, Query, QueryHandler};
 use validate_core::{FieldViolation, Validate};
 
 use crate::application::country_access::country_limit;
-use crate::application::port::{visible_authors, AudienceGate, CountryGrantStore, PinStore, SpatialIndex};
+use crate::application::port::{
+    sharing_for_reader, visible_authors, AudienceGate, CountryGrantStore, LocationSettingsStore, PinStore,
+    SpatialIndex,
+};
 use crate::domain::country_atlas::CountryAtlas;
 use crate::domain::entity::RadarPin;
-use crate::domain::value_object::{GeoCoordinate, MapScope, Viewer, zoom_to_resolution};
+use crate::domain::value_object::{
+    city_point, zoom_to_resolution, GeoCoordinate, H3Resolution, MapScope, Viewer,
+};
 use crate::error::GeoDiscoveryError;
 use crate::infrastructure::h3::h3_codec;
 
@@ -69,6 +74,8 @@ pub struct QueryTileHandler<SI, PS> {
     pub audience:      Arc<dyn AudienceGate>,
     pub grants:        Arc<dyn CountryGrantStore>,
     pub atlas:         &'static CountryAtlas,
+    /// The authors' location sharing (ghost, city level).
+    pub location:      Arc<dyn LocationSettingsStore>,
 }
 
 impl<SI, PS> QueryHandler<QueryTileQuery> for QueryTileHandler<SI, PS>
@@ -139,6 +146,31 @@ where
         // ── Phase 2b: a guest's country (borders shared with the app).
         if let Some(Some(country)) = limit {
             pins.retain(|p| self.atlas.contains(country, p.lat, p.lng));
+        }
+
+        // ── Phase 2c: the authors' location sharing (#657; fails closed). For
+        //   any reader but the author — the mesh included: a ghost's posts
+        //   leave the map; a city-level author's show only at the coarse band
+        //   (R5), at the cell's centre.
+        let owned: &[String] = match &q.viewer {
+            Viewer::Profiles(ids) => ids,
+            Viewer::Internal => &[],
+        };
+        let sharing =
+            sharing_for_reader(self.location.as_ref(), owned, pins.iter().filter_map(|p| p.author_id)).await?;
+        if !sharing.is_empty() {
+            pins.retain_mut(|p| match p.author_id.and_then(|a| sharing.get(&a)) {
+                None => true,
+                Some(s) if s.ghost => false,
+                Some(_) if resolution != H3Resolution::R5 => false,
+                Some(_) => match city_point(p.lat, p.lng) {
+                    Some((lat, lng)) => {
+                        (p.lat, p.lng) = (lat, lng);
+                        true
+                    }
+                    None => false,
+                },
+            });
         }
 
         // ── Phase 3: the reader's audience (one bulk CheckAccess; fail closed).

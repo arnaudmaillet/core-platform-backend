@@ -85,10 +85,12 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("account.v1.events", "audit"),
     ("account.v1.events", "profile"),
     // profile lifecycle → search index, post author-tier denormalization,
-    // social-graph audience projection (access check)
+    // social-graph audience projection (access check), geo-discovery authors'
+    // location sharing (ghost / city level on the map)
     ("profile.v1.events", "search"),
     ("profile.v1.events", "post"),
     ("profile.v1.events", "social-graph"),
+    ("profile.v1.events", "geo-discovery"),
     // post (legacy)
     ("post.published", "notification"),
     ("post.published", "geo-discovery"),

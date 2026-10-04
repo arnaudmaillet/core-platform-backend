@@ -40,6 +40,8 @@ message ProfileView {
     int64                           version           = 21;
     // Who may comment / mention / message, downloads, like counts.
     InteractionSettings             interaction_settings = 22;
+    // Owner-only (unset for anyone else): ghost mode and location precision.
+    LocationSettings                location_settings    = 23;
 }
 
 message ProfileSummaryView {
@@ -165,4 +167,17 @@ message InteractionSettings {
 message SetInteractionSettingsRequest {
     string              profile_id = 1;
     InteractionSettings settings   = 2;
+}
+
+// A profile's location sharing, applied by geo-discovery to every map surface.
+// Teen accounts (13–17) start ghosted.
+message LocationSettings {
+    // Ghost mode: the profile's posts leave everyone else's map.
+    bool              ghost     = 1;
+    LocationPrecision precision = 2;
+}
+
+message SetLocationSettingsRequest {
+    string           profile_id = 1;
+    LocationSettings settings   = 2;
 }

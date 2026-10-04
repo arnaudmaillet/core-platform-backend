@@ -35,3 +35,29 @@ async fn interaction_settings_round_trip_and_are_announced() {
     assert_eq!(h.get_by_id(&profile.id).await.unwrap().interaction, quiet);
     assert!(h.publisher.published().iter().any(|t| t == "ProfileInteractionSettingsChanged"));
 }
+
+#[tokio::test]
+async fn location_settings_round_trip_owner_only_and_are_announced() {
+    use profile::application::command::SetLocationSettingsCommand;
+    use profile::domain::value_object::{LocationPrecision, LocationSettings, Viewer};
+
+    let h = TestHarness::start().await;
+    let (account, handle) = (harness::random_account_id(), harness::random_handle());
+    h.create(&account, &handle, "Alice").await;
+    let profile = h.get_by_handle(&handle).await.expect("created");
+
+    let ghost = LocationSettings { ghost: true, precision: LocationPrecision::City };
+    h.command_bus
+        .dispatch(Envelope::new(
+            Uuid::now_v7(),
+            SetLocationSettingsCommand { profile_id: profile.id.clone(), settings: ghost },
+        ))
+        .await
+        .expect("set");
+
+    assert_eq!(h.get_by_id(&profile.id).await.unwrap().location, Some(ghost));
+    // Owner-only: nobody else learns that the profile ghosts the map.
+    let other = Viewer::Account(harness::random_account_id());
+    assert_eq!(h.get_by_handle_as(&handle, other).await.unwrap().location, None);
+    assert!(h.publisher.published().iter().any(|t| t == "ProfileLocationSettingsChanged"));
+}

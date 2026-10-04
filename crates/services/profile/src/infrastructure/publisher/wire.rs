@@ -75,6 +75,14 @@ pub enum ProfileEventWire {
         show_like_counts: bool,
         occurred_at_ms: i64,
     },
+    /// Ghost mode and location precision (`precise` | `city`).
+    /// `geo-discovery` projects it onto every map surface.
+    ProfileLocationSettingsChanged {
+        profile_id: String,
+        ghost: bool,
+        precision: String,
+        occurred_at_ms: i64,
+    },
 }
 
 impl ProfileEventWire {
@@ -90,7 +98,8 @@ impl ProfileEventWire {
             | ProfileEventWire::ProfileDeleted { profile_id, .. }
             | ProfileEventWire::ProfileTierChanged { profile_id, .. }
             | ProfileEventWire::ProfileVisibilityChanged { profile_id, .. }
-            | ProfileEventWire::ProfileInteractionSettingsChanged { profile_id, .. } => profile_id,
+            | ProfileEventWire::ProfileInteractionSettingsChanged { profile_id, .. }
+            | ProfileEventWire::ProfileLocationSettingsChanged { profile_id, .. } => profile_id,
         }
     }
 
@@ -109,6 +118,7 @@ impl ProfileEventWire {
             ProfileEventWire::ProfileInteractionSettingsChanged { .. } => {
                 "ProfileInteractionSettingsChanged"
             }
+            ProfileEventWire::ProfileLocationSettingsChanged { .. } => "ProfileLocationSettingsChanged",
         }
     }
 }
@@ -170,6 +180,12 @@ impl From<&DomainEvent> for ProfileEventWire {
                     occurred_at_ms: e.occurred_at.timestamp_millis(),
                 }
             }
+            DomainEvent::LocationSettingsChanged(e) => ProfileEventWire::ProfileLocationSettingsChanged {
+                profile_id: e.profile_id.to_string(),
+                ghost: e.settings.ghost,
+                precision: e.settings.precision.as_str().to_owned(),
+                occurred_at_ms: e.occurred_at.timestamp_millis(),
+            },
         }
     }
 }

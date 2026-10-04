@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 1246fc80c59bd93be2f0c8b3721ad843e0cf01ed0ae1cfd62249e56b131b94e6
+  source_sha256: 3764fadbd288b903f72c33eeef96c714bc8e85995b555146d603136da073ef03
   translated_at: 2026-10-04
   status: complete
 ---
@@ -41,7 +41,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | Topic | Producer | Consumers |
 |---|---|---|
 | `account.v1.events` | `account` | `audit`, `profile` |
-| `profile.v1.events` | `profile` | `search`, `post`, `social-graph` |
+| `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery` |
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |
 | `post.updated` | `post` | — *(orphan — see below)* |
@@ -124,6 +124,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `profile_hidden` / `profile_restored` / `profile_deleted` | une transition de visibilité/cycle de vie | action propriétaire ou modération | read-models (démantèlement/restauration) ; `social-graph` (projection d'audience : masqué) |
 | `profile_visibility_changed` | le propriétaire a rendu le profil privé ou public | `SetVisibility` | `social-graph` (projection d'audience : privé → contenu réservé aux abonnés, via `CheckAccess`) |
 | `profile_interaction_settings_changed` | le propriétaire a changé qui peut commenter / mentionner / écrire (tout le monde, abonnés, mutuels, personne), les téléchargements et les compteurs de likes | `SetInteractionSettings`, ou la création du profil d'un titulaire de 13 à 17 ans (défauts ados) | `social-graph` (projection lue par `CheckInteraction`, que comment appelle avant d'écrire) |
+| `profile_location_settings_changed` | le propriétaire a activé / désactivé le mode fantôme ou changé la précision de localisation (précise / ville) | `SetLocationSettings`, ou la création du profil d'un titulaire de 13 à 17 ans (défaut ado : fantôme) | `geo-discovery` (projection appliquée à chaque surface de carte : les posts d'un fantôme quittent la carte des autres ; le niveau ville ne les montre qu'à la bande grossière, au centre de la cellule) |
 
 ## Contenu — `post.v1.events` (producteur : `post`)
 

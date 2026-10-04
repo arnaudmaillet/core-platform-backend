@@ -25,6 +25,12 @@ impl H3Index {
             .expect("parent resolution must be coarser than cell resolution"))
     }
 
+    /// The cell's centre `(lat, lng)`.
+    pub fn center(&self) -> (f64, f64) {
+        let ll = h3o::LatLng::from(self.0);
+        (ll.lat(), ll.lng())
+    }
+
     /// Raw signed integer representation for ScyllaDB `bigint` storage.
     pub fn as_i64(&self) -> i64 {
         u64::from(self.0) as i64

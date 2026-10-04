@@ -1988,6 +1988,7 @@ dependencies = [
  "http",
  "maxminddb",
  "moderation",
+ "profile",
  "redis-storage",
  "rmp-serde",
  "scylla",

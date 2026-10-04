@@ -8,3 +8,4 @@ mod viewport_query;
 mod map_visibility;
 mod card_retention;
 mod country_scope;
+mod location_sharing;

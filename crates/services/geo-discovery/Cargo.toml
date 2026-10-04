@@ -60,6 +60,8 @@ tokio = { workspace = true }
 # Wire contract test in the visibility worker: decode events serialized by
 # moderation's own types, so a casing drift fails here (see search #687).
 moderation = { workspace = true }
+# Same for the location-settings worker: profile's own wire type.
+profile    = { workspace = true }
 
 # ── Integration suite (feature = "integration-geo-discovery") ────────────────
 # Container orchestration, the RF=1 migration runner, and `await_until` come from

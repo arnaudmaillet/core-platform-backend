@@ -212,6 +212,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 |---|---|---|---|
 | `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
 | `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | map suppression: delete → permanent; `remove_content` / `visibility_limit` on a post → hidden; a newer reversal → restored (version-guarded; actor-level and other events skipped) | DLQ `{topic}.dlq` |
+| `profile.v1.events` | `geo-discovery-location-settings` | authors' location sharing (#657) from `ProfileLocationSettingsChanged` → `geo_discovery.location_settings`; every map query applies it for any reader but the author (the mesh included): a **ghost**'s pins and cards leave the map; a **city-level** author's pins show only at the R5 band at the R5 cell centre, and their cards name the city's R7 cell. Other profile events skipped | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |
 
@@ -283,6 +284,7 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Yes** (prod) | `http://localhost:50053` | social-graph endpoint for the per-reader audience filter (`CheckAccess`); client reads fail closed without it. |
 | `GEO_AUDIENCE_RPC_TIMEOUT_MS` / `GEO_AUDIENCE_CONNECT_TIMEOUT_MS` | No | `500` / `500` | deadlines on that call. |
 | `GEO_VISIBILITY_GROUP_ID` | No | `geo-discovery-visibility` | Kafka group of the map-suppression consumer. |
+| `GEO_LOCATION_SETTINGS_GROUP_ID` | No | `geo-discovery-location-settings` | Kafka group of the authors' location-sharing consumer (`profile.v1.events`). |
 | `GEO_GEOIP_MMDB_PATH` | **Yes** (prod) | — | MaxMind-format IP→country database (DB-IP Lite country, CC BY 4.0 — *IP Geolocation by DB-IP*, <https://db-ip.com>; or GeoLite2-Country). Missing → country access grants nothing. |
 | `GEO_GEOIP_PRIVATE_NETWORK_COUNTRY` | No | — | What a private/loopback client address resolves to: an ISO code, or `*` = the device's claim. **Local fleet only** — never in a deployed env. |
 | `GEO_TRUSTED_PROXY_HOPS` | No | `GRPC_TRUSTED_PROXY_HOPS`, else `1` | Proxies appending to `X-Forwarded-For` (the ALB); the client address is that many entries from the right. Unset = the fleet-wide `GRPC_TRUSTED_PROXY_HOPS`. |

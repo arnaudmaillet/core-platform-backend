@@ -5,9 +5,11 @@ use uuid::Uuid;
 use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
-use crate::domain::value_object::{InteractionAudience, InteractionSettings};
+use crate::domain::value_object::{
+    InteractionAudience, InteractionSettings, LocationPrecision, LocationSettings,
+};
 use crate::application::command::{
-    SetInteractionSettingsCommand,
+    SetInteractionSettingsCommand, SetLocationSettingsCommand,
     ChangeHandleCommand, CreateProfileCommand, DeleteProfileCommand, HideProfileCommand,
     RestoreProfileCommand, SetVisibilityCommand, UpdateAvatarCommand, UpdateBannerCommand,
     UpdateProfileCommand, VerifyProfileCommand,
@@ -203,6 +205,30 @@ where
                 allow_downloads: s.allow_downloads,
                 show_like_counts: s.show_like_counts,
             },
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_cmd(&req.profile_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    /// The owner's ghost mode / location precision (edge: one of the caller's profiles).
+    pub async fn set_location_settings(
+        &self,
+        request: Request<proto::SetLocationSettingsRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let s = req.settings.ok_or_else(|| Status::invalid_argument("settings are required"))?;
+        let precision = match proto::LocationPrecision::try_from(s.precision) {
+            Ok(proto::LocationPrecision::Precise) => LocationPrecision::Precise,
+            Ok(proto::LocationPrecision::City) => LocationPrecision::City,
+            _ => return Err(Status::invalid_argument("precision must be set")),
+        };
+        let cmd = SetLocationSettingsCommand {
+            profile_id: req.profile_id.clone(),
+            settings: LocationSettings { ghost: s.ghost, precision },
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -425,6 +451,13 @@ fn profile_view_to_proto(v: ProfileView) -> proto::ProfileView {
         updated_at:        Some(dt_to_ts(v.updated_at)),
         version:           v.version,
         interaction_settings: Some(interaction_to_proto(v.interaction)),
+        location_settings: v.location.map(|l| proto::LocationSettings {
+            ghost: l.ghost,
+            precision: (match l.precision {
+                LocationPrecision::Precise => proto::LocationPrecision::Precise,
+                LocationPrecision::City => proto::LocationPrecision::City,
+            }) as i32,
+        }),
     }
 }
 

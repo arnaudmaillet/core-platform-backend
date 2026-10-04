@@ -48,6 +48,9 @@ pub struct GeoDiscoveryConfig {
     /// Kafka consumer group ID for `post.deleted` + `moderation.v1.events`.
     pub visibility_group_id: String,
 
+    /// Kafka consumer group ID for `profile.v1.events` (authors' location sharing).
+    pub location_settings_group_id: String,
+
     /// How long a country granted from location stays open without being
     /// confirmed again (the app re-sends at each foreground).
     ///
@@ -103,6 +106,9 @@ impl GeoDiscoveryConfig {
 
             visibility_group_id: std::env::var("GEO_VISIBILITY_GROUP_ID")
                 .unwrap_or_else(|_| "geo-discovery-visibility".to_owned()),
+
+            location_settings_group_id: std::env::var("GEO_LOCATION_SETTINGS_GROUP_ID")
+                .unwrap_or_else(|_| "geo-discovery-location-settings".to_owned()),
 
             country_grant_ttl_secs: std::env::var("GEO_COUNTRY_GRANT_TTL_SECS")
                 .ok()

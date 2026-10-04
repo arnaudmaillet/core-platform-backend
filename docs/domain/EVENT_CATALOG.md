@@ -28,7 +28,7 @@ producer's `DOMAIN.md §8`.
 | Topic | Producer | Consumers |
 |---|---|---|
 | `account.v1.events` | `account` | `audit`, `profile` |
-| `profile.v1.events` | `profile` | `search`, `post`, `social-graph` |
+| `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery` |
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |
 | `post.updated` | `post` | — *(orphan — see below)* |
@@ -111,6 +111,7 @@ producer's `DOMAIN.md §8`.
 | `profile_hidden` / `profile_restored` / `profile_deleted` | a visibility/lifecycle transition | owner or moderation action | read models (teardown/restore); `social-graph` (audience projection: hidden) |
 | `profile_visibility_changed` | the owner made the profile private or public | `SetVisibility` | `social-graph` (audience projection: private → content for followers only, via `CheckAccess`) |
 | `profile_interaction_settings_changed` | the owner changed who may comment / mention / message (everyone, followers, mutuals, no one), downloads and like counts | `SetInteractionSettings`, or a 13–17 holder's profile creation (teen defaults) | `social-graph` (projection read by `CheckInteraction`, which comment calls before writing) |
+| `profile_location_settings_changed` | the owner turned ghost mode on/off or changed location precision (precise / city) | `SetLocationSettings`, or a 13–17 holder's profile creation (teen default: ghost) | `geo-discovery` (projection applied to every map surface: a ghost's posts leave others' maps; city level shows them only at the coarse band, at the cell centre) |
 
 ## Content — `post.v1.events` (producer: `post`)
 

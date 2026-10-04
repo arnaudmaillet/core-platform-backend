@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::value_object::InteractionSettings;
+use crate::domain::value_object::{InteractionSettings, LocationSettings};
 use crate::domain::aggregate::Profile;
 use crate::domain::entity::ProfileLink;
 use crate::domain::value_object::{AccountId, ProfileId, ProfileStatus, Viewer};
@@ -54,6 +54,9 @@ pub struct ProfileView {
     /// Entries cached before the field existed read as the defaults.
     #[serde(default)]
     pub interaction: InteractionSettings,
+    /// Owner-only (cleared for others): whether they ghost the map.
+    #[serde(default)]
+    pub location: Option<LocationSettings>,
 }
 
 impl From<&Profile> for ProfileView {
@@ -81,6 +84,7 @@ impl From<&Profile> for ProfileView {
             updated_at: p.updated_at(),
             version: p.version(),
             interaction: p.interaction(),
+            location: Some(p.location()),
         }
     }
 }
@@ -107,6 +111,7 @@ impl ProfileView {
         self.timezone = None;
         self.masked_at = None;
         self.masking_reason = None;
+        self.location = None;
         Some(self)
     }
 }
@@ -169,6 +174,7 @@ mod viewer_tests {
             updated_at: Utc::now(),
             version: 3,
             interaction: InteractionSettings::default(),
+            location: Some(LocationSettings::teen()),
         }
     }
 
