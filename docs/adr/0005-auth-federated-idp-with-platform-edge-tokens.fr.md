@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./0005-auth-federated-idp-with-platform-edge-tokens.md
-  source_sha256: 528e8f77969013ae96f82a6ee7693f005583f528774ef4bef0653d075ba53e1a
-  translated_at: 2026-09-15
+  source_sha256: 4ca1da5a557ab52f99d96bc11159d9cc94f024f48e0b1391ff3f4503ab6705ad
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`0005-auth-federated-idp-with-platform-edge-tokens.md`](./0005-auth-federated-idp-with-platform-edge-tokens.md) fait foi.
@@ -57,6 +57,17 @@ serveur client-facing, via `auth-context::spawn_edge_decoder` partagé et l'extr
 `platform_edge` (qui lit `perms` ; l'extracteur OIDC par défaut l'ignorait silencieusement).
 Reste ouvert parmi les conséquences ci-dessus : le **lookup de génération** à la vérification
 — la révocation reste bornée par le TTL d'accès de 10 minutes.
+
+## Amendement 2026-10-04 — le claim `did`
+
+La passerelle realtime indexe une socket par appareil et refuse un handshake dont le jeton
+n'a pas de claim d'appareil, mais `auth` n'en émettait aucun : aucun jeton réel ne pouvait
+ouvrir de socket. `auth` émet désormais `did`, le `DeviceContext.device_id` auquel la session
+a été liée au login, à chaque login et refresh (`auth_context::edge::EDGE_DEVICE_CLAIM`, la
+valeur par défaut de `REALTIME_DEVICE_CLAIM` côté realtime). Il vient de la session, pas de
+la requête de refresh, et reste donc stable pendant toute la vie de la session. Il est omis
+quand le client n'a envoyé aucun id d'appareil, et un tel jeton échoue toujours au handshake
+realtime.
 
 ## Alternatives rejetées
 

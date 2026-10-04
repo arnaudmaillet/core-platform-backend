@@ -47,6 +47,16 @@ the default OIDC extractor silently dropped it). Still open from the consequence
 the **generation lookup** at verify time — revocation remains bounded by the 10-minute
 access TTL.
 
+## Amendment 2026-10-04 — the `did` claim
+
+The realtime gateway keys a socket by device and rejects a handshake whose token has no
+device claim, but `auth` never minted one, so no real token could open a socket. `auth`
+now mints `did`, the `DeviceContext.device_id` the session was bound to at login, on every
+login and refresh (`auth_context::edge::EDGE_DEVICE_CLAIM`, realtime's default
+`REALTIME_DEVICE_CLAIM`). It comes from the session, not the refresh request, so it stays
+stable for the session's life. It is omitted when the client sent no device id, and such a
+token still fails the realtime handshake.
+
 ## Alternatives rejected
 
 | Option | Why rejected |
