@@ -33,9 +33,21 @@ impl GrpcNearbyPosts {
         Self { channel, radius_km, close_radius_km }
     }
 
-    async fn ring(&self, lat: f64, lng: f64, radius_km: f64, zoom_level: i32) -> Result<Vec<PostId>, TimelineError> {
+    async fn ring(
+        &self,
+        lat:        f64,
+        lng:        f64,
+        radius_km:  f64,
+        zoom_level: i32,
+        guest:      Option<&str>,
+    ) -> Result<Vec<PostId>, TimelineError> {
+        let request = QueryTileRequest {
+            viewport: Some(viewport(lat, lng, radius_km)),
+            zoom_level,
+            guest_principal: guest.unwrap_or_default().to_owned(),
+        };
         let response = GeoDiscoveryServiceClient::new(self.channel.clone())
-            .query_tile(QueryTileRequest { viewport: Some(viewport(lat, lng, radius_km)), zoom_level })
+            .query_tile(request)
             .await
             .map_err(|status| TimelineError::NearbyUnavailable { reason: status.to_string() })?
             .into_inner();
@@ -58,10 +70,10 @@ fn viewport(lat: f64, lng: f64, radius_km: f64) -> Viewport {
 
 #[async_trait]
 impl NearbyPosts for GrpcNearbyPosts {
-    async fn around(&self, lat: f64, lng: f64) -> Result<Vec<PostId>, TimelineError> {
+    async fn around(&self, lat: f64, lng: f64, guest: Option<&str>) -> Result<Vec<PostId>, TimelineError> {
         let (wide, close) = tokio::join!(
-            self.ring(lat, lng, self.radius_km, WIDE_ZOOM),
-            self.ring(lat, lng, self.close_radius_km, CLOSE_ZOOM),
+            self.ring(lat, lng, self.radius_km, WIDE_ZOOM, guest),
+            self.ring(lat, lng, self.close_radius_km, CLOSE_ZOOM, guest),
         );
         let mut seen = HashSet::new();
         Ok(close?.into_iter().chain(wide?).filter(|id| seen.insert(*id)).collect())

@@ -23,11 +23,13 @@ use crate::application::command::{
     ApplyMapVisibilityCommand, ApplyMapVisibilityHandler, IndexPostCommand, IndexPostHandler,
     UpdateViralityWithTilesCommand, UpdateViralityWithTilesHandler,
 };
-use crate::application::port::AudienceGate;
+use crate::application::country_access::ResolveCountryAccess;
+use crate::application::port::{AudienceGate, CountryGrantStore, GeoIp};
+use crate::domain::country_atlas::CountryAtlas;
 use crate::application::query::get_geo_timeline::{GetGeoTimelineHandler, GetGeoTimelineQuery};
 use crate::application::query::query_tile::{QueryTileHandler, QueryTileQuery};
 use crate::config::GeoDiscoveryConfig;
-use crate::infrastructure::cache::{RedisCardStore, RedisGeoSpatialIndex, RedisPinStore};
+use crate::infrastructure::cache::{RedisCardStore, RedisCountryGrantStore, RedisGeoSpatialIndex, RedisPinStore};
 use crate::infrastructure::persistence::ScyllaTileRepository;
 use crate::infrastructure::worker::{
     PostIndexerWorker, ScoreUpdaterWorker, TilePrunerWorker, VisibilityWorker,
@@ -45,6 +47,8 @@ pub struct Backends {
     /// The audience check (social-graph `CheckAccess`) the read paths apply to
     /// clients. Injected so the harness can script it.
     pub audience: Arc<dyn AudienceGate>,
+    /// The request's network country (country access).
+    pub geo_ip:   Arc<dyn GeoIp>,
 }
 
 /// A fully-wired geo-discovery service bound to its backends. The buses exposed
@@ -58,6 +62,9 @@ pub struct App {
     /// their liveness (see [`crate::service`]).
     pub scylla:      Arc<ScyllaClient>,
     pub redis:       RedisClient,
+    /// Country access from location (`GetCountryAccess`).
+    pub country_access: Arc<ResolveCountryAccess>,
+    pub trusted_proxy_hops: usize,
 }
 
 impl App {
@@ -68,7 +75,7 @@ impl App {
         cfg:      GeoDiscoveryConfig,
         backends: Backends,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let Backends { scylla, redis, kafka, audience } = backends;
+        let Backends { scylla, redis, kafka, audience, geo_ip } = backends;
 
         let scylla_client = Arc::new(ScyllaSessionBuilder::new(scylla).build().await?);
         let redis_client = RedisClientBuilder::new(redis).build().await?;
@@ -77,6 +84,10 @@ impl App {
         let card_store = Arc::new(RedisCardStore::new(redis_client.clone()));
         let pin_store = Arc::new(RedisPinStore::new(redis_client.clone()));
         let tile_repository = Arc::new(ScyllaTileRepository::new(Arc::clone(&scylla_client)));
+        let grants: Arc<dyn CountryGrantStore> =
+            Arc::new(RedisCountryGrantStore::new(redis_client.clone(), cfg.country_grant_ttl_secs));
+        let atlas = CountryAtlas::embedded();
+        let country_access = Arc::new(ResolveCountryAccess { geo_ip, grants: Arc::clone(&grants), atlas });
 
         let command_bus = Arc::new(
             CommandBusBuilder::new()
@@ -107,12 +118,16 @@ impl App {
                     spatial_index: Arc::clone(&spatial_index),
                     pin_store:     Arc::clone(&pin_store),
                     audience:      Arc::clone(&audience),
+                    grants:        Arc::clone(&grants),
+                    atlas,
                 })?
                 // Focus (tap): hydrates full cards, Redis + ScyllaDB fallback.
                 .register::<GetGeoTimelineQuery, _>(GetGeoTimelineHandler {
                     card_store:      Arc::clone(&card_store),
                     tile_repository: Arc::clone(&tile_repository),
                     audience,
+                    grants,
+                    atlas,
                 })?
                 .build(),
         );
@@ -162,6 +177,13 @@ impl App {
             );
         }
 
-        Ok(Self { command_bus, query_bus, scylla: scylla_client, redis: redis_client })
+        Ok(Self {
+            command_bus,
+            query_bus,
+            scylla: scylla_client,
+            redis: redis_client,
+            country_access,
+            trusted_proxy_hops: cfg.trusted_proxy_hops,
+        })
     }
 }

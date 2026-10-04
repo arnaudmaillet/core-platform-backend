@@ -1,4 +1,5 @@
 pub mod client;
+pub mod geoip;
 pub mod cache;
 pub mod grpc;
 pub mod h3;

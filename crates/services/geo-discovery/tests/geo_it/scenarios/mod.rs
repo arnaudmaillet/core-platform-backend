@@ -7,3 +7,4 @@ mod radar_focus;
 mod viewport_query;
 mod map_visibility;
 mod card_retention;
+mod country_scope;

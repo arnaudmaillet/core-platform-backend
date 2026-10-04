@@ -47,6 +47,19 @@ pub struct GeoDiscoveryConfig {
 
     /// Kafka consumer group ID for `post.deleted` + `moderation.v1.events`.
     pub visibility_group_id: String,
+
+    /// How long a country granted from location stays open without being
+    /// confirmed again (the app re-sends at each foreground).
+    ///
+    /// Default: 43 200 s (12 h).
+    pub country_grant_ttl_secs: u64,
+
+    /// Proxies in front of the edge listener that append to `X-Forwarded-For`
+    /// (the ALB: 1). The client address is that many entries from the right;
+    /// anything further left is client-supplied and never trusted.
+    ///
+    /// Default: 1.
+    pub trusted_proxy_hops: usize,
 }
 
 impl GeoDiscoveryConfig {
@@ -89,6 +102,16 @@ impl GeoDiscoveryConfig {
 
             visibility_group_id: std::env::var("GEO_VISIBILITY_GROUP_ID")
                 .unwrap_or_else(|_| "geo-discovery-visibility".to_owned()),
+
+            country_grant_ttl_secs: std::env::var("GEO_COUNTRY_GRANT_TTL_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(43_200),
+
+            trusted_proxy_hops: std::env::var("GEO_TRUSTED_PROXY_HOPS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1),
         }
     }
 }

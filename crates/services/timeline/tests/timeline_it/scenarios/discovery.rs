@@ -47,6 +47,7 @@ async fn page(
     let query = GetDiscoveryFeedQuery {
         ranking,
         viewer: Viewer::Profiles(vec![]),
+        guest: None,
         content_level,
         lat: Some(48.85),
         lng: Some(2.35),

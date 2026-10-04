@@ -70,6 +70,10 @@ message QueryTileRequest {
     // Raw client zoom level (0–15). The server maps this to a ZoomBand and
     // applies the corresponding H3 resolution and virality floor.
     int32    zoom_level = 2;
+    // Mesh only (ignored on the client edge, where the caller's own token
+    // decides): the guest principal (token sub) a mesh caller reads on behalf
+    // of, so the guest's country limit applies (timeline's NEARBY feed).
+    string   guest_principal = 3;
 }
 
 message QueryTileResponse {
@@ -100,4 +104,18 @@ message GetGeoTimelineResponse {
     // Cards for the post_ids that resolved, in arbitrary order. Unresolved ids
     // (expired / never indexed) are simply absent.
     repeated MapPostCard cards = 1;
+}
+
+// ── Country access ────────────────────────────────────────────────────────────
+
+message GetCountryAccessRequest {
+    // ISO 3166-1 alpha-2, derived on the device from its location. Empty when
+    // location is off or unavailable.
+    string current_country = 1;
+}
+
+message GetCountryAccessResponse {
+    // The current country, echoed only when granted; empty otherwise.
+    string               current_country = 1;
+    CountryAccessOutcome outcome         = 2;
 }

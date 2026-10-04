@@ -49,6 +49,13 @@ pub enum GeoDiscoveryError {
     #[error("domain violation on field '{field}': {message}")]
     DomainViolation { field: String, message: String },
 
+    #[error("invalid country code: '{0}' (expected ISO 3166-1 alpha-2)")]
+    InvalidCountryCode(String),
+
+    /// Country access is a client's: a mesh call has no principal to grant to.
+    #[error("country access needs a client principal")]
+    CountryAccessNeedsCaller,
+
     // ── GEO-6xxx: dependencies ────────────────────────────────────────────────
     /// social-graph's `CheckAccess` could not answer. Client reads fail closed
     /// rather than risk showing a private, blocked or hidden author's post.
@@ -77,6 +84,8 @@ impl AppError for GeoDiscoveryError {
             Self::InvalidPostId(_)    => "GEO-9001",
             Self::InvalidAuthorId(_)  => "GEO-9002",
             Self::DomainViolation { .. } => "GEO-9003",
+            Self::InvalidCountryCode(_)  => "GEO-9004",
+            Self::CountryAccessNeedsCaller => "GEO-9005",
             Self::AccessCheckUnavailable { .. } => "GEO-6001",
         }
     }
@@ -92,6 +101,8 @@ impl AppError for GeoDiscoveryError {
             | Self::InvalidZoomLevel(_)
             | Self::InvalidPostId(_)
             | Self::InvalidAuthorId(_)
+            | Self::InvalidCountryCode(_)
+            | Self::CountryAccessNeedsCaller
             | Self::DomainViolation { .. } => StatusCode::UNPROCESSABLE_ENTITY,
 
             Self::InvalidH3Index(_) => StatusCode::UNPROCESSABLE_ENTITY,
@@ -121,7 +132,9 @@ impl AppError for GeoDiscoveryError {
             Self::InvalidH3Index(_)
             | Self::InvalidZoomLevel(_)
             | Self::InvalidPostId(_)
-            | Self::InvalidAuthorId(_) => Severity::Low,
+            | Self::InvalidAuthorId(_)
+            | Self::InvalidCountryCode(_)
+            | Self::CountryAccessNeedsCaller => Severity::Low,
 
             Self::AccessCheckUnavailable { .. } => Severity::Medium,
         }
@@ -168,6 +181,8 @@ impl AppError for GeoDiscoveryError {
             Self::InvalidAuthorId(_)  => "The provided author ID is not valid.",
             Self::DomainViolation { .. } =>
                 "The request contains an invalid domain value.",
+            Self::InvalidCountryCode(_) => "The provided country code is not valid.",
+            Self::CountryAccessNeedsCaller => "Country access needs a signed-in or guest session.",
 
             Self::Validation(e) => e.user_facing_message(),
 

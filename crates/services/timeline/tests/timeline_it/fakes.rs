@@ -99,7 +99,7 @@ pub struct FakeNearby {
 
 #[async_trait]
 impl NearbyPosts for FakeNearby {
-    async fn around(&self, _lat: f64, _lng: f64) -> Result<Vec<PostId>, TimelineError> {
+    async fn around(&self, _lat: f64, _lng: f64, _guest: Option<&str>) -> Result<Vec<PostId>, TimelineError> {
         Ok(self.posts.lock().unwrap().clone())
     }
 }

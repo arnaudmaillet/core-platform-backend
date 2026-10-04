@@ -147,7 +147,8 @@ A non-personalised feed that needs no follow graph: For You for guests and membe
   (`TIMELINE_DISCOVERY_HOT_GRAVITY_SECS`, 12.5 h: a post that much newer ranks like one ten times more
   popular), posts with some popularity only; `RECENT` = newest first; `FOR_YOU` = three hot for one *fresh*
   (no popularity yet); `NEARBY` = geo-discovery's posts around `lat`/`lng` (a wide ring above geo's
-  virality floor, plus a close ring with no floor), ranked by hot score.
+  virality floor, plus a close ring with no floor), ranked by hot score; a guest only gets its granted
+  country (geo-discovery country access, passed as `guest_principal`).
 - **Filters.** Deleted, removed and visibility-limited posts are never shown; age-gated ones only at
   `CONTENT_LEVEL_STANDARD`. A **guest always gets `RESTRICTED`**; anyone else gets what it asks for,
   `RESTRICTED` by default (no date of birth is known server-side yet). The reader comes from the token

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8b79611a2d3708673c8be25b6b4d03ab5efcfd12b46d7288292cb1b09cee4447
+  source_sha256: 64a2ddbce137a16bdfdeb804740958be458f7b1202ad569bddb331b6a44effe3
   translated_at: 2026-10-04
   status: complete
 ---
@@ -166,7 +166,8 @@ Un fil non personnalisé qui n'a besoin d'aucun graphe de suivi : le For You des
   fois plus populaire), uniquement les posts ayant de la popularité ; `RECENT` = du plus récent au plus
   ancien ; `FOR_YOU` = trois hot pour un *frais* (sans popularité encore) ; `NEARBY` = les posts de
   geo-discovery autour de `lat`/`lng` (un anneau large au-dessus du seuil de viralité de geo, plus un
-  anneau proche sans seuil), classés par score hot.
+  anneau proche sans seuil), classés par score hot ; un invité n'obtient que son pays accordé (accès par
+  pays de geo-discovery, transmis en `guest_principal`).
 - **Filtres.** Les posts supprimés, retirés ou à visibilité limitée ne sont jamais montrés ; les posts
   soumis à une limite d'âge seulement en `CONTENT_LEVEL_STANDARD`. Un **invité a toujours `RESTRICTED`** ;
   les autres obtiennent ce qu'ils demandent, `RESTRICTED` par défaut (aucune date de naissance n'est connue

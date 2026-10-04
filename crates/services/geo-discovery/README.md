@@ -125,13 +125,16 @@ retention window, so ingest-lag SLOs are softer than the query-latency SLO.
 service GeoDiscoveryService {
   rpc QueryTile      (QueryTileRequest)      returns (QueryTileResponse);      // Radar (pan): lean pins
   rpc GetGeoTimeline (GetGeoTimelineRequest) returns (GetGeoTimelineResponse); // Focus (tap): full cards
+  rpc GetCountryAccess (GetCountryAccessRequest) returns (GetCountryAccessResponse); // country access from location
 }
-message QueryTileRequest  { Viewport viewport = 1; int32 zoom_level = 2; }     // zoom ∈ [0,15]
+message QueryTileRequest  { Viewport viewport = 1; int32 zoom_level = 2; string guest_principal = 3; } // zoom ∈ [0,15]; 3 = mesh only
 message QueryTileResponse { reserved 1; repeated RadarPin pins = 3; int32 tile_count = 2; } // field 1 was `cards`
 message RadarPin { string post_id=1; double lat=2; double lng=3; string thumbnail_url=4; }
 
 message GetGeoTimelineRequest  { repeated string post_ids = 1; }
 message GetGeoTimelineResponse { repeated MapPostCard cards = 1; }
+message GetCountryAccessRequest  { string current_country = 1; }                 // ISO alpha-2 from the device, or empty
+message GetCountryAccessResponse { string current_country = 1; CountryAccessOutcome outcome = 2; } // echoed only when GRANTED
 message MapPostCard { string post_id=1; string author_id=2; string author_handle=3;
   string author_avatar_url=4; string thumbnail_url=5; int64 h3_index_r7=6;
   float virality_score=7; int64 published_at_ms=8; AuthorTier author_tier=9; string caption=10; }
@@ -155,6 +158,20 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > they don't follow, blocks either way and hidden authors are dropped; one's own posts always stay).
 > That check fails **closed** (`GEO-6001`, `UNAVAILABLE`).
 
+> **Country access (guest mode, #680 B10).** `GetCountryAccess` (edge `public_read`: members and guests)
+> takes the country the device derived from its location — an ISO code, never a coordinate. It is
+> **granted** only when the request's network country (GeoIP: the client address the ALB appended to
+> `X-Forwarded-For`, looked up in a MaxMind-format database, `GEO_GEOIP_MMDB_PATH`) is that country **or
+> a neighbouring one** (a border town, a phone on a neighbouring network); an unknown network grants
+> nothing (`UNVERIFIABLE`), as does a missing database. The grant is stored per principal (token `sub`,
+> `sg:geo:cc:{sub}`, `GEO_COUNTRY_GRANT_TTL_SECS`); a new grant replaces the previous one (the country
+> left behind locks again) and an empty `current_country` clears it. **A guest session's map** —
+> `QueryTile`, `GetGeoTimeline`, and timeline's NEARBY feed (mesh `guest_principal`) — shows **only its
+> granted country, and nothing without one**. Members are not limited in v1 (no server-side unlocks
+> yet). Countries and neighbours come from `data/countries.json`, the iOS app's own Natural Earth
+> borders, so the server and the device put a post in the same country (a point within ~2 km of a
+> border or coast counts for that country).
+>
 > **Wire contract:** `AuthorTier` is 0-based **with** an `UNSPECIFIED=0` safe default (= Standard);
 > `STANDARD=1, PREMIUM=2, VIP=3`. Badge rendering: `author_tier` → static badge; `is_friend`/`is_following`
 > are deliberately **absent** (resolved client-side from the session social graph). `author_handle` /
@@ -167,6 +184,8 @@ pub trait SpatialIndex: Send + Sync { /* upsert (ZADD+cap), update_score (ZADD X
 pub trait PinStore:     Send + Sync { /* set, mget (same-length Vec, None=miss), del — Radar pin projection */ }
 pub trait CardStore:    Send + Sync { /* set, mget (same-length Vec, None=miss), del — Focus card projection */ }
 pub trait TileRepository: Send + Sync { /* insert_tile_entry, upsert_card, update_card_score/tier, get_card, list_tile_post_ids */ }
+pub trait GeoIp: Send + Sync { /* IP → country (MaxMind DB file); None = unknown */ }
+pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country granted to a principal (Redis) */ }
 ```
 
 ### Error contract (`GEO-xxxx`)
@@ -179,6 +198,7 @@ pub trait TileRepository: Send + Sync { /* insert_tile_entry, upsert_card, updat
 | GEO-5001/5002 | 500 | msgpack ser / deser failure |
 | GEO-9001..9003 | 422 | malformed UUIDs / domain violation |
 | GEO-6001 | 503 | audience check (social-graph `CheckAccess`) unavailable; client reads fail closed (`UNAVAILABLE`, retryable) |
+| GEO-9004/9005 | 422 | invalid ISO country code / country access without a client principal (mesh) |
 
 ---
 
@@ -263,6 +283,10 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Yes** (prod) | `http://localhost:50053` | social-graph endpoint for the per-reader audience filter (`CheckAccess`); client reads fail closed without it. |
 | `GEO_AUDIENCE_RPC_TIMEOUT_MS` / `GEO_AUDIENCE_CONNECT_TIMEOUT_MS` | No | `500` / `500` | deadlines on that call. |
 | `GEO_VISIBILITY_GROUP_ID` | No | `geo-discovery-visibility` | Kafka group of the map-suppression consumer. |
+| `GEO_GEOIP_MMDB_PATH` | **Yes** (prod) | — | MaxMind-format IP→country database (DB-IP Lite country, CC BY 4.0 — *IP Geolocation by DB-IP*, <https://db-ip.com>; or GeoLite2-Country). Missing → country access grants nothing. |
+| `GEO_GEOIP_PRIVATE_NETWORK_COUNTRY` | No | — | What a private/loopback client address resolves to: an ISO code, or `*` = the device's claim. **Local fleet only** — never in a deployed env. |
+| `GEO_TRUSTED_PROXY_HOPS` | No | `1` | Proxies appending to `X-Forwarded-For` (the ALB); the client address is that many entries from the right. |
+| `GEO_COUNTRY_GRANT_TTL_SECS` | No | `43200` | How long a granted country stays open without being confirmed again (12 h). |
 
 > No compile-time feature flags. `build.rs` compiles `proto/geo_discovery/v1/*.proto`. ScyllaDB profiles:
 > Strict (`LocalQuorum`) for mutations, Fast (`LocalOne` + speculative) for reads.

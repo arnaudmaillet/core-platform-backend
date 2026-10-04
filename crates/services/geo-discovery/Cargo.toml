@@ -39,6 +39,10 @@ fred   = { workspace = true, features = ["partial-tracing", "i-scripts"] }
 
 # H3 spatial indexing — pure Rust, no C FFI.
 h3o = "0.6"
+# IP → country (DB-IP Lite or MaxMind GeoLite2, MaxMind DB format) for country access.
+maxminddb = "0.32"
+# Parses the embedded country borders (data/countries.json).
+serde_json = { workspace = true }
 
 # MessagePack serialization for compact Redis card payloads (~45% smaller than JSON).
 rmp-serde = "1.3"

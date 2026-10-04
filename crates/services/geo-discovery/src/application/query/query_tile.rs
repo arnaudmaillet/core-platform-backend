@@ -3,9 +3,11 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::port::{visible_authors, AudienceGate, PinStore, SpatialIndex};
+use crate::application::country_access::country_limit;
+use crate::application::port::{visible_authors, AudienceGate, CountryGrantStore, PinStore, SpatialIndex};
+use crate::domain::country_atlas::CountryAtlas;
 use crate::domain::entity::RadarPin;
-use crate::domain::value_object::{GeoCoordinate, Viewer, zoom_to_resolution};
+use crate::domain::value_object::{GeoCoordinate, MapScope, Viewer, zoom_to_resolution};
 use crate::error::GeoDiscoveryError;
 use crate::infrastructure::h3::h3_codec;
 
@@ -23,6 +25,8 @@ pub struct QueryTileQuery {
     pub zoom_level: i32,
     /// Who is looking: a client only gets pins of authors it may see.
     pub viewer:     Viewer,
+    /// Which part of the map: a guest only sees its granted country.
+    pub scope:      MapScope,
 }
 
 pub struct QueryTileResult {
@@ -63,6 +67,8 @@ pub struct QueryTileHandler<SI, PS> {
     pub spatial_index: Arc<SI>,
     pub pin_store:     Arc<PS>,
     pub audience:      Arc<dyn AudienceGate>,
+    pub grants:        Arc<dyn CountryGrantStore>,
+    pub atlas:         &'static CountryAtlas,
 }
 
 impl<SI, PS> QueryHandler<QueryTileQuery> for QueryTileHandler<SI, PS>
@@ -83,6 +89,12 @@ where
                 sw_lat: q.sw_lat, sw_lng: q.sw_lng,
                 ne_lat: q.ne_lat, ne_lng: q.ne_lng,
             });
+        }
+
+        // A guest without a granted country sees nothing: answer before any read.
+        let limit = country_limit(self.grants.as_ref(), &q.scope).await?;
+        if limit == Some(None) {
+            return Ok(QueryTileResult { pins: vec![], tile_count: 0 });
         }
 
         let resolution  = zoom_to_resolution(q.zoom_level);
@@ -123,6 +135,11 @@ where
         // Redis is silently dropped — the user pans again, or taps a neighbour.
         let cached = self.pin_store.mget(&post_ids).await?;
         let mut pins: Vec<RadarPin> = cached.into_iter().flatten().collect();
+
+        // ── Phase 2b: a guest's country (borders shared with the app).
+        if let Some(Some(country)) = limit {
+            pins.retain(|p| self.atlas.contains(country, p.lat, p.lng));
+        }
 
         // ── Phase 3: the reader's audience (one bulk CheckAccess; fail closed).
         //   A pin without a recorded author is unverifiable: dropped for a client.
