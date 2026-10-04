@@ -59,6 +59,17 @@ service ProfileService {
     // Feed controls: the sensitive-content level (owner only).
     rpc SetFeedSettings(SetFeedSettingsRequest) returns (CommandResponse);
 
+    // Account type: personal / professional (creator) / brand (business),
+    // with a brand's public contact card (owner only).
+    rpc SetAccountType(SetAccountTypeRequest) returns (CommandResponse);
+
+    // Verification requests: the owner asks and follows its status; staff
+    // (mesh-only) list the pending ones and decide.
+    rpc RequestVerification(RequestVerificationRequest) returns (CommandResponse);
+    rpc GetVerificationRequest(GetVerificationRequestRequest) returns (GetVerificationRequestResponse);
+    rpc ListPendingVerificationRequests(ListPendingVerificationRequestsRequest) returns (ListPendingVerificationRequestsResponse);
+    rpc DecideVerificationRequest(DecideVerificationRequestRequest) returns (CommandResponse);
+
     // Grant a platform verification badge (admin only).
     rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
 

@@ -8,7 +8,7 @@ use crate::domain::event::{
     CommentFiltersChanged, DiscoverySettingsChanged, InteractionSettingsChanged, TabSettingsChanged, LocationSettingsChanged, ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
 };
 use crate::domain::value_object::{
-    AccountId, AvatarUrl, BannerUrl, Bio, CommentFilters, DisplayName, DiscoverySettings, Handle, InteractionSettings,
+    AccountId, AvatarUrl, BannerUrl, Bio, BusinessInfo, CommentFilters, DisplayName, DiscoverySettings, Handle, InteractionSettings,
     FeedSettings, Locale, LocationSettings, TabSettings,
     MaskingReason, ProfileId, ProfileKind, ProfileStatus, ProfileVisibility, VerificationKind,
     WebsiteUrl,
@@ -43,7 +43,8 @@ pub struct ProfileCreateParams {
 ///
 /// # Invariants
 ///
-/// - `profile_kind` is immutable after creation.
+/// - `profile_kind` changes only between personal, professional (creator) and
+///   brand (business), by its owner (#668); a bot stays a bot.
 /// - Status transitions are gated by [`ProfileStatus::can_transition_to`].
 /// - `version` is incremented on every write cycle.
 /// - `verified = false` implies `verification_kind = None`.
@@ -79,6 +80,9 @@ pub struct Profile {
     /// Feed controls (the sensitive-content level).
     #[serde(default)]
     feed_settings: FeedSettings,
+    /// A brand's public contact card (`None` for other kinds).
+    #[serde(default)]
+    business_info: Option<BusinessInfo>,
     verified: bool,
     verification_kind: Option<VerificationKind>,
     /// Author tier (0=Standard, 1=Premium, 2=Vip), denormalized from
@@ -133,6 +137,7 @@ impl Profile {
             comment_filters: CommentFilters::default(),
             tab_settings: TabSettings::default(),
             feed_settings: FeedSettings::default(),
+            business_info: None,
             verified: false,
             verification_kind: None,
             tier: 0,
@@ -234,6 +239,7 @@ impl Profile {
             comment_filters: CommentFilters::default(),
             tab_settings: TabSettings::default(),
             feed_settings: FeedSettings::default(),
+            business_info: None,
             verified,
             verification_kind,
             tier,
@@ -532,6 +538,51 @@ impl Profile {
         self.feed_settings
     }
 
+    /// Switches the account type between personal, professional (creator) and
+    /// brand (business) (#668); a brand may carry a business card, other kinds
+    /// none. A bot never changes kind, and nothing becomes a bot. Unchanged ⇒
+    /// no-op.
+    pub fn set_account_type(
+        &mut self,
+        kind: ProfileKind,
+        business: Option<BusinessInfo>,
+        correlation_id: Uuid,
+    ) -> Result<bool, ProfileError> {
+        if self.status == ProfileStatus::Deleted {
+            return Err(ProfileError::ProfileNotActive { current: self.status.as_str().to_owned() });
+        }
+        if kind == ProfileKind::Bot || self.profile_kind == ProfileKind::Bot {
+            return Err(ProfileError::DomainViolation {
+                field:   "profile_kind".into(),
+                message: "a bot profile's kind cannot change, and no profile becomes a bot".into(),
+            });
+        }
+        let business = if kind == ProfileKind::Brand { business } else { None };
+        if kind == self.profile_kind && business == self.business_info {
+            return Ok(false);
+        }
+        self.profile_kind = kind;
+        self.business_info = business;
+        let now = self.touch_now();
+        self.pending_events.push(DomainEvent::ProfileUpdated(ProfileUpdated {
+            profile_id: self.id,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(true)
+    }
+
+    /// Restores the stored business card (a column added after
+    /// [`Self::reconstitute`]'s set).
+    pub fn with_business_info(mut self, business: Option<BusinessInfo>) -> Self {
+        self.business_info = business;
+        self
+    }
+
+    pub fn business_info(&self) -> Option<&BusinessInfo> {
+        self.business_info.as_ref()
+    }
+
     /// Restores the stored interaction settings (a column added after
     /// [`Self::reconstitute`]'s set).
     pub fn with_interaction(mut self, settings: InteractionSettings) -> Self {
@@ -660,6 +711,10 @@ impl Profile {
 
     // ─── Event Drain ────────────────────────────────────────────────────────
 
+    pub fn has_pending_events(&self) -> bool {
+        !self.pending_events.is_empty()
+    }
+
     pub fn drain_events(&mut self) -> Vec<DomainEvent> {
         std::mem::take(&mut self.pending_events)
     }
@@ -749,6 +804,24 @@ mod tests {
         });
         p.drain_events(); // discard the ProfileCreated event
         p
+    }
+
+    #[test]
+    fn the_account_type_switches_between_personal_creator_and_brand_only() {
+        let mut p = sample_profile();
+        let card = BusinessInfo::new("Café".into(), None, None).unwrap();
+        assert!(p.set_account_type(ProfileKind::Brand, Some(card.clone()), Uuid::now_v7()).unwrap());
+        assert_eq!(p.profile_kind(), ProfileKind::Brand);
+        assert_eq!(p.business_info(), Some(&card));
+        assert!(matches!(p.drain_events().as_slice(), [DomainEvent::ProfileUpdated(_)]));
+        assert!(!p.set_account_type(ProfileKind::Brand, Some(card), Uuid::now_v7()).unwrap(), "unchanged");
+
+        // A creator carries no business card.
+        let card = BusinessInfo::new("Shop".into(), None, None).unwrap();
+        p.set_account_type(ProfileKind::Professional, Some(card), Uuid::now_v7()).unwrap();
+        assert_eq!(p.business_info(), None);
+
+        assert!(p.set_account_type(ProfileKind::Bot, None, Uuid::now_v7()).is_err(), "nothing becomes a bot");
     }
 
     /// A 13–17 holder's profile is born private, and says so to projections.

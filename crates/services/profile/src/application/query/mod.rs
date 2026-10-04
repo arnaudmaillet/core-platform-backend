@@ -9,3 +9,8 @@ pub use check_handle_availability::{
 pub use get_profile_by_handle::{GetProfileByHandleHandler, GetProfileByHandleQuery};
 pub use get_profile_by_id::{GetProfileByIdHandler, GetProfileByIdQuery};
 pub use list_profiles_by_account::{ListProfilesByAccountHandler, ListProfilesByAccountQuery};
+pub mod verification;
+pub use verification::{
+    GetVerificationRequestHandler, GetVerificationRequestQuery, ListPendingVerificationsHandler,
+    ListPendingVerificationsQuery,
+};

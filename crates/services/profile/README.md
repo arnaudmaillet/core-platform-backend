@@ -121,6 +121,11 @@ service ProfileService {
   rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse); // #664 post window (all / 6 months / 1 month / 3 days; post hides older posts from visitors) + likes / saved / reposts / places tab visibility (stored; no tab served yet); partial; owner-only on the view
   rpc SetCommentFilters(SetCommentFiltersRequest) returns (CommandResponse); // #660 hidden words (≤ 200, normalised) + offensive filter (on by default); owner-only on the view; comment applies them
   rpc SetDiscoverySettings(SetDiscoverySettingsRequest) returns (CommandResponse); // #661 activity status, read receipts, findable by phone / email / handle search / QR / suggestions (partial; owner-only on the view); teens start unfindable by phone, email, suggestions; search applies by_handle_search
+  rpc SetAccountType(SetAccountTypeRequest) returns (CommandResponse); // #668 personal / professional (creator) / brand (business) + a brand's public contact card; bots stay bots
+  rpc RequestVerification(RequestVerificationRequest) returns (CommandResponse); // #668 owner: category + 1–5 documents → staff queue
+  rpc GetVerificationRequest(GetVerificationRequestRequest) returns (GetVerificationRequestResponse); // #668 owner: pending / approved / rejected (+ reason)
+  rpc ListPendingVerificationRequests(ListPendingVerificationRequestsRequest) returns (ListPendingVerificationRequestsResponse); // staff, mesh-only
+  rpc DecideVerificationRequest(DecideVerificationRequestRequest) returns (CommandResponse); // staff, mesh-only: approve verifies the profile; reject needs a reason
   rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
   rpc HideProfile(HideProfileRequest) returns (CommandResponse);
   rpc RestoreProfile(RestoreProfileRequest) returns (CommandResponse);
@@ -166,6 +171,8 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 | PRF-2001/2002 | `ProfileNotActive` / `InvalidStatusTransition` | 422 | No |
 | PRF-4001 | `ConcurrentModification` | 409 | **Yes** |
 | PRF-5001 | `ProfileAlreadyVerified` | 409 | No |
+| PRF-5002 | `VerificationPending` (a request is already under review) | 409 | No |
+| PRF-5003 | `NoPendingVerification` (nothing to decide) | 409 | No |
 | PRF-9001–9010 | domain / parse / validation | 422 | No |
 | SDB-* / RDB-* | storage (delegated) | varies | varies |
 

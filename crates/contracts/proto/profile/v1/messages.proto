@@ -50,6 +50,8 @@ message ProfileView {
     TabSettings                     tab_settings         = 26;
     // Owner-only (unset for anyone else): feed controls.
     FeedSettings                    feed_settings        = 27;
+    // A brand's public contact card (#668); unset for other kinds.
+    BusinessInfo                    business_info        = 28;
 }
 
 message ProfileSummaryView {
@@ -264,4 +266,76 @@ message FeedSettings {
 message SetFeedSettingsRequest {
     string       profile_id = 1;
     FeedSettings settings   = 2;
+}
+
+// ── Account type and verification requests (#668) ───────────────────────────
+
+// A brand (business) profile's public contact card.
+message BusinessInfo {
+    // E.g. "Restaurant" (1–64 chars).
+    string category      = 1;
+    string contact_email = 2;
+    string contact_phone = 3;
+}
+
+// Switch between PERSONAL, PROFESSIONAL (creator) and BRAND (business); BOT
+// can be neither set nor left. `business` applies to BRAND only.
+message SetAccountTypeRequest {
+    string       profile_id = 1;
+    ProfileKind  kind       = 2;
+    BusinessInfo business   = 3;
+}
+
+enum VerificationRequestStatus {
+    VERIFICATION_REQUEST_STATUS_UNSPECIFIED = 0;
+    VERIFICATION_REQUEST_STATUS_PENDING     = 1;
+    VERIFICATION_REQUEST_STATUS_APPROVED    = 2;
+    VERIFICATION_REQUEST_STATUS_REJECTED    = 3;
+}
+
+message VerificationRequestView {
+    string                    profile_id      = 1;
+    VerificationKind          category        = 2;
+    repeated string           documents       = 3;
+    VerificationRequestStatus status          = 4;
+    // Why it was rejected.
+    string                    reason          = 5;
+    int64                     submitted_at_ms = 6;
+    int64                     decided_at_ms   = 7;
+}
+
+// Ask for a badge with 1–5 supporting documents (media keys). PRF-5001 if
+// already verified, PRF-5002 if a request is pending.
+message RequestVerificationRequest {
+    string           profile_id = 1;
+    VerificationKind category   = 2;
+    repeated string  documents  = 3;
+}
+
+message GetVerificationRequestRequest {
+    string profile_id = 1;
+}
+
+// `request` unset: the profile never asked.
+message GetVerificationRequestResponse {
+    VerificationRequestView request = 1;
+}
+
+// Staff (mesh-only): the pending requests, oldest first.
+message ListPendingVerificationRequestsRequest {
+    int32  limit      = 1;
+    string page_token = 2;
+}
+
+message ListPendingVerificationRequestsResponse {
+    repeated VerificationRequestView requests        = 1;
+    string                           next_page_token = 2;
+}
+
+// Staff (mesh-only): approve (verifies the profile) or reject (with a reason
+// the owner sees). PRF-5003 if nothing is pending.
+message DecideVerificationRequestRequest {
+    string profile_id = 1;
+    bool   approve    = 2;
+    string reason     = 3;
 }
