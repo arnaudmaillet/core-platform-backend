@@ -111,8 +111,30 @@ service NotificationService {
   rpc MarkRead            (MarkReadRequest)             returns (CommandResponse);  // needs notification_id + created_at_ms
   rpc MarkAllRead         (MarkAllReadRequest)          returns (CommandResponse);  // sets read_horizon_ms
   rpc StreamNotifications (StreamNotificationsRequest)  returns (stream StreamNotificationsResponse);
+  // Push devices and preferences (#654)
+  rpc RegisterDevice                (RegisterDeviceRequest)                returns (CommandResponse);
+  rpc UnregisterDevice              (UnregisterDeviceRequest)              returns (CommandResponse);
+  rpc GetNotificationPreferences    (GetNotificationPreferencesRequest)    returns (NotificationPreferences);
+  rpc UpdateNotificationPreferences (UpdateNotificationPreferencesRequest) returns (NotificationPreferences);
+  rpc ResolvePushTargets            (ResolvePushTargetsRequest)            returns (ResolvePushTargetsResponse);  // MESH-ONLY
 }
 ```
+
+**Push devices and preferences (#654).** The contract and storage for push; **nothing sends a push
+yet** (no APNs credentials). Every RPC but `ResolvePushTargets` is edge `authenticated` and bound to
+`profile_id`.
+- `RegisterDevice(device_id, token, platform, environment, timezone)` — call it on every launch. A token
+  registered for another **account** leaves that account's profiles (a handed-over phone never gets the
+  old account's pushes); a device's new token replaces its old one. Tables `push_devices` (by profile)
+  and `push_device_tokens` (by token).
+- Preferences (`notification_preferences`, one JSON document per profile): push and email per category
+  (likes, comments, mentions, new followers, follow requests, messages, posts from followed accounts,
+  places nearby, wallet), a pause (≤ 8 h), quiet hours read in the holder's IANA zone. Defaults: every
+  push on, every email off; **13–17: quiet hours 22:00–07:00** (from the token's `age` on reads, and
+  written at a teen's first `RegisterDevice` so the sender applies them). Marketing email is the
+  account's `marketing` consent (`account.v1.UpdateConsents`), not a second toggle here.
+- `ResolvePushTargets(profile_id, category)` (mesh) is what the push sender will ask: the devices, or
+  `allowed = false` when the category is off, a pause runs or it is quiet hours.
 
 ### Rust ports (hexagonal contract)
 
@@ -121,6 +143,8 @@ pub trait NotificationRepository: Send + Sync + 'static { /* insert, list_pagina
 pub trait UnreadCounter:          Send + Sync + 'static { /* incr/decr/reset/get + read_horizon (Redis L1 + Scylla L2) */ }
 pub trait BlockCache:             Send + Sync + 'static { /* is_blocked(sender, target) — social-graph gate */ }
 pub trait StreamRegistry:         Send + Sync + 'static { /* subscribe/broadcast (broadcast::Receiver per profile) */ }
+pub trait DeviceRegistry:         Send + Sync + 'static { /* register/unregister/devices — push devices per profile */ }
+pub trait PreferenceStore:        Send + Sync + 'static { /* get/put — notification preferences per profile */ }
 ```
 
 ### Error contract (`NTF-xxxx`)

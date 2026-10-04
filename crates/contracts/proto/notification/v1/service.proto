@@ -24,4 +24,16 @@ service NotificationService {
     // The BFF opens this stream per authenticated client session.
     // On RecvError::Lagged the client must re-poll ListNotifications.
     rpc StreamNotifications (StreamNotificationsRequest) returns (stream StreamNotificationsResponse);
+
+    // Push devices (#654): register / forget a device for the profile.
+    rpc RegisterDevice (RegisterDeviceRequest) returns (CommandResponse);
+    rpc UnregisterDevice (UnregisterDeviceRequest) returns (CommandResponse);
+
+    // Push and email per category, pause, quiet hours.
+    rpc GetNotificationPreferences (GetNotificationPreferencesRequest) returns (NotificationPreferences);
+    rpc UpdateNotificationPreferences (UpdateNotificationPreferencesRequest) returns (NotificationPreferences);
+
+    // MESH-ONLY: the devices a push about a category goes to right now (none
+    // when the holder's preferences hold it). For the push sender.
+    rpc ResolvePushTargets (ResolvePushTargetsRequest) returns (ResolvePushTargetsResponse);
 }

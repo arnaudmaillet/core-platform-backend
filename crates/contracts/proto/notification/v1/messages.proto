@@ -94,3 +94,86 @@ message GetUnreadCountResponse {
 message StreamNotificationsResponse {
     NotificationView notification = 1;
 }
+
+// ── Push devices and preferences (#654) ───────────────────────────────────────
+
+// Register (or refresh: same device_id) a device for push. Call it on every
+// launch with the current token and zone. A token registered for another
+// account leaves that account's profiles.
+message RegisterDeviceRequest {
+    string          profile_id  = 1;
+    // The install's own id (iOS identifierForVendor), ≤ 128 chars.
+    string          device_id   = 2;
+    // The APNs / FCM token, ≤ 512 chars.
+    string          token       = 3;
+    DevicePlatform  platform    = 4;
+    PushEnvironment environment = 5;
+    // IANA zone (e.g. Europe/Paris); quiet hours are read in it. Empty: unchanged.
+    string          timezone    = 6;
+}
+
+// Forget a device for the profile (sign-out, push turned off).
+message UnregisterDeviceRequest {
+    string profile_id = 1;
+    string device_id  = 2;
+}
+
+message CategoryChannels {
+    PushCategory category = 1;
+    bool         push     = 2;
+    bool         email    = 3;
+}
+
+// A daily window in local minutes after midnight; it may wrap midnight.
+message QuietHours {
+    bool  enabled      = 1;
+    int32 start_minute = 2;
+    int32 end_minute   = 3;
+}
+
+// Defaults: every push on, every email off, no pause; 13–17: quiet hours
+// 22:00–07:00. Marketing email is account.v1 UpdateConsents (marketing).
+message NotificationPreferences {
+    // One entry per category.
+    repeated CategoryChannels categories      = 1;
+    // Unix ms; 0 when not paused.
+    int64                     paused_until_ms = 2;
+    QuietHours                quiet_hours     = 3;
+    string                    timezone        = 4;
+}
+
+message GetNotificationPreferencesRequest {
+    string profile_id = 1;
+}
+
+// Listed categories are set (push and email); others are unchanged. Returns
+// the resulting preferences.
+message UpdateNotificationPreferencesRequest {
+    string                    profile_id      = 1;
+    repeated CategoryChannels categories      = 2;
+    // Absent: unchanged; 0: resume; else pause until (≤ 8 h ahead).
+    optional int64            paused_until_ms = 3;
+    // Absent: unchanged.
+    QuietHours                quiet_hours     = 4;
+    // Empty: unchanged.
+    string                    timezone        = 5;
+}
+
+// MESH-ONLY: where a push about `category` goes now.
+message ResolvePushTargetsRequest {
+    string       profile_id = 1;
+    PushCategory category   = 2;
+}
+
+message PushDevice {
+    string          device_id   = 1;
+    string          token       = 2;
+    DevicePlatform  platform    = 3;
+    PushEnvironment environment = 4;
+}
+
+message ResolvePushTargetsResponse {
+    // false: the category is off, a pause runs, or it is quiet hours.
+    bool                allowed = 1;
+    repeated PushDevice devices = 2;
+}

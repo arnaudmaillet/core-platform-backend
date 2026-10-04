@@ -25,3 +25,31 @@ enum SubjectKind {
     // The subject is a comment (comment_id stored in subject_id).
     SUBJECT_KIND_COMMENT     = 2;
 }
+
+// What a push or an email is about (notification preferences, #654).
+enum PushCategory {
+    PUSH_CATEGORY_UNSPECIFIED     = 0;
+    PUSH_CATEGORY_LIKES           = 1;
+    PUSH_CATEGORY_COMMENTS        = 2;
+    PUSH_CATEGORY_MENTIONS        = 3;
+    PUSH_CATEGORY_NEW_FOLLOWERS   = 4;
+    PUSH_CATEGORY_FOLLOW_REQUESTS = 5;
+    PUSH_CATEGORY_MESSAGES        = 6;
+    // New posts from accounts the holder follows.
+    PUSH_CATEGORY_FOLLOWED_POSTS  = 7;
+    PUSH_CATEGORY_PLACES_NEARBY   = 8;
+    PUSH_CATEGORY_WALLET          = 9;
+}
+
+enum DevicePlatform {
+    DEVICE_PLATFORM_UNSPECIFIED = 0;
+    DEVICE_PLATFORM_IOS         = 1;
+    DEVICE_PLATFORM_ANDROID     = 2;
+}
+
+// APNs environment of a token (development builds use the sandbox).
+enum PushEnvironment {
+    PUSH_ENVIRONMENT_UNSPECIFIED = 0;
+    PUSH_ENVIRONMENT_SANDBOX     = 1;
+    PUSH_ENVIRONMENT_PRODUCTION  = 2;
+}

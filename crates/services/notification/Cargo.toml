@@ -27,6 +27,7 @@ serde        = { workspace = true }
 serde_json   = { workspace = true }
 uuid         = { workspace = true }
 chrono       = { workspace = true }
+chrono-tz    = { workspace = true }   # quiet hours in the holder's zone
 thiserror    = { workspace = true }
 tracing      = { workspace = true }
 dashmap      = { workspace = true }

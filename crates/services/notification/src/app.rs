@@ -33,8 +33,16 @@ use crate::application::command::create_notification::{
 use crate::application::command::mark_read::{
     MarkAllReadCommand, MarkAllReadHandler, MarkReadCommand, MarkReadHandler,
 };
+use crate::application::command::push_settings::{
+    RegisterDeviceCommand, RegisterDeviceHandler, UnregisterDeviceCommand, UnregisterDeviceHandler,
+    UpdatePreferencesCommand, UpdatePreferencesHandler,
+};
 use crate::application::port::{
-    BlockCache, NotificationEventPublisher, NotificationRepository, UnreadCounter,
+    BlockCache, DeviceRegistry, NotificationEventPublisher, NotificationRepository, PreferenceStore,
+    UnreadCounter,
+};
+use crate::application::query::push_settings::{
+    GetPreferencesHandler, GetPreferencesQuery, ResolvePushTargetsHandler, ResolvePushTargetsQuery,
 };
 use crate::application::query::get_unread_count::{GetUnreadCountHandler, GetUnreadCountQuery};
 use crate::application::query::list_notifications::{
@@ -42,7 +50,7 @@ use crate::application::query::list_notifications::{
 };
 use crate::config::NotificationConfig;
 use crate::infrastructure::cache::{RedisBlockCache, RedisUnreadCounter};
-use crate::infrastructure::persistence::ScyllaNotificationRepository;
+use crate::infrastructure::persistence::{ScyllaNotificationRepository, ScyllaPushSettings};
 use crate::infrastructure::publisher::{KafkaNotificationPublisher, NoopNotificationPublisher};
 use crate::infrastructure::streaming::BroadcastRegistry;
 use crate::infrastructure::worker::{
@@ -99,6 +107,9 @@ impl App {
             Arc::clone(&config),
         ));
         let stream_registry = Arc::new(BroadcastRegistry::new(config.stream_buffer_size));
+        let push_settings = Arc::new(ScyllaPushSettings::new(Arc::clone(&scylla_client)));
+        let devices: Arc<dyn DeviceRegistry> = Arc::clone(&push_settings) as _;
+        let preferences: Arc<dyn PreferenceStore> = push_settings;
 
         // ── Realtime push publisher (notification.v1.events) ─────────────────
         // Kafka-backed when a broker is configured; a no-op otherwise so the
@@ -131,6 +142,16 @@ impl App {
                     repository: Arc::clone(&repository),
                     counter:    Arc::clone(&counter),
                 })?
+                .register::<RegisterDeviceCommand, _>(RegisterDeviceHandler {
+                    devices:     Arc::clone(&devices),
+                    preferences: Arc::clone(&preferences),
+                })?
+                .register::<UnregisterDeviceCommand, _>(UnregisterDeviceHandler {
+                    devices: Arc::clone(&devices),
+                })?
+                .register::<UpdatePreferencesCommand, _>(UpdatePreferencesHandler {
+                    preferences: Arc::clone(&preferences),
+                })?
                 .build(),
         );
 
@@ -143,6 +164,13 @@ impl App {
                 })?
                 .register::<GetUnreadCountQuery, _>(GetUnreadCountHandler {
                     counter: Arc::clone(&counter),
+                })?
+                .register::<GetPreferencesQuery, _>(GetPreferencesHandler {
+                    preferences: Arc::clone(&preferences),
+                })?
+                .register::<ResolvePushTargetsQuery, _>(ResolvePushTargetsHandler {
+                    devices:     Arc::clone(&devices),
+                    preferences: Arc::clone(&preferences),
                 })?
                 .build(),
         );
