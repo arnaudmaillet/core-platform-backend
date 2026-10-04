@@ -37,8 +37,14 @@ const POSTGRES_PORT: u16 = 5432;
 const OPENSEARCH_PORT: u16 = 9200;
 /// Internal MinIO S3 API port.
 const MINIO_PORT: u16 = 9000;
-/// MinIO image, on quay.io: Docker Hub's `minio/minio` no longer exists.
-const MINIO_IMAGE: &str = "quay.io/minio/minio";
+/// MinIO image: the community-maintained `pgsty/minio` fork on Docker Hub (see
+/// [`minio_ready`] for why upstream `minio/minio` is unusable).
+const MINIO_IMAGE: &str = "pgsty/minio";
+/// Release tag + multi-arch (amd64/arm64) index digest. The digest makes the pin
+/// immutable: a re-pushed tag fails the pull instead of silently changing the
+/// backend under the suites.
+const MINIO_TAG: &str = "RELEASE.2026-08-04T00-00-00Z\
+     @sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372";
 
 static SCYLLA: OnceCell<ContainerAsync<ScyllaDB>> = OnceCell::const_new();
 static REDIS: OnceCell<ContainerAsync<GenericImage>> = OnceCell::const_new();
@@ -165,12 +171,17 @@ pub async fn opensearch_ready() -> String {
 pub async fn minio_ready() -> String {
     let container = MINIO
         .get_or_init(|| async {
-            // The `minio/minio` repository was removed from Docker Hub (the whole
-            // repo 404s as of 2026-09-16, which broke every MinIO-backed suite);
-            // MinIO publishes the same tags on quay.io, so keep the module's
-            // pinned tag and only switch the registry.
+            // Upstream MinIO stopped publishing anonymously pullable images:
+            // Docker Hub's `minio/minio` went away on 2026-09-16 (PR #644 moved
+            // to quay.io), then `quay.io/minio/minio` started answering 401 to
+            // anonymous pulls on 2026-10-04 — each time breaking every
+            // MinIO-backed suite. `pgsty/minio` is a community build of the same
+            // server: same `server /data` CLI, same `API:` readiness line on
+            // stderr, same `minioadmin:minioadmin` defaults, so the module's
+            // wait condition and the suites' static keys are unchanged.
             MinIO::default()
                 .with_name(MINIO_IMAGE)
+                .with_tag(MINIO_TAG)
                 .start()
                 .await
                 .expect("failed to start the MinIO test container")
