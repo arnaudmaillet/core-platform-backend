@@ -91,3 +91,23 @@ async fn a_non_member_cannot_signal_presence_or_typing() {
     .unwrap_err();
     assert_eq!(err.code(), Code::PermissionDenied);
 }
+
+#[tokio::test]
+async fn settings_are_read_for_a_roster_past_the_in_clause_cap() {
+    // A group holds up to 500 members; Scylla refuses an IN over 100 keys.
+    let h = TestHarness::start(HarnessOptions::default()).await;
+    let members: Vec<_> = (0..250).map(|_| harness::random_profile()).collect();
+    let opted_out = [members[3], members[120], members[249]];
+    for profile in &opted_out {
+        h.presence_settings
+            .set(profile, PresenceSettings { activity_status: true, read_receipts: false })
+            .await
+            .expect("settings");
+    }
+
+    let read = h.presence_settings.get_many(&members).await.expect("get_many over 250 members");
+    assert_eq!(read.len(), 3, "only stored rows come back");
+    for profile in &opted_out {
+        assert!(!read[profile].read_receipts);
+    }
+}

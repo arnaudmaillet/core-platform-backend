@@ -23,31 +23,15 @@ pub struct ScyllaPresenceSettingsStore {
     client: Arc<ScyllaClient>,
 }
 
+/// Scylla's default `max_partition_key_restrictions_per_query`.
+const MAX_KEYS_PER_QUERY: usize = 100;
+
 impl ScyllaPresenceSettingsStore {
     pub fn new(client: Arc<ScyllaClient>) -> Self {
         Self { client }
     }
-}
 
-#[async_trait]
-impl PresenceSettingsStore for ScyllaPresenceSettingsStore {
-    async fn set(&self, profile: &ProfileId, settings: PresenceSettings) -> Result<(), ChatError> {
-        let stmt = strict(
-            &self.client,
-            "INSERT INTO chat.presence_settings (profile_id, activity_status, read_receipts) VALUES (?, ?, ?)",
-        );
-        self.client
-            .session
-            .execute_unpaged(stmt, (profile.as_uuid(), settings.activity_status, settings.read_receipts))
-            .await
-            .map_err(scylla_err)?;
-        Ok(())
-    }
-
-    async fn get_many(&self, profiles: &[ProfileId]) -> Result<HashMap<ProfileId, PresenceSettings>, ChatError> {
-        if profiles.is_empty() {
-            return Ok(HashMap::new());
-        }
+    async fn get_chunk(&self, profiles: &[ProfileId]) -> Result<HashMap<ProfileId, PresenceSettings>, ChatError> {
         let stmt = fast(
             &self.client,
             "SELECT profile_id, activity_status, read_receipts FROM chat.presence_settings WHERE profile_id IN ?",
@@ -71,6 +55,32 @@ impl PresenceSettingsStore for ScyllaPresenceSettingsStore {
                     read_receipts:   row.read_receipts.unwrap_or(true),
                 },
             );
+        }
+        Ok(out)
+    }
+}
+
+#[async_trait]
+impl PresenceSettingsStore for ScyllaPresenceSettingsStore {
+    async fn set(&self, profile: &ProfileId, settings: PresenceSettings) -> Result<(), ChatError> {
+        let stmt = strict(
+            &self.client,
+            "INSERT INTO chat.presence_settings (profile_id, activity_status, read_receipts) VALUES (?, ?, ?)",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt, (profile.as_uuid(), settings.activity_status, settings.read_receipts))
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn get_many(&self, profiles: &[ProfileId]) -> Result<HashMap<ProfileId, PresenceSettings>, ChatError> {
+        // Scylla caps an IN at 100 partition keys; a group has up to 500 members.
+        let chunks = profiles.chunks(MAX_KEYS_PER_QUERY).map(|chunk| self.get_chunk(chunk));
+        let mut out = HashMap::with_capacity(profiles.len());
+        for part in futures::future::try_join_all(chunks).await? {
+            out.extend(part);
         }
         Ok(out)
     }
