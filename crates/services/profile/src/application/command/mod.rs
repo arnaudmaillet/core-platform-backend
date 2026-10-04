@@ -5,6 +5,7 @@ pub mod hide_profile;
 pub mod mask_account_profiles;
 pub mod restore_profile;
 pub mod set_tier;
+pub mod set_interaction_settings;
 pub mod set_visibility;
 pub mod update_avatar;
 pub mod update_banner;
@@ -20,6 +21,7 @@ pub use mask_account_profiles::{
 };
 pub use restore_profile::{RestoreProfileCommand, RestoreProfileHandler};
 pub use set_tier::{SetProfileTierCommand, SetProfileTierHandler};
+pub use set_interaction_settings::{SetInteractionSettingsCommand, SetInteractionSettingsHandler};
 pub use set_visibility::{SetVisibilityCommand, SetVisibilityHandler};
 pub use update_avatar::{UpdateAvatarCommand, UpdateAvatarHandler};
 pub use update_banner::{UpdateBannerCommand, UpdateBannerHandler};

@@ -52,6 +52,13 @@ where
         self.update_banner(request).await
     }
 
+    async fn set_interaction_settings(
+        &self,
+        request: Request<proto::SetInteractionSettingsRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.set_interaction_settings(request).await
+    }
+
     async fn set_visibility(
         &self,
         request: Request<proto::SetVisibilityRequest>,

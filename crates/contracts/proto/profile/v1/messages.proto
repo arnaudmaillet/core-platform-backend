@@ -38,6 +38,8 @@ message ProfileView {
     google.protobuf.Timestamp       created_at        = 19;
     google.protobuf.Timestamp       updated_at        = 20;
     int64                           version           = 21;
+    // Who may comment / mention / message, downloads, like counts.
+    InteractionSettings             interaction_settings = 22;
 }
 
 message ProfileSummaryView {
@@ -147,4 +149,20 @@ message ListProfilesByAccountRequest {
 message ListProfilesByAccountResponse {
     repeated ProfileSummaryView profiles        = 1;
     string                      next_page_token = 2;
+}
+
+// A profile's interaction settings. Teen accounts (13–17) start with comments,
+// mentions and messages from followers only and downloads off.
+message InteractionSettings {
+    InteractionAudience comments         = 1;
+    InteractionAudience mentions         = 2;
+    InteractionAudience messages         = 3;
+    bool                allow_downloads  = 4;
+    bool                show_like_counts = 5;
+}
+
+// The whole set at once (an UNSPECIFIED audience is refused).
+message SetInteractionSettingsRequest {
+    string              profile_id = 1;
+    InteractionSettings settings   = 2;
 }

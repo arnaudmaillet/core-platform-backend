@@ -4,6 +4,7 @@ use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
 use crate::application::port::SocialGraphRepository;
+use crate::domain::interaction::InteractionPolicy;
 use crate::domain::value_object::ProfileId;
 use crate::error::SocialGraphError;
 
@@ -14,6 +15,8 @@ pub enum AudienceFact {
     Private(bool),
     /// The profile was hidden (`true`) or restored (`false`).
     Hidden(bool),
+    /// Who may comment / mention / message it.
+    Interaction(InteractionPolicy),
 }
 
 /// Records an audience fact in the projection the access check reads.
@@ -57,6 +60,7 @@ impl CommandHandler<RecordProfileAudienceCommand> for RecordProfileAudienceHandl
         match cmd.fact {
             AudienceFact::Private(private) => self.repo.set_profile_private(&id, private).await,
             AudienceFact::Hidden(hidden) => self.repo.set_profile_hidden(&id, hidden).await,
+            AudienceFact::Interaction(policy) => self.repo.set_interaction_policy(&id, &policy).await,
         }
     }
 }

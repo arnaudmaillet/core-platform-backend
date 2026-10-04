@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::value_object::InteractionSettings;
 use crate::domain::aggregate::Profile;
 use crate::domain::entity::ProfileLink;
 use crate::domain::value_object::{AccountId, ProfileId, ProfileStatus, Viewer};
@@ -50,6 +51,9 @@ pub struct ProfileView {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub version: i64,
+    /// Entries cached before the field existed read as the defaults.
+    #[serde(default)]
+    pub interaction: InteractionSettings,
 }
 
 impl From<&Profile> for ProfileView {
@@ -76,6 +80,7 @@ impl From<&Profile> for ProfileView {
             created_at: p.created_at(),
             updated_at: p.updated_at(),
             version: p.version(),
+            interaction: p.interaction(),
         }
     }
 }
@@ -163,6 +168,7 @@ mod viewer_tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             version: 3,
+            interaction: InteractionSettings::default(),
         }
     }
 

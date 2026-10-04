@@ -18,7 +18,7 @@ use scylla_storage::ScyllaConfig;
 use comment::app::{App, Backends};
 use comment::application::command::create_comment::CreateCommentCommand;
 use comment::application::command::delete_comment::DeleteCommentCommand;
-use comment::application::port::{CommentEventPublisher, CommentSummary, ReadGate};
+use comment::application::port::{CommentEventPublisher, CommentSummary, CommentAdmission, ReadGate};
 use comment::application::query::get_comment::GetCommentQuery;
 use comment::application::query::list_replies::ListRepliesQuery;
 use comment::application::query::list_top_level::ListTopLevelQuery;
@@ -55,6 +55,7 @@ impl CommentEventPublisher for NoopPublisher {
 pub struct ScriptedGate {
     unreadable_posts: Mutex<HashSet<String>>,
     hidden_authors:   Mutex<HashSet<String>>,
+    restricted_posts: Mutex<HashSet<String>>,
     down:             Mutex<bool>,
 }
 
@@ -64,6 +65,10 @@ impl ScriptedGate {
     }
     pub fn hide_author(&self, author_id: &str) {
         self.hidden_authors.lock().unwrap().insert(author_id.to_owned());
+    }
+    /// The post's author takes no comments from anyone (but themselves).
+    pub fn restrict_comments(&self, post_id: &str) {
+        self.restricted_posts.lock().unwrap().insert(post_id.to_owned());
     }
     pub fn set_down(&self, down: bool) {
         *self.down.lock().unwrap() = down;
@@ -86,6 +91,19 @@ impl ReadGate for ScriptedGate {
         }
         let hidden = self.hidden_authors.lock().unwrap();
         Ok(Some(comment_authors.iter().filter(|a| hidden.contains(&a.as_str())).cloned().collect()))
+    }
+
+    async fn may_comment(&self, _author: &ProfileId, post_id: &PostId) -> Result<CommentAdmission, CommentError> {
+        if *self.down.lock().unwrap() {
+            return Err(CommentError::AccessCheckUnavailable { reason: "scripted outage".into() });
+        }
+        if self.unreadable_posts.lock().unwrap().contains(&post_id.as_str()) {
+            return Ok(CommentAdmission::PostUnavailable);
+        }
+        if self.restricted_posts.lock().unwrap().contains(&post_id.as_str()) {
+            return Ok(CommentAdmission::Restricted);
+        }
+        Ok(CommentAdmission::Allowed)
     }
 }
 
@@ -138,6 +156,22 @@ impl TestHarness {
             .await
             .expect("create_comment");
         comment_id
+    }
+
+    /// Tries to create a top-level comment; the error when it is refused.
+    pub async fn try_create(&self, post_id: &str, author_id: &str) -> Result<(), CqrsError> {
+        let cmd = CreateCommentCommand {
+            comment_id: Uuid::now_v7().to_string(),
+            post_id:    post_id.to_owned(),
+            author_id:  author_id.to_owned(),
+            parent_id:  None,
+            body:       Some("a comment".to_owned()),
+            gif_id:     None,
+            gif_url:    None,
+            gif_width:  None,
+            gif_height: None,
+        };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await
     }
 
     /// Deletes a comment as `author`.

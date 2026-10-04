@@ -43,3 +43,26 @@ async fn the_post_and_its_authors_gate_the_comments_and_an_outage_fails_closed()
     assert!(err.to_string().contains("audience check unavailable"), "{err}");
     assert_eq!(h.list_top_level(&post).await.len(), 2, "the mesh still reads");
 }
+
+/// Writing is gated too (#656): the post must be readable to the commenter and
+/// its author must take their comments; the gate failing refuses the write.
+#[tokio::test]
+async fn comments_are_refused_where_the_author_or_the_post_does_not_allow_them() {
+    let h = TestHarness::start().await;
+    let (open, restricted, unreadable) = (harness::random_post(), harness::random_post(), harness::random_post());
+    let commenter = harness::random_author();
+    h.gate.restrict_comments(&restricted);
+    h.gate.post_unreadable(&unreadable);
+
+    h.try_create(&open, &commenter).await.expect("an open post takes comments");
+
+    let err = h.try_create(&restricted, &commenter).await.unwrap_err();
+    assert!(err.to_string().contains("does not take comments"), "{err}");
+    let err = h.try_create(&unreadable, &commenter).await.unwrap_err();
+    assert!(err.to_string().contains("post not found"), "{err}");
+    assert!(h.list_top_level(&restricted).await.is_empty(), "nothing written");
+
+    h.gate.set_down(true);
+    let err = h.try_create(&open, &commenter).await.unwrap_err();
+    assert!(err.to_string().contains("unavailable"), "{err}");
+}

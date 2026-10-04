@@ -40,6 +40,9 @@ service ProfileService {
     // Toggle profile visibility between Public and Private.
     rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
 
+    // Who may comment / mention / message this profile, downloads, like counts.
+    rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse);
+
     // Grant a platform verification badge (admin only).
     rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
 

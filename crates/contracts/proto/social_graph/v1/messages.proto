@@ -154,3 +154,17 @@ message CancelFollowRequestRequest {
     string actor_id  = 1;
     string target_id = 2;
 }
+
+// ── Interaction check (mesh-only) ─────────────────────────────────────────────
+
+message CheckInteractionRequest {
+    string          actor_profile_id  = 1;
+    string          target_profile_id = 2;
+    InteractionKind kind              = 3;
+}
+
+message CheckInteractionResponse {
+    // false: a block either way, or the target's audience for `kind` excludes
+    // the actor (followers / mutuals / no one).
+    bool allowed = 1;
+}

@@ -128,6 +128,8 @@ transport (`edge::viewer`). For anyone but a mesh caller, a **read gate** decide
 
 The gate fails closed: an outage is `CMT-5001` (`UNAVAILABLE`), never the comments.
 
+**Writes are gated too** (#656): `CreateComment` needs a post the commenter may read (else `CMT-1004`, `NOT_FOUND`) whose author takes their comments — social-graph `CheckInteraction(COMMENT)` over the author's interaction settings (everyone / followers / mutuals / no one) and blocks (else `CMT-1005`, `PERMISSION_DENIED`). Commenting on your own post is always allowed; an outage refuses the write (`CMT-5001`).
+
 ### Error contract (`CMT-xxxx`)
 
 | Code | Error | HTTP |
@@ -135,6 +137,8 @@ The gate fails closed: an outage is `CMT-5001` (`UNAVAILABLE`), never the commen
 | CMT-1001/1002/1003 | not found / already deleted / author mismatch | 404 / 409 / 403 |
 | CMT-2001/2002/2003 | nesting depth / parent not found / parent deleted | 422 / 404 / 422 |
 | CMT-3001/3002 | empty content / incomplete GIF metadata | 422 |
+| CMT-1004 | `PostNotFound` (missing, or not readable by the commenter) | 404 → `NOT_FOUND` |
+| CMT-1005 | `CommentsRestricted` (the post's author does not take this profile's comments) | 403 → `PERMISSION_DENIED` |
 | CMT-5001 | `AccessCheckUnavailable` (read gate down; retryable) | 503 → `UNAVAILABLE` |
 | CMT-4001 | Kafka publish failed | 500 |
 | CMT-9001..9004 | invalid ids / domain violation | 422 |

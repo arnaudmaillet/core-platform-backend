@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use crate::domain::access::AccessFacts;
+use crate::domain::interaction::InteractionPolicy;
 use crate::domain::aggregate::Relation;
 use crate::domain::entity::{BlockEdge, FollowEdge};
 use crate::domain::value_object::ProfileId;
@@ -146,4 +147,14 @@ pub trait SocialGraphRepository: Send + Sync + 'static {
 
     /// Records whether `profile_id` is hidden (audience projection).
     async fn set_profile_hidden(&self, profile_id: &ProfileId, hidden: bool) -> Result<(), SocialGraphError>;
+
+    /// Records who may comment / mention / message `profile_id`.
+    async fn set_interaction_policy(
+        &self,
+        profile_id: &ProfileId,
+        policy: &InteractionPolicy,
+    ) -> Result<(), SocialGraphError>;
+
+    /// `profile_id`'s interaction policy; the default (everyone) when none.
+    async fn load_interaction_policy(&self, profile_id: &ProfileId) -> Result<InteractionPolicy, SocialGraphError>;
 }

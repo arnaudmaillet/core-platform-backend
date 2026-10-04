@@ -21,6 +21,15 @@ pub enum CommentError {
     #[error("caller {caller_id} is not the author of comment {comment_id}")]
     AuthorMismatch { comment_id: String, caller_id: String },
 
+    /// The post is missing, or not one the commenter may read.
+    #[error("post not found: {post_id}")]
+    PostNotFound { post_id: String },
+
+    /// The post's author does not take comments from this profile (their
+    /// interaction settings, or a block).
+    #[error("the author of post {post_id} does not take comments from this profile")]
+    CommentsRestricted { post_id: String },
+
     // ── CMT-2xxx: Threading invariant violations ──────────────────────────────
     #[error("replies to replies are not allowed — maximum nesting depth is 1")]
     NestingDepthExceeded,
@@ -71,6 +80,8 @@ impl AppError for CommentError {
             Self::CommentNotFound { .. }      => "CMT-1001",
             Self::CommentAlreadyDeleted { .. } => "CMT-1002",
             Self::AuthorMismatch { .. }        => "CMT-1003",
+            Self::PostNotFound { .. }          => "CMT-1004",
+            Self::CommentsRestricted { .. }    => "CMT-1005",
 
             Self::NestingDepthExceeded        => "CMT-2001",
             Self::ParentNotFound { .. }        => "CMT-2002",
@@ -95,9 +106,11 @@ impl AppError for CommentError {
             Self::Validation(e) => e.http_status(),
 
             Self::CommentNotFound { .. }
-            | Self::ParentNotFound { .. }      => StatusCode::NOT_FOUND,
+            | Self::ParentNotFound { .. }
+            | Self::PostNotFound { .. }        => StatusCode::NOT_FOUND,
 
-            Self::AuthorMismatch { .. }        => StatusCode::FORBIDDEN,
+            Self::AuthorMismatch { .. }
+            | Self::CommentsRestricted { .. }  => StatusCode::FORBIDDEN,
 
             Self::CommentAlreadyDeleted { .. } => StatusCode::CONFLICT,
 
@@ -161,6 +174,8 @@ impl AppError for CommentError {
             Self::CommentNotFound { .. }       => "The requested comment was not found.",
             Self::CommentAlreadyDeleted { .. } => "This comment has already been deleted.",
             Self::AuthorMismatch { .. }        => "You are not authorised to delete this comment.",
+            Self::PostNotFound { .. }          => "This post was not found.",
+            Self::CommentsRestricted { .. }    => "The author has limited who can comment on this post.",
             Self::NestingDepthExceeded         => "Replies to replies are not supported.",
             Self::ParentNotFound { .. }        => "The parent comment was not found.",
             Self::ParentDeleted { .. }         => "Cannot reply to a deleted comment.",

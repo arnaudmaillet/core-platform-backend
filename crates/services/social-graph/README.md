@@ -122,6 +122,7 @@ service SocialGraphService {
   rpc ListFollowing(ListFollowingRequest) returns (ListFollowingResponse);
   rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
   rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY
+  rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);   // MESH-ONLY: may actor comment / mention / message target (its profile interaction settings, blocks)
 }
 ```
 

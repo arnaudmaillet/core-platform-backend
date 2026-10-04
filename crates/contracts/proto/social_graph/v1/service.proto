@@ -78,4 +78,11 @@ service SocialGraphService {
     // either way, or a hidden profile). MESH-ONLY: services answering a client
     // read call it with the reader they took from the edge token.
     rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);
+
+    // May the actor comment on / mention / message the target, per the
+    // target's interaction settings (profile.v1) and blocks either way? A
+    // profile may always interact with itself. MESH-ONLY: the service that
+    // owns the interaction asks before writing it, with the actor taken from
+    // the edge token.
+    rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);
 }

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: aae1f05ae698755feda78b2a04dbeceec5134bd5698b6e060f9329929c389d69
+  source_sha256: 8456ace739c5c3527c7b3576267ac924281ffd2a68797f9cf12ff8240328a8cb
   translated_at: 2026-10-04
   status: complete
 ---
@@ -139,6 +139,7 @@ service SocialGraphService {
   rpc ListFollowing(ListFollowingRequest) returns (ListFollowingResponse);
   rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
   rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY
+  rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);   // MESH-ONLY : l'acteur peut-il commenter / mentionner / écrire à la cible (ses réglages d'interaction profile, blocages)
 }
 ```
 

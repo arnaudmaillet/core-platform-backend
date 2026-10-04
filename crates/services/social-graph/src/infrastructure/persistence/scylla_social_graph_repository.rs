@@ -14,6 +14,7 @@ use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStora
 
 use crate::application::port::SocialGraphRepository;
 use crate::domain::access::AccessFacts;
+use crate::domain::interaction::InteractionPolicy;
 use crate::domain::aggregate::{Relation, RelationContext};
 use crate::domain::entity::{BlockEdge, FollowEdge};
 use crate::domain::value_object::ProfileId;
@@ -821,6 +822,42 @@ impl SocialGraphRepository for ScyllaSocialGraphRepository {
             .await
             .map_err(scylla_err)?;
         Ok(())
+    }
+
+    async fn set_interaction_policy(
+        &self,
+        profile_id: &ProfileId,
+        policy: &InteractionPolicy,
+    ) -> Result<(), SocialGraphError> {
+        let stmt = self.strict_stmt(
+            "UPDATE social_graph.profile_audience SET interaction = ? WHERE profile_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt, (policy.to_json(), profile_id.as_uuid()))
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn load_interaction_policy(&self, profile_id: &ProfileId) -> Result<InteractionPolicy, SocialGraphError> {
+        #[derive(DeserializeRow)]
+        struct Row { interaction: Option<String> }
+
+        let stmt = self.fast_stmt(
+            "SELECT interaction FROM social_graph.profile_audience WHERE profile_id = ?",
+        );
+        let row = self
+            .client
+            .session
+            .execute_unpaged(stmt, (profile_id.as_uuid(),))
+            .await
+            .map_err(scylla_err)?
+            .into_rows_result()
+            .map_err(|e| row_err("load_interaction_policy:rows", e))?
+            .maybe_first_row::<Row>()
+            .map_err(|e| row_err("load_interaction_policy:deser", e))?;
+        Ok(InteractionPolicy::from_json(row.and_then(|r| r.interaction).as_deref()))
     }
 }
 

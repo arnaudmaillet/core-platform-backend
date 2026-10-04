@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 71a78504cb6cb31ae6542c1ab9f77bb7251d1f6fadcf57199fec172703040d57
+  source_sha256: 1246fc80c59bd93be2f0c8b3721ad843e0cf01ed0ae1cfd62249e56b131b94e6
   translated_at: 2026-10-04
   status: complete
 ---
@@ -123,6 +123,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `tier_changed` | le tier d'auteur a changé | recalcul de tier (depuis `social-graph`) | `geo-discovery` (pondération), `timeline` (push/pull) |
 | `profile_hidden` / `profile_restored` / `profile_deleted` | une transition de visibilité/cycle de vie | action propriétaire ou modération | read-models (démantèlement/restauration) ; `social-graph` (projection d'audience : masqué) |
 | `profile_visibility_changed` | le propriétaire a rendu le profil privé ou public | `SetVisibility` | `social-graph` (projection d'audience : privé → contenu réservé aux abonnés, via `CheckAccess`) |
+| `profile_interaction_settings_changed` | le propriétaire a changé qui peut commenter / mentionner / écrire (tout le monde, abonnés, mutuels, personne), les téléchargements et les compteurs de likes | `SetInteractionSettings`, ou la création du profil d'un titulaire de 13 à 17 ans (défauts ados) | `social-graph` (projection lue par `CheckInteraction`, que comment appelle avant d'écrire) |
 
 ## Contenu — `post.v1.events` (producteur : `post`)
 
