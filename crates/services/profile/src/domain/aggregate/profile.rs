@@ -666,6 +666,7 @@ mod tests {
             DomainEvent::ProfileCreated(_),
             DomainEvent::InteractionSettingsChanged(_),
             DomainEvent::LocationSettingsChanged(_),
+            DomainEvent::DiscoverySettingsChanged(_),
             DomainEvent::VisibilityChanged(VisibilityChanged { visibility: ProfileVisibility::Private, .. })
         ]));
     }
