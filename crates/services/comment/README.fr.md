@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 458fb2706bc75c4b3e9ff6a628f337cf8f334ec09880e8551ad70696bfbedc15
-  translated_at: 2026-10-04
+  source_sha256: 3148587f273b3dd94632d27acdcf07613aca1e6c57d7fda21500d14151bc135d
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -139,6 +139,8 @@ la page) :
   qu'il arrive), et son auteur `VISIBLE` pour le lecteur (pas un auteur privé qu'il ne suit pas, pas
   de blocage dans un sens ou l'autre, pas masqué). Sinon `GetComment` renvoie `CMT-1001` et les
   listes sont vides ;
+- les commentaires d'un post **soumis à une limite d'âge** ne sont pas lisibles par un client anonyme, un
+  invité ou un lecteur de 13 à 17 ans (`CMT-1001` / listes vides), comme le post lui-même ;
 - les commentaires d'un auteur **masqué** pour le lecteur (blocage dans un sens ou l'autre, profil
   masqué) sont retirés ; le commentaire d'un profil privé sur un post lisible reste. Une page peut
   revenir plus courte tandis que `next_token` reste valide ;

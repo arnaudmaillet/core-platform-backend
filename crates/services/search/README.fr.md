@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 5afd55baba94ed7402cca5ce53b37c60c4168e2e67e0018fbbd7a1de425080e0
-  translated_at: 2026-10-04
+  source_sha256: eaad5721d9fc5ec9d9d122e4099057e4e027c7ce2449c05886532dfedda748b4
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -147,7 +147,7 @@ Chaque faute implémente `error::AppError` avec un code `SCH-XXXX` stable, mapp�
 | `moderation.v1.events` | `search-moderation-indexer` | bascule le drapeau de visibilité **moderation** au masquage ; rétablit à la réversion | DLQ `moderation.v1.events.dlq` |
 | `<hashtag stream>` | `search-post-indexer` | maintient l'index hashtag (dérivé des événements post) | DLQ `<...>.dlq` |
 
-> **Deux autorités de visibilité :** un document n'est recherchable que si **les deux** drapeaux l'autorisent — `searchable = moderation_searchable AND owner_searchable`. Ce sont deux champs indépendants, chacun avec sa propre garde de version, écrits par des flux différents (`moderation.v1.events` vs un événement de masquage par le propriétaire du profil). Aucune autorité ne peut surpasser l'autre : un propriétaire de profil qui rétablit sa propre visibilité ne peut pas lever un masquage de modération, et inversement. Une **troisième autorité**, `discoverable` (#661), porte le choix du profil d'être trouvable par la recherche (`by_handle_search` de `ProfileDiscoverySettingsChanged`) ; le masquage et la modération n'y touchent pas. Ses deux champs ont été ajoutés aux index existants sur place : `ensure_indices` pose les propriétés communes à chaque démarrage, une mise à jour `_mapping` additive (sans réindexation). Un drapeau absent vaut visible.
+> **Deux autorités de visibilité :** un document n'est recherchable que si **les deux** drapeaux l'autorisent — `searchable = moderation_searchable AND owner_searchable`. Ce sont deux champs indépendants, chacun avec sa propre garde de version, écrits par des flux différents (`moderation.v1.events` vs un événement de masquage par le propriétaire du profil). Aucune autorité ne peut surpasser l'autre : un propriétaire de profil qui rétablit sa propre visibilité ne peut pas lever un masquage de modération, et inversement. Une **troisième autorité**, `discoverable` (#661), porte le choix du profil d'être trouvable par la recherche (`by_handle_search` de `ProfileDiscoverySettingsChanged`) ; le masquage et la modération n'y touchent pas. Ses deux champs ont été ajoutés aux index existants sur place : `ensure_indices` pose les propriétés communes à chaque démarrage, une mise à jour `_mapping` additive (sans réindexation). Un drapeau absent vaut visible. Un post **soumis à une limite d'âge** (`age_gate` de la modération) est hors de la recherche pour tous : search n'a pas de niveau de contenu par lecteur, il tient donc le contenu mature à l'écart des 13–17 ans et des invités de façon prudente (RESTRICTED par défaut, comme les fils de découverte).
 
 > **Contrat d'exécution (obligatoire) :** tous les consommateurs s'exécutent sous `run_consumer` — commit manuel après une issue terminale, retry borné avec backoff + jitter, DLQ à l'épuisement/poison, reconstruction depuis le dernier offset commité sur erreur broker. **Idempotence :** la garde de version externe du moteur (`version_type=external`) ; les suppressions sont idempotentes par nature ; une écriture de version périmée (`SCH-2002`) et un type d'événement inconnu sont repliés en `Ok` pour que l'offset soit tout de même commité. Une boucle `run_consumer` par topic source (la logique dépend du topic).
 

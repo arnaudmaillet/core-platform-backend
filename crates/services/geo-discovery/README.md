@@ -146,8 +146,9 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > **reserved**, with pins on a fresh field number to stay wire/JSON-compatible (`buf WIRE_JSON`).
 
 > **What the map may show.** A post leaves the map when it is **deleted** (`post.deleted`, for good)
-> or when moderation **removes or limits** it (`moderation.v1.events`: `remove_content` /
-> `visibility_limit` on a post — the map is a discovery surface). The card row is marked
+> or when moderation **removes, limits or age-gates** it (`moderation.v1.events`: `remove_content` /
+> `visibility_limit` / `age_gate` on a post — the map is a discovery surface with no content level, so
+> mature content stays off it for everyone, 13–17 and guests included). The card row is marked
 > (`suppressed`, `moderation_version`; writes carry the row's remaining TTL) and its pin and cached
 > card leave Redis, so both paths drop it; a **newer** reversal restores it and rebuilds the pin
 > and spatial-index entries from the card's stored coordinates. The two consumers are unordered: a
@@ -211,7 +212,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
-| `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | map suppression: delete → permanent; `remove_content` / `visibility_limit` on a post → hidden; a newer reversal → restored (version-guarded; actor-level and other events skipped) | DLQ `{topic}.dlq` |
+| `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | map suppression: delete → permanent; `remove_content` / `visibility_limit` / `age_gate` on a post → hidden; a newer reversal → restored (version-guarded; actor-level and other events skipped) | DLQ `{topic}.dlq` |
 | `profile.v1.events` | `geo-discovery-location-settings` | authors' location sharing (#657) from `ProfileLocationSettingsChanged` → `geo_discovery.location_settings`; every map query applies it for any reader but the author (the mesh included): a **ghost**'s pins and cards leave the map; a **city-level** author's pins show only at the R5 band at the R5 cell centre, and their cards name the city's R7 cell. Other profile events skipped | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |

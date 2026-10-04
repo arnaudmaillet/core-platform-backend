@@ -190,8 +190,9 @@ where
         request: Request<proto::GetPostRequest>,
     ) -> Result<Response<proto::PostView>, Status> {
         let viewer = viewer_of(&request);
+        let mature = mature_of(&request);
         let req    = request.into_inner();
-        let query  = GetPostQuery { post_id: req.post_id, viewer };
+        let query  = GetPostQuery { post_id: req.post_id, viewer, mature };
         let post: Post = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
@@ -206,8 +207,10 @@ where
         request: Request<proto::ListPostsByProfileRequest>,
     ) -> Result<Response<proto::ListPostsByProfileResponse>, Status> {
         let viewer = viewer_of(&request);
+        let mature = mature_of(&request);
         let req    = request.into_inner();
         let query  = ListPostsByProfileQuery {
+            mature,
             profile_id: req.profile_id,
             limit:      req.limit,
             page_token: Some(req.page_token).filter(|s| !s.is_empty()),
@@ -227,6 +230,16 @@ where
 }
 
 // ── Viewer ────────────────────────────────────────────────────────────────────
+
+/// Whether the reader is cleared for mature content: the mesh is; an
+/// anonymous client, a guest or a 13–17 holder (the token's `age`) is not.
+fn mature_of<T>(request: &Request<T>) -> bool {
+    match edge::viewer(request) {
+        edge::Viewer::Internal => true,
+        edge::Viewer::Anonymous => false,
+        edge::Viewer::Member { .. } => edge::principal(request).is_some_and(|p| !p.is_guest() && !p.is_minor()),
+    }
+}
 
 /// The reader of a viewer-aware RPC, from how the request arrived. A `pids`
 /// entry that is not a profile id cannot author a post, so it is dropped.

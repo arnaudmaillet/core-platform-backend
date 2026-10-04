@@ -134,8 +134,11 @@ impl SourceHydrator for GrpcSourceHydrator {
 /// converges to "absent" too: a takedown survives a re-announce (a delete then
 /// restore, #663), whatever moderation's own stream did to the document.
 fn post_event(view: post_api::PostView, revision: u64) -> SourceEvent {
+    // Age-gated too: search has no per-reader content level, so mature
+    // content stays out for everyone (13–17 and guests are never served it).
     let hidden_by_moderation = view.moderation == post_api::ModerationRestriction::Removed as i32
-        || view.moderation == post_api::ModerationRestriction::Limited as i32;
+        || view.moderation == post_api::ModerationRestriction::Limited as i32
+        || view.moderation == post_api::ModerationRestriction::AgeGated as i32;
     if view.status != post_api::PostStatus::Published as i32 || hidden_by_moderation {
         return deleted(EntityKind::Post, view.post_id);
     }
@@ -247,7 +250,7 @@ mod tests {
         }
         let mut gated = view(post_api::PostStatus::Published);
         gated.moderation = post_api::ModerationRestriction::AgeGated as i32;
-        assert!(matches!(post_event(gated, 7), SourceEvent::Post(PostEvent::Published(_))));
+        assert!(matches!(post_event(gated, 7), SourceEvent::Post(PostEvent::Deleted(_))), "age-gated: absent");
     }
 
     #[test]

@@ -6,8 +6,10 @@
 //! - `post.deleted` (legacy, bare `{post_id, profile_id, deleted_at_ms}`, no tag);
 //! - `moderation.v1.events` (moderation's `DomainEvent`, tagged `type`,
 //!   snake_case). Only `enforcement_applied` / `enforcement_reversed` on a
-//!   `post` matter: `remove_content` / `visibility_limit` hide (the map is a
-//!   discovery surface, so a limited post leaves it too), a reversal restores.
+//!   `post` matter: `remove_content` / `visibility_limit` / `age_gate` hide (the
+//!   map is a discovery surface with no content level, so a limited or
+//!   age-gated post leaves it too — no reader's age is known here), a reversal
+//!   restores.
 
 use std::sync::Arc;
 
@@ -70,8 +72,8 @@ fn outcome(event: &VisibilityEvent) -> Outcome {
     };
     let restricted = match event_type {
         "enforcement_applied" => match event.action.as_deref() {
-            Some("remove_content" | "visibility_limit") => true,
-            _ => return Outcome::Skip, // actor-level, warn, age_gate (B3)
+            Some("remove_content" | "visibility_limit" | "age_gate") => true,
+            _ => return Outcome::Skip, // actor-level, warn
         },
         "enforcement_reversed" => false,
         _ => return Outcome::Skip,
@@ -220,8 +222,8 @@ mod tests {
     }
 
     #[test]
-    fn takedowns_and_limits_hide_reversals_restore() {
-        for action in [ActionType::RemoveContent, ActionType::VisibilityLimit] {
+    fn takedowns_limits_and_age_gates_hide_reversals_restore() {
+        for action in [ActionType::RemoveContent, ActionType::VisibilityLimit, ActionType::AgeGate] {
             assert_eq!(
                 outcome(&applied(EntityType::Post, action, 3)),
                 apply(VisibilityChange::Moderation { restricted: true, version: 3 })
@@ -242,7 +244,7 @@ mod tests {
     #[test]
     fn other_entities_and_actions_are_skipped() {
         assert_eq!(outcome(&applied(EntityType::Comment, ActionType::RemoveContent, 1)), Outcome::Skip);
-        for action in [ActionType::Warn, ActionType::AgeGate, ActionType::Ban] {
+        for action in [ActionType::Warn, ActionType::Ban] {
             assert_eq!(outcome(&applied(EntityType::Post, action, 1)), Outcome::Skip, "{action:?}");
         }
         assert_eq!(outcome(&decode(br#"{"type":"case_opened"}"#)), Outcome::Skip);

@@ -91,6 +91,7 @@ impl ReadGate for ScriptedGate {
     async fn check(
         &self,
         _viewer: &Viewer,
+        _mature: bool,
         post_id: &PostId,
         comment_authors: &[ProfileId],
     ) -> Result<Option<ReadDecision>, CommentError> {
@@ -231,7 +232,7 @@ impl TestHarness {
         self.query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
-                GetCommentQuery { comment_id: comment_id.to_owned(), viewer },
+                GetCommentQuery { comment_id: comment_id.to_owned(), viewer, mature: true },
             ))
             .await
     }
@@ -246,7 +247,7 @@ impl TestHarness {
             .query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
-                ListTopLevelQuery { post_id: post_id.to_owned(), limit: 100, page_token: None, viewer },
+                ListTopLevelQuery { post_id: post_id.to_owned(), limit: 100, page_token: None, viewer, mature: true },
             ))
             .await?;
         Ok(summaries)
@@ -263,6 +264,7 @@ impl TestHarness {
                     limit:      100,
                     page_token: None,
                     viewer:     Viewer::Internal,
+                    mature:     true,
                 },
             ))
             .await
@@ -282,6 +284,7 @@ impl TestHarness {
                     limit:      100,
                     page_token: None,
                     viewer:     Viewer::Internal,
+                    mature:     true,
                 },
             ))
             .await

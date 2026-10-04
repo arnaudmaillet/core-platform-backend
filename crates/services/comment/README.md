@@ -122,6 +122,8 @@ transport (`edge::viewer`). For anyone but a mesh caller, a **read gate** decide
 - the **post** must be readable: published and not removed by moderation (its author sees it
   regardless), and its author `VISIBLE` to the reader (not a private author they don't follow, not
   blocked either way, not hidden). Otherwise `GetComment` is `CMT-1001` and the lists are empty;
+- an **age-gated** post's comments are not readable by an anonymous client, a guest or a 13–17 reader
+  (`CMT-1001` / empty lists), like the post itself;
 - comments by an author **hidden** to the reader (a block either way, a hidden profile) are dropped;
   a private commenter's comment on a readable post stays. A page can come back short while
   `next_token` stays valid;

@@ -128,7 +128,9 @@ field. A draft, a deleted post, or a post moderation **removed** is visible to i
 profile in the token's `pids`) and to mesh callers only; anyone else gets `PST-1001` from `GetPost`
 and does not see it in `ListPostsByProfile` (filtered per page, so a page can come back short
 while `next_token` stays valid). `PostView.moderation` / `PostSummary.moderation` tell the author
-what is in force; `LIMITED` and `AGE_GATED` posts stay readable (discovery applies those).
+what is in force; `LIMITED` posts stay readable (discovery applies it). An **`AGE_GATED`** post is
+not found for a reader not cleared for mature content — an anonymous client, a guest, or a 13–17 holder
+(the token's `age`) — and left out of their lists; its author and adults read it.
 Then the **author's audience**, from social-graph's mesh-only `CheckAccess`: a private author the
 reader does not follow, a block either way, or a hidden author → `PST-1001` / an empty list. The
 author and mesh callers skip the check; anyone else (anonymous included) depends on it, and an

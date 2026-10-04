@@ -14,6 +14,9 @@ pub struct ListTopLevelQuery {
     pub page_token: Option<String>,
     /// Who is reading (see [`ReadGate`]).
     pub viewer:     Viewer,
+    /// The reader is cleared for mature content (not a guest, not 13–17):
+    /// the comments of an age-gated post are hidden otherwise.
+    pub mature:     bool,
 }
 
 impl Query for ListTopLevelQuery {
@@ -39,6 +42,6 @@ impl<R: CommentRepository> QueryHandler<ListTopLevelQuery> for ListTopLevelHandl
             .repository
             .list_top_level(&post_id, q.limit, q.page_token.as_deref())
             .await?;
-        filter_page(self.gate.as_ref(), &self.filters, &q.viewer, &post_id, page).await
+        filter_page(self.gate.as_ref(), &self.filters, &q.viewer, q.mature, &post_id, page).await
     }
 }

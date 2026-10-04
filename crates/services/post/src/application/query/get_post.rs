@@ -15,6 +15,9 @@ pub struct GetPostQuery {
     /// Who is reading. A post the viewer may not see is reported as not found,
     /// so a draft's existence does not leak.
     pub viewer:  Viewer,
+    /// The reader is cleared for mature content (not a guest, not 13–17): an
+    /// age-gated post is not found otherwise.
+    pub mature:  bool,
 }
 
 impl Query for GetPostQuery {
@@ -39,7 +42,9 @@ impl<R: PostRepository> QueryHandler<GetPostQuery> for GetPostHandler<R> {
         // The post's own state first (no network hop), then its author's
         // audience: private, blocked or hidden authors (fail closed).
         let mut post = self.repository.find_by_id(&post_id).await?
-            .filter(|post| post.is_visible_to(&query.viewer))
+            .filter(|post| {
+                query.viewer.may_see_rated(post.profile_id(), post.status(), post.moderation().restriction, query.mature)
+            })
             .ok_or_else(not_found)?;
         if !author_visible_to(self.audience.as_ref(), &query.viewer, post.profile_id()).await? {
             return Err(not_found());

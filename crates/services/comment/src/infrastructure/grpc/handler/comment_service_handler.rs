@@ -114,7 +114,8 @@ where
         request: Request<proto::GetCommentRequest>,
     ) -> Result<Response<proto::CommentView>, Status> {
         let viewer = viewer_of(&request);
-        let query  = GetCommentQuery { comment_id: request.into_inner().comment_id, viewer };
+        let mature = mature_of(&request);
+        let query  = GetCommentQuery { comment_id: request.into_inner().comment_id, viewer, mature };
         let comment: Comment = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
@@ -129,8 +130,10 @@ where
         request: Request<proto::ListTopLevelRequest>,
     ) -> Result<Response<proto::ListCommentsResponse>, Status> {
         let viewer = viewer_of(&request);
+        let mature = mature_of(&request);
         let req    = request.into_inner();
         let query  = ListTopLevelQuery {
+            mature,
             post_id:    req.post_id,
             limit:      req.limit,
             page_token: Some(req.page_token).filter(|s| !s.is_empty()),
@@ -153,8 +156,10 @@ where
         request: Request<proto::ListRepliesRequest>,
     ) -> Result<Response<proto::ListCommentsResponse>, Status> {
         let viewer = viewer_of(&request);
+        let mature = mature_of(&request);
         let req    = request.into_inner();
         let query  = ListRepliesQuery {
+            mature,
             post_id:    req.post_id,
             comment_id: req.comment_id,
             limit:      req.limit,
@@ -222,6 +227,16 @@ where
 
 /// The reader of a viewer-aware RPC, from how the request arrived. A `pids`
 /// entry that is not a profile id is dropped.
+/// Whether the reader is cleared for mature content: the mesh is; an
+/// anonymous client, a guest or a 13–17 holder (the token's `age`) is not.
+fn mature_of<T>(request: &Request<T>) -> bool {
+    match edge::viewer(request) {
+        edge::Viewer::Internal => true,
+        edge::Viewer::Anonymous => false,
+        edge::Viewer::Member { .. } => edge::principal(request).is_some_and(|p| !p.is_guest() && !p.is_minor()),
+    }
+}
+
 fn viewer_of<T>(request: &Request<T>) -> Viewer {
     match edge::viewer(request) {
         edge::Viewer::Internal => Viewer::Internal,

@@ -30,9 +30,12 @@ pub trait ReadGate: Send + Sync + 'static {
     /// deleted, removed, or an author they may not see). Otherwise the subset
     /// of `comment_authors` whose comments the viewer must not see, and the
     /// post's author.
+    /// `mature`: the reader is cleared for mature content; an age-gated post
+    /// is unreadable otherwise (unless the reader wrote it).
     async fn check(
         &self,
         viewer: &Viewer,
+        mature: bool,
         post_id: &PostId,
         comment_authors: &[ProfileId],
     ) -> Result<Option<ReadDecision>, CommentError>;
@@ -101,6 +104,7 @@ pub async fn filter_page(
     gate: &dyn ReadGate,
     filters: &OwnerFilters,
     viewer: &Viewer,
+    mature: bool,
     post_id: &PostId,
     (mut page, next): (Vec<CommentSummary>, Option<String>),
 ) -> Result<(Vec<CommentSummary>, Option<String>), CommentError> {
@@ -110,7 +114,7 @@ pub async fn filter_page(
     let mut authors: Vec<ProfileId> = page.iter().map(|c| c.author_id.clone()).collect();
     authors.sort_by_key(|a| a.as_str());
     authors.dedup();
-    match gate.check(viewer, post_id, &authors).await? {
+    match gate.check(viewer, mature, post_id, &authors).await? {
         None => Ok((Vec::new(), None)),
         Some(decision) => {
             let filter = filters.of(decision.post_author.as_ref()).await?;
