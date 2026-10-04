@@ -26,7 +26,7 @@ profile classification. It is the authoritative read path for any consumer resol
 
 The hard problem it solves is **sub-millisecond reads at hyperscale without cross-service coupling**: a
 Redis cache-aside layer over ScyllaDB serves cache hits in < 1 ms, and account lifecycle is ingested
-**reactively** via Kafka (`AccountSuspended/Deleted/Activated` → mask/restore) so there is no
+**reactively** via Kafka (`AccountSuspended/Deactivated/Deleted/Activated` → mask/restore) so there is no
 synchronous dependency on `account` on the read path.
 
 **Core objectives:** P99 < 1 ms cache hit, < 5 ms cache miss; globally-unique @handles via ScyllaDB
@@ -51,7 +51,7 @@ gRPC ─► ProfileServiceHandler ─► Command bus            Query bus ─►
 
    Redis cache-aside: profile:v1:{id} TTL 300s · handle:v1:{handle} TTL 600s · account:profiles:v1:{id} TTL 120s
 
-   Kafka account.v1.events ─► account_suspended / account_deleted → hide every profile of the account · account_activated → restore the ones the suspension hid
+   Kafka account.v1.events ─► account_suspended / account_deactivated / account_deleted → hide every profile of the account · account_activated → restore the ones the suspension or deactivation hid
 ```
 
 **Cache-key versioning.** All keys carry a `v1:` prefix — bumping the suffix performs a zero-downtime
@@ -88,7 +88,7 @@ it at the application layer).
 |---|---|---|---|
 | ScyllaDB (keyspace `profile`) | durable store | reads + writes fail | **Hard** — `UNAVAILABLE` |
 | Redis | cache-aside | cache misses to Scylla | **Soft** — all reads fall through; latency rises |
-| Kafka | reactive masking + `profile.tier_changed` | suspend/delete masking stalls | **Soft** — reads/writes unaffected |
+| Kafka | reactive masking + `profile.tier_changed` | suspend/deactivate/delete masking stalls | **Soft** — reads/writes unaffected |
 
 **Upstream — who depends on `profile` (blast radius if `profile` fails):**
 
@@ -172,7 +172,7 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
-| `account.v1.events` | `profile-account-events` | account's `DomainEvent` (tagged on `type`, snake_case): `account_suspended` / `account_deleted` → hide **every** profile of the account (`HideAccountProfiles`); `account_activated` → restore the profiles the suspension hid (`RestoreAccountProfiles`; a content-policy hide stays). Idempotent per profile, so a redelivery finishes a partial walk. Other types = no-op commit | DLQ `account.v1.events.dlq` |
+| `account.v1.events` | `profile-account-events` | account's `DomainEvent` (tagged on `type`, snake_case): `account_suspended` / `account_deactivated` / `account_deleted` → hide **every** profile of the account (`HideAccountProfiles`, the event type is the masking reason); `account_activated` → restore the profiles the suspension or deactivation hid (`RestoreAccountProfiles`; a content-policy hide stays). Idempotent per profile, so a redelivery finishes a partial walk. Other types = no-op commit | DLQ `account.v1.events.dlq` |
 | `social-graph.author_tier_changed` | `profile-author-tier` | denormalize the author tier onto the profile (`SetProfileTier`) → re-emit on `profile.v1.events` (`ProfileTierChanged`); idempotent on unchanged tier | DLQ `social-graph.author_tier_changed.dlq` |
 
 > **Runtime contract (mandatory):** the account-event consumer runs under `run_consumer` — manual

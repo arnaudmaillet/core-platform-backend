@@ -93,6 +93,10 @@ message LoginResponse {
     // True when this login established the IdP-subject → account link for the
     // first time (a SubjectLinked event was emitted).
     bool        first_link  = 3;
+    // True when the account had been deactivated by its holder and this login
+    // reactivated it (its profiles become visible again) — the app can welcome
+    // the user back. A suspended account is never reactivated by a login.
+    bool        reactivated = 4;
 }
 
 // ── Refresh ───────────────────────────────────────────────────────────────────

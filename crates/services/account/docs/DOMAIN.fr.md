@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: 5c64e6c4176491a870fa3f9505d73057f318e859eed6734da1f858b7129623ad
-  translated_at: 2026-06-28
+  source_sha256: 41b31b4820853c1d04e1a20c835747a012d5dcffb0d58c423f01dd98d521b6ca
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -74,7 +74,7 @@ réelle ; tous les autres détiennent des références dérivées, non faisant-a
 ```
 created --> activated --(suspend)--> suspended --(reactivate)--> activated
    │            │                                                   │
-   │            └--(deactivate)--> deactivated                      │
+   │            └--(deactivate)--> deactivated --(le titulaire se reconnecte : Login auth)--> activated
    └────────────────────────── gdpr_deletion_requested ──> deleted (PII erased)
 ```
 

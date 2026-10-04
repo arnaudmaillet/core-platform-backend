@@ -1,5 +1,8 @@
 use account_api::account_service_client::AccountServiceClient;
-use account_api::{AccountStatus, GetAccountByIdRequest, GetAccountByIdentityIdRequest};
+use account_api::{
+    AccountStatus, GetAccountByIdRequest, GetAccountByIdentityIdRequest,
+    ResumeDeactivatedAccountRequest,
+};
 use async_trait::async_trait;
 use tonic::transport::Channel;
 use tonic::Code;
@@ -68,6 +71,7 @@ impl AccountDirectory for GrpcAccountDirectory {
 
         let activation = match AccountStatus::try_from(view.status).unwrap_or(AccountStatus::Unspecified) {
             AccountStatus::Active => AccountActivation::Active,
+            AccountStatus::Deactivated => AccountActivation::Deactivated,
             other => AccountActivation::Inactive { reason: status_name(other) },
         };
         // Union of coarse role names (pre-existing behaviour — downstream gates
@@ -81,6 +85,25 @@ impl AccountDirectory for GrpcAccountDirectory {
         let permissions = grants.into_iter().map(Permission::new).collect();
 
         Ok(AccountSnapshot { activation, permissions })
+    }
+
+    #[instrument(name = "auth.directory.resume", skip(self), fields(account.id = %account_id))]
+    async fn resume_deactivated(&self, account_id: &AccountId) -> Result<(), AuthError> {
+        let mut client = self.client.clone();
+        client
+            .resume_deactivated_account(ResumeDeactivatedAccountRequest {
+                account_id: account_id.as_str(),
+            })
+            .await
+            .map(|_| ())
+            .map_err(|status| match status.code() {
+                Code::NotFound => AuthError::AccountNotActive { current: "not_found".into() },
+                // No longer deactivated (suspended or deleted since the lookup).
+                Code::FailedPrecondition => {
+                    AuthError::AccountNotActive { current: "not_resumable".into() }
+                }
+                _ => AuthError::AccountDirectoryUnavailable,
+            })
     }
 }
 

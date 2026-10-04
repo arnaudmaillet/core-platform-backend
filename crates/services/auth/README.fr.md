@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3c638222b7a00428117be154e0c42f92184b8abc0024958200043fc24077740c
+  source_sha256: a23115eb003727f05fcac9c2adfb9ebb84ffc265cc526b96f1975a9810ba58be
   translated_at: 2026-10-04
   status: complete
 ---
@@ -138,7 +138,7 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | Dépendance | Rôle | Si en panne → | Dégradation |
 |---|---|---|---|
 | Keycloak (IdP) | vérification des identifiants au `Login` | `Login` échoue (`UNAVAILABLE`) | **Dur** pour les nouvelles connexions ; refresh/introspect intacts |
-| `account` (gRPC) | résolution compte + gating actif au `Login` | `Login` échoue | **Dur** pour les nouvelles connexions |
+| `account` (gRPC) | résolution compte + gating actif au `Login` (un compte désactivé par son titulaire est réactivé : `ResumeDeactivatedAccount`, `reactivated = true`) | `Login` échoue | **Dur** pour les nouvelles connexions |
 | PostgreSQL | registre sessions + refresh + liens | écritures `Refresh`/`Logout` échouent | **Dur** pour refresh/révocation |
 | Redis Cluster | carte de génération + blacklist (chemin chaud) | contrôles de révocation dégradés | **Souple** — la génération se reconstruit depuis Postgres ; une entrée blacklist manquée expire avec le jeton |
 | Kafka | émission `auth.v1.events` | événements non émis | **Souple** — best-effort ; repli sur le log publisher |

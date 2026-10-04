@@ -97,6 +97,13 @@ where
         self.deactivate_account(request).await
     }
 
+    async fn resume_deactivated_account(
+        &self,
+        request: Request<proto::ResumeDeactivatedAccountRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.resume_deactivated_account(request).await
+    }
+
     // ── Session tracking ──────────────────────────────────────────────────────
 
     async fn record_login(

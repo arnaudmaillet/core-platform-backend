@@ -56,8 +56,16 @@ service AccountService {
     // Lift a suspension and return the account to Active status.
     rpc ReactivateAccount(ReactivateAccountRequest) returns (CommandResponse);
 
-    // User-initiated self-deactivation. Data is retained per retention policy.
+    // User-initiated self-deactivation: the account's profiles are hidden until
+    // the holder signs back in (see ResumeDeactivatedAccount). Data is retained
+    // per retention policy. Refused on a suspended account.
     rpc DeactivateAccount(DeactivateAccountRequest) returns (CommandResponse);
+
+    // Return a self-deactivated account to Active because its holder signed
+    // back in (called by auth on Login; mesh only). Succeeds as a no-op on an
+    // account that is already Active; FAILED_PRECONDITION on any other status —
+    // a suspension is lifted only by ReactivateAccount.
+    rpc ResumeDeactivatedAccount(ResumeDeactivatedAccountRequest) returns (CommandResponse);
 
     // ── Session tracking ──────────────────────────────────────────────────────
 

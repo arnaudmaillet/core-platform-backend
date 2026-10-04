@@ -63,7 +63,7 @@ references.
 ```
 created --> activated --(suspend)--> suspended --(reactivate)--> activated
    │            │                                                   │
-   │            └--(deactivate)--> deactivated                      │
+   │            └--(deactivate)--> deactivated --(holder signs in: auth Login)--> activated
    └────────────────────────── gdpr_deletion_requested ──> deleted (PII erased)
 ```
 

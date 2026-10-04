@@ -72,15 +72,11 @@ async fn process_event<CB: CommandBus>(command_bus: &CB, event: &AccountEvent) -
 
     // An account owns N profiles: each command walks all of them.
     let dispatch = match event.kind.as_str() {
-        "account_suspended" | "account_deleted" => {
-            let masking_reason = if event.kind == "account_deleted" {
-                "account_deleted"
-            } else {
-                "account_suspended"
-            };
+        kind @ ("account_suspended" | "account_deactivated" | "account_deleted") => {
+            // The event kind doubles as the masking reason.
             let cmd = HideAccountProfilesCommand {
                 account_id:        event.account_id.clone(),
-                masking_reason:    masking_reason.to_owned(),
+                masking_reason:    kind.to_owned(),
                 suspension_reason: event.reason.clone(),
             };
             command_bus.dispatch(Envelope::new(correlation_id, cmd)).await
@@ -107,8 +103,10 @@ async fn process_event<CB: CommandBus>(command_bus: &CB, event: &AccountEvent) -
 #[cfg(test)]
 mod tests {
     use account::domain::event::{
-        AccountActivated, AccountDeleted, AccountSuspended, DomainEvent as AccountDomainEvent,
+        AccountActivated, AccountDeactivated, AccountDeleted, AccountSuspended,
+        DomainEvent as AccountDomainEvent,
     };
+    use crate::domain::value_object::MaskingReason;
     use account::domain::value_object::AccountId;
     use chrono::Utc;
 
@@ -141,6 +139,15 @@ mod tests {
             correlation_id: Uuid::now_v7(),
         }));
         assert_eq!(deleted.kind, "account_deleted");
+
+        let deactivated = wire(AccountDomainEvent::AccountDeactivated(AccountDeactivated {
+            account_id: id,
+            occurred_at: Utc::now(),
+            correlation_id: Uuid::now_v7(),
+        }));
+        assert_eq!(deactivated.kind, "account_deactivated");
+        // Its kind is the masking reason the hide command parses.
+        assert!(MaskingReason::try_from(deactivated.kind.as_str()).is_ok());
 
         let activated = wire(AccountDomainEvent::AccountActivated(AccountActivated {
             account_id: id,

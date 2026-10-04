@@ -114,6 +114,10 @@ message DeactivateAccountRequest {
     string account_id = 1;
 }
 
+message ResumeDeactivatedAccountRequest {
+    string account_id = 1;
+}
+
 message RecordLoginRequest {
     string account_id = 1;
 }

@@ -439,10 +439,12 @@ impl Account {
         Ok(())
     }
 
-    /// Re-activates a suspended account. Emits [`AccountActivated`].
+    /// Re-activates a suspended (or deactivated) account — the admin path.
+    /// Emits [`AccountActivated`].
     pub fn activate(&mut self, correlation_id: Uuid) -> Result<(), AccountError> {
         self.transition_status(AccountStatus::Active)?;
         self.suspension_reason = None;
+        self.deactivated_at = None;
         let now = self.touch_now();
         self.pending_events.push(DomainEvent::AccountActivated(AccountActivated {
             account_id: self.id,
@@ -463,6 +465,26 @@ impl Account {
             correlation_id,
         }));
         Ok(())
+    }
+
+    /// Returns a self-deactivated account to Active — the holder signed back in.
+    /// Emits [`AccountActivated`] and returns `true`.
+    ///
+    /// Idempotent for a concurrent sign-in: an account that is already Active
+    /// returns `false` with no event. Every other status is refused — a
+    /// suspension is lifted only by an admin through [`Self::activate`].
+    pub fn resume_after_deactivation(&mut self, correlation_id: Uuid) -> Result<bool, AccountError> {
+        match self.status {
+            AccountStatus::Active => Ok(false),
+            AccountStatus::Deactivated => {
+                self.activate(correlation_id)?;
+                Ok(true)
+            }
+            other => Err(AccountError::InvalidStatusTransition {
+                from: other.as_str().to_owned(),
+                to: AccountStatus::Active.as_str().to_owned(),
+            }),
+        }
     }
 
     /// Hard-deletes the account (terminal state). Emits [`AccountDeleted`].
@@ -831,5 +853,92 @@ mod tests {
             None,
         );
         assert!(account.effective_permissions().is_empty());
+    }
+
+    fn account_in(status: AccountStatus, suspension_reason: Option<String>) -> Account {
+        Account::reconstitute(
+            AccountId::new(),
+            IdentityId::new("idp|lifecycle").expect("identity id"),
+            status,
+            suspension_reason,
+            (status == AccountStatus::Deactivated).then(Utc::now),
+            EmailAddress::new("user@example.com").expect("email"),
+            true,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            0,
+            None,
+            None,
+            MfaState::default(),
+            KycStatus::NotStarted,
+            None,
+            None,
+            None,
+            None,
+            GdprRecord::default(),
+            vec![AccountRole::User],
+            Vec::new(),
+            1,
+            Utc::now(),
+            Utc::now(),
+            None,
+        )
+    }
+
+    /// Signing back in returns a self-deactivated account to Active, clears
+    /// the deactivation timestamp and tells the fleet (profiles un-hide on it).
+    #[test]
+    fn resume_returns_a_deactivated_account_to_active() {
+        let mut account = account_in(AccountStatus::Deactivated, None);
+
+        assert!(account.resume_after_deactivation(Uuid::now_v7()).unwrap());
+
+        assert_eq!(account.status(), AccountStatus::Active);
+        assert_eq!(account.deactivated_at(), None);
+        let events = account.drain_events();
+        assert!(matches!(events.as_slice(), [DomainEvent::AccountActivated(_)]));
+    }
+
+    /// A second sign-in racing the first finds the account already Active:
+    /// nothing to do, nothing to publish.
+    #[test]
+    fn resume_is_a_no_op_on_an_active_account() {
+        let mut account = account_in(AccountStatus::Active, None);
+
+        assert!(!account.resume_after_deactivation(Uuid::now_v7()).unwrap());
+
+        assert!(account.drain_events().is_empty());
+    }
+
+    /// Only an admin lifts a suspension: signing in must not.
+    #[test]
+    fn resume_refuses_every_status_but_deactivated() {
+        for status in [
+            AccountStatus::Suspended,
+            AccountStatus::PendingVerification,
+            AccountStatus::Deleted,
+        ] {
+            let mut account = account_in(status, Some("spam".into()));
+            let err = account.resume_after_deactivation(Uuid::now_v7()).unwrap_err();
+            assert!(matches!(err, AccountError::InvalidStatusTransition { .. }), "{status}");
+            assert_eq!(account.status(), status);
+            assert!(account.drain_events().is_empty());
+        }
+    }
+
+    /// Deactivating while suspended would turn the next sign-in into a way
+    /// around the suspension.
+    #[test]
+    fn a_suspended_account_cannot_deactivate() {
+        let mut account = account_in(AccountStatus::Suspended, Some("spam".into()));
+
+        let err = account.deactivate(Uuid::now_v7()).unwrap_err();
+
+        assert!(matches!(err, AccountError::InvalidStatusTransition { .. }));
+        assert_eq!(account.status(), AccountStatus::Suspended);
     }
 }

@@ -24,6 +24,7 @@ use crate::application::command::{
     ReactivateAccountCommand, ReactivateAccountHandler, RecordFailedLoginCommand,
     RecordFailedLoginHandler, RecordLoginCommand, RecordLoginHandler, RequestDataExportCommand,
     RequestDataExportHandler, RequestGdprDeletionCommand, RequestGdprDeletionHandler,
+    ResumeDeactivatedAccountCommand, ResumeDeactivatedAccountHandler,
     RevokeMfaCommand, RevokeMfaHandler, RevokeRoleCommand, RevokeRoleHandler, SuspendAccountCommand,
     SuspendAccountHandler, UpdateKycStatusCommand, UpdateKycStatusHandler, VerifyEmailCommand,
     VerifyEmailHandler, VerifyPhoneCommand, VerifyPhoneHandler,
@@ -70,6 +71,7 @@ impl App {
                 .register::<SuspendAccountCommand, _>(SuspendAccountHandler::new(Arc::clone(&repository)))?
                 .register::<ReactivateAccountCommand, _>(ReactivateAccountHandler::new(Arc::clone(&repository)))?
                 .register::<DeactivateAccountCommand, _>(DeactivateAccountHandler::new(Arc::clone(&repository)))?
+                .register::<ResumeDeactivatedAccountCommand, _>(ResumeDeactivatedAccountHandler::new(Arc::clone(&repository)))?
                 .register::<RecordLoginCommand, _>(RecordLoginHandler::new(Arc::clone(&repository)))?
                 .register::<RecordFailedLoginCommand, _>(RecordFailedLoginHandler::new(Arc::clone(&repository)))?
                 .register::<RequestGdprDeletionCommand, _>(RequestGdprDeletionHandler::new(Arc::clone(&repository)))?

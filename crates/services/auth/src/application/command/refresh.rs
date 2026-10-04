@@ -126,6 +126,10 @@ impl RefreshHandler {
                 let snapshot = self.directory.lookup(&account_id).await?;
                 match snapshot.activation {
                     AccountActivation::Active => Permission::with_read_public(snapshot.permissions),
+                    // Only a fresh login resumes a deactivated account.
+                    AccountActivation::Deactivated => {
+                        return Err(AuthError::AccountNotActive { current: "deactivated".into() });
+                    }
                     AccountActivation::Inactive { reason } => {
                         return Err(AuthError::AccountNotActive { current: reason });
                     }
@@ -156,6 +160,7 @@ impl RefreshHandler {
             refresh_token: new_plaintext,
             access_expires_in: claims.expires_in_secs(now),
             first_link: false,
+            reactivated: false,
         })
     }
 
@@ -255,6 +260,25 @@ mod tests {
         assert_eq!(fx.cache.current_generation(&account).await.unwrap(), Generation::INITIAL.next());
         assert!(fx.sessions.list_active_by_account(&account).await.unwrap().is_empty());
         assert!(fx.publisher.event_types().contains(&"auth.session_revoked"));
+    }
+
+    /// Deactivating ends every device's sessions at its next refresh; only a
+    /// fresh login (the holder's credential again) resumes the account.
+    #[tokio::test]
+    async fn refresh_on_a_deactivated_account_is_refused_and_does_not_resume_it() {
+        use crate::application::port::AccountActivation;
+        let fx = Fixture::new();
+        let first = login(&fx).await;
+        fx.directory.set_activation(&first.account_id, AccountActivation::Deactivated);
+
+        let err = fx
+            .refresh_handler()
+            .handle(refresh_env(&first.refresh_token), t0() + Duration::minutes(1))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, AuthError::AccountNotActive { .. }));
+        assert!(fx.directory.resumed().is_empty());
     }
 
     #[tokio::test]
