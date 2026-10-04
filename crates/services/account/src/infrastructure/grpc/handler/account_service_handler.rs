@@ -124,6 +124,8 @@ where
             .map_err(cqrs_error_to_status)
     }
 
+    /// Mesh only (not in `EDGE_POLICY`): it carries no proof, so auth calls it
+    /// once the holder proved the address (a verified id_token or a code).
     pub async fn verify_email(
         &self,
         request: Request<proto::VerifyEmailRequest>,
@@ -138,6 +140,8 @@ where
             .map_err(cqrs_error_to_status)
     }
 
+    /// Mesh only (not in `EDGE_POLICY`): auth calls it once the holder proved
+    /// the number (a one-time SMS code).
     pub async fn verify_phone(
         &self,
         request: Request<proto::VerifyPhoneRequest>,

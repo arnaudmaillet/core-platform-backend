@@ -46,10 +46,10 @@ impl Service for AccountService {
     // Self-service only: every listed RPC binds `account_id` to the token subject.
     // Admin/compliance RPCs (KYC, suspend, roles, listing) and the
     // auth-plane writes (RecordLogin, Anonymize, CreateAccount) stay mesh-only
-    // until a staff permission catalogue exists.
+    // until a staff permission catalogue exists. VerifyEmail / VerifyPhone are
+    // auth-plane writes too: they carry no proof, so only auth calls them, once
+    // the holder proved the address (a verified id_token or a one-time code).
     const EDGE_POLICY: EdgePolicy = &[
-        authenticated("/account.v1.AccountService/VerifyEmail"),
-        authenticated("/account.v1.AccountService/VerifyPhone"),
         authenticated("/account.v1.AccountService/ChangePassword"),
         authenticated("/account.v1.AccountService/EnrollMfa"),
         authenticated("/account.v1.AccountService/RevokeMfa"),
@@ -129,5 +129,22 @@ fn build_publisher() -> anyhow::Result<Arc<dyn EventPublisher>> {
         Ok(Arc::new(KafkaEventPublisher::new(producer)))
     } else {
         Ok(Arc::new(LogEventPublisher))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Marking an address verified takes a proof only auth checks: these RPCs
+    /// must never be reachable on the client edge.
+    #[test]
+    fn verification_writes_are_mesh_only() {
+        for method in ["/account.v1.AccountService/VerifyEmail", "/account.v1.AccountService/VerifyPhone"] {
+            assert!(
+                AccountService::EDGE_POLICY.iter().all(|rule| rule.method != method),
+                "{method} is on the edge"
+            );
+        }
     }
 }

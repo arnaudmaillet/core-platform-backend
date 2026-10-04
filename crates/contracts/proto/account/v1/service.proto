@@ -24,10 +24,12 @@ service AccountService {
     // Register a new account. Idempotent on (identity_id, email) uniqueness.
     rpc CreateAccount(CreateAccountRequest) returns (CommandResponse);
 
-    // Mark the account's email address as verified.
+    // Mark the account's email address as verified. Mesh only: auth calls it
+    // after the holder proved the address (a verified id_token or a one-time code).
     rpc VerifyEmail(VerifyEmailRequest) returns (CommandResponse);
 
-    // Mark the account's phone number as verified.
+    // Mark the account's phone number as verified. Mesh only: auth calls it
+    // after the holder proved the number (a one-time SMS code).
     rpc VerifyPhone(VerifyPhoneRequest) returns (CommandResponse);
 
     // ── Credentials ───────────────────────────────────────────────────────────
