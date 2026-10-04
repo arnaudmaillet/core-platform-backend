@@ -8,8 +8,8 @@
 > | **On-call / escalation** | `<TODO: oncall-rotation>` → `<TODO: escalation-policy>` |
 > | **Tier** | **TIER-1** — feeds, notifications, and block-gating depend on it |
 > | **Deployable** | `crates/apps/social-graph-server` (library crate: `crates/services/social-graph`) |
-> | **Datastores** | ScyllaDB keyspace `social_graph` (4 tables) · Redis (sets + counters) |
-> | **Async** | publishes `social-graph.followed` / `.unfollowed` / `.blocked` / `.author_tier_changed` · consumes nothing |
+> | **Datastores** | ScyllaDB keyspace `social_graph` (5 tables) · Redis (sets + counters) |
+> | **Async** | publishes `social-graph.followed` / `.unfollowed` / `.blocked` / `.author_tier_changed` · consumes `profile.v1.events` (audience projection) |
 > | **Upstream callers** | `timeline`, `notification`, `<TODO: gateway>` |
 > | **Downstream deps** | ScyllaDB, Redis, Kafka |
 > | **SLO** | `<TODO>` avail · `GetRelationStatus` p99 `<TODO>` · write p99 `<TODO>` |
@@ -117,8 +117,21 @@ service SocialGraphService {
   rpc ListFollowers(ListFollowersRequest) returns (ListFollowersResponse);
   rpc ListFollowing(ListFollowingRequest) returns (ListFollowingResponse);
   rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
+  rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY
 }
 ```
+
+**Access check (`CheckAccess`, mesh-only).** The audience rule every viewer-aware read applies
+(post, comment, these lists): given the reader's profiles (the token's `pids`; none when
+anonymous) and up to 100 target profiles, each target is `VISIBLE`, `HEADER_ONLY` (a private
+profile no reader profile follows) or `HIDDEN` (a block either way, or a profile hidden by
+moderation / an account suspension / deletion). One's own profile is always visible. Four Scylla
+queries per call whatever the sizes (`IN` over `follow_status`, `blocks` both ways and
+`profile_audience`). Callers take the reader from their own edge request and fail closed when
+this RPC is unavailable.
+
+**Viewer-aware lists.** `ListFollowers` / `ListFollowing` of a profile that is not `VISIBLE` to the
+reader come back empty (the owner and mesh callers always get them).
 
 > **Wire contract:** `RelationStatus` (actor's perspective): `NONE`, `FOLLOWING`, `FOLLOWED_BY`,
 > `MUTUAL` (implicit friendship), `BLOCKING`, `BLOCKED_BY`.
@@ -148,7 +161,14 @@ service SocialGraphService {
 
 `ProfileUnblocked` is **not** published — no downstream fan-out needs it.
 
-**Consumes:** none.
+**Consumes:**
+
+| Topic | Consumer group | Purpose | On poison/exhaustion |
+|---|---|---|---|
+| `profile.v1.events` | `social-graph-profile-audience` | project the audience facts into `profile_audience`: `ProfileVisibilityChanged` → `private`; `ProfileHidden` / `ProfileDeleted` → `hidden = true`; `ProfileRestored` → `hidden = false`. Column upserts (idempotent; the topic is keyed by `profile_id`, so a profile's facts arrive in order). Other types = no-op commit | DLQ `profile.v1.events.dlq` |
+
+> **Projection start:** no row = public, not hidden. Profiles made private or hidden before this
+> consumer first ran need a one-off replay of `profile.v1.events` (no live environment holds data today).
 
 > **Runtime contract:** events are published via a durable Kafka producer after the edge commit.
 > Downstream consumers own at-least-once handling under `run_consumer`.
@@ -219,7 +239,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Deployment, Migrations & Rollback
 
-- **Migrations:** `migrations/000{1..5}_*.cql` (keyspace + 4 tables) against `social_graph`, applied
+- **Migrations:** `migrations/000{1..6}_*.cql` (keyspace + 5 tables) against `social_graph`, applied
   **before** first start.
 - **Rollout/Rollback:** `<TODO>`; stateless service, safe to roll.
 - **Counter rebuild:** Redis follower/following counters are derived — if Redis is lost, rebuild them

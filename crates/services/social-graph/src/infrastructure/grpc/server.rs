@@ -75,4 +75,11 @@ where
     ) -> Result<Response<proto::ListBlocksResponse>, Status> {
         self.list_blocks(request).await
     }
+
+    async fn check_access(
+        &self,
+        request: Request<proto::CheckAccessRequest>,
+    ) -> Result<Response<proto::CheckAccessResponse>, Status> {
+        self.check_access(request).await
+    }
 }

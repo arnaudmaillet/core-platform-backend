@@ -13,6 +13,7 @@ use uuid::Uuid;
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
 
 use crate::application::port::SocialGraphRepository;
+use crate::domain::access::AccessFacts;
 use crate::domain::aggregate::{Relation, RelationContext};
 use crate::domain::entity::{BlockEdge, FollowEdge};
 use crate::domain::value_object::ProfileId;
@@ -542,6 +543,124 @@ impl SocialGraphRepository for ScyllaSocialGraphRepository {
         };
 
         Ok((edges, next_token))
+    }
+
+    // ── access check ──────────────────────────────────────────────────────────
+
+    async fn load_access_facts(
+        &self,
+        viewers: &[ProfileId],
+        targets: &[ProfileId],
+    ) -> Result<AccessFacts, SocialGraphError> {
+        let mut facts = AccessFacts::default();
+        if targets.is_empty() {
+            return Ok(facts);
+        }
+        let viewer_ids: Vec<Uuid> = viewers.iter().map(ProfileId::as_uuid).collect();
+        let target_ids: Vec<Uuid> = targets.iter().map(ProfileId::as_uuid).collect();
+
+        #[derive(DeserializeRow)]
+        struct Pair { a: Uuid, b: Uuid }
+        #[derive(DeserializeRow)]
+        struct Audience { profile_id: Uuid, private: Option<bool>, hidden: Option<bool> }
+
+        let audience = self.fast_stmt(
+            "SELECT profile_id, private, hidden FROM social_graph.profile_audience \
+             WHERE profile_id IN ?",
+        );
+        let rows = self
+            .client
+            .session
+            .execute_unpaged(audience, (&target_ids,))
+            .await
+            .map_err(scylla_err)?
+            .into_rows_result()
+            .map_err(|e| row_err("load_access_facts:audience", e))?;
+        for row in rows.rows::<Audience>().map_err(|e| row_err("load_access_facts:audience", e))? {
+            let row = row.map_err(|e| row_err("load_access_facts:audience", e))?;
+            let id = ProfileId::from_uuid(row.profile_id);
+            if row.private == Some(true) {
+                facts.private.insert(id);
+            }
+            if row.hidden == Some(true) {
+                facts.hidden.insert(id);
+            }
+        }
+
+        // An anonymous viewer has no follows and no blocks.
+        if viewer_ids.is_empty() {
+            return Ok(facts);
+        }
+
+        let pairs = |cql: &'static str, left: &Vec<Uuid>, right: &Vec<Uuid>| {
+            let stmt = self.fast_stmt(cql);
+            let (left, right) = (left.clone(), right.clone());
+            async move {
+                let rows = self
+                    .client
+                    .session
+                    .execute_unpaged(stmt, (left, right))
+                    .await
+                    .map_err(scylla_err)?
+                    .into_rows_result()
+                    .map_err(|e| row_err("load_access_facts:pairs", e))?;
+                rows.rows::<Pair>()
+                    .map_err(|e| row_err("load_access_facts:pairs", e))?
+                    .map(|r| {
+                        r.map(|p| (ProfileId::from_uuid(p.a), ProfileId::from_uuid(p.b)))
+                            .map_err(|e| row_err("load_access_facts:pairs", e))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            }
+        };
+        let (follows, blocked_by_viewer, blocked_by_target) = tokio::join!(
+            pairs(
+                "SELECT follower_id AS a, followee_id AS b FROM social_graph.follow_status \
+                 WHERE follower_id IN ? AND followee_id IN ?",
+                &viewer_ids,
+                &target_ids,
+            ),
+            pairs(
+                "SELECT blocker_id AS a, blockee_id AS b FROM social_graph.blocks \
+                 WHERE blocker_id IN ? AND blockee_id IN ?",
+                &viewer_ids,
+                &target_ids,
+            ),
+            pairs(
+                "SELECT blocker_id AS a, blockee_id AS b FROM social_graph.blocks \
+                 WHERE blocker_id IN ? AND blockee_id IN ?",
+                &target_ids,
+                &viewer_ids,
+            ),
+        );
+        facts.follows.extend(follows?);
+        facts.blocks.extend(blocked_by_viewer?);
+        facts.blocks.extend(blocked_by_target?);
+        Ok(facts)
+    }
+
+    async fn set_profile_private(&self, profile_id: &ProfileId, private: bool) -> Result<(), SocialGraphError> {
+        let stmt = self.strict_stmt(
+            "UPDATE social_graph.profile_audience SET private = ? WHERE profile_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt, (private, profile_id.as_uuid()))
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn set_profile_hidden(&self, profile_id: &ProfileId, hidden: bool) -> Result<(), SocialGraphError> {
+        let stmt = self.strict_stmt(
+            "UPDATE social_graph.profile_audience SET hidden = ? WHERE profile_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt, (hidden, profile_id.as_uuid()))
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
     }
 }
 

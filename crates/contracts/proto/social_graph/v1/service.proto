@@ -58,4 +58,10 @@ service SocialGraphService {
 
     // Paginated list of profiles blocked by the given profile.
     rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
+
+    // What a reader may see of each target profile's content: visible, header
+    // only (a private profile the reader does not follow) or hidden (a block
+    // either way, or a hidden profile). MESH-ONLY: services answering a client
+    // read call it with the reader they took from the edge token.
+    rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);
 }

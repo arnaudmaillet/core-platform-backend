@@ -4,3 +4,4 @@
 
 mod adjacency_consistency;
 mod block_overrides_follow;
+mod access_check;

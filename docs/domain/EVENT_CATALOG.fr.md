@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: f825a0fb06b61be8c38ca4648886e3408ed91b2fe138893703d31b9379921aa4
+  source_sha256: 76fce60cded72ac0e48068a810e08d8f0debc39021f26ddfd9e10b0cc81a6865
   translated_at: 2026-10-04
   status: complete
 ---
@@ -41,7 +41,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | Topic | Producer | Consumers |
 |---|---|---|
 | `account.v1.events` | `account` | `audit`, `profile` |
-| `profile.v1.events` | `profile` | `search`, `post` |
+| `profile.v1.events` | `profile` | `search`, `post`, `social-graph` |
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |
 | `post.updated` | `post` | — *(orphan — see below)* |
@@ -118,7 +118,8 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `handle_changed` | le @handle a changé | revendication de handle | `search` (ré-indexation), intégrations |
 | `profile_verified` | le badge de vérification a changé | vérification | `search`, intégrations |
 | `tier_changed` | le tier d'auteur a changé | recalcul de tier (depuis `social-graph`) | `geo-discovery` (pondération), `timeline` (push/pull) |
-| `profile_hidden` / `profile_restored` / `profile_deleted` | une transition de visibilité/cycle de vie | action propriétaire ou modération | read-models (démantèlement/restauration) |
+| `profile_hidden` / `profile_restored` / `profile_deleted` | une transition de visibilité/cycle de vie | action propriétaire ou modération | read-models (démantèlement/restauration) ; `social-graph` (projection d'audience : masqué) |
+| `profile_visibility_changed` | le propriétaire a rendu le profil privé ou public | `SetVisibility` | `social-graph` (projection d'audience : privé → contenu réservé aux abonnés, via `CheckAccess`) |
 
 ## Contenu — `post.v1.events` (producteur : `post`)
 

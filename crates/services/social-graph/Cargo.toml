@@ -59,6 +59,9 @@ fred   = { workspace = true }
 integration-social-graph = []
 
 [dev-dependencies]
+# Wire contract test in the profile-audience consumer: decode events serialized
+# by profile's own wire type, so a shape drift fails here.
+profile = { workspace = true }
 tokio = { workspace = true }
 
 # ── Integration suite (feature = "integration-social-graph") ─────────────────

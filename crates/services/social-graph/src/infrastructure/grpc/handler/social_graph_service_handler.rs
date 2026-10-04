@@ -9,8 +9,10 @@ use crate::application::command::{
     BlockProfileCommand, FollowProfileCommand, UnblockProfileCommand, UnfollowProfileCommand,
 };
 use crate::application::query::{
-    GetRelationStatusQuery, ListBlocksQuery, ListFollowersQuery, ListFollowingQuery,
+    CheckAccessQuery, GetRelationStatusQuery, ListBlocksQuery, ListFollowersQuery,
+    ListFollowingQuery,
 };
+use crate::domain::access::{ContentAccess, Viewer};
 use crate::application::query::get_relation_status::RelationStatusView;
 use crate::domain::entity::{BlockEdge, FollowEdge};
 use crate::domain::value_object::RelationStatus;
@@ -162,12 +164,14 @@ where
         &self,
         request: Request<proto::ListFollowersRequest>,
     ) -> Result<Response<proto::ListFollowersResponse>, Status> {
-        let req   = request.into_inner();
-        let limit = req.limit.clamp(1, 100) as u32;
-        let query = ListFollowersQuery {
+        let viewer = viewer_of(&request);
+        let req    = request.into_inner();
+        let limit  = req.limit.clamp(1, 100) as u32;
+        let query  = ListFollowersQuery {
             followee_id: req.followee_id,
             limit,
             page_token: Some(req.page_token).filter(|s| !s.is_empty()),
+            viewer,
         };
         let (edges, next): (Vec<FollowEdge>, Option<String>) = self
             .query_bus
@@ -185,12 +189,14 @@ where
         &self,
         request: Request<proto::ListFollowingRequest>,
     ) -> Result<Response<proto::ListFollowingResponse>, Status> {
-        let req   = request.into_inner();
-        let limit = req.limit.clamp(1, 100) as u32;
-        let query = ListFollowingQuery {
+        let viewer = viewer_of(&request);
+        let req    = request.into_inner();
+        let limit  = req.limit.clamp(1, 100) as u32;
+        let query  = ListFollowingQuery {
             follower_id: req.follower_id,
             limit,
             page_token: Some(req.page_token).filter(|s| !s.is_empty()),
+            viewer,
         };
         let (edges, next): (Vec<FollowEdge>, Option<String>) = self
             .query_bus
@@ -226,6 +232,57 @@ where
             blocks:          edges.into_iter().map(block_edge_to_proto).collect(),
             next_page_token: next.unwrap_or_default(),
         }))
+    }
+
+    /// Mesh-only (absent from `EDGE_POLICY`): the caller passes the reader it
+    /// took from its own edge request.
+    pub async fn check_access(
+        &self,
+        request: Request<proto::CheckAccessRequest>,
+    ) -> Result<Response<proto::CheckAccessResponse>, Status> {
+        let req   = request.into_inner();
+        let query = CheckAccessQuery {
+            viewer_profile_ids: req.viewer_profile_ids,
+            target_profile_ids: req.target_profile_ids,
+        };
+        let access: Vec<(crate::domain::value_object::ProfileId, ContentAccess)> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+
+        Ok(Response::new(proto::CheckAccessResponse {
+            targets: access
+                .into_iter()
+                .map(|(target, access)| proto::TargetAccess {
+                    target_profile_id: target.as_str(),
+                    access:            content_access_to_proto(access) as i32,
+                })
+                .collect(),
+        }))
+    }
+}
+
+/// The reader of a viewer-aware RPC, from how the request arrived. A `pids`
+/// entry that is not a profile id is dropped.
+fn viewer_of<T>(request: &Request<T>) -> Viewer {
+    match edge::viewer(request) {
+        edge::Viewer::Internal => Viewer::Internal,
+        edge::Viewer::Anonymous => Viewer::Profiles(Vec::new()),
+        edge::Viewer::Member { profile_ids, .. } => Viewer::Profiles(
+            profile_ids
+                .iter()
+                .filter_map(|id| crate::domain::value_object::ProfileId::try_from(id.as_str()).ok())
+                .collect(),
+        ),
+    }
+}
+
+fn content_access_to_proto(access: ContentAccess) -> proto::ContentAccess {
+    match access {
+        ContentAccess::Visible    => proto::ContentAccess::Visible,
+        ContentAccess::HeaderOnly => proto::ContentAccess::HeaderOnly,
+        ContentAccess::Hidden     => proto::ContentAccess::Hidden,
     }
 }
 

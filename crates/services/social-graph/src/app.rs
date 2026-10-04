@@ -19,11 +19,13 @@ use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 
 use crate::application::command::{
     BlockProfileCommand, BlockProfileHandler, FollowProfileCommand, FollowProfileHandler,
-    UnblockProfileCommand, UnblockProfileHandler, UnfollowProfileCommand, UnfollowProfileHandler,
+    RecordProfileAudienceCommand, RecordProfileAudienceHandler, UnblockProfileCommand,
+    UnblockProfileHandler, UnfollowProfileCommand, UnfollowProfileHandler,
 };
 use crate::application::port::{EventPublisher, SocialGraphCache, SocialGraphRepository};
 use crate::application::query::{
-    GetRelationStatusHandler, GetRelationStatusQuery, ListBlocksHandler, ListBlocksQuery,
+    CheckAccessHandler, CheckAccessQuery, GetRelationStatusHandler, GetRelationStatusQuery,
+    ListBlocksHandler, ListBlocksQuery,
     ListFollowersHandler, ListFollowersQuery, ListFollowingHandler, ListFollowingQuery,
 };
 use crate::domain::value_object::TierThresholds;
@@ -92,6 +94,9 @@ impl App {
                     Arc::clone(&cache),
                     Arc::clone(&publisher),
                 ))?
+                .register::<RecordProfileAudienceCommand, _>(RecordProfileAudienceHandler::new(
+                    Arc::clone(&repo),
+                ))?
                 .build(),
         );
 
@@ -104,6 +109,7 @@ impl App {
                 .register::<ListFollowersQuery, _>(ListFollowersHandler::new(Arc::clone(&repo)))?
                 .register::<ListFollowingQuery, _>(ListFollowingHandler::new(Arc::clone(&repo)))?
                 .register::<ListBlocksQuery, _>(ListBlocksHandler::new(Arc::clone(&repo)))?
+                .register::<CheckAccessQuery, _>(CheckAccessHandler::new(Arc::clone(&repo)))?
                 .build(),
         );
 

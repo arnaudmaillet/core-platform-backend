@@ -55,6 +55,14 @@ pub enum ProfileEventWire {
         tier: u8,
         occurred_at_ms: i64,
     },
+    /// The owner switched the profile between `public` and `private`.
+    /// `social-graph` projects it for its access check (private profiles show
+    /// their content to followers only).
+    ProfileVisibilityChanged {
+        profile_id: String,
+        visibility: String,
+        occurred_at_ms: i64,
+    },
 }
 
 impl ProfileEventWire {
@@ -68,7 +76,8 @@ impl ProfileEventWire {
             | ProfileEventWire::ProfileHidden { profile_id, .. }
             | ProfileEventWire::ProfileRestored { profile_id, .. }
             | ProfileEventWire::ProfileDeleted { profile_id, .. }
-            | ProfileEventWire::ProfileTierChanged { profile_id, .. } => profile_id,
+            | ProfileEventWire::ProfileTierChanged { profile_id, .. }
+            | ProfileEventWire::ProfileVisibilityChanged { profile_id, .. } => profile_id,
         }
     }
 
@@ -83,6 +92,7 @@ impl ProfileEventWire {
             ProfileEventWire::ProfileRestored { .. } => "ProfileRestored",
             ProfileEventWire::ProfileDeleted { .. } => "ProfileDeleted",
             ProfileEventWire::ProfileTierChanged { .. } => "ProfileTierChanged",
+            ProfileEventWire::ProfileVisibilityChanged { .. } => "ProfileVisibilityChanged",
         }
     }
 }
@@ -126,6 +136,11 @@ impl From<&DomainEvent> for ProfileEventWire {
             DomainEvent::TierChanged(e) => ProfileEventWire::ProfileTierChanged {
                 profile_id: e.profile_id.to_string(),
                 tier: e.tier,
+                occurred_at_ms: e.occurred_at.timestamp_millis(),
+            },
+            DomainEvent::VisibilityChanged(e) => ProfileEventWire::ProfileVisibilityChanged {
+                profile_id: e.profile_id.to_string(),
+                visibility: e.visibility.as_str().to_owned(),
                 occurred_at_ms: e.occurred_at.timestamp_millis(),
             },
         }

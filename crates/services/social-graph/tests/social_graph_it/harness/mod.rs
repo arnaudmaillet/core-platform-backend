@@ -17,12 +17,15 @@ use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 
 use social_graph::app::{App, Backends};
-use social_graph::application::command::{BlockProfileCommand, FollowProfileCommand};
+use social_graph::application::command::{
+    AudienceFact, BlockProfileCommand, FollowProfileCommand, RecordProfileAudienceCommand,
+};
 use social_graph::application::port::EventPublisher;
-use social_graph::application::query::{ListFollowersQuery, ListFollowingQuery};
+use social_graph::application::query::{CheckAccessQuery, ListFollowersQuery, ListFollowingQuery};
 use social_graph::domain::event::DomainEvent;
 use social_graph::error::SocialGraphError;
 
+pub use social_graph::domain::access::{ContentAccess, Viewer};
 pub use social_graph::domain::value_object::ProfileId;
 pub use test_support::await_until;
 
@@ -101,7 +104,46 @@ impl TestHarness {
             .query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
-                ListFollowersQuery { followee_id: target.as_str(), limit: 1000, page_token: None },
+                ListFollowersQuery {
+                    followee_id: target.as_str(),
+                    limit:       1000,
+                    page_token:  None,
+                    viewer:      Viewer::Internal,
+                },
+            ))
+            .await
+            .expect("list_followers");
+        edges.into_iter().map(|e| e.profile_id).collect()
+    }
+
+    /// Records an audience fact, as the `profile.v1.events` consumer does.
+    pub async fn audience(&self, profile: &ProfileId, fact: AudienceFact) {
+        let cmd = RecordProfileAudienceCommand { profile_id: profile.as_str(), fact };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("audience");
+    }
+
+    /// What `viewers` may see of `target`, through `CheckAccess`.
+    pub async fn access(&self, viewers: &[ProfileId], target: &ProfileId) -> ContentAccess {
+        let query = CheckAccessQuery {
+            viewer_profile_ids: viewers.iter().map(ProfileId::as_str).collect(),
+            target_profile_ids: vec![target.as_str()],
+        };
+        let result: Vec<(ProfileId, ContentAccess)> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .expect("check_access");
+        assert_eq!(result.len(), 1);
+        result[0].1
+    }
+
+    /// Returns the follower ids of `target` as `viewer` sees them.
+    pub async fn followers_as(&self, target: &ProfileId, viewer: Viewer) -> Vec<ProfileId> {
+        let (edges, _next) = self
+            .query_bus
+            .dispatch(Envelope::new(
+                Uuid::now_v7(),
+                ListFollowersQuery { followee_id: target.as_str(), limit: 1000, page_token: None, viewer },
             ))
             .await
             .expect("list_followers");
@@ -114,7 +156,12 @@ impl TestHarness {
             .query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
-                ListFollowingQuery { follower_id: actor.as_str(), limit: 1000, page_token: None },
+                ListFollowingQuery {
+                    follower_id: actor.as_str(),
+                    limit:       1000,
+                    page_token:  None,
+                    viewer:      Viewer::Internal,
+                },
             ))
             .await
             .expect("list_following");
