@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: df8a9cbb8e1b444fbd9e0c1e79070a0a0f083f971bf1e0159326096357bca7e2
+  source_sha256: 37a05da734751b2c01119ea188d27e3b6adc73b957bbe4615658bd48547141d8
   translated_at: 2026-10-04
   status: complete
 ---
@@ -137,6 +137,8 @@ service SocialGraphService {
   rpc Unblock(UnblockRequest) returns (CommandResponse);
   rpc Mute(MuteRequest) returns (CommandResponse);   // acteur : posts / stories / messages
   rpc Unmute(UnmuteRequest) returns (CommandResponse);
+  rpc Restrict(RestrictRequest) returns (CommandResponse);   // acteur : les commentaires de la cible sur ses posts ne sont vus que de la cible et de l'acteur
+  rpc Unrestrict(UnrestrictRequest) returns (CommandResponse);
   // Queries
   rpc GetRelationStatus(GetRelationStatusRequest) returns (RelationStatusView);
   rpc ListFollowers(ListFollowersRequest) returns (ListFollowersResponse);
@@ -144,9 +146,11 @@ service SocialGraphService {
   rpc GetListPrivacy(GetListPrivacyRequest) returns (ListPrivacy);   // propriétaire
   rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
   rpc ListMutes(ListMutesRequest) returns (ListMutesResponse);   // propriétaire
+  rpc ListRestricted(ListRestrictedRequest) returns (ListRestrictedResponse);   // propriétaire
   rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY
   rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);   // MESH-ONLY : l'acteur peut-il commenter / mentionner / écrire à la cible (ses réglages d'interaction profile, blocages)
   rpc ListMutedProfiles(ListMutedProfilesRequest) returns (ListMutedProfilesResponse);   // MESH-ONLY : les mises en sourdine d'un lecteur pour une portée (timeline)
+  rpc ListRestrictedAmong(ListRestrictedAmongRequest) returns (ListRestrictedAmongResponse);   // MESH-ONLY : quels commentateurs le propriétaire du post a restreints (comment)
 }
 ```
 
@@ -182,6 +186,12 @@ auteur de la mise en sourdine). Appliqué aujourd'hui aux **posts** : timeline e
 des fils des abonnements et de découverte du lecteur via `ListMutedProfiles` (mesh uniquement, ≤ 10 profils
 lecteurs, ≤ 5 000 mises en sourdine chacun). Stories et messages sont stockés pour le client : il n'existe
 encore ni surface de stories ni notification de message.
+
+**Restrictions (#659).** `Restrict` rend les commentaires de la cible sur les posts de l'acteur visibles
+de la cible et de l'acteur seulement (le read gate de comment interroge `ListRestrictedAmong`, mesh
+uniquement, avec les commentateurs d'une page, ≤ 100 par appel) ; `Unrestrict` la lève, `ListRestricted`
+pagine la liste du propriétaire et `RelationStatusView.restricted` l'indique à l'acteur. La cible n'est
+pas prévenue et rien n'est rompu. Table `social_graph.restrictions` (partitionnée par propriétaire).
 
 > **Contrat de sérialisation :** `RelationStatus` (du point de vue de l'acteur) : `NONE`, `FOLLOWING`,
 > `FOLLOWED_BY`, `MUTUAL` (amitié implicite), `BLOCKING`, `BLOCKED_BY`.

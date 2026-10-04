@@ -25,6 +25,34 @@ where
         self.follow(request).await
     }
 
+    async fn restrict(
+        &self,
+        request: Request<proto::RestrictRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.restrict(request).await
+    }
+
+    async fn unrestrict(
+        &self,
+        request: Request<proto::UnrestrictRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.unrestrict(request).await
+    }
+
+    async fn list_restricted(
+        &self,
+        request: Request<proto::ListRestrictedRequest>,
+    ) -> Result<Response<proto::ListRestrictedResponse>, Status> {
+        self.list_restricted(request).await
+    }
+
+    async fn list_restricted_among(
+        &self,
+        request: Request<proto::ListRestrictedAmongRequest>,
+    ) -> Result<Response<proto::ListRestrictedAmongResponse>, Status> {
+        self.list_restricted_among(request).await
+    }
+
     async fn mute(
         &self,
         request: Request<proto::MuteRequest>,

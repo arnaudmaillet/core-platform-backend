@@ -22,6 +22,8 @@ message RelationStatusView {
     int64          target_following_count = 5;
     // How the actor mutes the target (all false when it does not).
     MuteScopes     muted                  = 6;
+    // The actor restricts the target.
+    bool           restricted             = 7;
 }
 
 // A lightweight summary of one edge in an adjacency list.
@@ -251,4 +253,44 @@ message ListMutedProfilesRequest {
 
 message ListMutedProfilesResponse {
     repeated string profile_ids = 1;
+}
+
+// ── Restrictions (#659) ───────────────────────────────────────────────────────
+
+// Restrict target: its comments on actor's posts are seen only by target and
+// actor. The target is not told and follows are untouched.
+message RestrictRequest {
+    string actor_id  = 1;
+    string target_id = 2;
+}
+
+message UnrestrictRequest {
+    string actor_id  = 1;
+    string target_id = 2;
+}
+
+message ListRestrictedRequest {
+    string profile_id = 1;
+    int32  limit      = 2;
+    string page_token = 3;
+}
+
+message RestrictedSummary {
+    string                    profile_id    = 1;
+    google.protobuf.Timestamp restricted_at = 2;
+}
+
+message ListRestrictedResponse {
+    repeated RestrictedSummary restricted      = 1;
+    string                     next_page_token = 2;
+}
+
+// MESH-ONLY: which of candidate_ids (≤ 100) owner_id restricts.
+message ListRestrictedAmongRequest {
+    string          owner_id      = 1;
+    repeated string candidate_ids = 2;
+}
+
+message ListRestrictedAmongResponse {
+    repeated string restricted_ids = 1;
 }

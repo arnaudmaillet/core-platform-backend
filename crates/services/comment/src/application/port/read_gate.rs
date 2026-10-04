@@ -8,8 +8,10 @@ use crate::error::CommentError;
 
 /// Decides what a reader may see of a post's comments: the post itself (its
 /// status, a moderation takedown, its author's audience) and the comment
-/// authors (blocks, hidden profiles). Backed by post `GetPost` and social-graph
-/// `CheckAccess`; errors are `AccessCheckUnavailable` and readers fail closed.
+/// authors (blocks, hidden profiles, and commenters the post's owner restricted:
+/// seen only by themselves and the owner). Backed by post `GetPost` and
+/// social-graph `CheckAccess` / `ListRestrictedAmong`; errors are
+/// `AccessCheckUnavailable` and readers fail closed.
 #[async_trait]
 pub trait ReadGate: Send + Sync + 'static {
     /// `None` when the viewer may not read `post_id` at all (missing, draft,

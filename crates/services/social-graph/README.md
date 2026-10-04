@@ -120,6 +120,8 @@ service SocialGraphService {
   rpc Unblock(UnblockRequest) returns (CommandResponse);
   rpc Mute(MuteRequest) returns (CommandResponse);   // actor: posts / stories / messages
   rpc Unmute(UnmuteRequest) returns (CommandResponse);
+  rpc Restrict(RestrictRequest) returns (CommandResponse);   // actor: its posts' comments by target seen by target + actor only
+  rpc Unrestrict(UnrestrictRequest) returns (CommandResponse);
   // Queries
   rpc GetRelationStatus(GetRelationStatusRequest) returns (RelationStatusView);
   rpc ListFollowers(ListFollowersRequest) returns (ListFollowersResponse);
@@ -127,9 +129,11 @@ service SocialGraphService {
   rpc GetListPrivacy(GetListPrivacyRequest) returns (ListPrivacy);   // owner
   rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
   rpc ListMutes(ListMutesRequest) returns (ListMutesResponse);   // owner
+  rpc ListRestricted(ListRestrictedRequest) returns (ListRestrictedResponse);   // owner
   rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY
   rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);   // MESH-ONLY: may actor comment / mention / message target (its profile interaction settings, blocks)
   rpc ListMutedProfiles(ListMutedProfilesRequest) returns (ListMutedProfilesResponse);   // MESH-ONLY: a reader's mutes for one scope (timeline)
+  rpc ListRestrictedAmong(ListRestrictedAmongRequest) returns (ListRestrictedAmongResponse);   // MESH-ONLY: which commenters the post owner restricted (comment)
 }
 ```
 
@@ -161,6 +165,12 @@ severed. Table `social_graph.mutes` (partitioned by muter). Enforced today for *
 muted author out of the reader's following and discovery feeds through the mesh-only `ListMutedProfiles`
 (≤ 10 reader profiles, ≤ 5 000 mutes each). Stories and messages are stored for the client: there is no
 stories surface and no message notification yet.
+
+**Restrictions (#659).** `Restrict` makes the target's comments on the actor's posts visible only to the
+target and the actor (comment's read gate asks the mesh-only `ListRestrictedAmong` with a page's
+commenters, ≤ 100 per call); `Unrestrict` lifts it, `ListRestricted` pages the owner's list and
+`RelationStatusView.restricted` tells the actor. The target is not told and nothing is severed. Table
+`social_graph.restrictions` (partitioned by owner).
 
 > **Wire contract:** `RelationStatus` (actor's perspective): `NONE`, `FOLLOWING`, `FOLLOWED_BY`,
 > `MUTUAL` (implicit friendship), `BLOCKING`, `BLOCKED_BY`.

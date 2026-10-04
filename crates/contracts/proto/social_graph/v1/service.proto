@@ -73,6 +73,13 @@ service SocialGraphService {
     // Lift actor's mute of target (no-op when none).
     rpc Unmute(UnmuteRequest) returns (CommandResponse);
 
+    // Restrict target: its comments on actor's posts are seen only by target
+    // and actor. Not told to the target. Rejected if actor == target.
+    rpc Restrict(RestrictRequest) returns (CommandResponse);
+
+    // Lift actor's restriction of target (no-op when none).
+    rpc Unrestrict(UnrestrictRequest) returns (CommandResponse);
+
     // ── Queries ───────────────────────────────────────────────────────────────
 
     // Returns the full bidirectional relationship context between actor and target,
@@ -90,6 +97,9 @@ service SocialGraphService {
 
     // The profile's mutes, in profile-id order (its owner).
     rpc ListMutes(ListMutesRequest) returns (ListMutesResponse);
+
+    // The profiles the owner restricts, in profile-id order (its owner).
+    rpc ListRestricted(ListRestrictedRequest) returns (ListRestrictedResponse);
 
     // Paginated list of profiles blocked by the given profile.
     rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
@@ -110,4 +120,8 @@ service SocialGraphService {
     // The profiles a reader mutes for a scope. MESH-ONLY: timeline drops
     // their posts from the reader's feeds.
     rpc ListMutedProfiles(ListMutedProfilesRequest) returns (ListMutedProfilesResponse);
+
+    // Which of the candidates the owner restricts. MESH-ONLY: comment hides a
+    // restricted commenter's comments on the owner's posts from other readers.
+    rpc ListRestrictedAmong(ListRestrictedAmongRequest) returns (ListRestrictedAmongResponse);
 }

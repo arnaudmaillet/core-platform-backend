@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: eacc89d43357d5e4a942ef46727cf3fc8705d0118854ed3080289f0e69a8591c
+  source_sha256: abd392a6848b4d151ffb76ec02ae919f0856d2359bf43b324f2f0705fa53b3cb
   translated_at: 2026-10-04
   status: complete
 ---
@@ -141,7 +141,10 @@ la page) :
   listes sont vides ;
 - les commentaires d'un auteur **masqué** pour le lecteur (blocage dans un sens ou l'autre, profil
   masqué) sont retirés ; le commentaire d'un profil privé sur un post lisible reste. Une page peut
-  revenir plus courte tandis que `next_token` reste valide.
+  revenir plus courte tandis que `next_token` reste valide ;
+- les commentaires d'un profil que le **propriétaire du post a restreint** (#659) ne sont vus que par
+  ce profil et le propriétaire : pour tout autre lecteur, un appel social-graph de plus,
+  `ListRestrictedAmong(propriétaire, commentateurs)`, les retire.
 
 Le gate échoue fermé : une panne renvoie `CMT-5001` (`UNAVAILABLE`), jamais les commentaires.
 

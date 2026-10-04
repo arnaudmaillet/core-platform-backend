@@ -7,13 +7,13 @@ use cqrs::{CommandBus, Envelope, QueryBus};
 use transport::grpc::edge;
 use crate::application::command::{
     ApproveFollowRequestCommand, BlockProfileCommand, FollowProfileCommand, MuteProfileCommand,
-    SetListPrivacyCommand, UnblockProfileCommand, UnfollowProfileCommand, UnmuteProfileCommand,
-    WithdrawFollowRequestCommand,
+    RestrictProfileCommand, SetListPrivacyCommand, UnblockProfileCommand, UnfollowProfileCommand,
+    UnmuteProfileCommand, UnrestrictProfileCommand, WithdrawFollowRequestCommand,
 };
 use crate::application::query::{
     CheckAccessQuery, CheckInteractionQuery, FollowListPage, GetListPrivacyQuery, GetRelationStatusQuery,
     ListBlocksQuery, ListFollowRequestsQuery, ListFollowersQuery, ListFollowingQuery, ListMutesQuery,
-    MutedProfilesQuery,
+    ListRestrictedQuery, MutedProfilesQuery, RestrictedAmongQuery,
 };
 use crate::domain::access::{ContentAccess, Viewer};
 use crate::domain::interaction::{InteractionAudience, InteractionKind};
@@ -147,6 +147,80 @@ where
             .map_err(cqrs_to_status)?;
         Ok(Response::new(proto::ListMutedProfilesResponse {
             profile_ids: muted.iter().map(ProfileId::as_str).collect(),
+        }))
+    }
+
+    /// Mesh-only (absent from the edge policy): comment asks with a page's
+    /// commenters on the owner's post.
+    pub async fn list_restricted_among(
+        &self,
+        request: Request<proto::ListRestrictedAmongRequest>,
+    ) -> Result<Response<proto::ListRestrictedAmongResponse>, Status> {
+        let req = request.into_inner();
+        let query = RestrictedAmongQuery { owner_id: req.owner_id, candidate_ids: req.candidate_ids };
+        let restricted: std::collections::HashSet<ProfileId> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListRestrictedAmongResponse {
+            restricted_ids: restricted.iter().map(ProfileId::as_str).collect(),
+        }))
+    }
+
+    pub async fn restrict(
+        &self,
+        request: Request<proto::RestrictRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().actor_id)?;
+        let req = request.into_inner();
+        let cmd = RestrictProfileCommand { actor_id: req.actor_id.clone(), target_id: req.target_id.clone() };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_response(&req.actor_id, &req.target_id))
+            .map_err(cqrs_to_status)
+    }
+
+    pub async fn unrestrict(
+        &self,
+        request: Request<proto::UnrestrictRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().actor_id)?;
+        let req = request.into_inner();
+        let cmd = UnrestrictProfileCommand { actor_id: req.actor_id.clone(), target_id: req.target_id.clone() };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_response(&req.actor_id, &req.target_id))
+            .map_err(cqrs_to_status)
+    }
+
+    pub async fn list_restricted(
+        &self,
+        request: Request<proto::ListRestrictedRequest>,
+    ) -> Result<Response<proto::ListRestrictedResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let query = ListRestrictedQuery {
+            profile_id: req.profile_id,
+            limit:      req.limit.clamp(1, 100) as u32,
+            page_token: Some(req.page_token).filter(|s| !s.is_empty()),
+        };
+        let (entries, next): (Vec<(ProfileId, DateTime<Utc>)>, Option<String>) = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListRestrictedResponse {
+            restricted: entries
+                .into_iter()
+                .map(|(profile_id, at)| proto::RestrictedSummary {
+                    profile_id:    profile_id.as_str(),
+                    restricted_at: Some(dt_to_ts(at)),
+                })
+                .collect(),
+            next_page_token: next.unwrap_or_default(),
         }))
     }
 
@@ -579,6 +653,7 @@ fn relation_status_view_to_proto(v: RelationStatusView) -> proto::RelationStatus
         target_followers_count: v.target_followers_count,
         target_following_count: v.target_following_count,
         muted:                  Some(mute_scopes_to_proto(v.muted)),
+        restricted:             v.restricted,
     }
 }
 
