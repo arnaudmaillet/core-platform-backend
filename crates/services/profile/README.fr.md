@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: c0ee0425fd3368e4bb850582adda8b6fc645ca53e82aeaee68335d3a9b0f73f3
+  source_sha256: a5d8efb289bd1051af3268eb9b263da754f643a64ca8f141ad7cf754c37f403d
   translated_at: 2026-10-04
   status: complete
 ---
@@ -178,7 +178,7 @@ réactivement).
 
 | Topic | Déclencheur | Clé | Consommateurs |
 |---|---|---|---|
-| `profile.v1.events` | chaque mutation de cycle de vie — `ProfileCreated` / `ProfileUpdated` / `HandleChanged` / `ProfileVerified` / `ProfileHidden` / `ProfileRestored` / `ProfileDeleted` / `ProfileTierChanged` | `profile_id` | `search` (indexation des profils), `post` (dénormalisation du palier auteur) |
+| `profile.v1.events` | chaque mutation de cycle de vie — `ProfileCreated` / `ProfileUpdated` / `HandleChanged` / `ProfileVerified` / `ProfileHidden` / `ProfileRestored` / `ProfileDeleted` / `ProfileTierChanged` / `ProfileVisibilityChanged` (`public`/`private` ; `SetVisibility` n'émet que celui-ci) | `profile_id` | `search` (indexation des profils), `post` (dénormalisation du palier auteur), `social-graph` (projection d'audience pour le contrôle d'accès) |
 
 > **Contrat de fil :** un topic versionné unique, tagué en interne sur `type` (convention du service moderation), clé `profile_id` pour l'ordre par-profil. Les événements sont **fins** (ids + horodatages, sans contenu d'affichage) — un consommateur qui a besoin du profil complet l'hydrate via `GetProfileById`. Chaque command handler draine les événements en attente de l'agrégat et les publie **après** l'écriture durable (durable-first ; un publisher no-op couvre la composition sans broker).
 

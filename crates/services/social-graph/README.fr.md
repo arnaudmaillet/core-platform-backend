@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 76dbe5c398c64fd84d891df6bb3ba9406fca746559cfaec7777e9c3a8f101e5e
-  translated_at: 2026-06-26
+  source_sha256: 2ae3fcaa707af92917af1116a8ef578ee53625c5f6a6f68ebb2d6f839bb924b7
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -19,8 +19,8 @@ i18n:
 > | **Astreinte / escalade** | `<TODO: rotation-astreinte>` → `<TODO: politique-escalade>` |
 > | **Palier (Tier)** | **TIER-1** — feeds, notifications et filtrage par blocage en dépendent |
 > | **Binaire déployable** | `crates/apps/social-graph-server` (crate bibliothèque : `crates/services/social-graph`) |
-> | **Bases de données** | ScyllaDB keyspace `social_graph` (4 tables) · Redis (sets + compteurs) |
-> | **Asynchrone** | publie `social-graph.followed` / `.unfollowed` / `.blocked` / `.author_tier_changed` · ne consomme rien |
+> | **Bases de données** | ScyllaDB keyspace `social_graph` (5 tables) · Redis (sets + compteurs) |
+> | **Asynchrone** | publie `social-graph.followed` / `.unfollowed` / `.blocked` / `.author_tier_changed` · consomme `profile.v1.events` (projection d'audience) |
 > | **Appelants amont** | `timeline`, `notification`, `<TODO: passerelle>` |
 > | **Dépendances aval** | ScyllaDB, Redis, Kafka |
 > | **SLO** | `<TODO>` dispo · `GetRelationStatus` p99 `<TODO>` · écriture p99 `<TODO>` |
@@ -134,8 +134,22 @@ service SocialGraphService {
   rpc ListFollowers(ListFollowersRequest) returns (ListFollowersResponse);
   rpc ListFollowing(ListFollowingRequest) returns (ListFollowingResponse);
   rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
+  rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY
 }
 ```
+
+**Contrôle d'accès (`CheckAccess`, mesh uniquement).** La règle d'audience qu'applique chaque
+lecture selon le lecteur (post, comment, ces listes) : étant donné les profils du lecteur (les
+`pids` du jeton ; aucun s'il est anonyme) et jusqu'à 100 profils cibles, chaque cible est `VISIBLE`,
+`HEADER_ONLY` (un profil privé qu'aucun profil du lecteur ne suit) ou `HIDDEN` (un blocage dans un
+sens ou l'autre, ou un profil masqué par la modération / une suspension de compte / une
+suppression). Son propre profil est toujours visible. Quatre requêtes Scylla par appel quelle que
+soit la taille (`IN` sur `follow_status`, `blocks` dans les deux sens et `profile_audience`). Les
+appelants prennent le lecteur de leur propre requête edge et échouent fermé si cette RPC est
+indisponible.
+
+**Listes selon le lecteur.** `ListFollowers` / `ListFollowing` d'un profil qui n'est pas `VISIBLE`
+pour le lecteur reviennent vides (le propriétaire et les appelants du mesh les reçoivent toujours).
 
 > **Contrat de sérialisation :** `RelationStatus` (du point de vue de l'acteur) : `NONE`, `FOLLOWING`,
 > `FOLLOWED_BY`, `MUTUAL` (amitié implicite), `BLOCKING`, `BLOCKED_BY`.
@@ -165,7 +179,15 @@ service SocialGraphService {
 
 `ProfileUnblocked` n'est **pas** publié — aucun fan-out aval n'en a besoin.
 
-**Consomme :** rien.
+**Consomme :**
+
+| Topic | Groupe de consommateurs | Rôle | Sur poison/épuisement |
+|---|---|---|---|
+| `profile.v1.events` | `social-graph-profile-audience` | projette les faits d'audience dans `profile_audience` : `ProfileVisibilityChanged` → `private` ; `ProfileHidden` / `ProfileDeleted` → `hidden = true` ; `ProfileRestored` → `hidden = false`. Upserts par colonne (idempotents ; le topic a pour clé `profile_id`, donc les faits d'un profil arrivent dans l'ordre). Autres types = commit no-op | DLQ `profile.v1.events.dlq` |
+
+> **Démarrage de la projection :** pas de ligne = public, non masqué. Les profils rendus privés ou
+> masqués avant le premier passage de ce consommateur demandent un rejeu ponctuel de
+> `profile.v1.events` (aucun environnement actif ne contient de données aujourd'hui).
 
 > **Contrat d'exécution :** les événements sont publiés via un producteur Kafka durable après le commit
 > de l'arête. Les consommateurs aval gèrent leur propre traitement at-least-once sous `run_consumer`.
@@ -236,7 +258,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Déploiement, migrations & rollback
 
-- **Migrations :** `migrations/000{1..5}_*.cql` (keyspace + 4 tables) sur `social_graph`, appliquées
+- **Migrations :** `migrations/000{1..6}_*.cql` (keyspace + 5 tables) sur `social_graph`, appliquées
   **avant** le premier démarrage.
 - **Déploiement/Rollback :** `<TODO>` ; service sans état, sûr à déployer.
 - **Reconstruction des compteurs :** les compteurs followers/following Redis sont dérivés — si Redis est

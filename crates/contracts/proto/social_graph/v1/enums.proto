@@ -28,3 +28,14 @@ enum RelationStatus {
     // Target has blocked actor. No follow is possible in either direction.
     RELATION_STATUS_BLOCKED_BY  = 6;
 }
+
+// What a reader may see of a profile's content (CheckAccess).
+enum ContentAccess {
+    CONTENT_ACCESS_UNSPECIFIED = 0;
+    // Posts, comments and lists are visible.
+    CONTENT_ACCESS_VISIBLE     = 1;
+    // A private profile the reader does not follow: its header only.
+    CONTENT_ACCESS_HEADER_ONLY = 2;
+    // Nothing: a block either way, or a hidden profile.
+    CONTENT_ACCESS_HIDDEN      = 3;
+}

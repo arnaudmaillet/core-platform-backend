@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::domain::entity::ProfileLink;
 use crate::domain::event::{
     DomainEvent, HandleChanged, ProfileCreated, ProfileDeleted, ProfileHidden, ProfileRestored,
-    ProfileUpdated, ProfileVerified, TierChanged,
+    ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
 };
 use crate::domain::value_object::{
     AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, Locale, MaskingReason, ProfileId,
@@ -274,8 +274,9 @@ impl Profile {
         }
         self.visibility = v;
         let now = self.touch_now();
-        self.pending_events.push(DomainEvent::ProfileUpdated(ProfileUpdated {
+        self.pending_events.push(DomainEvent::VisibilityChanged(VisibilityChanged {
             profile_id: self.id,
+            visibility: v,
             occurred_at: now,
             correlation_id,
         }));
@@ -475,6 +476,23 @@ mod tests {
         let events = p.drain_events();
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], DomainEvent::TierChanged(_)));
+    }
+
+    #[test]
+    fn set_visibility_emits_the_new_visibility() {
+        let mut p = sample_profile();
+        p.set_visibility(ProfileVisibility::Private, Uuid::now_v7()).unwrap();
+        let events = p.drain_events();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            DomainEvent::VisibilityChanged(e) => assert_eq!(e.visibility, ProfileVisibility::Private),
+            other => panic!("expected VisibilityChanged, got {other:?}"),
+        }
+        // On the wire, as social-graph reads it.
+        let wire = crate::infrastructure::publisher::wire::ProfileEventWire::from(&events[0]);
+        let json = serde_json::to_value(&wire).unwrap();
+        assert_eq!(json["type"], "ProfileVisibilityChanged");
+        assert_eq!(json["visibility"], "private");
     }
 
     #[test]

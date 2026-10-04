@@ -1,3 +1,4 @@
+pub mod access;
 pub mod aggregate;
 pub mod entity;
 pub mod event;

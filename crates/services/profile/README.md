@@ -164,7 +164,7 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 
 | Topic | Trigger | Key | Consumers |
 |---|---|---|---|
-| `profile.v1.events` | every profile lifecycle mutation — `ProfileCreated` / `ProfileUpdated` / `HandleChanged` / `ProfileVerified` / `ProfileHidden` / `ProfileRestored` / `ProfileDeleted` / `ProfileTierChanged` | `profile_id` | `search` (profile indexing), `post` (author-tier denormalization) |
+| `profile.v1.events` | every profile lifecycle mutation — `ProfileCreated` / `ProfileUpdated` / `HandleChanged` / `ProfileVerified` / `ProfileHidden` / `ProfileRestored` / `ProfileDeleted` / `ProfileTierChanged` / `ProfileVisibilityChanged` (`public`/`private`; `SetVisibility` emits only this) | `profile_id` | `search` (profile indexing), `post` (author-tier denormalization), `social-graph` (audience projection for the access check) |
 
 > **Wire contract:** one versioned topic, internally tagged on `type` (the moderation-service convention), keyed by `profile_id` for per-profile ordering. Events are **thin** (ids + timestamps, no display content) — a consumer that needs the full profile hydrates it via `GetProfileById`. Each command handler drains the aggregate's pending events and publishes them **after** the durable write (durable-first; a no-op publisher backs broker-free composition).
 

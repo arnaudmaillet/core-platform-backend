@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
+use crate::domain::access::AccessFacts;
 use crate::domain::aggregate::Relation;
 use crate::domain::entity::{BlockEdge, FollowEdge};
 use crate::domain::value_object::ProfileId;
@@ -91,4 +92,19 @@ pub trait SocialGraphRepository: Send + Sync + 'static {
         limit:      i32,
         page_token: Option<&str>,
     ) -> Result<(Vec<BlockEdge>, Option<String>), SocialGraphError>;
+
+    /// Loads what the access rule needs for `viewers` against `targets`, in four
+    /// queries whatever the sizes: follows viewer→target, blocks both ways, and
+    /// the targets' audience projection. Callers bound both slices.
+    async fn load_access_facts(
+        &self,
+        viewers: &[ProfileId],
+        targets: &[ProfileId],
+    ) -> Result<AccessFacts, SocialGraphError>;
+
+    /// Records whether the owner made `profile_id` private (audience projection).
+    async fn set_profile_private(&self, profile_id: &ProfileId, private: bool) -> Result<(), SocialGraphError>;
+
+    /// Records whether `profile_id` is hidden (audience projection).
+    async fn set_profile_hidden(&self, profile_id: &ProfileId, hidden: bool) -> Result<(), SocialGraphError>;
 }

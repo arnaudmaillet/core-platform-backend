@@ -106,3 +106,21 @@ message ListBlocksResponse {
     repeated BlockSummary blocks          = 1;
     string                next_page_token = 2;
 }
+
+message CheckAccessRequest {
+    // The profiles the reader's account owns (the token's `pids`); empty for
+    // an anonymous reader. At most 20.
+    repeated string viewer_profile_ids = 1;
+    // The profiles whose content is being read (authors). At most 100.
+    repeated string target_profile_ids = 2;
+}
+
+message TargetAccess {
+    string        target_profile_id = 1;
+    ContentAccess access            = 2;
+}
+
+message CheckAccessResponse {
+    // One entry per distinct target.
+    repeated TargetAccess targets = 1;
+}

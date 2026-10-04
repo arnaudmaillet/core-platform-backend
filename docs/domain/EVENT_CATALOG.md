@@ -28,7 +28,7 @@ producer's `DOMAIN.md §8`.
 | Topic | Producer | Consumers |
 |---|---|---|
 | `account.v1.events` | `account` | `audit`, `profile` |
-| `profile.v1.events` | `profile` | `search`, `post` |
+| `profile.v1.events` | `profile` | `search`, `post`, `social-graph` |
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |
 | `post.updated` | `post` | — *(orphan — see below)* |
@@ -105,7 +105,8 @@ producer's `DOMAIN.md §8`.
 | `handle_changed` | the @handle changed | handle claim | `search` (re-index), embeds |
 | `profile_verified` | the verification badge changed | verification | `search`, embeds |
 | `tier_changed` | the author tier changed | tier recompute (from `social-graph`) | `geo-discovery` (weight), `timeline` (push/pull) |
-| `profile_hidden` / `profile_restored` / `profile_deleted` | a visibility/lifecycle transition | owner or moderation action | read models (teardown/restore) |
+| `profile_hidden` / `profile_restored` / `profile_deleted` | a visibility/lifecycle transition | owner or moderation action | read models (teardown/restore); `social-graph` (audience projection: hidden) |
+| `profile_visibility_changed` | the owner made the profile private or public | `SetVisibility` | `social-graph` (audience projection: private → content for followers only, via `CheckAccess`) |
 
 ## Content — `post.v1.events` (producer: `post`)
 
