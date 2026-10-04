@@ -25,6 +25,34 @@ where
         self.follow(request).await
     }
 
+    async fn list_follow_requests(
+        &self,
+        request: Request<proto::ListFollowRequestsRequest>,
+    ) -> Result<Response<proto::ListFollowRequestsResponse>, Status> {
+        self.list_follow_requests(request).await
+    }
+
+    async fn approve_follow_request(
+        &self,
+        request: Request<proto::AnswerFollowRequestRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.approve_follow_request(request).await
+    }
+
+    async fn decline_follow_request(
+        &self,
+        request: Request<proto::AnswerFollowRequestRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.decline_follow_request(request).await
+    }
+
+    async fn cancel_follow_request(
+        &self,
+        request: Request<proto::CancelFollowRequestRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.cancel_follow_request(request).await
+    }
+
     async fn unfollow(
         &self,
         request: Request<proto::UnfollowRequest>,

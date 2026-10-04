@@ -16,16 +16,55 @@ use crate::error::SocialGraphError;
 pub trait SocialGraphRepository: Send + Sync + 'static {
     /// Loads the full bidirectional relationship context for `(actor, target)`.
     ///
-    /// Fires four concurrent ScyllaDB point-lookups:
+    /// Fires six concurrent ScyllaDB point-lookups:
     ///   1. `follow_status` WHERE `follower = actor  AND followee = target`
     ///   2. `follow_status` WHERE `follower = target AND followee = actor`
     ///   3. `blocks`        WHERE `blocker  = actor  AND blockee  = target`
     ///   4. `blocks`        WHERE `blocker  = target AND blockee  = actor`
+    ///   5. `follow_request_status` actor → target
+    ///   6. `follow_request_status` target → actor
     async fn load_relation(
         &self,
         actor_id:  &ProfileId,
         target_id: &ProfileId,
     ) -> Result<Relation, SocialGraphError>;
+
+    /// Records a pending follow request atomically in `follow_requests` (the
+    /// owner's inbox) and `follow_request_status` (the point lookup).
+    async fn persist_follow_request(
+        &self,
+        requester_id: &ProfileId,
+        target_id:    &ProfileId,
+        requested_at: DateTime<Utc>,
+    ) -> Result<(), SocialGraphError>;
+
+    /// Removes a pending follow request (declined, cancelled, moot or severed
+    /// by a block). `requested_at` must be the stored value.
+    async fn delete_follow_request(
+        &self,
+        requester_id: &ProfileId,
+        target_id:    &ProfileId,
+        requested_at: DateTime<Utc>,
+    ) -> Result<(), SocialGraphError>;
+
+    /// Turns an approved request into a follow in ONE logged batch: the request
+    /// rows go, the three follow rows appear — never both, never neither.
+    async fn approve_follow_request(
+        &self,
+        requester_id: &ProfileId,
+        target_id:    &ProfileId,
+        requested_at: DateTime<Utc>,
+        followed_at:  DateTime<Utc>,
+    ) -> Result<(), SocialGraphError>;
+
+    /// The pending requests to `target_id`, newest first (`followed_at` of each
+    /// edge is the request time).
+    async fn list_follow_requests(
+        &self,
+        target_id:  &ProfileId,
+        limit:      i32,
+        page_token: Option<&str>,
+    ) -> Result<(Vec<FollowEdge>, Option<String>), SocialGraphError>;
 
     /// Writes a follow edge across three tables atomically as an unlogged batch:
     ///   - `following`     INSERT (follower_id, followed_at, followee_id)

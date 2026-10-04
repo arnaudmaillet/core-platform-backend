@@ -27,6 +27,8 @@ enum RelationStatus {
     RELATION_STATUS_BLOCKING    = 5;
     // Target has blocked actor. No follow is possible in either direction.
     RELATION_STATUS_BLOCKED_BY  = 6;
+    // Actor asked to follow target (a private profile); awaiting the owner.
+    RELATION_STATUS_REQUESTED   = 7;
 }
 
 // What a reader may see of a profile's content (CheckAccess).

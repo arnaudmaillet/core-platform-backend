@@ -20,4 +20,6 @@ pub enum RelationStatus {
     Blocking,
     /// Target has blocked actor.
     BlockedBy,
+    /// Actor asked to follow target (a private profile); awaiting approval.
+    Requested,
 }

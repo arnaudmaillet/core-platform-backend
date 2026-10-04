@@ -1,3 +1,3 @@
 pub mod relation;
 
-pub use relation::{Relation, RelationContext, SeveredFollows};
+pub use relation::{FollowOutcome, Relation, RelationContext, SeveredFollows};

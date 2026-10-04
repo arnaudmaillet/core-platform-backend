@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 2ae3fcaa707af92917af1116a8ef578ee53625c5f6a6f68ebb2d6f839bb924b7
+  source_sha256: aae1f05ae698755feda78b2a04dbeceec5134bd5698b6e060f9329929c389d69
   translated_at: 2026-10-04
   status: complete
 ---
@@ -125,7 +125,11 @@ en espace O(1).
 ```protobuf
 service SocialGraphService {
   // Commands
-  rpc Follow(FollowRequest) returns (CommandResponse);
+  rpc Follow(FollowRequest) returns (CommandResponse);   // une cible privée reçoit une demande en attente (CommandResponse.requested)
+  rpc ListFollowRequests(ListFollowRequestsRequest) returns (ListFollowRequestsResponse);   // boîte de réception du propriétaire d'un profil privé
+  rpc ApproveFollowRequest(AnswerFollowRequestRequest) returns (CommandResponse);   // propriétaire
+  rpc DeclineFollowRequest(AnswerFollowRequestRequest) returns (CommandResponse);   // propriétaire
+  rpc CancelFollowRequest(CancelFollowRequestRequest) returns (CommandResponse);   // demandeur
   rpc Unfollow(UnfollowRequest) returns (CommandResponse);
   rpc Block(BlockRequest) returns (CommandResponse);
   rpc Unblock(UnblockRequest) returns (CommandResponse);

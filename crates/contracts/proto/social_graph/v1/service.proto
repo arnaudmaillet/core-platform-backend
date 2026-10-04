@@ -20,6 +20,7 @@ option go_package = "github.com/coreplatform/social-graph/v1;socialgraphv1";
 //   1. Self-interaction is rejected (a profile cannot follow or block itself).
 //   2. A block bi-directionally severs any existing follow and prevents future follows.
 //   3. Mutual follows (A→B and B→A) are implicitly "friends" — no dedicated table.
+//   4. Following a PRIVATE profile creates a pending request (no access until approved).
 //
 // All mutating RPCs (commands) return CommandResponse.
 // All read RPCs (queries) return typed view or paginated response messages.
@@ -27,9 +28,22 @@ service SocialGraphService {
 
     // ── Commands ──────────────────────────────────────────────────────────────
 
-    // Record that actor follows target.
+    // Record that actor follows target — or, when target is private, that actor
+    // asks to (CommandResponse.requested; SGR-1005 if already pending).
     // Rejected if a block exists in either direction, or if actor == target.
     rpc Follow(FollowRequest) returns (CommandResponse);
+
+    // The private profile's pending follow requests, newest first (its owner).
+    rpc ListFollowRequests(ListFollowRequestsRequest) returns (ListFollowRequestsResponse);
+
+    // The owner lets the requester follow (a real follow: counts, feeds).
+    rpc ApproveFollowRequest(AnswerFollowRequestRequest) returns (CommandResponse);
+
+    // The owner turns the request down (the requester is not notified).
+    rpc DeclineFollowRequest(AnswerFollowRequestRequest) returns (CommandResponse);
+
+    // The requester withdraws a pending request. SGR-1006 if none is pending.
+    rpc CancelFollowRequest(CancelFollowRequestRequest) returns (CommandResponse);
 
     // Remove an existing follow from actor to target.
     // Rejected if no follow exists.

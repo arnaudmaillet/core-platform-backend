@@ -58,6 +58,8 @@ atomicity for the dual-write, and tier thresholds derived from follower counts.
 
 ```
 (none) --(follow)--> following --(unfollow)--> (none)
+(none) --(follow a private profile)--> requested --(owner approves)--> following
+                                        requested --(owner declines / requester cancels / block)--> (none)
 (none) --(block)--> blocked (severs existing follows both ways)
 ```
 
@@ -90,6 +92,7 @@ atomicity for the dual-write, and tier thresholds derived from follower counts.
 | I2 | A block severs existing follows both directions | domain | `SGR-1xxx` |
 | I3 | Author tier is derived from follower count crossing `TierThresholds` | domain | — |
 | I4 | Hot-relation reads are served from Redis Sets, rebuildable from Scylla | infrastructure | `SGR-1xxx` |
+| I5 | Following a private profile creates a pending request, never a follow: no access, not in the lists, until the owner approves (one logged batch: request rows out, follow rows in); a block drops requests both ways | domain + application | `SGR-1005` / `SGR-1006` |
 
 ---
 

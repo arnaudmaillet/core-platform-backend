@@ -80,6 +80,12 @@ impl Service for SocialGraphService {
         public_read("/social_graph.v1.SocialGraphService/ListFollowers"),
         public_read("/social_graph.v1.SocialGraphService/ListFollowing"),
         authenticated("/social_graph.v1.SocialGraphService/ListBlocks"),
+        // Follow requests to private profiles: the owner's inbox and answers
+        // (bound to owner_id), the requester's cancel (bound to actor_id).
+        authenticated("/social_graph.v1.SocialGraphService/ListFollowRequests"),
+        authenticated("/social_graph.v1.SocialGraphService/ApproveFollowRequest"),
+        authenticated("/social_graph.v1.SocialGraphService/DeclineFollowRequest"),
+        authenticated("/social_graph.v1.SocialGraphService/CancelFollowRequest"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

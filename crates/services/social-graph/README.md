@@ -108,7 +108,11 @@ SISMEMBER(B,A)` — no `friends` table, so no dual-write desync. `sg:followers_c
 ```protobuf
 service SocialGraphService {
   // Commands
-  rpc Follow(FollowRequest) returns (CommandResponse);
+  rpc Follow(FollowRequest) returns (CommandResponse);   // a private target gets a pending request (CommandResponse.requested)
+  rpc ListFollowRequests(ListFollowRequestsRequest) returns (ListFollowRequestsResponse);   // private profile owner's inbox
+  rpc ApproveFollowRequest(AnswerFollowRequestRequest) returns (CommandResponse);   // owner
+  rpc DeclineFollowRequest(AnswerFollowRequestRequest) returns (CommandResponse);   // owner
+  rpc CancelFollowRequest(CancelFollowRequestRequest) returns (CommandResponse);   // requester
   rpc Unfollow(UnfollowRequest) returns (CommandResponse);
   rpc Block(BlockRequest) returns (CommandResponse);
   rpc Unblock(UnblockRequest) returns (CommandResponse);

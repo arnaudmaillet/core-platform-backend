@@ -10,6 +10,8 @@ use thiserror::Error;
 /// |----------|-----------------------|------|----------|-----------|
 /// | SGR-1001 | AlreadyFollowing      | 409  | Low      | No        |
 /// | SGR-1002 | NotFollowing          | 422  | Low      | No        |
+/// | SGR-1005 | AlreadyRequested      | 409  | Low      | No        |
+/// | SGR-1006 | NoFollowRequest       | 422  | Low      | No        |
 /// | SGR-1003 | AlreadyBlocked        | 409  | Low      | No        |
 /// | SGR-1004 | NotBlocked            | 422  | Low      | No        |
 /// | SGR-2001 | SelfInteraction       | 422  | Low      | No        |
@@ -40,6 +42,12 @@ pub enum SocialGraphError {
 
     #[error("profile '{actor_id}' does not follow '{target_id}'")]
     NotFollowing { actor_id: String, target_id: String },
+
+    #[error("profile '{actor_id}' has already asked to follow '{target_id}'")]
+    AlreadyRequested { actor_id: String, target_id: String },
+
+    #[error("profile '{actor_id}' has no pending request to follow '{target_id}'")]
+    NoFollowRequest { actor_id: String, target_id: String },
 
     // ── Block state (SGR-1xxx continued) ─────────────────────────────────────
 
@@ -75,6 +83,8 @@ impl AppError for SocialGraphError {
 
             SocialGraphError::AlreadyFollowing { .. } => "SGR-1001",
             SocialGraphError::NotFollowing { .. }     => "SGR-1002",
+            SocialGraphError::AlreadyRequested { .. } => "SGR-1005",
+            SocialGraphError::NoFollowRequest { .. }  => "SGR-1006",
             SocialGraphError::AlreadyBlocked { .. }   => "SGR-1003",
             SocialGraphError::NotBlocked { .. }       => "SGR-1004",
 
@@ -93,9 +103,11 @@ impl AppError for SocialGraphError {
             SocialGraphError::Validation(e) => e.http_status(),
 
             SocialGraphError::AlreadyFollowing { .. }
+            | SocialGraphError::AlreadyRequested { .. }
             | SocialGraphError::AlreadyBlocked { .. } => StatusCode::CONFLICT,
 
             SocialGraphError::NotFollowing { .. }
+            | SocialGraphError::NoFollowRequest { .. }
             | SocialGraphError::NotBlocked { .. }
             | SocialGraphError::SelfInteraction
             | SocialGraphError::BlockGateDenied { .. }
@@ -142,6 +154,8 @@ impl AppError for SocialGraphError {
 
             SocialGraphError::AlreadyFollowing { .. } => "You are already following this profile.",
             SocialGraphError::NotFollowing { .. }     => "You are not following this profile.",
+            SocialGraphError::AlreadyRequested { .. } => "You have already asked to follow this profile.",
+            SocialGraphError::NoFollowRequest { .. }  => "There is no pending follow request.",
             SocialGraphError::AlreadyBlocked { .. }   => "You have already blocked this profile.",
             SocialGraphError::NotBlocked { .. }       => "You have not blocked this profile.",
             SocialGraphError::SelfInteraction          => "A profile cannot follow or block itself.",
