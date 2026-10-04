@@ -1,4 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
+
+use crate::domain::value_object::ConsentPurpose;
 use serde::{Deserialize, Serialize};
 
 /// GDPR and data-protection state for an account.
@@ -15,6 +17,10 @@ pub struct GdprRecord {
 
     /// Timestamp of explicit marketing opt-in (separate from data processing).
     pub marketing_consented_at: Option<DateTime<Utc>>,
+
+    /// Timestamp of the product-analytics opt-in.
+    #[serde(default)]
+    pub analytics_consented_at: Option<DateTime<Utc>>,
 
     /// IP address from which consent was recorded (evidence for regulators).
     /// Stored encrypted at rest.
@@ -60,6 +66,7 @@ impl GdprRecord {
         Self {
             data_processing_consented_at,
             marketing_consented_at,
+            analytics_consented_at: None,
             consent_ip,
             last_consent_version,
             deletion_requested_at,
@@ -72,6 +79,39 @@ impl GdprRecord {
 
     pub fn data_processing_consented_at(&self) -> Option<DateTime<Utc>> { self.data_processing_consented_at }
     pub fn marketing_consented_at(&self) -> Option<DateTime<Utc>> { self.marketing_consented_at }
+    pub fn analytics_consented_at(&self) -> Option<DateTime<Utc>> { self.analytics_consented_at }
+
+    /// Restores the analytics consent from persistence (added after
+    /// [`Self::reconstitute`]'s column set).
+    pub fn with_analytics_consented_at(mut self, at: Option<DateTime<Utc>>) -> Self {
+        self.analytics_consented_at = at;
+        self
+    }
+
+    fn consent_slot(&mut self, purpose: ConsentPurpose) -> &mut Option<DateTime<Utc>> {
+        match purpose {
+            ConsentPurpose::DataProcessing => &mut self.data_processing_consented_at,
+            ConsentPurpose::Marketing => &mut self.marketing_consented_at,
+            ConsentPurpose::Analytics => &mut self.analytics_consented_at,
+        }
+    }
+
+    /// Gives (`at` = when) or withdraws a consent. Returns `true` when that
+    /// changed anything: re-giving a given consent keeps its original time.
+    pub fn set_consent(&mut self, purpose: ConsentPurpose, granted: bool, at: DateTime<Utc>) -> bool {
+        let slot = self.consent_slot(purpose);
+        match (granted, slot.is_some()) {
+            (true, false) => {
+                *slot = Some(at);
+                true
+            }
+            (false, true) => {
+                *slot = None;
+                true
+            }
+            _ => false,
+        }
+    }
     pub fn consent_ip_address(&self) -> Option<&str> { self.consent_ip.as_deref() }
     pub fn last_consent_version(&self) -> Option<&str> { self.last_consent_version.as_deref() }
     pub fn deletion_requested_at(&self) -> Option<DateTime<Utc>> { self.deletion_requested_at }

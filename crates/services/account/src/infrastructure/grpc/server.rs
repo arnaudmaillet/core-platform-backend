@@ -189,6 +189,13 @@ where
         self.get_gdpr_record(request).await
     }
 
+    async fn update_consents(
+        &self,
+        request: Request<proto::UpdateConsentsRequest>,
+    ) -> Result<Response<proto::GdprRecordView>, Status> {
+        self.update_consents(request).await
+    }
+
     async fn list_accounts_by_status(
         &self,
         request: Request<proto::ListAccountsByStatusRequest>,

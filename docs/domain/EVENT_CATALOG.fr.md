@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: aa0c2abe9bd4393a6092ba8f490cf17a64febf459dc4df8f85b183e8d126b337
+  source_sha256: 8dadda7ad8ce5531161c77e21bde9c193f4a46560dd343de960301954871f151
   translated_at: 2026-10-04
   status: complete
 ---
@@ -101,6 +101,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `role_assigned` / `role_revoked` | un octroi d'autorisation a changé | octroi/révocation de rôle | `audit` (Authorization) |
 | `gdpr_deletion_requested` | le droit à l'effacement (Art. 17) a été invoqué | demande utilisateur/DPO | `audit` → **crypto-shred du sujet** (ferme la boucle Art. 17) |
 | `gdpr_data_export_requested` | le droit d'accès/portabilité a été invoqué | demande utilisateur/DPO | exécution de l'export (en aval) |
+| `consents_updated` | le titulaire a donné ou retiré des consentements (art. 7), changements effectifs seulement, avec la version de la politique | `UpdateConsents` change quelque chose | aucun pour l'instant (l'historique horodaté `account_consent_history` fait preuve) |
 
 ## Authentification — `auth.v1.events` (producteur : `auth`)
 

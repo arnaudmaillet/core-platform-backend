@@ -35,6 +35,8 @@ const MIGRATIONS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
 pub struct TestHarness {
     pub command_bus: Arc<InMemoryCommandBus>,
     pub query_bus:   Arc<InMemoryQueryBus>,
+    /// Direct reads for assertions on tables no query exposes.
+    pub pool:        sqlx::PgPool,
 }
 
 impl TestHarness {
@@ -57,11 +59,11 @@ impl TestHarness {
 
         // Log publisher — this suite tests account behaviour, not event emission.
         let publisher = std::sync::Arc::new(account::infrastructure::event::LogEventPublisher);
-        let app = App::build(pool, publisher)
+        let app = App::build(pool.clone(), publisher)
             .await
             .expect("integration: build account app");
 
-        Self { command_bus: app.command_bus, query_bus: app.query_bus }
+        Self { command_bus: app.command_bus, query_bus: app.query_bus, pool }
     }
 
     /// Creates an account, expecting success.

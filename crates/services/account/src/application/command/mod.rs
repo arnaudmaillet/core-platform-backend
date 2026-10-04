@@ -15,6 +15,7 @@ pub mod resume_deactivated_account;
 pub mod revoke_mfa;
 pub mod revoke_role;
 pub mod suspend_account;
+pub mod update_consents;
 pub mod update_kyc_status;
 pub mod verify_email;
 pub mod verify_phone;
@@ -36,6 +37,7 @@ pub use resume_deactivated_account::{
 pub use revoke_mfa::{RevokeMfaCommand, RevokeMfaHandler};
 pub use revoke_role::{RevokeRoleCommand, RevokeRoleHandler};
 pub use suspend_account::{SuspendAccountCommand, SuspendAccountHandler};
+pub use update_consents::{UpdateConsentsCommand, UpdateConsentsHandler};
 pub use update_kyc_status::{UpdateKycStatusCommand, UpdateKycStatusHandler};
 pub use verify_email::{VerifyEmailCommand, VerifyEmailHandler};
 pub use verify_phone::{VerifyPhoneCommand, VerifyPhoneHandler};

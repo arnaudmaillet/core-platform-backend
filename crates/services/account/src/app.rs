@@ -26,7 +26,7 @@ use crate::application::command::{
     RequestDataExportHandler, RequestGdprDeletionCommand, RequestGdprDeletionHandler,
     ResumeDeactivatedAccountCommand, ResumeDeactivatedAccountHandler,
     RevokeMfaCommand, RevokeMfaHandler, RevokeRoleCommand, RevokeRoleHandler, SuspendAccountCommand,
-    SuspendAccountHandler, UpdateKycStatusCommand, UpdateKycStatusHandler, VerifyEmailCommand,
+    SuspendAccountHandler, UpdateConsentsCommand, UpdateConsentsHandler, UpdateKycStatusCommand, UpdateKycStatusHandler, VerifyEmailCommand,
     VerifyEmailHandler, VerifyPhoneCommand, VerifyPhoneHandler,
 };
 use crate::application::port::{AccountRepository, EventPublisher};
@@ -77,6 +77,7 @@ impl App {
                 .register::<RequestGdprDeletionCommand, _>(RequestGdprDeletionHandler::new(Arc::clone(&repository)))?
                 .register::<AnonymizeAccountCommand, _>(AnonymizeAccountHandler::new(Arc::clone(&repository)))?
                 .register::<RequestDataExportCommand, _>(RequestDataExportHandler::new(Arc::clone(&repository)))?
+                .register::<UpdateConsentsCommand, _>(UpdateConsentsHandler::new(Arc::clone(&repository)))?
                 .register::<AssignRoleCommand, _>(AssignRoleHandler::new(Arc::clone(&repository)))?
                 .register::<RevokeRoleCommand, _>(RevokeRoleHandler::new(Arc::clone(&repository)))?
                 .build(),

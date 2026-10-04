@@ -5,12 +5,12 @@ use uuid::Uuid;
 use crate::domain::entity::{GdprRecord, MfaState};
 use crate::domain::event::{
     AccountActivated, AccountCreated, AccountDeactivated, AccountDeleted, AccountSuspended,
-    DomainEvent, EmailChanged, EmailVerified, GdprDataExportRequested, GdprDeletionRequested,
+    ConsentChange, ConsentsUpdated, DomainEvent, EmailChanged, EmailVerified, GdprDataExportRequested, GdprDeletionRequested,
     KycStatusChanged, MfaEnrolled, MfaRevoked, PasswordChanged, PhoneChanged, RoleAssigned,
     RoleRevoked,
 };
 use crate::domain::value_object::{
-    AccountId, AccountRole, AccountStatus, CountryCode, EmailAddress, EncryptedBytes, IdentityId,
+    AccountId, AccountRole, AccountStatus, ConsentPurpose, CountryCode, EmailAddress, EncryptedBytes, IdentityId,
     KycStatus, PasswordHash, PhoneNumber, RecoveryCodeHash,
 };
 use crate::error::AccountError;
@@ -574,6 +574,43 @@ impl Account {
         Ok(())
     }
 
+    /// Gives or withdraws consents (GDPR Art. 7(3): withdrawing is as easy as
+    /// giving). Emits [`ConsentsUpdated`] listing only the effective changes;
+    /// a request that changes nothing (and no new policy version) is a no-op.
+    pub fn update_consents(
+        &mut self,
+        requested: &[(ConsentPurpose, bool)],
+        policy_version: Option<String>,
+        correlation_id: Uuid,
+    ) -> Result<(), AccountError> {
+        if self.gdpr.is_anonymized() {
+            return Err(AccountError::AccountAlreadyAnonymized);
+        }
+        let now = Utc::now();
+        let changes: Vec<ConsentChange> = requested
+            .iter()
+            .filter(|(purpose, granted)| self.gdpr.set_consent(*purpose, *granted, now))
+            .map(|(purpose, granted)| ConsentChange { purpose: *purpose, granted: *granted })
+            .collect();
+        let new_version = policy_version
+            .filter(|v| self.gdpr.last_consent_version.as_deref() != Some(v.as_str()));
+        if changes.is_empty() && new_version.is_none() {
+            return Ok(());
+        }
+        if let Some(version) = &new_version {
+            self.gdpr.last_consent_version = Some(version.clone());
+        }
+        self.touch(now);
+        self.pending_events.push(DomainEvent::ConsentsUpdated(ConsentsUpdated {
+            account_id: self.id,
+            changes,
+            policy_version: new_version,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(())
+    }
+
     /// Anonymises the account: clears PII fields and marks as deleted.
     ///
     /// Called by the GDPR janitor worker once `deletion_scheduled_at` has elapsed.
@@ -940,5 +977,74 @@ mod tests {
 
         assert!(matches!(err, AccountError::InvalidStatusTransition { .. }));
         assert_eq!(account.status(), AccountStatus::Suspended);
+    }
+
+    fn consent_events(account: &mut Account) -> Vec<ConsentsUpdated> {
+        account
+            .drain_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                DomainEvent::ConsentsUpdated(c) => Some(c),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// GDPR Art. 7(3): giving and withdrawing are one call each, and only an
+    /// effective change is recorded.
+    #[test]
+    fn consents_are_given_and_withdrawn_and_only_effective_changes_are_recorded() {
+        let mut account = account_in(AccountStatus::Active, None);
+
+        account
+            .update_consents(
+                &[(ConsentPurpose::Marketing, true), (ConsentPurpose::Analytics, false)],
+                Some("PP-1".into()),
+                Uuid::now_v7(),
+            )
+            .unwrap();
+        let given_at = account.gdpr().marketing_consented_at().expect("given");
+        let events = consent_events(&mut account);
+        assert_eq!(events.len(), 1);
+        // Analytics was never given: withdrawing it is not a change.
+        assert_eq!(events[0].changes, vec![ConsentChange { purpose: ConsentPurpose::Marketing, granted: true }]);
+        assert_eq!(events[0].policy_version.as_deref(), Some("PP-1"));
+
+        // Re-giving keeps the original time and records nothing.
+        let version = account.version();
+        account
+            .update_consents(&[(ConsentPurpose::Marketing, true)], Some("PP-1".into()), Uuid::now_v7())
+            .unwrap();
+        assert_eq!(account.gdpr().marketing_consented_at(), Some(given_at));
+        assert_eq!(account.version(), version, "a no-op does not touch the aggregate");
+        assert!(consent_events(&mut account).is_empty());
+
+        account
+            .update_consents(&[(ConsentPurpose::Marketing, false)], None, Uuid::now_v7())
+            .unwrap();
+        assert_eq!(account.gdpr().marketing_consented_at(), None);
+        let events = consent_events(&mut account);
+        assert_eq!(events[0].changes, vec![ConsentChange { purpose: ConsentPurpose::Marketing, granted: false }]);
+    }
+
+    /// Accepting a new policy version alone is recorded too.
+    #[test]
+    fn a_new_policy_version_alone_is_recorded() {
+        let mut account = account_in(AccountStatus::Active, None);
+        account.update_consents(&[], Some("PP-2".into()), Uuid::now_v7()).unwrap();
+        let events = consent_events(&mut account);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].changes.is_empty());
+        assert_eq!(account.gdpr().last_consent_version(), Some("PP-2"));
+    }
+
+    #[test]
+    fn an_anonymized_account_has_no_consents_to_change() {
+        let mut account = account_in(AccountStatus::Active, None);
+        account.anonymize(Uuid::now_v7()).unwrap();
+        let err = account
+            .update_consents(&[(ConsentPurpose::Analytics, true)], None, Uuid::now_v7())
+            .unwrap_err();
+        assert!(matches!(err, AccountError::AccountAlreadyAnonymized));
     }
 }

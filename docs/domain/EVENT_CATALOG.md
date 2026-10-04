@@ -88,6 +88,7 @@ producer's `DOMAIN.md §8`.
 | `role_assigned` / `role_revoked` | an authorization grant changed | role grant/revoke | `audit` (Authorization) |
 | `gdpr_deletion_requested` | the right to erasure (Art. 17) was invoked | user/DPO request | `audit` → **crypto-shreds the subject** (closes the Art. 17 loop) |
 | `gdpr_data_export_requested` | the right to access/portability was invoked | user/DPO request | export fulfilment (downstream) |
+| `consents_updated` | the holder gave or withdrew consents (Art. 7), effective changes only, with the policy version | `UpdateConsents` changes something | none yet (the timestamped `account_consent_history` is the evidence) |
 
 ## Authentication — `auth.v1.events` (producer: `auth`)
 

@@ -21,6 +21,7 @@ use crate::application::command::{
     revoke_mfa::RevokeMfaCommand,
     revoke_role::RevokeRoleCommand,
     suspend_account::SuspendAccountCommand,
+    update_consents::UpdateConsentsCommand,
     update_kyc_status::UpdateKycStatusCommand,
     verify_email::VerifyEmailCommand,
     verify_phone::VerifyPhoneCommand,
@@ -442,22 +443,53 @@ where
         &self,
         request: Request<proto::GetGdprRecordRequest>,
     ) -> Result<Response<proto::GdprRecordView>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
         let req = request.into_inner();
-        let query = GetGdprRecordQuery { account_id: req.account_id };
+        self.gdpr_record(req.account_id).await.map(Response::new)
+    }
+
+    pub async fn update_consents(
+        &self,
+        request: Request<proto::UpdateConsentsRequest>,
+    ) -> Result<Response<proto::GdprRecordView>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let cmd = UpdateConsentsCommand {
+            account_id: req.account_id.clone(),
+            data_processing: req.data_processing,
+            marketing: req.marketing,
+            analytics: req.analytics,
+            policy_version: (!req.policy_version.is_empty()).then_some(req.policy_version),
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map_err(cqrs_error_to_status)?;
+        self.gdpr_record(req.account_id).await.map(Response::new)
+    }
+
+    async fn gdpr_record(&self, account_id: String) -> Result<proto::GdprRecordView, Status> {
+        let query = GetGdprRecordQuery { account_id };
         let view: GdprRecordView = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_error_to_status)?;
-        Ok(Response::new(proto::GdprRecordView {
+        Ok(proto::GdprRecordView {
             account_id: view.account_id,
             data_processing_consented: view.data_processing_consented_at.is_some(),
             marketing_consented: view.marketing_consented_at.is_some(),
+            analytics_consented: view.analytics_consented_at.is_some(),
+            data_processing_consented_at: view.data_processing_consented_at.map(dt_to_ts),
+            marketing_consented_at: view.marketing_consented_at.map(dt_to_ts),
+            analytics_consented_at: view.analytics_consented_at.map(dt_to_ts),
+            consent_policy_version: view.last_consent_version.unwrap_or_default(),
             deletion_requested_at: view.deletion_requested_at.map(dt_to_ts),
+            deletion_scheduled_at: view.deletion_scheduled_at.map(dt_to_ts),
             anonymized_at: view.anonymized_at.map(dt_to_ts),
             data_export_requested_at: view.data_export_requested_at.map(dt_to_ts),
             data_export_completed_at: view.data_export_completed_at.map(dt_to_ts),
-        }))
+        })
     }
 
     pub async fn list_accounts_by_status(

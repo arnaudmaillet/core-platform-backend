@@ -105,8 +105,14 @@ service AccountService {
     // Lightweight status check used by auth middleware and gateway.
     rpc GetAccountStatus(GetAccountStatusRequest) returns (AccountStatusView);
 
-    // Full GDPR compliance record (restricted endpoint).
+    // The GDPR record: consents, deletion and export state. On the client edge
+    // an account reads its own only (account_id = the caller).
     rpc GetGdprRecord(GetGdprRecordRequest) returns (GdprRecordView);
+
+    // Give or withdraw consents (GDPR Art. 7(3)); each effective change is
+    // kept in a timestamped history. Returns the updated record. On the client
+    // edge an account updates its own only.
+    rpc UpdateConsents(UpdateConsentsRequest) returns (GdprRecordView);
 
     // Paginated list of accounts filtered by lifecycle status (admin / ops).
     rpc ListAccountsByStatus(ListAccountsByStatusRequest) returns (ListAccountsByStatusResponse);

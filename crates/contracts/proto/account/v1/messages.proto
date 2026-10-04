@@ -33,7 +33,9 @@ message AccountView {
     repeated string                 permissions          = 15;
 }
 
-// GDPR compliance record — returned only to authorised compliance officers.
+// GDPR record: the holder's own (client edge, account_id = the caller) or any
+// account's (mesh, compliance). A consent is given while its `_consented_at`
+// is set.
 message GdprRecordView {
     string                          account_id                       = 1;
     bool                            data_processing_consented        = 2;
@@ -42,6 +44,14 @@ message GdprRecordView {
     google.protobuf.Timestamp       anonymized_at                    = 5;
     google.protobuf.Timestamp       data_export_requested_at         = 6;
     google.protobuf.Timestamp       data_export_completed_at         = 7;
+    // When a requested deletion becomes permanent (the end of the grace period).
+    google.protobuf.Timestamp       deletion_scheduled_at            = 8;
+    bool                            analytics_consented              = 9;
+    // The privacy-policy version the holder last consented under.
+    string                          consent_policy_version           = 10;
+    google.protobuf.Timestamp       data_processing_consented_at     = 11;
+    google.protobuf.Timestamp       marketing_consented_at           = 12;
+    google.protobuf.Timestamp       analytics_consented_at           = 13;
 }
 
 // Minimal status-only view used by auth and gateway services.
@@ -164,6 +174,16 @@ message GetAccountStatusRequest {
 
 message GetGdprRecordRequest {
     string account_id = 1;
+}
+
+// Give or withdraw consents. An unset field leaves that purpose unchanged.
+message UpdateConsentsRequest {
+    string          account_id       = 1;
+    optional bool   data_processing  = 2;
+    optional bool   marketing        = 3;
+    optional bool   analytics        = 4;
+    // The privacy-policy version shown to the holder (≤ 64 chars), if any.
+    string          policy_version   = 5;
 }
 
 message ListAccountsByStatusRequest {

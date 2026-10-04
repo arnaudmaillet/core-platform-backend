@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: ec01ef19e36a08545b37d54824b8c10767a020f66dc82c14887fe0e146dce726
+  source_sha256: cdee49c5e7467ffa26557fadf119f7cdb93c07ec678c597a56437901becd5d9e
   translated_at: 2026-10-04
   status: complete
 ---
@@ -141,7 +141,8 @@ service AccountService {
   rpc GetAccountById (GetAccountByIdRequest) returns (AccountView);
   rpc GetAccountByIdentityId (GetAccountByIdentityIdRequest) returns (AccountView);
   rpc GetAccountStatus (GetAccountStatusRequest) returns (AccountStatusView); // auth hot path
-  rpc GetGdprRecord (GetGdprRecordRequest) returns (GdprRecordView);          // restricted
+  rpc GetGdprRecord (GetGdprRecordRequest) returns (GdprRecordView);          // le sien propre en périphérie
+  rpc UpdateConsents (UpdateConsentsRequest) returns (GdprRecordView);         // GDPR Art. 7 consents + history
   rpc ListAccountsByStatus (ListAccountsByStatusRequest) returns (ListAccountsByStatusResponse);
 }
 ```
@@ -186,7 +187,7 @@ Les codes stables vont de `ACC-1xxx` (lifecycle) à `ACC-9xxx` (identifiers), vi
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested` | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `ConsentsUpdated` | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
 
 **Consomme :** rien — `account` est un producteur d'événements pur.
 

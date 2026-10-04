@@ -5,6 +5,7 @@ use postgres_storage::{StorageError, TransactionManager};
 
 use crate::application::port::account_repository::AccountRepository;
 use crate::domain::aggregate::account::Account;
+use crate::domain::event::DomainEvent;
 use crate::domain::value_object::{
     account_id::AccountId, account_status::AccountStatus, email_address::EmailAddress,
     identity_id::IdentityId,
@@ -102,6 +103,22 @@ impl AccountRepository for PgAccountRepository {
         let p_gdpr_anonymized     = gdpr.anonymized_at();
         let p_gdpr_export_req     = gdpr.data_export_requested_at();
         let p_gdpr_export_done    = gdpr.data_export_completed_at();
+        let p_gdpr_analytics_at   = gdpr.analytics_consented_at();
+        // The consent history rows this save appends (GDPR Art. 7(1) evidence),
+        // from the aggregate's pending ConsentsUpdated events.
+        let p_consent_history: Vec<(&'static str, bool, Option<String>, chrono::DateTime<chrono::Utc>)> = account
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                DomainEvent::ConsentsUpdated(c) => Some(c),
+                _ => None,
+            })
+            .flat_map(|c| {
+                c.changes.iter().map(move |change| {
+                    (change.purpose.as_str(), change.granted, c.policy_version.clone(), c.occurred_at)
+                })
+            })
+            .collect();
 
         let p_roles: Vec<String> = account.roles().iter().map(|r| r.as_str().to_owned()).collect();
         let p_perms: Vec<String> = account.permission_overrides().to_vec();
@@ -129,12 +146,13 @@ impl AccountRepository for PgAccountRepository {
                                 gdpr_anonymized_at,
                                 gdpr_data_export_requested_at, gdpr_data_export_completed_at,
                                 roles, permission_overrides,
-                                version, created_at, updated_at, created_by
+                                version, created_at, updated_at, created_by,
+                                gdpr_analytics_consented_at
                             ) VALUES (
                                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
                                 $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
                                 $31,$32,$33,$34,$35,$36,$37,
-                                $38,$39,$40,$41
+                                $38,$39,$40,$41,$42
                             )
                             "#,
                         )
@@ -179,6 +197,7 @@ impl AccountRepository for PgAccountRepository {
                         .bind(p_created_at)          // $39
                         .bind(p_updated_at)          // $40
                         .bind(p_created_by)          // $41
+                        .bind(p_gdpr_analytics_at)   // $42
                         .execute(&mut **tx)
                         .await
                         .map(|_| ())
@@ -238,6 +257,7 @@ impl AccountRepository for PgAccountRepository {
                                 gdpr_data_export_completed_at = $34,
                                 roles = $35,
                                 permission_overrides = $36,
+                                gdpr_analytics_consented_at = $38,
                                 version = version + 1,
                                 updated_at = NOW()
                             WHERE id = $1 AND version = $37
@@ -280,16 +300,35 @@ impl AccountRepository for PgAccountRepository {
                         .bind(&p_roles)             // $35
                         .bind(&p_perms)             // $36
                         .bind(expected_version)     // $37
+                        .bind(p_gdpr_analytics_at)  // $38
                         .execute(&mut **tx)
                         .await
                         .map_err(|e| AccountError::Storage(StorageError::from(e)))?
                         .rows_affected();
 
                         if affected == 0 {
-                            Err(AccountError::ConcurrentModification)
-                        } else {
-                            Ok(())
+                            return Err(AccountError::ConcurrentModification);
                         }
+                        // Same transaction as the state it explains.
+                        for (purpose, granted, policy_version, changed_at) in p_consent_history {
+                            sqlx::query(
+                                r#"
+                                INSERT INTO account_consent_history
+                                    (account_id, purpose, granted, policy_version, changed_at)
+                                VALUES ($1, $2, $3, $4, $5)
+                                ON CONFLICT DO NOTHING
+                                "#,
+                            )
+                            .bind(id.as_uuid())
+                            .bind(purpose)
+                            .bind(granted)
+                            .bind(policy_version)
+                            .bind(changed_at)
+                            .execute(&mut **tx)
+                            .await
+                            .map_err(|e| AccountError::Storage(StorageError::from(e)))?;
+                        }
+                        Ok(())
                     })
                 })
                 .await
