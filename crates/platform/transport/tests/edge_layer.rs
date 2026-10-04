@@ -15,7 +15,9 @@ use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use serde_json::json;
 use tonic::body::Body;
 use tower::{Layer, ServiceExt};
-use transport::grpc::edge::{authenticated, permission, public, EdgePrincipal, EdgeRule};
+use transport::grpc::edge::{
+    authenticated, permission, public, EdgeAnonymous, EdgePrincipal, EdgeRule,
+};
 use transport::grpc::layer::edge::{EdgeGuard, EdgeLayer};
 
 const ISSUER: &str = "https://auth.test";
@@ -103,6 +105,9 @@ macro_rules! echo_service {
                     p.profile_ids().collect::<Vec<_>>().join(",").parse().unwrap(),
                 );
             }
+            if req.extensions().get::<EdgeAnonymous>().is_some() {
+                resp.headers_mut().insert("x-seen-anonymous", "1".parse().unwrap());
+            }
             if let Some(p) = auth_context::current_principal() {
                 resp.headers_mut()
                     .insert("x-seen-task-local", p.user_id().as_str().parse().unwrap());
@@ -160,6 +165,8 @@ async fn public_methods_pass_without_a_token_and_without_a_principal() {
     let resp = svc.oneshot(req("/auth.v1.AuthService/Login", None)).await.unwrap();
     assert!(grpc_status(&resp).is_none());
     assert!(header(&resp, "x-seen-principal").is_none());
+    // Marked anonymous, so a handler cannot mistake it for a trusted mesh call.
+    assert_eq!(header(&resp, "x-seen-anonymous"), Some("1"));
 }
 
 #[tokio::test]
@@ -182,6 +189,7 @@ async fn a_valid_token_attaches_the_principal_header_and_task_local() {
     assert_eq!(header(&resp, "x-seen-principal"), Some("acct-1"));
     assert_eq!(header(&resp, "x-seen-pids"), Some("p-1,p-2"));
     assert_eq!(header(&resp, "x-seen-task-local"), Some("acct-1"));
+    assert!(header(&resp, "x-seen-anonymous").is_none());
 }
 
 #[tokio::test]
@@ -259,6 +267,7 @@ async fn disabled_layer_is_passthrough_and_keeps_headers() {
     assert!(grpc_status(&resp).is_none());
     assert_eq!(header(&resp, "x-seen-identity"), Some("mesh-caller"));
     assert!(header(&resp, "x-seen-principal").is_none());
+    assert!(header(&resp, "x-seen-anonymous").is_none());
 }
 
 /// Regression: the PRODUCTION decoder builder (`auth_context::edge_decoder`, what

@@ -41,7 +41,7 @@ use opentelemetry::{global, metrics::Counter, KeyValue};
 use tonic::{body::Body, Status};
 use tower::{Layer, Service};
 
-use crate::grpc::edge::{EdgeAccess, EdgePolicy, EdgePrincipal};
+use crate::grpc::edge::{EdgeAccess, EdgeAnonymous, EdgePolicy, EdgePrincipal};
 use crate::grpc::server::config::DEFAULT_IDENTITY_HEADER;
 
 /// Instrument name; the Prometheus exporter appends `_total`.
@@ -176,8 +176,10 @@ where
             return Box::pin(async move { Ok(response) });
         };
 
-        // 4. Public methods carry no principal.
+        // 4. Public methods carry no principal, only the marker that tells the
+        //    handler this is an anonymous client rather than a mesh peer.
         if access == EdgeAccess::Public {
+            req.extensions_mut().insert(EdgeAnonymous);
             return Box::pin(self.inner.call(req));
         }
 
