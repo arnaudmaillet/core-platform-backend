@@ -10,16 +10,46 @@
 //! The `testcontainers-modules` redis module defaults to `redis:5.0`, which
 //! predates sharded pub/sub (`SSUBSCRIBE`/`SPUBLISH`/`SUNSUBSCRIBE`, Redis 7.0).
 //! Several services depend on those, so we pin a 7.x image explicitly for all.
+//!
+//! ## Teardown
+//!
+//! The containers live in statics, which Rust never drops — so testcontainers'
+//! drop-time removal never fires and, left alone, every run would leak its
+//! whole container set. (Leaked containers pile up fast; see the Scylla
+//! `--reactor-backend` note for why that used to break every Scylla suite.)
+//!
+//! Every container is therefore created with the [`OWNER_LABEL`] label (value:
+//! this process's PID), and a reaper removes everything carrying this PID's
+//! label — including a container still mid-boot — when the test binary ends:
+//!
+//! - **Normal exit** (all tests done, pass or fail): from an `atexit` hook.
+//! - **SIGINT / SIGTERM / SIGQUIT** (Ctrl-C mid-suite): from a signal thread,
+//!   which then re-raises the signal so the process still dies of it.
+//!
+//! Both run after (or outside) the tokio runtimes the containers were created
+//! on, so the reaper shells out to the `docker` CLI. testcontainers' own
+//! `watchdog` feature is deliberately not used: it panics (and from then on
+//! swallows Ctrl-C) when a container it tracks was already removed, which is
+//! what happens to one interrupted mid-boot.
+//!
+//! A SIGKILL or abort skips both paths. Anything left behind can be swept with
+//! `docker rm -f -v $(docker ps -aq --filter label=core-platform.test-support.pid)`.
 
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
+use signal_hook::consts::{SIGINT, SIGQUIT, SIGTERM};
+use signal_hook::iterator::Signals;
 use testcontainers::core::WaitFor;
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, GenericImage, ImageExt};
-use testcontainers_modules::kafka::apache::{Kafka, KAFKA_PORT};
+use testcontainers::{ContainerAsync, ContainerRequest, GenericImage, Image, ImageExt};
+use testcontainers_modules::kafka::apache::{KAFKA_PORT, Kafka};
 use testcontainers_modules::minio::MinIO;
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::scylladb::ScyllaDB;
@@ -56,12 +86,127 @@ static MINIO: OnceCell<ContainerAsync<MinIO>> = OnceCell::const_new();
 static SCYLLA_MIGRATED: OnceCell<()> = OnceCell::const_new();
 static POSTGRES_MIGRATED: OnceCell<()> = OnceCell::const_new();
 
+/// Label stamped on every container this crate boots; the value is the PID of
+/// the test process that owns it (see the module docs, "Teardown").
+pub const OWNER_LABEL: &str = "core-platform.test-support.pid";
+
+static REAPER: Once = Once::new();
+/// Set by the signal reaper: the process is about to die, boot nothing new.
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+// ── Lifecycle ────────────────────────────────────────────────────────────────
+
+/// Starts `request` labelled with [`OWNER_LABEL`], with the reaper armed first
+/// so a container interrupted mid-boot is removed too.
+async fn boot<I: Image>(
+    request: impl Into<ContainerRequest<I>>,
+    backend: &str,
+) -> ContainerAsync<I> {
+    REAPER.call_once(arm_reaper);
+    if INTERRUPTED.load(Ordering::SeqCst) {
+        // A signal reaper is tearing down; a boot now (typically a test
+        // retrying the `OnceCell` init the reaper just broke) would only leak
+        // a fresh container. Park until the process dies.
+        std::future::pending::<()>().await;
+    }
+    request
+        .with_label(OWNER_LABEL, std::process::id().to_string())
+        .start()
+        .await
+        .unwrap_or_else(|e| panic!("failed to start the {backend} test container: {e:?}"))
+}
+
+/// Runs [`reap`] at normal exit (`atexit`) and on SIGINT/SIGTERM/SIGQUIT.
+fn arm_reaper() {
+    extern "C" fn reap_at_exit() {
+        reap();
+    }
+    // SAFETY: `reap_at_exit` is a plain `extern "C" fn()` that never unwinds.
+    if unsafe { libc::atexit(reap_at_exit) } != 0 {
+        warn("could not register the exit-time container reaper");
+    }
+
+    let spawned = Signals::new([SIGINT, SIGTERM, SIGQUIT]).and_then(|mut signals| {
+        std::thread::Builder::new()
+            .name("test-support-reaper".into())
+            .spawn(move || {
+                if let Some(signal) = signals.forever().next() {
+                    // Stop new boots, then sweep until a pass finds nothing,
+                    // catching a create that was already in flight.
+                    INTERRUPTED.store(true, Ordering::SeqCst);
+                    for _ in 0..5 {
+                        if reap() == 0 {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(250));
+                    }
+                    // Restores the default disposition and re-raises: the
+                    // process dies of the signal, as if never intercepted.
+                    let _ = signal_hook::low_level::emulate_default_handler(signal);
+                }
+            })
+    });
+    if let Err(e) = spawned {
+        warn(&format!(
+            "could not install the signal-time container reaper: {e}"
+        ));
+    }
+}
+
+/// Force-removes (with anonymous volumes) every container labelled with this
+/// process's PID and returns how many it found. Never panics: it runs inside an
+/// `extern "C"` `atexit` hook, where an unwind would abort.
+fn reap() -> usize {
+    let owner = format!("label={OWNER_LABEL}={}", std::process::id());
+    let listed = Command::new("docker")
+        .args(["ps", "--all", "--quiet", "--filter", &owner])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let ids = match listed {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
+        other => {
+            warn(&format!(
+                "could not list this run's test containers ({other:?})"
+            ));
+            return 0;
+        }
+    };
+    let ids: Vec<&str> = ids.split_whitespace().collect();
+    if ids.is_empty() {
+        return 0;
+    }
+
+    let removed = Command::new("docker")
+        .args(["rm", "--force", "--volumes"])
+        .args(&ids)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if !matches!(removed, Ok(status) if status.success()) {
+        warn(&format!(
+            "could not remove test containers {ids:?} ({removed:?})"
+        ));
+    }
+    ids.len()
+}
+
+/// Best-effort stderr notice with the manual cleanup command; never panics.
+fn warn(what: &str) {
+    let _ = writeln!(
+        std::io::stderr(),
+        "test-support: {what}; remove leftovers with \
+         `docker rm -f -v $(docker ps -aq --filter label={OWNER_LABEL})`"
+    );
+}
+
 // ── ScyllaDB ─────────────────────────────────────────────────────────────────
 
 /// Boots ScyllaDB (once) and returns its `host:port` contact point.
 ///
-/// `--developer-mode 1 --smp 1` makes a single-node boot fast and reliable on
-/// untuned hosts (CI / macOS).
+/// `--developer-mode 1 --smp 1 --reactor-backend epoll` makes a single-node boot
+/// fast and reliable on untuned hosts (CI / macOS), several at a time.
 pub async fn scylla_contact_point() -> String {
     let container = SCYLLA
         .get_or_init(|| async {
@@ -71,12 +216,21 @@ pub async fn scylla_contact_point() -> String {
             // six services' migrations: local runs kept passing on cached old
             // images while fresh CI pulls failed (first-ever CI execution of
             // these suites, 2026-07-05).
-            ScyllaDB::default()
-                .with_tag("5.4.0")
-                .with_cmd(["--developer-mode", "1", "--smp", "1"])
-                .start()
-                .await
-                .expect("failed to start the ScyllaDB test container")
+            //
+            // `--reactor-backend epoll`: the default linux-aio backend reserves
+            // ~51k of the Docker host's 65536 `fs.aio-max-nr` events per node, so
+            // a second concurrent Scylla (another suite, worktree, or a leaked
+            // container) fails to boot with `StartupTimeout`. epoll needs 1024
+            // and boots as fast; CQL semantics are unchanged.
+            let request = ScyllaDB::default().with_tag("5.4.0").with_cmd([
+                "--developer-mode",
+                "1",
+                "--smp",
+                "1",
+                "--reactor-backend",
+                "epoll",
+            ]);
+            boot(request, "ScyllaDB").await
         })
         .await;
 
@@ -115,11 +269,12 @@ pub async fn scylla_ready(keyspace: &str, migrations_dir: &str) -> String {
 pub async fn redis_endpoint() -> String {
     let container = REDIS
         .get_or_init(|| async {
-            GenericImage::new("redis", "7-alpine")
-                .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
-                .start()
-                .await
-                .expect("failed to start the Redis test container")
+            boot(
+                GenericImage::new("redis", "7-alpine")
+                    .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections")),
+                "Redis",
+            )
+            .await
         })
         .await;
 
@@ -141,15 +296,16 @@ pub async fn redis_endpoint() -> String {
 pub async fn opensearch_ready() -> String {
     let container = OPENSEARCH
         .get_or_init(|| async {
-            GenericImage::new("opensearchproject/opensearch", "2.15.0")
-                .with_wait_for(WaitFor::message_on_stdout("] started"))
-                .with_env_var("discovery.type", "single-node")
-                .with_env_var("DISABLE_SECURITY_PLUGIN", "true")
-                .with_env_var("DISABLE_INSTALL_DEMO_CONFIG", "true")
-                .with_env_var("OPENSEARCH_JAVA_OPTS", "-Xms512m -Xmx512m")
-                .start()
-                .await
-                .expect("failed to start the OpenSearch test container")
+            boot(
+                GenericImage::new("opensearchproject/opensearch", "2.15.0")
+                    .with_wait_for(WaitFor::message_on_stdout("] started"))
+                    .with_env_var("discovery.type", "single-node")
+                    .with_env_var("DISABLE_SECURITY_PLUGIN", "true")
+                    .with_env_var("DISABLE_INSTALL_DEMO_CONFIG", "true")
+                    .with_env_var("OPENSEARCH_JAVA_OPTS", "-Xms512m -Xmx512m"),
+                "OpenSearch",
+            )
+            .await
         })
         .await;
 
@@ -179,12 +335,11 @@ pub async fn minio_ready() -> String {
             // server: same `server /data` CLI, same `API:` readiness line on
             // stderr, same `minioadmin:minioadmin` defaults, so the module's
             // wait condition and the suites' static keys are unchanged.
-            MinIO::default()
-                .with_name(MINIO_IMAGE)
-                .with_tag(MINIO_TAG)
-                .start()
-                .await
-                .expect("failed to start the MinIO test container")
+            boot(
+                MinIO::default().with_name(MINIO_IMAGE).with_tag(MINIO_TAG),
+                "MinIO",
+            )
+            .await
         })
         .await;
 
@@ -203,12 +358,7 @@ pub async fn minio_ready() -> String {
 /// clients must dial that exact host.
 pub async fn kafka_brokers() -> String {
     let container = KAFKA
-        .get_or_init(|| async {
-            Kafka::default()
-                .start()
-                .await
-                .expect("failed to start the Kafka test container")
-        })
+        .get_or_init(|| async { boot(Kafka::default(), "Kafka").await })
         .await;
 
     let port = container
@@ -260,11 +410,7 @@ pub async fn postgres_ready(migrations_dir: &str) -> String {
         .get_or_init(|| async {
             // Pinned to prod's major (CNPG ghcr postgresql:16) — same
             // lockstep rule as the Scylla tag above.
-            Postgres::default()
-                .with_tag("16")
-                .start()
-                .await
-                .expect("failed to start the Postgres test container")
+            boot(Postgres::default().with_tag("16"), "Postgres").await
         })
         .await;
 

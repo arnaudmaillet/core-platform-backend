@@ -16,6 +16,9 @@ publish = false
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["scylladb", "redis", "kafka", "postgres", "minio"] }
 rdkafka                = { workspace = true }
+# Container reaper (`containers.rs`, "Teardown"): `atexit` + signal hooks.
+libc                   = { workspace = true }
+signal-hook            = { workspace = true }
 
 # ── Async runtime ────────────────────────────────────────────────────────────
 tokio = { workspace = true }
