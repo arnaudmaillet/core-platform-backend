@@ -60,7 +60,7 @@ pub enum ModerationWireEvent {
 #[derive(Debug, Clone, Deserialize)]
 pub struct EnforcementWire {
     pub subject: SubjectWire,
-    /// Variant name of moderation's `ActionType` (e.g. "RemoveContent").
+    /// Moderation's `ActionType`, snake_case on the wire (e.g. "remove_content").
     #[serde(default)]
     pub action: Option<String>,
     pub occurred_at: chrono::DateTime<chrono::Utc>,
@@ -68,7 +68,7 @@ pub struct EnforcementWire {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SubjectWire {
-    /// Variant name of moderation's `EntityType` (e.g. "Post", "Profile", "Account").
+    /// Moderation's `EntityType`, snake_case on the wire (e.g. "post", "profile").
     pub entity_type: String,
     pub entity_id: String,
 }

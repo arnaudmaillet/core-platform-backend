@@ -5037,6 +5037,7 @@ dependencies = [
  "cqrs",
  "error",
  "http",
+ "moderation",
  "post-api",
  "profile-api",
  "prost-types",

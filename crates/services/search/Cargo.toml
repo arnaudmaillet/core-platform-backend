@@ -66,3 +66,6 @@ integration-search = []
 [dev-dependencies]
 # Live integration suite: shared OpenSearch container orchestration + await_until.
 test-support = { workspace = true }
+# Wire contract test (tests/moderation_wire_contract.rs): decode events produced
+# by moderation's own serializer, so a casing drift fails here, not in prod.
+moderation = { workspace = true }
