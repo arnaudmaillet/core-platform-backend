@@ -44,6 +44,12 @@ fn post_is_public(view: &post_api::PostView) -> bool {
         && view.moderation != ModerationRestriction::Removed as i32
 }
 
+/// An age-gated post (and its comments) is for readers cleared for mature
+/// content only — never a guest or a 13–17 reader — and its author.
+fn age_gate_hides(view: &post_api::PostView, reader_is_author: bool, mature: bool) -> bool {
+    !reader_is_author && !mature && view.moderation == ModerationRestriction::AgeGated as i32
+}
+
 /// `CheckAccess` caps per call (social-graph `MAX_VIEWERS` / `MAX_TARGETS`).
 const MAX_VIEWERS_PER_CALL: usize = 20;
 const MAX_TARGETS_PER_CALL: usize = 100;
@@ -159,6 +165,7 @@ impl ReadGate for GrpcReadGate {
     async fn check(
         &self,
         viewer: &Viewer,
+        mature: bool,
         post_id: &PostId,
         comment_authors: &[ProfileId],
     ) -> Result<Option<ReadDecision>, CommentError> {
@@ -181,6 +188,9 @@ impl ReadGate for GrpcReadGate {
         };
         let reader_is_author = viewers.iter().any(|v| v.as_str() == view.profile_id);
         if !reader_is_author && !post_is_public(&view) {
+            return Ok(None);
+        }
+        if age_gate_hides(&view, reader_is_author, mature) {
             return Ok(None);
         }
 
@@ -314,6 +324,16 @@ mod tests {
         // The restricted profile reading: its own comments are not candidates.
         let own = restriction_candidates(std::slice::from_ref(&restricted), &owner.as_str(), &authors, &hidden);
         assert_eq!(own, vec![reader.as_str()]);
+    }
+
+    #[test]
+    fn an_age_gated_post_is_closed_to_readers_not_cleared_for_mature_content() {
+        let gated = post_api::PostView { moderation: ModerationRestriction::AgeGated as i32, ..Default::default() };
+        assert!(age_gate_hides(&gated, false, false), "13–17 / guest");
+        assert!(!age_gate_hides(&gated, false, true), "an adult");
+        assert!(!age_gate_hides(&gated, true, false), "the author");
+        let open = post_api::PostView { moderation: ModerationRestriction::None as i32, ..Default::default() };
+        assert!(!age_gate_hides(&open, false, false));
     }
 
     #[test]

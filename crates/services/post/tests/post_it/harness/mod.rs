@@ -174,12 +174,18 @@ impl TestHarness {
         self.get_as(post_id, Viewer::Internal).await
     }
 
-    /// Reads a single post as `viewer` (`Err` when absent or not visible).
+    /// Reads a single post as `viewer`, an adult reader (`Err` when absent or
+    /// not visible).
     pub async fn get_as(&self, post_id: &str, viewer: Viewer) -> Result<Post, CqrsError> {
+        self.get_rated(post_id, viewer, true).await
+    }
+
+    /// Reads a single post as `viewer`, cleared for mature content or not.
+    pub async fn get_rated(&self, post_id: &str, viewer: Viewer, mature: bool) -> Result<Post, CqrsError> {
         self.query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
-                GetPostQuery { post_id: post_id.to_owned(), viewer },
+                GetPostQuery { post_id: post_id.to_owned(), viewer, mature },
             ))
             .await
     }
@@ -190,8 +196,13 @@ impl TestHarness {
         self.list_as(profile_id, Viewer::Internal).await
     }
 
-    /// Lists a profile's posts as `viewer`.
+    /// Lists a profile's posts as `viewer`, an adult reader.
     pub async fn list_as(&self, profile_id: &str, viewer: Viewer) -> Vec<PostSummary> {
+        self.list_rated(profile_id, viewer, true).await
+    }
+
+    /// Lists a profile's posts as `viewer`, cleared for mature content or not.
+    pub async fn list_rated(&self, profile_id: &str, viewer: Viewer, mature: bool) -> Vec<PostSummary> {
         let (summaries, _next) = self
             .query_bus
             .dispatch(Envelope::new(
@@ -201,6 +212,7 @@ impl TestHarness {
                     limit:      100,
                     page_token: None,
                     viewer,
+                    mature,
                 },
             ))
             .await

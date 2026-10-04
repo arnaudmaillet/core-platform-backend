@@ -41,6 +41,19 @@ impl Viewer {
         self.sees_every_post_of(author)
             || (status == PostStatus::Published && restriction != ModerationRestriction::Removed)
     }
+
+    /// [`Self::may_see`], and an age-gated post only for a reader cleared for
+    /// mature content (`mature`: not a guest, not 13–17) — or its author.
+    pub fn may_see_rated(
+        &self,
+        author: &ProfileId,
+        status: PostStatus,
+        restriction: ModerationRestriction,
+        mature: bool,
+    ) -> bool {
+        self.may_see(author, status, restriction)
+            && (mature || restriction != ModerationRestriction::AgeGated || self.sees_every_post_of(author))
+    }
 }
 
 #[cfg(test)]
@@ -65,6 +78,18 @@ mod tests {
                 assert!(viewer.may_see(&author, PostStatus::Published, r), "{viewer:?} {r:?}");
             }
         }
+    }
+
+    #[test]
+    fn an_age_gated_post_is_kept_from_readers_not_cleared_for_mature_content() {
+        let author = profile();
+        let gated = ModerationRestriction::AgeGated;
+        let reader = Viewer::Profiles(vec![profile()]);
+        assert!(reader.may_see_rated(&author, PostStatus::Published, gated, true), "an adult");
+        assert!(!reader.may_see_rated(&author, PostStatus::Published, gated, false), "13–17 / guest");
+        assert!(!Viewer::Anonymous.may_see_rated(&author, PostStatus::Published, gated, false));
+        assert!(Viewer::Profiles(vec![author.clone()]).may_see_rated(&author, PostStatus::Published, gated, false), "the author");
+        assert!(reader.may_see_rated(&author, PostStatus::Published, NONE, false), "other posts unaffected");
     }
 
     #[test]

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 97a2b5dd5a441aa178891c061b8e6f34c8a1b0bc9f0d39424fa107eacf4acf9c
-  translated_at: 2026-10-04
+  source_sha256: c4e4c8adfe6b654036165a37decc62cf2f486c92dab4a85cfcd4d06d09f7eb67
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -160,8 +160,10 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > (`buf WIRE_JSON`).
 
 > **Ce que la carte peut montrer.** Un post quitte la carte quand il est **supprimé** (`post.deleted`,
-> définitivement) ou quand la modération le **retire ou le limite** (`moderation.v1.events` :
-> `remove_content` / `visibility_limit` sur un post — la carte est une surface de découverte). La
+> définitivement) ou quand la modération le **retire, le limite ou le soumet à une limite d'âge**
+> (`moderation.v1.events` : `remove_content` / `visibility_limit` / `age_gate` sur un post — la carte est
+> une surface de découverte sans niveau de contenu, le contenu mature en reste donc écarté pour tous, 13–17
+> ans et invités compris). La
 > ligne de la fiche est marquée (`suppressed`, `moderation_version` ; les écritures portent le TTL
 > restant de la ligne) et son pin et sa fiche en cache quittent Redis, si bien que les deux chemins
 > l'ignorent ; une réversion **plus récente** le restaure et reconstruit le pin et les entrées de
@@ -227,7 +229,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
-| `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | suppression de la carte : suppression → définitive ; `remove_content` / `visibility_limit` sur un post → masqué ; une réversion plus récente → restauré (gardé par version ; événements au niveau de l'acteur et autres ignorés) | DLQ `{topic}.dlq` |
+| `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | suppression de la carte : suppression → définitive ; `remove_content` / `visibility_limit` / `age_gate` sur un post → masqué ; une réversion plus récente → restauré (gardé par version ; événements au niveau de l'acteur et autres ignorés) | DLQ `{topic}.dlq` |
 | `profile.v1.events` | `geo-discovery-location-settings` | partage de localisation des auteurs (#657) depuis `ProfileLocationSettingsChanged` → `geo_discovery.location_settings` ; chaque requête de carte l'applique pour tout lecteur sauf l'auteur (mesh compris) : les pins et cartes d'un **fantôme** quittent la carte ; ceux d'un auteur au **niveau ville** n'apparaissent qu'à la bande R5, au centre de la cellule R5, et ses cartes indiquent la cellule R7 de la ville. Autres événements profile ignorés | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |

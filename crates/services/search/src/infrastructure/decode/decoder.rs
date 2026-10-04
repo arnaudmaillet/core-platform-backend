@@ -119,8 +119,11 @@ fn map_entity(entity_type: &str) -> Option<EntityKind> {
 }
 
 /// The content-visibility actions, as moderation's `ActionType` serializes them.
+/// An age-gated post leaves search for everyone: search has no per-reader
+/// content level, so it keeps mature content away from 13–17 and guests the
+/// conservative way (RESTRICTED by default, as the discovery feeds).
 fn is_content_action(action: Option<&str>) -> bool {
-    matches!(action, Some("remove_content") | Some("visibility_limit"))
+    matches!(action, Some("remove_content") | Some("visibility_limit") | Some("age_gate"))
 }
 
 /// Decode a `profile.v1.events` message body. Used by the unit tests; the live
@@ -272,6 +275,15 @@ mod tests {
             }
             other => panic!("expected a (none-kind) revoke, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn an_age_gate_on_a_post_revokes_visibility_for_everyone() {
+        let json = br#"{"type":"enforcement_applied","subject":{"entity_type":"post","entity_id":"post-1","actor_id":"acct-9","surface":"feed"},"actor_id":"acct-9","action":"age_gate","version":3,"applied_at":"2026-06-26T12:00:00Z","occurred_at":"2026-06-26T12:00:00Z","correlation_id":"00000000-0000-0000-0000-000000000000"}"#;
+        assert!(matches!(
+            decode_moderation(json).unwrap(),
+            Decoded::Ready(SourceEvent::Moderation(ModerationEvent::VisibilityRevoked(_)))
+        ));
     }
 
     #[test]

@@ -17,6 +17,9 @@ pub struct ListPostsByProfileQuery {
     /// Who is reading. Anyone but the author (or a trusted internal caller) gets
     /// published posts that moderation has not removed.
     pub viewer:     Viewer,
+    /// The reader is cleared for mature content (not a guest, not 13–17):
+    /// age-gated posts are left out otherwise.
+    pub mature:     bool,
 }
 
 impl Query for ListPostsByProfileQuery {
@@ -50,7 +53,7 @@ impl<R: PostRepository> QueryHandler<ListPostsByProfileQuery> for ListPostsByPro
             .repository
             .list_by_profile(&profile_id, query.limit, query.page_token.as_deref())
             .await?;
-        posts.retain(|post| query.viewer.may_see(&profile_id, post.status, post.moderation));
+        posts.retain(|post| query.viewer.may_see_rated(&profile_id, post.status, post.moderation, query.mature));
 
         // The author's post window (#664): clients other than the author see
         // posts created within it only. The list is newest first, so the first

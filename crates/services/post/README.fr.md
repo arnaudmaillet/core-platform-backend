@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 067ef8168c2b40355c32e7f09b2f10f8192c69142d5f339ed90497d270451072
+  source_sha256: 865b47fd6a6923fff7927165dd9448fe03becc2fee6e6c8f21f13021e76b9271
   translated_at: 2026-10-05
   status: complete
 ---
@@ -140,8 +140,10 @@ requête. Un brouillon, un post supprimé ou un post **retiré** par la modérat
 son auteur (tout profil des `pids` du jeton) et des appelants du mesh ; tout autre lecteur reçoit
 `PST-1001` de `GetPost` et ne le voit pas dans `ListPostsByProfile` (filtré par page : une page peut
 revenir plus courte tandis que `next_token` reste valide). `PostView.moderation` /
-`PostSummary.moderation` indiquent à l'auteur ce qui est en vigueur ; les posts `LIMITED` et
-`AGE_GATED` restent lisibles (la découverte les applique). Vient ensuite l'**audience de l'auteur**,
+`PostSummary.moderation` indiquent à l'auteur ce qui est en vigueur ; les posts `LIMITED` restent
+lisibles (la découverte l'applique). Un post **`AGE_GATED`** est introuvable pour un lecteur non autorisé au
+contenu mature — client anonyme, invité, ou titulaire de 13 à 17 ans (l'`age` du jeton) — et absent de ses
+listes ; son auteur et les adultes le lisent. Vient ensuite l'**audience de l'auteur**,
 via le `CheckAccess` (mesh uniquement) de social-graph : un auteur privé que le lecteur ne suit pas,
 un blocage dans un sens ou l'autre, ou un auteur masqué → `PST-1001` / une liste vide. L'auteur et
 les appelants du mesh sautent ce contrôle ; tout autre lecteur (anonyme compris) en dépend, et une

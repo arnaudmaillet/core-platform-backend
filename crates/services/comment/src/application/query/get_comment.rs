@@ -12,6 +12,9 @@ pub struct GetCommentQuery {
     pub comment_id: String,
     /// Who is reading (see [`ReadGate`]).
     pub viewer:     Viewer,
+    /// The reader is cleared for mature content (not a guest, not 13–17):
+    /// the comments of an age-gated post are hidden otherwise.
+    pub mature:     bool,
 }
 
 impl Query for GetCommentQuery {
@@ -38,7 +41,7 @@ impl<R: CommentRepository> QueryHandler<GetCommentQuery> for GetCommentHandler<R
         // The post must be readable, the comment's author not hidden, and the
         // comment not hidden by the post owner's filter.
         let author = comment.author_id().clone();
-        let Some(decision) = self.gate.check(&query.viewer, comment.post_id(), std::slice::from_ref(&author)).await? else {
+        let Some(decision) = self.gate.check(&query.viewer, query.mature, comment.post_id(), std::slice::from_ref(&author)).await? else {
             return Err(not_found());
         };
         let filter = self.filters.of(decision.post_author.as_ref()).await?;

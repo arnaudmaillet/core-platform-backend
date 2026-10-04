@@ -75,6 +75,15 @@ async fn a_removed_post_is_its_authors_alone_until_reversed() {
     let limited = h.get_as(&post_id, Viewer::Anonymous).await.expect("limited is readable");
     assert_eq!(limited.moderation().restriction, ModerationRestriction::Limited);
 
+    // Age-gated: an adult reads it; a guest or a 13–17 reader does not (not in
+    // the list either); the author always does.
+    h.moderate(&post_id, ModerationRestriction::AgeGated, 4).await;
+    let adult = Viewer::Profiles(vec![ProfileId::try_from(harness::random_id().as_str()).unwrap()]);
+    assert!(h.get_rated(&post_id, adult.clone(), true).await.is_ok());
+    assert!(h.get_rated(&post_id, adult.clone(), false).await.is_err(), "13–17 / guest");
+    assert!(h.list_rated(&author_id, adult, false).await.is_empty());
+    assert!(h.get_rated(&post_id, author.clone(), false).await.is_ok(), "the author");
+
     // An outcome for a post that does not exist is a no-op, not an error.
     h.moderate(&harness::random_id(), ModerationRestriction::Removed, 1).await;
 }
