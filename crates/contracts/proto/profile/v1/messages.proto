@@ -46,6 +46,8 @@ message ProfileView {
     DiscoverySettings               discovery_settings   = 24;
     // Owner-only (unset for anyone else): hidden words, offensive filter.
     CommentFilters                  comment_filters      = 25;
+    // Owner-only (unset for anyone else): post window, tab visibility.
+    TabSettings                     tab_settings         = 26;
 }
 
 message ProfileSummaryView {
@@ -226,4 +228,26 @@ message CommentFilters {
 message SetCommentFiltersRequest {
     string         profile_id = 1;
     CommentFilters filters    = 2;
+}
+
+// How far back others see the profile's posts and which tabs they see (#664).
+// Older posts are hidden from everyone but the owner, never deleted. Saved is
+// private by default. Only the window is enforced today (post); no likes,
+// saved, reposts or places tab is served yet.
+message TabSettings {
+    PostWindow post_window  = 1;
+    bool       show_likes   = 2;
+    bool       show_saved   = 3;
+    bool       show_reposts = 4;
+    bool       show_places  = 5;
+}
+
+// An unset field (UNSPECIFIED window) keeps its value.
+message SetTabSettingsRequest {
+    string        profile_id   = 1;
+    PostWindow    post_window  = 2;
+    optional bool show_likes   = 3;
+    optional bool show_saved   = 4;
+    optional bool show_reposts = 5;
+    optional bool show_places  = 6;
 }

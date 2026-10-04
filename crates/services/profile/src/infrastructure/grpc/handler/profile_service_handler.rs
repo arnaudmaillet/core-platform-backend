@@ -9,7 +9,7 @@ use crate::domain::value_object::{
     InteractionAudience, InteractionSettings, LocationPrecision, LocationSettings,
 };
 use crate::application::command::{
-    SetCommentFiltersCommand, SetDiscoverySettingsCommand, SetInteractionSettingsCommand, SetLocationSettingsCommand,
+    SetCommentFiltersCommand, SetDiscoverySettingsCommand, SetInteractionSettingsCommand, SetTabSettingsCommand, SetLocationSettingsCommand,
     ChangeHandleCommand, CreateProfileCommand, DeleteProfileCommand, HideProfileCommand,
     RestoreProfileCommand, SetVisibilityCommand, UpdateAvatarCommand, UpdateBannerCommand,
     UpdateProfileCommand, VerifyProfileCommand,
@@ -229,6 +229,37 @@ where
         let cmd = SetLocationSettingsCommand {
             profile_id: req.profile_id.clone(),
             settings: LocationSettings { ghost: s.ghost, precision },
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_cmd(&req.profile_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    /// The owner's post window and tab visibility (edge: one of the caller's profiles).
+    pub async fn set_tab_settings(
+        &self,
+        request: Request<proto::SetTabSettingsRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        use crate::domain::value_object::PostWindow;
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let post_window = match proto::PostWindow::try_from(req.post_window) {
+            Ok(proto::PostWindow::Unspecified) => None,
+            Ok(proto::PostWindow::All) => Some(PostWindow::All),
+            Ok(proto::PostWindow::SixMonths) => Some(PostWindow::SixMonths),
+            Ok(proto::PostWindow::OneMonth) => Some(PostWindow::OneMonth),
+            Ok(proto::PostWindow::ThreeDays) => Some(PostWindow::ThreeDays),
+            Err(_) => return Err(Status::invalid_argument("unknown post_window")),
+        };
+        let cmd = SetTabSettingsCommand {
+            profile_id:   req.profile_id.clone(),
+            post_window,
+            show_likes:   req.show_likes,
+            show_saved:   req.show_saved,
+            show_reposts: req.show_reposts,
+            show_places:  req.show_places,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -501,6 +532,18 @@ fn profile_view_to_proto(v: ProfileView) -> proto::ProfileView {
                 LocationPrecision::Precise => proto::LocationPrecision::Precise,
                 LocationPrecision::City => proto::LocationPrecision::City,
             }) as i32,
+        }),
+        tab_settings: v.tab_settings.map(|t| proto::TabSettings {
+            post_window: (match t.post_window {
+                crate::domain::value_object::PostWindow::All => proto::PostWindow::All,
+                crate::domain::value_object::PostWindow::SixMonths => proto::PostWindow::SixMonths,
+                crate::domain::value_object::PostWindow::OneMonth => proto::PostWindow::OneMonth,
+                crate::domain::value_object::PostWindow::ThreeDays => proto::PostWindow::ThreeDays,
+            }) as i32,
+            show_likes:   t.show_likes,
+            show_saved:   t.show_saved,
+            show_reposts: t.show_reposts,
+            show_places:  t.show_places,
         }),
         comment_filters: v.comment_filters.map(|f| proto::CommentFilters {
             hidden_words:     f.hidden_words,

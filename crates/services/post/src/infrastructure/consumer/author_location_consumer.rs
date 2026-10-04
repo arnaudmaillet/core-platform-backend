@@ -7,12 +7,13 @@ use error::AppError;
 use transport::kafka::consumer::{run_consumer, KafkaConsumerHandle, ProcessOutcome, RetryPolicy};
 use transport::kafka::producer::KafkaProducerHandle;
 
-use crate::application::port::AuthorLocationStore;
+use crate::application::port::{AuthorLocationStore, AuthorWindowStore};
 use crate::domain::value_object::{LocationSharing, ProfileId};
 
 /// Lenient read DTO for `profile.v1.events` (the internally-tagged
-/// `{"type": ...}` stream). Only `ProfileLocationSettingsChanged` is acted on;
-/// all other variants deserialize and are skipped.
+/// `{"type": ...}` stream). Only `ProfileLocationSettingsChanged` and
+/// `ProfileTabSettingsChanged` are acted on; all other variants deserialize
+/// and are skipped.
 #[derive(Debug, Deserialize)]
 struct ProfileV1Event {
     #[serde(rename = "type")]
@@ -24,23 +25,39 @@ struct ProfileV1Event {
     /// `precise` | `city`.
     #[serde(default)]
     precision:  Option<String>,
+    /// `all` | `six_months` | `one_month` | `three_days`.
+    #[serde(default)]
+    post_window: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum Outcome {
     Skip,
     Record(ProfileId, LocationSharing),
+    /// The author's post window in days (`None`: every post).
+    Window(ProfileId, Option<u32>),
     Poison(String),
 }
 
 fn outcome(event: &ProfileV1Event) -> Outcome {
-    if event.event_type != "ProfileLocationSettingsChanged" {
-        return Outcome::Skip;
-    }
+    let tab = match event.event_type.as_str() {
+        "ProfileLocationSettingsChanged" => false,
+        "ProfileTabSettingsChanged" => true,
+        _ => return Outcome::Skip,
+    };
     let profile_id = match ProfileId::try_from(event.profile_id.as_str()) {
         Ok(id) => id,
         Err(e) => return Outcome::Poison(e.to_string()),
     };
+    if tab {
+        return match event.post_window.as_deref() {
+            Some("all") => Outcome::Window(profile_id, None),
+            Some("six_months") => Outcome::Window(profile_id, Some(183)),
+            Some("one_month") => Outcome::Window(profile_id, Some(30)),
+            Some("three_days") => Outcome::Window(profile_id, Some(3)),
+            other => Outcome::Poison(format!("post_window {other:?}")),
+        };
+    }
     let city = match event.precision.as_deref() {
         Some("city") => true,
         Some("precise") => false,
@@ -52,25 +69,26 @@ fn outcome(event: &ProfileV1Event) -> Outcome {
     Outcome::Record(profile_id, LocationSharing { ghost, city })
 }
 
-/// Runs the author location-sharing projection consumer on the shared
-/// at-least-once runner.
+/// Runs the authors' settings projection consumer on the shared at-least-once
+/// runner.
 ///
-/// Consumes `profile.v1.events`, upserts `profile_id → sharing` on each
-/// `ProfileLocationSettingsChanged`, and commits everything else as a no-op.
-/// The upsert is last-writer-wins (per-profile order from the topic key), so
-/// redelivery is harmless. `GetPost` reads it to coarsen or drop a post's
-/// location for anyone but its author.
+/// Consumes `profile.v1.events` and upserts `profile_id → sharing` on each
+/// `ProfileLocationSettingsChanged` (#657) and `profile_id → post window` on
+/// each `ProfileTabSettingsChanged` (#664); everything else commits as a no-op.
+/// The upserts are last-writer-wins (per-profile order from the topic key), so
+/// redelivery is harmless. The reads apply them for anyone but the author.
 pub async fn run_author_location_consumer(
     consumer: KafkaConsumerHandle,
     store: Arc<dyn AuthorLocationStore>,
+    windows: Arc<dyn AuthorWindowStore>,
     producer: KafkaProducerHandle,
 ) {
     info!("post author-location consumer started");
 
     let policy = RetryPolicy::default();
     let result = run_consumer::<ProfileV1Event, _>(&consumer, &producer, &policy, move |event| {
-        let store = Arc::clone(&store);
-        Box::pin(async move { process_event(store.as_ref(), event).await })
+        let (store, windows) = (Arc::clone(&store), Arc::clone(&windows));
+        Box::pin(async move { process_event(store.as_ref(), windows.as_ref(), event).await })
     })
     .await;
 
@@ -79,15 +97,21 @@ pub async fn run_author_location_consumer(
     }
 }
 
-async fn process_event(store: &dyn AuthorLocationStore, event: &ProfileV1Event) -> ProcessOutcome {
-    match outcome(event) {
-        Outcome::Skip => ProcessOutcome::Done,
-        Outcome::Poison(reason) => ProcessOutcome::Reject(reason),
-        Outcome::Record(profile_id, sharing) => match store.set(&profile_id, sharing).await {
-            Ok(())                     => ProcessOutcome::Done,
-            Err(e) if e.is_retryable() => ProcessOutcome::Retry(e.to_string()),
-            Err(e)                     => ProcessOutcome::Reject(e.to_string()),
-        },
+async fn process_event(
+    store: &dyn AuthorLocationStore,
+    windows: &dyn AuthorWindowStore,
+    event: &ProfileV1Event,
+) -> ProcessOutcome {
+    let written = match outcome(event) {
+        Outcome::Skip => return ProcessOutcome::Done,
+        Outcome::Poison(reason) => return ProcessOutcome::Reject(reason),
+        Outcome::Record(profile_id, sharing) => store.set(&profile_id, sharing).await,
+        Outcome::Window(profile_id, days) => windows.set(&profile_id, days).await,
+    };
+    match written {
+        Ok(())                     => ProcessOutcome::Done,
+        Err(e) if e.is_retryable() => ProcessOutcome::Retry(e.to_string()),
+        Err(e)                     => ProcessOutcome::Reject(e.to_string()),
     }
 }
 
@@ -122,6 +146,21 @@ mod tests {
 
         let other = wire(ProfileEventWire::ProfileUpdated { profile_id: id, occurred_at_ms: 1 });
         assert_eq!(outcome(&other), Outcome::Skip);
+    }
+
+    #[test]
+    fn the_post_window_is_read_from_profiles_own_wire() {
+        let id = Uuid::now_v7().to_string();
+        let event = wire(ProfileEventWire::ProfileTabSettingsChanged {
+            profile_id: id.clone(),
+            post_window: "one_month".into(),
+            show_likes: true,
+            show_saved: false,
+            show_reposts: true,
+            show_places: true,
+            occurred_at_ms: 1,
+        });
+        assert_eq!(outcome(&event), Outcome::Window(ProfileId::try_from(id.as_str()).unwrap(), Some(30)));
     }
 
     #[test]

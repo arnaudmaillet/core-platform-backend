@@ -5,11 +5,11 @@ use uuid::Uuid;
 use crate::domain::entity::ProfileLink;
 use crate::domain::event::{
     DomainEvent, HandleChanged, ProfileCreated, ProfileDeleted, ProfileHidden, ProfileRestored,
-    CommentFiltersChanged, DiscoverySettingsChanged, InteractionSettingsChanged, LocationSettingsChanged, ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
+    CommentFiltersChanged, DiscoverySettingsChanged, InteractionSettingsChanged, TabSettingsChanged, LocationSettingsChanged, ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
 };
 use crate::domain::value_object::{
     AccountId, AvatarUrl, BannerUrl, Bio, CommentFilters, DisplayName, DiscoverySettings, Handle, InteractionSettings,
-    Locale, LocationSettings,
+    Locale, LocationSettings, TabSettings,
     MaskingReason, ProfileId, ProfileKind, ProfileStatus, ProfileVisibility, VerificationKind,
     WebsiteUrl,
 };
@@ -73,6 +73,9 @@ pub struct Profile {
     /// Hidden words and the offensive-comment filter (comment applies them).
     #[serde(default)]
     comment_filters: CommentFilters,
+    /// Post history window and tab visibility (post applies the window).
+    #[serde(default)]
+    tab_settings: TabSettings,
     verified: bool,
     verification_kind: Option<VerificationKind>,
     /// Author tier (0=Standard, 1=Premium, 2=Vip), denormalized from
@@ -125,6 +128,7 @@ impl Profile {
             location: params.location,
             discovery: params.discovery,
             comment_filters: CommentFilters::default(),
+            tab_settings: TabSettings::default(),
             verified: false,
             verification_kind: None,
             tier: 0,
@@ -224,6 +228,7 @@ impl Profile {
             location: LocationSettings::default(),
             discovery: DiscoverySettings::default(),
             comment_filters: CommentFilters::default(),
+            tab_settings: TabSettings::default(),
             verified,
             verification_kind,
             tier,
@@ -461,6 +466,38 @@ impl Profile {
 
     pub fn comment_filters(&self) -> &CommentFilters {
         &self.comment_filters
+    }
+
+    /// Changes the post window / tab visibility. Unchanged ⇒ no-op.
+    pub fn set_tab_settings(&mut self, settings: TabSettings, correlation_id: Uuid) -> Result<bool, ProfileError> {
+        if self.status == ProfileStatus::Deleted {
+            return Err(ProfileError::ProfileNotActive {
+                current: self.status.as_str().to_owned(),
+            });
+        }
+        if settings == self.tab_settings {
+            return Ok(false);
+        }
+        self.tab_settings = settings;
+        let now = self.touch_now();
+        self.pending_events.push(DomainEvent::TabSettingsChanged(TabSettingsChanged {
+            profile_id: self.id,
+            settings,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(true)
+    }
+
+    /// Restores the stored tab settings (a column added after
+    /// [`Self::reconstitute`]'s set).
+    pub fn with_tab_settings(mut self, settings: TabSettings) -> Self {
+        self.tab_settings = settings;
+        self
+    }
+
+    pub fn tab_settings(&self) -> TabSettings {
+        self.tab_settings
     }
 
     /// Restores the stored interaction settings (a column added after

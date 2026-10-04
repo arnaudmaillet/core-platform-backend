@@ -24,14 +24,15 @@ use crate::application::command::restore_post::{RestorePostCommand, RestorePostH
 use crate::application::query::list_recently_deleted::{ListRecentlyDeletedHandler, ListRecentlyDeletedQuery};
 use crate::application::command::update_post::{UpdatePostCommand, UpdatePostHandler};
 use crate::application::port::{
-    AudienceGate, AuthorLocationStore, AuthorTierStore, EventPublisher, RecentlyDeleted,
+    AudienceGate, AuthorLocationStore, AuthorTierStore, AuthorWindowStore, EventPublisher, RecentlyDeleted,
 };
 use crate::application::query::get_post::{GetPostHandler, GetPostQuery};
 use crate::application::query::list_posts_by_profile::{
     ListPostsByProfileHandler, ListPostsByProfileQuery,
 };
 use crate::infrastructure::persistence::{
-    ScyllaAuthorLocationStore, ScyllaAuthorTierStore, ScyllaPostRepository, ScyllaRecentlyDeleted,
+    ScyllaAuthorLocationStore, ScyllaAuthorTierStore, ScyllaAuthorWindowStore, ScyllaPostRepository,
+    ScyllaRecentlyDeleted,
 };
 
 /// Storage endpoints the graph is wired against. Post has no Redis and emits its
@@ -56,6 +57,8 @@ pub struct App {
     /// The authors' location sharing, exposed likewise for its
     /// `profile.v1.events` consumer.
     pub author_location_store: Arc<dyn AuthorLocationStore>,
+    /// The authors' post window, exposed likewise for the same consumer.
+    pub author_window_store: Arc<dyn AuthorWindowStore>,
 }
 
 impl App {
@@ -74,6 +77,8 @@ impl App {
             Arc::new(ScyllaAuthorLocationStore::new(Arc::clone(&scylla_client)));
         let recently_deleted: Arc<dyn RecentlyDeleted> =
             Arc::new(ScyllaRecentlyDeleted::new(Arc::clone(&scylla_client)));
+        let author_window_store: Arc<dyn AuthorWindowStore> =
+            Arc::new(ScyllaAuthorWindowStore::new(Arc::clone(&scylla_client)));
 
         let command_bus = Arc::new(
             CommandBusBuilder::new()
@@ -113,6 +118,7 @@ impl App {
                     repository: Arc::clone(&repository),
                     audience:   Arc::clone(&audience),
                     locations:  Arc::clone(&author_location_store),
+                    windows:    Arc::clone(&author_window_store),
                 })?
                 .register::<ListRecentlyDeletedQuery, _>(ListRecentlyDeletedHandler {
                     repository:       Arc::clone(&repository),
@@ -121,6 +127,7 @@ impl App {
                 .register::<ListPostsByProfileQuery, _>(ListPostsByProfileHandler {
                     repository: Arc::clone(&repository),
                     audience,
+                    windows:    Arc::clone(&author_window_store),
                 })?
                 .build(),
         );
@@ -131,6 +138,7 @@ impl App {
             scylla: scylla_client,
             author_tier_store,
             author_location_store,
+            author_window_store,
         })
     }
 }

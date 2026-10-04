@@ -70,3 +70,12 @@ enum LocationPrecision {
     // City level: only the coarse map band, at a coarse point.
     LOCATION_PRECISION_CITY        = 2;
 }
+
+// How far back others see a profile's posts.
+enum PostWindow {
+    POST_WINDOW_UNSPECIFIED = 0;
+    POST_WINDOW_ALL         = 1;
+    POST_WINDOW_SIX_MONTHS  = 2;
+    POST_WINDOW_ONE_MONTH   = 3;
+    POST_WINDOW_THREE_DAYS  = 4;
+}
