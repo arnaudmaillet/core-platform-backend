@@ -122,9 +122,16 @@ service ProfileService {
   // Queries
   rpc GetProfileById(GetProfileByIdRequest) returns (ProfileView);
   rpc GetProfileByHandle(GetProfileByHandleRequest) returns (ProfileView);
+  rpc CheckHandleAvailability(CheckHandleAvailabilityRequest) returns (CheckHandleAvailabilityResponse);
   rpc ListProfilesByAccount(ListProfilesByAccountRequest) returns (ListProfilesByAccountResponse);
 }
 ```
+
+**Handle availability.** `CheckHandleAvailability` (edge `public_read`: guests signing up, and
+members) applies the handle rules and the same availability read as `CreateProfile`'s pre-check:
+`AVAILABLE` (with the normalized, lower-cased handle), `TAKEN` (in use, or released less than 30
+days ago) or `INVALID` (with the reason). Advisory: the LWT claim at `CreateProfile` is what
+reserves a handle.
 
 **Viewer-aware reads.** `GetProfileById/ByHandle` take the reader from the transport
 (`edge::viewer`). The owner (token `sub` = the profile's account) and mesh callers get the full

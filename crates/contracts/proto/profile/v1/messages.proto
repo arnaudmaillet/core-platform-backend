@@ -126,6 +126,18 @@ message GetProfileByHandleRequest {
     string handle = 1;
 }
 
+message CheckHandleAvailabilityRequest {
+    string handle = 1;
+}
+
+message CheckHandleAvailabilityResponse {
+    HandleAvailability availability   = 1;
+    // The handle as it would be stored (lower-cased); empty when INVALID.
+    string             handle         = 2;
+    // Why the handle is INVALID (length, characters…); empty otherwise.
+    string             invalid_reason = 3;
+}
+
 message ListProfilesByAccountRequest {
     string account_id  = 1;
     int32  limit       = 2;

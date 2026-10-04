@@ -115,6 +115,11 @@ service AccountService {
     // Fetch the full account aggregate view by IdP subject claim.
     rpc GetAccountByIdentityId(GetAccountByIdentityIdRequest) returns (AccountView);
 
+    // Fetch the account holding an email address (case-insensitive). Mesh only:
+    // auth's sign-up uses it to spot an account created with another method,
+    // so a client can never enumerate addresses through it.
+    rpc GetAccountByEmail(GetAccountByEmailRequest) returns (AccountView);
+
     // Lightweight status check used by auth middleware and gateway.
     rpc GetAccountStatus(GetAccountStatusRequest) returns (AccountStatusView);
 

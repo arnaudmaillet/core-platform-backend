@@ -61,6 +61,12 @@ service ProfileService {
     // Resolve a @handle to its full profile view (cache-aside, two hops).
     rpc GetProfileByHandle(GetProfileByHandleRequest) returns (ProfileView);
 
+    // Whether a @handle can be taken right now (sign-up's live check; guests
+    // and members). Normalized like CreateProfile does (lower-cased); a taken
+    // handle includes one released less than 30 days ago. Advisory: the claim at
+    // CreateProfile is what reserves it.
+    rpc CheckHandleAvailability(CheckHandleAvailabilityRequest) returns (CheckHandleAvailabilityResponse);
+
     // Paginated list of all profiles owned by an account.
     rpc ListProfilesByAccount(ListProfilesByAccountRequest) returns (ListProfilesByAccountResponse);
 }

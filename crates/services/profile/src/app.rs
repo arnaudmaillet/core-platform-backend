@@ -30,7 +30,8 @@ use crate::application::command::{
 };
 use crate::application::port::{EventPublisher, ProfileCache, ProfileRepository};
 use crate::application::query::{
-    GetProfileByHandleHandler, GetProfileByHandleQuery, GetProfileByIdHandler, GetProfileByIdQuery,
+    CheckHandleAvailabilityHandler, CheckHandleAvailabilityQuery, GetProfileByHandleHandler,
+    GetProfileByHandleQuery, GetProfileByIdHandler, GetProfileByIdQuery,
     ListProfilesByAccountHandler, ListProfilesByAccountQuery,
 };
 use crate::infrastructure::cache::{
@@ -168,6 +169,9 @@ impl App {
                 .register::<GetProfileByHandleQuery, _>(GetProfileByHandleHandler::new(
                     Arc::clone(&repository),
                     Arc::clone(&cache),
+                ))?
+                .register::<CheckHandleAvailabilityQuery, _>(CheckHandleAvailabilityHandler::new(
+                    Arc::clone(&repository),
                 ))?
                 .register::<ListProfilesByAccountQuery, _>(ListProfilesByAccountHandler::new(
                     Arc::clone(&repository),

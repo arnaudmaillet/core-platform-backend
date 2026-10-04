@@ -33,7 +33,8 @@ use crate::application::command::{
 };
 use crate::application::port::{AccountRepository, EventPublisher};
 use crate::application::query::{
-    GetAccountByIdHandler, GetAccountByIdQuery, GetAccountByIdentityIdHandler,
+    GetAccountByEmailHandler, GetAccountByEmailQuery, GetAccountByIdHandler, GetAccountByIdQuery,
+    GetAccountByIdentityIdHandler,
     GetAccountByIdentityIdQuery, GetAccountStatusHandler, GetAccountStatusQuery,
     GetGdprRecordHandler, GetGdprRecordQuery, ListAccountsByStatusHandler,
     ListAccountsByStatusQuery,
@@ -91,6 +92,7 @@ impl App {
             QueryBusBuilder::new()
                 .register::<GetAccountByIdQuery, _>(GetAccountByIdHandler::new(Arc::clone(&repository)))?
                 .register::<GetAccountByIdentityIdQuery, _>(GetAccountByIdentityIdHandler::new(Arc::clone(&repository)))?
+                .register::<GetAccountByEmailQuery, _>(GetAccountByEmailHandler::new(Arc::clone(&repository)))?
                 .register::<GetAccountStatusQuery, _>(GetAccountStatusHandler::new(Arc::clone(&repository)))?
                 .register::<GetGdprRecordQuery, _>(GetGdprRecordHandler::new(Arc::clone(&repository)))?
                 .register::<ListAccountsByStatusQuery, _>(ListAccountsByStatusHandler::new(Arc::clone(&repository)))?

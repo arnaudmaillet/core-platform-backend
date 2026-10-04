@@ -7,3 +7,4 @@ mod mutation_roundtrip;
 mod consents;
 mod gdpr_deletion;
 mod date_of_birth;
+mod email_lookup;

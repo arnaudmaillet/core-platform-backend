@@ -31,6 +31,7 @@ use crate::application::command::{
 };
 use crate::application::query::{
     get_account_by_id::{AccountView, GetAccountByIdQuery},
+    get_account_by_email::GetAccountByEmailQuery,
     get_account_by_identity_id::GetAccountByIdentityIdQuery,
     get_account_status::{AccountStatusView, GetAccountStatusQuery},
     get_gdpr_record::{GdprRecordView, GetGdprRecordQuery},
@@ -443,6 +444,20 @@ where
         let view: AccountView = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), GetAccountByIdQuery { account_id: req.account_id }))
+            .await
+            .map_err(cqrs_error_to_status)?;
+        Ok(Response::new(account_view_to_proto(view)))
+    }
+
+    /// Mesh only (not in `EDGE_POLICY`): it would enumerate addresses.
+    pub async fn get_account_by_email(
+        &self,
+        request: Request<proto::GetAccountByEmailRequest>,
+    ) -> Result<Response<proto::AccountView>, Status> {
+        let req = request.into_inner();
+        let view: AccountView = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), GetAccountByEmailQuery { email: req.email }))
             .await
             .map_err(cqrs_error_to_status)?;
         Ok(Response::new(account_view_to_proto(view)))

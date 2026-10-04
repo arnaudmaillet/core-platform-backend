@@ -189,6 +189,13 @@ where
         self.get_account_by_identity_id(request).await
     }
 
+    async fn get_account_by_email(
+        &self,
+        request: Request<proto::GetAccountByEmailRequest>,
+    ) -> Result<Response<proto::AccountView>, Status> {
+        self.get_account_by_email(request).await
+    }
+
     async fn get_account_status(
         &self,
         request: Request<proto::GetAccountStatusRequest>,

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: e7f9539d5743c001e2a5df87d269f2a6a9fb96cc057013476b0c86d68a337d59
+  source_sha256: 1d85fe95f28e4c2756a6c9623b14f754c23edb02fde4360a44db55faf0218e4a
   translated_at: 2026-10-04
   status: complete
 ---
@@ -135,9 +135,16 @@ service ProfileService {
   // Queries
   rpc GetProfileById(GetProfileByIdRequest) returns (ProfileView);
   rpc GetProfileByHandle(GetProfileByHandleRequest) returns (ProfileView);
+  rpc CheckHandleAvailability(CheckHandleAvailabilityRequest) returns (CheckHandleAvailabilityResponse);
   rpc ListProfilesByAccount(ListProfilesByAccountRequest) returns (ListProfilesByAccountResponse);
 }
 ```
+
+**Disponibilité d'un handle.** `CheckHandleAvailability` (edge `public_read` : les invités qui
+s'inscrivent, et les membres) applique les règles de handle et la même lecture de disponibilité
+que la pré-vérification de `CreateProfile` : `AVAILABLE` (avec le handle normalisé, en minuscules),
+`TAKEN` (utilisé, ou libéré depuis moins de 30 jours) ou `INVALID` (avec la raison). Indicatif :
+c'est la réservation LWT de `CreateProfile` qui réserve le handle.
 
 **Lectures selon le lecteur.** `GetProfileById/ByHandle` prennent le lecteur du transport
 (`edge::viewer`). Le propriétaire (`sub` du jeton = le compte du profil) et les appelants du mesh

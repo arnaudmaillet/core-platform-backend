@@ -41,3 +41,13 @@ enum MaskingReason {
     MASKING_REASON_ACCOUNT_DELETED     = 2;
     MASKING_REASON_CONTENT_POLICY      = 3;
 }
+
+// Whether a handle can be taken.
+enum HandleAvailability {
+    HANDLE_AVAILABILITY_UNSPECIFIED = 0;
+    HANDLE_AVAILABILITY_AVAILABLE   = 1;
+    // Fails the handle rules (2–30 of [a-z0-9._], alphanumeric ends, no "..").
+    HANDLE_AVAILABILITY_INVALID     = 2;
+    // In use, or released less than 30 days ago.
+    HANDLE_AVAILABILITY_TAKEN       = 3;
+}

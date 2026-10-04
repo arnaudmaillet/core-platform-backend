@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 20952a3cb38587d963c7e587bf049fc670447365eaf14f3b2d894c8a80f742ed
+  source_sha256: 1eb66cee524a05cf3ff33b2427f6c7652515c98e5b116a94e4e9cc422b53cf86
   translated_at: 2026-10-04
   status: complete
 ---
@@ -141,6 +141,7 @@ service AccountService {
   // Queries
   rpc GetAccountById (GetAccountByIdRequest) returns (AccountView);
   rpc GetAccountByIdentityId (GetAccountByIdentityIdRequest) returns (AccountView);
+  rpc GetAccountByEmail      (GetAccountByEmailRequest)      returns (AccountView);   // mesh uniquement (inscription d'auth) : jamais sur l'edge
   rpc GetAccountStatus (GetAccountStatusRequest) returns (AccountStatusView); // auth hot path
   rpc SetDateOfBirth (SetDateOfBirthRequest) returns (AccountView);          // une fois, si absente ; âge minimum 13 ans (16 en AU)
   rpc GetGdprRecord (GetGdprRecordRequest) returns (GdprRecordView);          // le sien propre en périphérie

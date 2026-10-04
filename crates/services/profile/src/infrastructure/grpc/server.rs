@@ -103,6 +103,13 @@ where
         self.get_profile_by_handle(request).await
     }
 
+    async fn check_handle_availability(
+        &self,
+        request: Request<proto::CheckHandleAvailabilityRequest>,
+    ) -> Result<Response<proto::CheckHandleAvailabilityResponse>, Status> {
+        self.check_handle_availability(request).await
+    }
+
     async fn list_profiles_by_account(
         &self,
         request: Request<proto::ListProfilesByAccountRequest>,
