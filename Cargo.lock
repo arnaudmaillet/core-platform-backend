@@ -3851,6 +3851,7 @@ dependencies = [
  "cqrs",
  "error",
  "http",
+ "moderation",
  "post-api",
  "scylla",
  "scylla-storage",

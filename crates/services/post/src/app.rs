@@ -16,6 +16,7 @@ use cqrs::command::{CommandBusBuilder, InMemoryCommandBus};
 use cqrs::query::{InMemoryQueryBus, QueryBusBuilder};
 use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 
+use crate::application::command::apply_moderation::{ApplyModerationCommand, ApplyModerationHandler};
 use crate::application::command::create_post::{CreatePostCommand, CreatePostHandler};
 use crate::application::command::delete_post::{DeletePostCommand, DeletePostHandler};
 use crate::application::command::publish_post::{PublishPostCommand, PublishPostHandler};
@@ -78,6 +79,9 @@ impl App {
                 .register::<DeletePostCommand, _>(DeletePostHandler {
                     repository: Arc::clone(&repository),
                     publisher:  Arc::clone(&publisher),
+                })?
+                .register::<ApplyModerationCommand, _>(ApplyModerationHandler {
+                    repository: Arc::clone(&repository),
                 })?
                 .build(),
         );

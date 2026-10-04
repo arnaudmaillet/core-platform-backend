@@ -11,7 +11,10 @@ use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStora
 use crate::application::port::{PostRepository, PostSummary};
 use crate::domain::aggregate::Post;
 use crate::domain::entity::MediaAttachment;
-use crate::domain::value_object::{AudioId, AudioKind, AudioReference, Caption, GeoPoint, PostId, PostKind, PostStatus, ProfileId};
+use crate::domain::value_object::{
+    AudioId, AudioKind, AudioReference, Caption, GeoPoint, ModerationRestriction, ModerationState,
+    PostId, PostKind, PostStatus, ProfileId,
+};
 use crate::error::PostError;
 use crate::infrastructure::persistence::model::{PostProfileRow, PostRow};
 
@@ -149,6 +152,10 @@ fn row_to_post(row: PostRow) -> Result<Post, PostError> {
     let updated_at   = ScyllaPostRepository::ms_to_dt(row.updated_at.0, "updated_at")?;
     let published_at = row.published_at.map(|t| ScyllaPostRepository::ms_to_dt(t.0, "published_at")).transpose()?;
     let deleted_at   = row.deleted_at.map(|t| ScyllaPostRepository::ms_to_dt(t.0, "deleted_at")).transpose()?;
+    let moderation   = ModerationState {
+        restriction: row.moderation_restriction.map(ModerationRestriction::try_from).transpose()?.unwrap_or_default(),
+        version:     row.moderation_version.unwrap_or(0),
+    };
 
     Ok(Post::reconstitute(
         PostId::from_uuid(row.post_id),
@@ -165,17 +172,20 @@ fn row_to_post(row: PostRow) -> Result<Post, PostError> {
         updated_at,
         published_at,
         deleted_at,
+        moderation,
     ))
 }
 
 fn profile_row_to_summary(row: PostProfileRow) -> Result<PostSummary, PostError> {
     let kind       = PostKind::try_from(row.kind)?;
     let status     = PostStatus::try_from(row.status)?;
+    let moderation = row.moderation_restriction.map(ModerationRestriction::try_from).transpose()?.unwrap_or_default();
     let created_at = ScyllaPostRepository::ms_to_dt(row.created_at.0, "created_at")?;
     Ok(PostSummary {
         post_id: PostId::from_uuid(row.post_id),
         kind,
         status,
+        moderation,
         created_at,
     })
 }
@@ -325,13 +335,51 @@ impl PostRepository for ScyllaPostRepository {
         Ok(())
     }
 
+    // ── update_moderation ─────────────────────────────────────────────────────
+
+    async fn update_moderation(&self, post: &Post) -> Result<(), PostError> {
+        let moderation = post.moderation();
+        let restriction = moderation.restriction.as_tinyint();
+
+        let stmt_posts = self.strict_stmt(
+            "UPDATE post.posts SET moderation_restriction = ?, moderation_version = ? \
+             WHERE post_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt_posts, (restriction, moderation.version, post.id().as_uuid()))
+            .await
+            .map_err(scylla_err)?;
+
+        let stmt_index = self.strict_stmt(
+            "UPDATE post.posts_by_profile SET moderation_restriction = ?, moderation_version = ? \
+             WHERE profile_id = ? AND created_at = ? AND post_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(
+                stmt_index,
+                (
+                    restriction,
+                    moderation.version,
+                    post.profile_id().as_uuid(),
+                    Self::dt_ms(post.created_at()),
+                    post.id().as_uuid(),
+                ),
+            )
+            .await
+            .map_err(scylla_err)?;
+
+        Ok(())
+    }
+
     // ── find_by_id ────────────────────────────────────────────────────────────
 
     async fn find_by_id(&self, id: &PostId) -> Result<Option<Post>, PostError> {
         let stmt = self.fast_stmt(
             "SELECT post_id, profile_id, kind, status, caption, attachments, \
              parent_id, root_id, created_at, updated_at, published_at, deleted_at, \
-             audio_id, audio_kind, lat, lng \
+             audio_id, audio_kind, lat, lng, moderation_restriction, moderation_version \
              FROM post.posts WHERE post_id = ?",
         );
         let result = self
@@ -367,7 +415,8 @@ impl PostRepository for ScyllaPostRepository {
 
         let rows: Vec<PostProfileRow> = if let Some(ref tok) = token {
             let stmt = self.fast_stmt(
-                "SELECT created_at, post_id, kind, status FROM post.posts_by_profile \
+                "SELECT created_at, post_id, kind, status, moderation_restriction \
+                 FROM post.posts_by_profile \
                  WHERE profile_id = ? AND created_at < ? LIMIT ?",
             );
             self.client
@@ -386,7 +435,8 @@ impl PostRepository for ScyllaPostRepository {
                 .map_err(|e| row_err("list_by_profile:deser", e))?
         } else {
             let stmt = self.fast_stmt(
-                "SELECT created_at, post_id, kind, status FROM post.posts_by_profile \
+                "SELECT created_at, post_id, kind, status, moderation_restriction \
+                 FROM post.posts_by_profile \
                  WHERE profile_id = ? LIMIT ?",
             );
             self.client

@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-0** — the content publish path; feeds and discovery derive from its events |
 > | **Deployable** | `crates/apps/post-server` (library crate: `crates/services/post`) |
 > | **Datastores** | ScyllaDB keyspace `post` (2 tables) |
-> | **Async** | publishes `post.v1.events` (unified) + `post.published` / `post.updated` / `post.deleted` (legacy) · consumes `profile.v1.events` (author-tier denormalization) |
+> | **Async** | publishes `post.v1.events` (unified) + `post.published` / `post.updated` / `post.deleted` (legacy) · consumes `profile.v1.events` (author-tier denormalization) + `moderation.v1.events` (read restriction) |
 > | **Upstream callers** | `<TODO: gateway>` |
 > | **Downstream deps** | ScyllaDB, Kafka |
 > | **SLO** | `<TODO>` avail · `GetPost` p99 `<TODO>` · publish p99 `<TODO>` |
@@ -106,12 +106,19 @@ service PostService {
   rpc PublishPost (PublishPostRequest) returns (CommandResponse);           // Draft→Published; emits post.published
   rpc UpdatePost (UpdatePostRequest) returns (CommandResponse);             // emits post.updated
   rpc DeletePost (DeletePostRequest) returns (CommandResponse);             // soft-delete; emits post.deleted
-  rpc GetPost (GetPostRequest) returns (PostView);                          // point lookup
-  rpc ListPostsByProfile (ListPostsByProfileRequest) returns (ListPostsByProfileResponse); // cursor-paginated
+  rpc GetPost (GetPostRequest) returns (PostView);                          // point lookup; viewer-aware
+  rpc ListPostsByProfile (ListPostsByProfileRequest) returns (ListPostsByProfileResponse); // cursor-paginated; viewer-aware
 }
 // CreatePostRequest / PostView carry an optional GeoPoint location:
 message GeoPoint { double lat = 1; double lng = 2; }  // WGS-84; absent → post is not geo-indexed
 ```
+
+**Viewer-aware reads.** The reader comes from the transport (`edge::viewer`), never from a request
+field. A draft, a deleted post, or a post moderation **removed** is visible to its author (any
+profile in the token's `pids`) and to mesh callers only; anyone else gets `PST-1001` from `GetPost`
+and does not see it in `ListPostsByProfile` (filtered per page, so a page can come back short
+while `next_token` stays valid). `PostView.moderation` / `PostSummary.moderation` tell the author
+what is in force; `LIMITED` and `AGE_GATED` posts stay readable (discovery applies those).
 
 ### Error contract (`PST-xxxx`)
 
@@ -150,6 +157,7 @@ message GeoPoint { double lat = 1; double lng = 2; }  // WGS-84; absent → post
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `profile.v1.events` | `post-author-tier` | denormalize `ProfileTierChanged` into the `author_tiers` projection (`profile_id → tier`); read on the publish path to stamp `author_tier` onto published posts. Other event types commit as no-ops | DLQ `profile.v1.events.dlq` |
+| `moderation.v1.events` | `post-moderation` | record `enforcement_applied` / `enforcement_reversed` on a **post** as its moderation restriction (`remove_content` → Removed, `visibility_limit` → Limited, `age_gate` → AgeGated; reversal → None), version-guarded by moderation's per-subject `EnforcementVersion` so redelivery converges. Other entities, actor-level actions and other event types commit as no-ops | DLQ `moderation.v1.events.dlq` |
 
 > **Runtime contract:** the event is published after the durable dual-write. Downstream consumers own
 > at-least-once handling under `run_consumer`; all of them treat `post.*` as idempotent by `post_id`.
@@ -219,7 +227,8 @@ async fn main() -> anyhow::Result<()> {
 ## 🚀 Deployment, Migrations & Rollback
 
 - **Migrations:** `migrations/0001_create_keyspace.cql` → `0002_create_posts_table.cql` →
-  `0003_create_posts_by_profile_table.cql` against `post`, applied **before** first start.
+  `0003_create_posts_by_profile_table.cql` → `0004`–`0007` (audio, author tiers, geo, moderation
+  columns; online `ALTER`s) against `post`, applied **before** first start.
 - **Rollout/Rollback:** `<TODO>`; stateless service, safe to roll.
 - **Schema gotcha:** the creator-index clustering order (`created_at DESC, post_id ASC`) is a read
   contract — don't change it after data exists.

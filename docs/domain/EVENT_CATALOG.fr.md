@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 318af7ec1e58aeac41718a7a3f611b5221c3886450f6ac456ce21bec78a310a8
-  translated_at: 2026-07-07
+  source_sha256: f825a0fb06b61be8c38ca4648886e3408ed91b2fe138893703d31b9379921aa4
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`EVENT_CATALOG.md`](./EVENT_CATALOG.md) fait foi.
@@ -61,7 +61,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `chat.member.left` | `chat` | — *(orphan — see below)* |
 | `chat.message.sent` | `chat` | — *(orphan — see below)* |
 | `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery` |
-| `moderation.v1.events` | `moderation` | `audit`, `search`, `media` |
+| `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post` |
 | `auth.v1.events` | `auth` | `audit` |
 | `media.v1.events` | `media` | `media` |
 
@@ -154,7 +154,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | Événement | Signifie | Émis quand | Consommateurs & pourquoi |
 |---|---|---|---|
 | `decision_recorded` | une décision d'intégrité faisant autorité a été prise — porte *qui a décidé* + *pourquoi* (SoR DSA) | une décision est enregistrée (auto-screen / revue humaine / réversion d'appel) | `audit` (scelle la justification en enveloppe crypto-shred) |
-| `enforcement_applied` / `enforcement_reversed` | une conséquence a été appliquée/levée contre un acteur (versionnée) | l'enforcement commite | `timeline`, `chat`, `account` (dénorm Plane-B) ; `audit` |
+| `enforcement_applied` / `enforcement_reversed` | une conséquence a été appliquée/levée contre un acteur (versionnée) | l'enforcement commite | `timeline`, `chat`, `account` (dénorm Plane-B) ; `post` (garde la restriction qu'appliquent ses lectures : `remove_content` → auteur seul) ; `search`, `media` (visibilité / retrait) ; `audit` |
 | `case_opened` / `case_resolved` | une unité de revue a été ouverte/fermée | seuil d'ingestion / action du relecteur | consommateurs Plane-B |
 | `appeal_resolved` | un appel a été tranché | résolution de l'appel | consommateurs Plane-B |
 

@@ -3,9 +3,10 @@
 //! A draft or a deleted post belongs to its author: anyone else (another member,
 //! an anonymous client) gets "not found" from `GetPost` and does not see it in
 //! `ListPostsByProfile`. A published post is visible to all. A trusted internal
-//! caller (the mesh) sees everything, as before.
+//! caller (the mesh) sees everything, as before. A post moderation removed goes
+//! back to its author alone, in both tables, until the enforcement is reversed.
 
-use crate::post_it::harness::{self, ProfileId, TestHarness, Viewer};
+use crate::post_it::harness::{self, ModerationRestriction, ProfileId, TestHarness, Viewer};
 
 #[tokio::test]
 async fn drafts_and_deleted_posts_are_visible_to_their_author_only() {
@@ -37,4 +38,41 @@ async fn drafts_and_deleted_posts_are_visible_to_their_author_only() {
     assert!(h.get_as(&post_id, Viewer::Anonymous).await.is_err());
     assert!(h.list_as(&author_id, Viewer::Anonymous).await.is_empty());
     assert_eq!(h.list_as(&author_id, author).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_removed_post_is_its_authors_alone_until_reversed() {
+    let h = TestHarness::start().await;
+
+    let author_id = harness::random_id();
+    let post_id = harness::random_id();
+    let author = Viewer::Profiles(vec![ProfileId::try_from(author_id.as_str()).unwrap()]);
+    h.create(&post_id, &author_id).await;
+    h.publish(&post_id, &author_id).await;
+
+    // Taken down (v1): gone for everyone else, kept (and labelled) for the author.
+    h.moderate(&post_id, ModerationRestriction::Removed, 1).await;
+    assert!(h.get_as(&post_id, Viewer::Anonymous).await.is_err());
+    assert!(h.list_as(&author_id, Viewer::Anonymous).await.is_empty());
+    let own = h.get_as(&post_id, author.clone()).await.expect("the author still sees it");
+    assert_eq!(own.moderation().restriction, ModerationRestriction::Removed);
+    let own_list = h.list_as(&author_id, author.clone()).await;
+    assert_eq!(own_list[0].moderation, ModerationRestriction::Removed, "posts_by_profile too");
+
+    // Reversed (v2): visible again.
+    h.moderate(&post_id, ModerationRestriction::None, 2).await;
+    assert!(h.get_as(&post_id, Viewer::Anonymous).await.is_ok());
+    assert_eq!(h.list_as(&author_id, Viewer::Anonymous).await.len(), 1);
+
+    // A redelivered takedown (v1) is stale and changes nothing.
+    h.moderate(&post_id, ModerationRestriction::Removed, 1).await;
+    assert!(h.get_as(&post_id, Viewer::Anonymous).await.is_ok());
+
+    // Limited stays readable (discovery applies it, not GetPost).
+    h.moderate(&post_id, ModerationRestriction::Limited, 3).await;
+    let limited = h.get_as(&post_id, Viewer::Anonymous).await.expect("limited is readable");
+    assert_eq!(limited.moderation().restriction, ModerationRestriction::Limited);
+
+    // An outcome for a post that does not exist is a no-op, not an error.
+    h.moderate(&harness::random_id(), ModerationRestriction::Removed, 1).await;
 }

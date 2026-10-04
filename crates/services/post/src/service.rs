@@ -20,7 +20,7 @@ use transport::kafka::producer::{KafkaProducerBuilder, KafkaProducerHandle};
 
 use crate::app::{App, Backends};
 use crate::application::port::AuthorTierStore;
-use crate::infrastructure::consumer::run_author_tier_consumer;
+use crate::infrastructure::consumer::{run_author_tier_consumer, run_moderation_consumer};
 use crate::infrastructure::grpc::handler::post_service_handler::PostServiceServer;
 use crate::infrastructure::grpc::handler::PostServiceHandler;
 use crate::infrastructure::grpc::server::FILE_DESCRIPTOR_SET;
@@ -30,6 +30,10 @@ use crate::infrastructure::publisher::KafkaEventPublisher;
 const PROFILE_EVENTS_TOPIC: &str = "profile.v1.events";
 /// Consumer group for post's author-tier projection consumer.
 const AUTHOR_TIER_GROUP: &str = "post-author-tier";
+/// Moderation's decision stream; post holds the outcome for its reads.
+const MODERATION_EVENTS_TOPIC: &str = "moderation.v1.events";
+/// Consumer group for post's moderation-outcome consumer.
+const MODERATION_GROUP: &str = "post-moderation";
 /// Backoff before respawning the consumer after the runner returns.
 const CONSUMER_RESPAWN_BACKOFF: Duration = Duration::from_secs(5);
 
@@ -74,6 +78,9 @@ impl Service for PostService {
         // Inbound integration: profile tier signal → denormalized author-tier
         // projection (read on the publish path to stamp posts).
         spawn_author_tier_consumer(Arc::clone(&app.author_tier_store));
+        // Inbound integration: moderation outcomes (takedowns, reversals) → the
+        // restriction post's reads apply.
+        spawn_moderation_consumer(Arc::clone(&app.command_bus));
 
         Ok(Self { app })
     }
@@ -119,13 +126,43 @@ fn spawn_author_tier_consumer(store: Arc<dyn AuthorTierStore>) {
 /// Builds the manual-commit consumer (subscribed to `profile.v1.events`) and the
 /// dead-letter producer the runner needs.
 fn build_author_tier_consumer() -> anyhow::Result<(KafkaConsumerHandle, KafkaProducerHandle)> {
+    build_consumer(AUTHOR_TIER_GROUP, PROFILE_EVENTS_TOPIC, "author-tier")
+}
+
+/// Spawns the supervised moderation-outcome consumer (moderation.v1.events →
+/// the post's moderation restriction), respawning after a backoff whenever the
+/// runner returns.
+fn spawn_moderation_consumer(command_bus: Arc<InMemoryCommandBus>) {
+    tokio::spawn(async move {
+        loop {
+            match build_consumer(MODERATION_GROUP, MODERATION_EVENTS_TOPIC, "moderation") {
+                Ok((consumer, producer)) => {
+                    run_moderation_consumer(consumer, Arc::clone(&command_bus), producer).await;
+                    tracing::warn!("moderation consumer exited; respawning after backoff");
+                }
+                Err(error) => {
+                    tracing::error!(%error, "failed to build moderation consumer; retrying");
+                }
+            }
+            tokio::time::sleep(CONSUMER_RESPAWN_BACKOFF).await;
+        }
+    });
+}
+
+/// Builds a manual-commit consumer for `group` on `topic`, and the dead-letter
+/// producer the runner needs.
+fn build_consumer(
+    group: &str,
+    topic: &str,
+    label: &str,
+) -> anyhow::Result<(KafkaConsumerHandle, KafkaProducerHandle)> {
     let kafka = KafkaClientConfig::from_env();
-    let consumer = KafkaConsumerBuilder::new(ConsumerConfig::new(kafka.clone(), AUTHOR_TIER_GROUP))
-        .subscribe(PROFILE_EVENTS_TOPIC)
+    let consumer = KafkaConsumerBuilder::new(ConsumerConfig::new(kafka.clone(), group))
+        .subscribe(topic)
         .build()
-        .map_err(|e| anyhow::anyhow!("build author-tier consumer: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("build {label} consumer: {e}"))?;
     let producer = KafkaProducerBuilder::new(ProducerConfig::new(kafka))
         .build()
-        .map_err(|e| anyhow::anyhow!("build author-tier dead-letter producer: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("build {label} dead-letter producer: {e}"))?;
     Ok((consumer, producer))
 }
