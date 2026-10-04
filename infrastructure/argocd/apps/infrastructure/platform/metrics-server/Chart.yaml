@@ -1,9 +1,0 @@
-# infrastructure/argocd/apps/platform/metrics-server/Chart.yaml
-
-apiVersion: v2
-name: metrics-server-wrapper
-version: 1.0.0
-dependencies:
-  - name: metrics-server
-    version: "3.11.0"
-    repository: https://kubernetes-sigs.github.io/metrics-server/

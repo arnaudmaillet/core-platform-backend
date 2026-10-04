@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for working in `core-platform`. Keep this file short and factual — it is
+Guidance for working in `core-platform-backend`. Keep this file short and factual — it is
 loaded into every session. Deep detail lives in `docs/` (linked below).
 
 ## What this is
@@ -8,15 +8,14 @@ loaded into every session. Deep detail lives in `docs/` (linked below).
 A single Rust workspace (`crates/`) for a hyperscale, event-driven social backend:
 ~17 services as hexagonal (DDD) crates, each shipped as one or more per-binary
 container images. Sync contracts are versioned gRPC (`*-api` crates); async
-contracts are Kafka topics governed by the `event-topology` registry. Infra is
-Terraform/Terragrunt + EKS + Karpenter + ArgoCD (GitOps via Kustomize).
+contracts are Kafka topics governed by the `event-topology` registry.
 
-> `staging` is the active GitOps path (`k8s/overlays/staging`, synced by ArgoCD
-> from `develop`). **prod is fully scaffolded but NOT applied**: `live/prod` +
-> `k8s/overlays/prod` + `bootstrap/prod` track the `main` branch (merging
-> develop → main is the prod deploy); bring-up prerequisites live in
-> `infrastructure/live/prod/env.hcl` (state bucket, EKS endpoint CIDRs,
-> image-promotion workflow).
+> **Infra & GitOps live in a separate repo:**
+> [`arnaudmaillet/core-platform-infra`](https://github.com/arnaudmaillet/core-platform-infra)
+> (Terraform/Terragrunt + EKS + Karpenter + ArgoCD + the Kustomize overlays; staging
+> syncs from *its* `develop`, prod from *its* `main`). This repo builds immutable
+> `:<git-sha>` images; the fleet CI pins them into the infra repo. Split from the
+> former `core-platform` monorepo on 2026-10-04 (history preserved in both).
 
 ## Repo layout
 
@@ -27,10 +26,9 @@ Terraform/Terragrunt + EKS + Karpenter + ArgoCD (GitOps via Kustomize).
 | `crates/apps/<svc>-server` (and `-worker`) | thin deployable binaries (`serve::<XService>(addr)`) |
 | `crates/contracts/<svc>-api`, `crates/contracts/proto` | gRPC contract crates + protos |
 | `crates/contracts/event-topology` | **authoritative Kafka producer/consumer registry** (golden-tested; generates `docs/domain/EVENT_CATALOG.md`) |
-| `k8s/base` + `k8s/overlays/{dev,staging,prod}` | Kustomize manifests (staging is the live fleet) |
-| `infrastructure/modules` + `infrastructure/live/<env>` | Terraform modules + Terragrunt live tree |
-| `infrastructure/argocd` | ArgoCD bootstrap appsets + Helm app catalog |
-| `docs/` | architecture (ADRs), domain (event catalog, context map), infrastructure, runbooks, security |
+| `deploy/` | `Dockerfile` (one image per binary) + `docker-bake.hcl` (CI packaging) |
+| `local-dev/` | docker-compose fleet for local frontend testing |
+| `docs/` | ADRs, architecture (C4), domain (event catalog, context map), i18n, templates |
 
 ## Common commands
 
@@ -50,15 +48,10 @@ cargo test -p <svc> --features integration-<svc>   # needs Docker (Scylla/Redis/
 docker build -f deploy/Dockerfile --build-arg BIN=<svc>-server -t <repo>/<svc>-server:<tag> .
 # (CI instead compiles all binaries once per arch and bakes runtime images: deploy/docker-bake.hcl)
 
-# Render manifests (validate before pushing)
-kubectl kustomize k8s/overlays/staging
-
 # i18n drift gate (MUST pass — see i18n rule below)
 bash tools/i18n/i18n-drift.sh check
 bash tools/i18n/i18n-drift.sh stamp <file>.fr.md   # re-stamp after editing an EN source
 
-# Infra (per env, from infrastructure/live/<env>/us-east-1)
-terragrunt run-all plan
 ```
 
 ## Service & gRPC port registry
@@ -102,27 +95,26 @@ allow-listed listener (see the edge rule below). Each service owns an error-code
   must be in the token's `pids`). Never read the actor from the request alone on
   an edge-exposed RPC. Only `auth.Login`/`Refresh` are `public`; staff/admin RPCs
   stay off the edge until a permission catalogue exists.
-- **Kustomize CRD references:** the built-in nameReference transformer doesn't know
-  KEDA `ScaledObject.scaleTargetRef` or CNPG `ScheduledBackup.spec.cluster.name` —
-  overlays add `configurations:` entries (`*-refs-config.yaml`) so `namePrefix`
-  flows. Add one when introducing a CRD that references another resource by name.
 
-## GitOps / IaC rules
+## Cross-repo contract (with `core-platform-infra`)
 
-- **ArgoCD tracks `develop` with `selfHeal`.** `develop` is **protected** — branch
-  off it, open a PR; don't commit/push to it directly.
-- **Apply order matters.** Terraform must run before the workloads sync: the
-  staging overlay's runtime endpoints are resolved by an `envsubst` Config
-  Management Plugin in `argocd-repo-server` (fed by a Terraform-written Secret), and
-  CNPG backups / Karpenter graceful-drain / NetworkPolicies all depend on AWS
-  resources Terraform creates. Order: `vpc → eks → data → security → argocd`, then
-  let ArgoCD sync. Full sequence: **`docs/runbooks/audit-remediation-rollout.md`**.
-- **EKS version:** `modules/eks` pins the Kubernetes minor (1.36). Keep it in EKS
-  *standard* support — extended support bills the control plane 6x and ends in a
-  forced upgrade. Bumping it means bumping Karpenter (min version per k8s minor)
-  and the operator charts with it; see `docs/infrastructure/README.md` §2.2.
-- **Image tags:** the staging overlay is pinned to immutable `:<git-sha>` tags by
-  the fleet CI job (not a mutable `:staging`). Don't reintroduce floating tags.
+- **`develop` is protected** — branch off it, open a PR. Since the split no bot
+  commits land here: the fleet CI (`fleet-images-deploy.yml`) builds every binary
+  on a push to `develop`, then pins the `:<git-sha>` tags into the infra repo's
+  `k8s/overlays/staging` (deploy key `PLATFORM_PIN_DEPLOY_KEY`). ArgoCD rolls out
+  from there.
+- **Adding a binary / service** (order matters): infra repo first — ECR repo in
+  `live/global/artifacts/ecr` **applied**, manifests, overlays' `images:` entry,
+  NetworkPolicy; then here — crate, `crates/apps/<bin>`, `FLEET_BINS`, port.
+  A push before the ECR repo exists fails the fleet build.
+- **Coupled change** (new env var, secret, Kafka consumer needing a scaler):
+  infra side first with a tolerant default, then the code; cross-link the PRs
+  (`arnaudmaillet/core-platform-backend#N` ↔ `arnaudmaillet/core-platform-infra#M`).
+- **Kafka topics** need no infra PR: the infra repo's `topic-provisioner` PreSync
+  Job runs this repo's registry (pinned image).
+- **Image tags** are immutable `:<git-sha>`; never introduce a floating tag in
+  either repo. GitOps/IaC rules (apply order, EKS version, Kustomize CRD refs,
+  state keys) are in the infra repo's `CLAUDE.md`.
 
 ## i18n rule
 
@@ -134,14 +126,8 @@ English inside FR files. See `docs/i18n/`.
 
 ## Key references
 
-- Infra & ops overview (canonical): `docs/infrastructure/README.md`
 - Docs entry point & taxonomy: `docs/README.md`
-- GitOps / ArgoCD operations: `docs/infrastructure/gitops-argocd.md`
-- Terragrunt units reference: `docs/infrastructure/terragrunt-units.md`
-- Secret topology (ESO / ClusterSecretStore): `docs/infrastructure/secrets-eso.md`
-- Environment lifecycle runbook: `docs/runbooks/environment-lifecycle.md`
+- Infra, GitOps, runbooks, NetworkPolicy call graph: `core-platform-infra` → `docs/README.md`
 - Event plane (who produces/consumes what): `docs/domain/EVENT_CATALOG.md`
 - Domain context map / ubiquitous language: `docs/domain/`
 - Architecture decisions: `docs/adr/`
-- Rollout runbook: `docs/runbooks/audit-remediation-rollout.md`
-- NetworkPolicy call graph (W8): `docs/security/network-policy-call-graph.md`

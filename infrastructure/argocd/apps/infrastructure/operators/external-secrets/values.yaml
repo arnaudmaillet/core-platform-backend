@@ -1,9 +1,0 @@
-# infrastructure/argocd/apps/infrastructure/operators/external-secrets/values.yaml
-external-secrets:
-  installCRDs: true
-  serviceAccount:
-    create: true
-    name: external-secrets
-    # Populated by the ApplicationSet from global-params (externalSecretsRoleArn).
-    annotations:
-      eks.amazonaws.com/role-arn: ""

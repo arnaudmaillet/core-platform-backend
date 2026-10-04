@@ -1,6 +1,0 @@
-dependencies:
-- name: k6-operator
-  repository: https://grafana.github.io/helm-charts
-  version: 3.6.0
-digest: sha256:8e8ebca9b83e08d5ddfe45e3b20e9a013a8875339c5ab28374f42fc5b818eee0
-generated: "2026-03-18T01:33:39.313096+01:00"

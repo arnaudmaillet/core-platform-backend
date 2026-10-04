@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 1438dc450817ea3927ef2df20386163bbfeb39c6f545abfdd88a269a55e87877
-  translated_at: 2026-06-29
+  source_sha256: df371b28733b4e8866f7d328f50029102768d1a6f6b8d684ed158c35fbf25d4a
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -34,7 +34,7 @@ livrée — services fantômes, mauvaise stack, 7 services manquants.
 - **Un container par service.** Les services à deux binaires (audit, counter, search, notification) sont notés dans leur description ; `realtime` est scindé en `realtime-gateway` et `realtime-dispatcher` car l'edge WebSocket public est architecturalement distinct.
 - **Les datastores sont un container par technologie.** L'isolation par-service (keyspace / base / namespace) vit dans chaque Domain Card, pas ici.
 - **L'async route via Kafka.** Les arêtes producteur→Kafka et Kafka→consommateur portent les noms de topics ; la *sémantique* producteur→consommateur vit dans [`EVENT_CATALOG.md`](../domain/EVENT_CATALOG.md).
-- Le trafic API client synchrone (lecture/écriture) entre via l'ingress de la plateforme (voir [`docs/infrastructure`](../infrastructure/README.md)) et n'est pas énuméré, pour garder la vue container lisible.
+- Le trafic API client synchrone (lecture/écriture) entre via l'ingress de la plateforme (voir [`docs/infrastructure`](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/infrastructure/README.md)) et n'est pas énuméré, pour garder la vue container lisible.
 
 ## Rendu
 

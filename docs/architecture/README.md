@@ -23,7 +23,7 @@ shipped — phantom services, wrong stack, 7 missing services.
 - **One container per service.** Dual-binary services (audit, counter, search, notification) are noted in their description; `realtime` is split into `realtime-gateway` and `realtime-dispatcher` because the public WebSocket edge is architecturally distinct.
 - **Datastores are one container per technology.** Per-service isolation (keyspace / database / namespace) lives in each Domain Card, not here.
 - **Async routes through Kafka.** Producer→Kafka and Kafka→consumer edges carry the topic names; the producer→consumer *semantics* live in [`EVENT_CATALOG.md`](../domain/EVENT_CATALOG.md).
-- Synchronous client read/write API traffic enters via the platform ingress (see [`docs/infrastructure`](../infrastructure/README.md)) and is not enumerated, to keep the container view readable.
+- Synchronous client read/write API traffic enters via the platform ingress (see [`docs/infrastructure`](https://github.com/arnaudmaillet/core-platform-infra/blob/develop/docs/infrastructure/README.md)) and is not enumerated, to keep the container view readable.
 
 ## Rendering
 

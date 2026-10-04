@@ -1,7 +1,0 @@
-# infrastructure/argocd/apps/infrastructure/platform/metrics-server/values.yaml
-
-metrics-server:
-  args:
-    - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
-    - --kubelet-use-node-status-port
-    - --metric-resolution=15s

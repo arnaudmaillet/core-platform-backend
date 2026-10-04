@@ -1,5 +1,0 @@
-# Account Postgres. namePrefix in the dev overlay -> Service dev-account-postgres.
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - account-postgres.yaml

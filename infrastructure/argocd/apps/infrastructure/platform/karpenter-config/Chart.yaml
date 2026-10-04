@@ -1,8 +1,0 @@
-# infrastructure/argocd/apps/infrastructure/platform/karpenter-config/Chart.yaml
-
-apiVersion: v2
-name: karpenter-config
-description: Configuration des NodePools et NodeClasses pour Karpenter
-type: application
-version: 1.0.0
-appVersion: "1.0.0"

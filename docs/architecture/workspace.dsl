@@ -156,7 +156,7 @@ workspace "Core Platform" "Social platform backend — corrected C4, derived fro
             user -> objectStore "direct upload (pre-signed URL)"
             user -> cdn "media delivery"
             # Synchronous client read/write API traffic enters the mesh via the platform ingress
-            # (see docs/infrastructure) to the relevant service; not enumerated here to keep the
+            # (see core-platform-infra: docs/infrastructure) to the relevant service; not enumerated here to keep the
             # container view readable.
         }
 

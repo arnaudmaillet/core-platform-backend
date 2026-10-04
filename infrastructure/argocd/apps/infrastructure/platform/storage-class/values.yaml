@@ -1,6 +1,0 @@
-# infrastructure/argocd/apps/infrastructure/platform/storage-class/values.yaml
-#
-# No values are consumed by this chart (the platform appset passes the shared
-# global-params file as a values file; it is intentionally ignored here). The
-# StorageClass is rendered as a static manifest in templates/gp3.yaml.
-{}

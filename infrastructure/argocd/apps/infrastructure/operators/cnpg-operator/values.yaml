@@ -1,5 +1,0 @@
-# infrastructure/argocd/apps/infrastructure/operators/cnpg-operator/values.yaml
-
-cloudnative-pg:
-  monitoring:
-    podMonitorEnabled: true

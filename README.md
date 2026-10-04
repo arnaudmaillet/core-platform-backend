@@ -35,8 +35,8 @@ The platform's documentation is layered by concern, each layer derived from the 
 - **What each service does (domain / functional):** [`docs/domain/`](docs/domain/README.md) for
   cross-context maps, and each service's `crates/services/<svc>/docs/DOMAIN.md` for its bounded
   context, invariants, and data ownership.
-- **How the platform deploys & operates:** [`docs/infrastructure/`](docs/infrastructure/README.md)
-  (AWS EKS, VPC, managed services; diagram generated from `aws_production.py`).
+- **How the platform deploys & operates:** [`core-platform-infra`](https://github.com/arnaudmaillet/core-platform-infra) —
+  Terraform/Terragrunt (AWS EKS, VPC, managed services), ArgoCD, Kustomize, runbooks.
 - **How to build & run each service:** the per-crate `README.md`, following
   [`docs/templates/SERVICE_README.template.md`](docs/templates/SERVICE_README.template.md).
 - **System architecture (C4 Model):** [`docs/architecture/`](docs/architecture/README.md) —
@@ -83,7 +83,7 @@ The workspace lives under `crates/`, organised by role:
 - **`crates/apps/<svc>-server/`** — thin deployable binaries (one per service). Each `main` is a `service_runtime::serve::<…>(addr)` one-liner.
 - **`crates/platform/service-runtime/`** — the unified fleet bootstrap: telemetry, `infrastructure.toml` load + hot-reload, ingress trace + rate-limit layers, dynamic gRPC health, and graceful shutdown. See its [README](crates/platform/service-runtime/README.md).
 - **`crates/shared/`** — reusable building blocks: `error`, `cqrs`, `auth-context`, `validation`/`validate-core`, the externalized-config stack (`infra-config`, `resilience`, `traffic`, `telemetry`), `transport` (gRPC + Kafka), and storage clients under `crates/shared/storage/{postgres,scylla,redis}`.
-- **`infrastructure/`** — Terraform/Terragrunt modules, EKS configuration, and ArgoCD manifests.
+- **Infrastructure & GitOps** — moved to [`core-platform-infra`](https://github.com/arnaudmaillet/core-platform-infra) (2026-10-04); this repo's fleet CI pins its images there.
 
 ## Roadmap
 

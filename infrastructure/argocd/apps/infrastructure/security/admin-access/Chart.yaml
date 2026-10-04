@@ -1,6 +1,0 @@
-# infrastructure/argocd/apps/infrastructure/security/admin-access/Chart.yaml
-
-apiVersion: v2
-name: admin-access
-version: 1.0.0
-description: "Ingress pour les outils d'administration"

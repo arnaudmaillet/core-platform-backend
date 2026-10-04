@@ -1,8 +1,0 @@
-# infrastructure/argocd/apps/infrastructure/operators/k6-operator/values.yaml
-
-k6-operator:
-  authProxy:
-    image:
-      registry: registry.k8s.io
-      repository: kubebuilder/kube-rbac-proxy
-      tag: v0.16.0

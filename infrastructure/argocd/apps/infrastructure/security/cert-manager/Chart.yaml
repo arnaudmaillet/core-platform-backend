@@ -1,9 +1,0 @@
-# infrastructure/argocd/apps/infrastructure/security/cert-manager/Chart.yaml
-
-apiVersion: v2
-name: cert-manager-wrapper
-version: 1.0.0
-dependencies:
-  - name: cert-manager
-    version: "v1.21.2"
-    repository: https://charts.jetstack.io
