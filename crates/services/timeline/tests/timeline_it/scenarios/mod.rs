@@ -3,6 +3,7 @@
 //! invalidation, and stream/async-task lifetimes.
 
 mod fanout_ordering;
+mod discovery;
 mod following_cache;
 mod vip_routing;
 mod warmup_lifecycle;

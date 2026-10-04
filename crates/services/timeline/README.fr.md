@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 6737910e3ddf997c4e171bc96166cfc3324613b06eb22f1a3605a5628d51382e
-  translated_at: 2026-06-29
+  source_sha256: 8b79611a2d3708673c8be25b6b4d03ab5efcfd12b46d7288292cb1b09cee4447
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -111,12 +111,15 @@ BFF identifie l'auteur sans lookup secondaire.
 | ScyllaDB (`timeline`) | store froid durable | cold-start + ingestion échouent | **Dur** pour les lectures froides ; l'ingestion réessaie |
 | Kafka | ingestion du fan-out | le feed cesse de se mettre à jour | **Souple** — feed existant servi |
 | `social-graph` (gRPC) | reconstruction du following-set | la reconstruction sur miss Redis échoue | **Souple** — boote en lazy ; `TML-3001` réessayable |
+| `social-graph` (gRPC) | `CheckAccess` pour le fil de découverte | les lectures de découverte échouent | **Dur** pour la découverte (échec fermé, `TML-8002`) |
+| `geo-discovery` (gRPC) | candidats NEARBY (`QueryTile`) | NEARBY échoue | **Souple** — les autres classements ne sont pas touchés ; `TML-8003` |
 
 **Amont (rayon d'impact) :**
 
 | Caller | Uses | Impact si `timeline` est indisponible |
 |---|---|---|
 | `<TODO: BFF / mobile>` | `GetFollowingFeed` | le fil d'accueil Following cesse de charger |
+| client iOS (edge) | `GetDiscoveryFeed` | For You / Trending / Nearby cessent de charger |
 
 > **Chemin critique ?** Oui pour la surface fil d'accueil ; c'est un read-model dérivé, donc une panne
 > dégrade le fil mais pas les actions de publication/sociales.
@@ -133,12 +136,47 @@ rpc GetFollowingFeed(GetFollowingFeedRequest) returns (GetFollowingFeedResponse)
 message GetFollowingFeedRequest  { string profile_id=1; int32 limit=2; string page_token=3; }
 message GetFollowingFeedResponse { repeated FeedItem items=1; string next_page_token=2; bool is_cold=3; }
 message FeedItem { string post_id=1; string author_id=2; int64 published_at_ms=3; }
+
+rpc GetDiscoveryFeed(GetDiscoveryFeedRequest) returns (GetDiscoveryFeedResponse);   // edge public_read
+
+message GetDiscoveryFeedRequest  { DiscoveryRanking ranking=1; string region=2; optional double lat=3;
+                                   optional double lng=4; ContentLevel content_level=5; string page_token=6; int32 limit=7; }
+message GetDiscoveryFeedResponse { repeated FeedItem items=1; string next_page_token=2; string region_applied=3;
+                                   ContentLevel content_level_applied=4; }
 ```
 
 > **Contrat de sérialisation :** le curseur est `base64url("{published_at_ms}:{post_id_hyphenated}")` —
 > opaque aux clients, décodé côté serveur uniquement. `limit` est clampé à `TIMELINE_MAX_PAGE_SIZE`.
 > `is_cold=true` signifie que la page a été servie depuis ScyllaDB pendant que Redis se réchauffe en
 > asynchrone.
+
+### Fil de découverte (`GetDiscoveryFeed`)
+
+Un fil non personnalisé qui n'a besoin d'aucun graphe de suivi : le For You des invités et des membres
+(#673, B3).
+
+- **Pool** (Redis, `timeline:{disc}:recent|fresh|hot` + un hash `timeline:disc:post:<id>` par post) : les posts
+  publiés depuis moins de `TIMELINE_DISCOVERY_WINDOW_SECS` (72 h), plafonnés à `TIMELINE_DISCOVERY_POOL_CAP`.
+  Alimenté par un seul consumer (`timeline-discovery`) sur `post.v1.events` (publié / supprimé),
+  `counter.v1.popularity` (popularité cumulée) et `moderation.v1.events` (restriction gardée par version,
+  enregistrée même avant que la publication soit vue). Comportement de cache : si Redis le perd, il se
+  remplit à nouveau en une fenêtre.
+- **Classements.** `TRENDING` = le score hot `log10(max(popularity, 1)) + (published_s − epoch) / gravity`
+  (`TIMELINE_DISCOVERY_HOT_GRAVITY_SECS`, 12,5 h : un post plus récent d'autant se classe comme un post dix
+  fois plus populaire), uniquement les posts ayant de la popularité ; `RECENT` = du plus récent au plus
+  ancien ; `FOR_YOU` = trois hot pour un *frais* (sans popularité encore) ; `NEARBY` = les posts de
+  geo-discovery autour de `lat`/`lng` (un anneau large au-dessus du seuil de viralité de geo, plus un
+  anneau proche sans seuil), classés par score hot.
+- **Filtres.** Les posts supprimés, retirés ou à visibilité limitée ne sont jamais montrés ; les posts
+  soumis à une limite d'âge seulement en `CONTENT_LEVEL_STANDARD`. Un **invité a toujours `RESTRICTED`** ;
+  les autres obtiennent ce qu'ils demandent, `RESTRICTED` par défaut (aucune date de naissance n'est connue
+  côté serveur pour l'instant). Le lecteur vient du jeton (`edge::viewer`) : les auteurs qu'il ne peut pas
+  voir (`CheckAccess` ≠ `VISIBLE`) sont exclus, et la lecture **échoue fermée** (`TML-8002`, UNAVAILABLE)
+  quand social-graph ne peut pas répondre. Les appelants mesh ne sont pas filtrés par audience.
+- **Pagination.** Le curseur porte une position par flux et est lié à son classement. Une page peut être
+  courte (voire vide) avec un jeton non vide quand ses candidats ont été filtrés ; un post qui passe de
+  frais à hot peut revenir sur une page suivante — les clients dédupliquent par `post_id`.
+- **Région.** Acceptée, pas encore appliquée : v1 classe un seul pool global (`region_applied` est vide).
 
 ### Ports Rust (contrat hexagonal)
 
@@ -149,6 +187,8 @@ pub trait TierCache: Send + Sync { /* author tier + warm flag */ }
 pub trait FollowingStore: Send + Sync { /* following set (SADD/SREM/SMEMBERS) */ }
 pub trait FeedRepository / AuthorPostRepository: Send + Sync { /* ScyllaDB cold layer */ }
 pub trait SocialGraphClient: Send + Sync { /* paginated gRPC to social-graph */ }
+pub trait DiscoveryPool: Send + Sync { /* discovery indices + per-post meta (Redis) */ }
+pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point */ }
 ```
 
 ### Contrat d'erreur (`TML-xxxx`)
@@ -161,6 +201,8 @@ pub trait SocialGraphClient: Send + Sync { /* paginated gRPC to social-graph */ 
 | TML-4001 | `ColdStartFailed` | 500 |
 | TML-5001/5002 | `ScriptReturnInvalid` / `BackfillFailed` | 500 |
 | TML-6001 | `InvalidPageToken` | 422 |
+| TML-8001 | `LocationRequired` (NEARBY sans lat/lng) | 422 |
+| TML-8002/8003 | `AccessCheckUnavailable` / `NearbyUnavailable` (réessayable) | 503 |
 | TML-9001..9004 | invalid ids / domain violation | 422 |
 
 ---
@@ -177,6 +219,7 @@ pub trait SocialGraphClient: Send + Sync { /* paginated gRPC to social-graph */ 
 | `post.deleted` | `timeline-post-deleted` | VIP ZREM or Scylla purge | DLQ `{topic}.dlq` |
 | `social-graph.followed` | `timeline-sg-followed` | backfill recent posts + update following set | DLQ `{topic}.dlq` |
 | `social-graph.unfollowed` | `timeline-sg-unfollowed` | prune posts + update following set | DLQ `{topic}.dlq` |
+| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction) | DLQ `{topic}.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** tous les workers s'exécutent sous `run_consumer` — commit manuel
 > après succès, retries bornés avec backoff + jitter, DLQ en cas d'épuisement/poison. Toutes les écritures
@@ -210,7 +253,7 @@ timeline = { path = "crates/services/timeline" }
 Bibliothèque uniquement. Implémente [`service_runtime::Service`](../../platform/service-runtime/README.md)
 sous le nom `timeline::service::TimelineService` — `build` mappe `TimelineConfig → AppConfig`, construit
 le client gRPC social-graph sur un canal **connecté en lazy** (timeline boote même si social-graph n'est
-pas encore joignable), assemble les adaptateurs cache/persistence + bus CQRS, et lance les quatre workers
+pas encore joignable), assemble les adaptateurs cache/persistence + bus CQRS, et lance les cinq workers
 d'ingestion ; `register` ajoute les services gRPC + réflexion (surface en lecture seule) ; `health_probes`
 vérifie Scylla/Redis.
 
@@ -247,7 +290,13 @@ async fn main() -> anyhow::Result<()> {
 | `TIMELINE_MAX_VIP_MERGE_SOURCES` | `50` | Max VIP ZSETs merged per request. |
 | `TIMELINE_SOCIAL_GRAPH_PAGE_SIZE` | `500` | Pagination size for social-graph lists. |
 | `TIMELINE_SOCIAL_GRAPH_ENDPOINT` | `http://social-graph:50051` | social-graph gRPC endpoint. |
-| `TIMELINE_KAFKA_GROUP_*` | `timeline-*` | Consumer group IDs (post-published/deleted, sg-followed/unfollowed). |
+| `TIMELINE_DISCOVERY_WINDOW_SECS` | `259200` | Durée de présence d'un post dans le pool de découverte (72 h). |
+| `TIMELINE_DISCOVERY_POOL_CAP` | `10000` | Nombre max de posts dans le pool de découverte. |
+| `TIMELINE_DISCOVERY_HOT_GRAVITY_SECS` | `45000` | Gravité du score hot (12,5 h pour une popularité ×10). |
+| `TIMELINE_GEO_DISCOVERY_ENDPOINT` | `http://localhost:50054` | Endpoint gRPC de geo-discovery (NEARBY). |
+| `TIMELINE_NEARBY_RADIUS_KM` · `TIMELINE_NEARBY_CLOSE_RADIUS_KM` | `25` · `2` | Rayon des anneaux large / proche de NEARBY. |
+| `TIMELINE_NEARBY_CANDIDATES` | `300` | Candidats NEARBY classés par requête. |
+| `TIMELINE_KAFKA_GROUP_*` | `timeline-*` | Consumer group IDs (post-published/deleted, sg-followed/unfollowed, discovery). |
 
 > Les variables de connexion ScyllaDB / Redis / Kafka standard des crates de stockage partagés
 > s'appliquent. `TIMELINE_GRPC_ADDR` vaut par défaut `0.0.0.0:50070`.

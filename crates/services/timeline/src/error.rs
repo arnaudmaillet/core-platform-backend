@@ -57,6 +57,16 @@ pub enum TimelineError {
     #[error("audio feed list failed for audio {audio_id}: {message}")]
     AudioFeedListFailed { audio_id: String, message: String },
 
+    // ── TML-8xxx: Discovery feed errors ───────────────────────────────────────
+    #[error("NEARBY needs lat and lng")]
+    LocationRequired,
+
+    #[error("audience check unavailable: {reason}")]
+    AccessCheckUnavailable { reason: String },
+
+    #[error("nearby lookup unavailable: {reason}")]
+    NearbyUnavailable { reason: String },
+
     // ── TML-9xxx: ID parsing / domain violations ──────────────────────────────
     #[error("invalid post ID: '{0}'")]
     InvalidPostId(String),
@@ -100,6 +110,10 @@ impl AppError for TimelineError {
             Self::AudioFeedDeleteFailed { .. }  => "TML-7002",
             Self::AudioFeedListFailed { .. }    => "TML-7003",
 
+            Self::LocationRequired              => "TML-8001",
+            Self::AccessCheckUnavailable { .. } => "TML-8002",
+            Self::NearbyUnavailable { .. }      => "TML-8003",
+
             Self::InvalidPostId(_)              => "TML-9001",
             Self::InvalidProfileId(_)           => "TML-9002",
             Self::InvalidAuthorId(_)            => "TML-9003",
@@ -116,7 +130,11 @@ impl AppError for TimelineError {
 
             Self::FeedNotFound { .. } => StatusCode::NOT_FOUND,
 
+            Self::AccessCheckUnavailable { .. }
+            | Self::NearbyUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+
             Self::InvalidPageToken { .. }
+            | Self::LocationRequired
             | Self::InvalidPostId(_)
             | Self::InvalidProfileId(_)
             | Self::InvalidAuthorId(_)
@@ -152,6 +170,9 @@ impl AppError for TimelineError {
 
             Self::SocialGraphClientError { .. } => Severity::High,
 
+            Self::AccessCheckUnavailable { .. }
+            | Self::NearbyUnavailable { .. } => Severity::Medium,
+
             Self::Validation(e) => e.severity(),
 
             Self::SocialGraphInvalidId(_)
@@ -159,6 +180,7 @@ impl AppError for TimelineError {
 
             Self::FeedNotFound { .. }
             | Self::InvalidPageToken { .. }
+            | Self::LocationRequired
             | Self::InvalidPostId(_)
             | Self::InvalidProfileId(_)
             | Self::InvalidAuthorId(_)
@@ -170,7 +192,9 @@ impl AppError for TimelineError {
         match self {
             Self::Scylla(e) => e.is_retryable(),
             Self::Redis(e)  => e.is_retryable(),
-            Self::SocialGraphClientError { .. } => true,
+            Self::SocialGraphClientError { .. }
+            | Self::AccessCheckUnavailable { .. }
+            | Self::NearbyUnavailable { .. } => true,
             _ => false,
         }
     }
@@ -202,6 +226,12 @@ impl AppError for TimelineError {
 
             Self::FeedNotFound { .. } =>
                 "No feed was found for this profile.",
+
+            Self::LocationRequired =>
+                "The nearby feed needs a location.",
+
+            Self::AccessCheckUnavailable { .. } | Self::NearbyUnavailable { .. } =>
+                "The feed is temporarily unavailable. Please try again.",
 
             Self::InvalidPageToken { .. } =>
                 "The pagination cursor is invalid. Please restart from the first page.",

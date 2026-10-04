@@ -5,6 +5,8 @@ use cqrs::{Envelope, QueryBus};
 
 use transport::grpc::edge;
 use crate::application::query::get_audio_feed::GetAudioFeedQuery;
+use crate::application::query::get_discovery_feed::GetDiscoveryFeedQuery;
+use crate::domain::value_object::{ContentLevel, DiscoveryRanking, Viewer};
 use crate::application::query::get_following_feed::GetFollowingFeedQuery;
 
 // ── Proto inclusion ───────────────────────────────────────────────────────────
@@ -106,6 +108,81 @@ where
     }
 }
 
+impl<QB> TimelineServiceHandler<QB>
+where
+    QB: QueryBus + Send + Sync + 'static,
+{
+    pub async fn get_discovery_feed(
+        &self,
+        request: Request<proto::GetDiscoveryFeedRequest>,
+    ) -> Result<Response<proto::GetDiscoveryFeedResponse>, Status> {
+        let (viewer, guest) = viewer_of(&request);
+        let req = request.into_inner();
+
+        let ranking = match proto::DiscoveryRanking::try_from(req.ranking) {
+            Ok(proto::DiscoveryRanking::Trending) => DiscoveryRanking::Trending,
+            Ok(proto::DiscoveryRanking::Recent) => DiscoveryRanking::Recent,
+            Ok(proto::DiscoveryRanking::Nearby) => DiscoveryRanking::Nearby,
+            _ => DiscoveryRanking::ForYou,
+        };
+        // A guest never gets more than RESTRICTED; anyone else gets what it asks
+        // for, RESTRICTED by default (no date of birth is known server-side yet).
+        let content_level = match proto::ContentLevel::try_from(req.content_level) {
+            Ok(proto::ContentLevel::Standard) if !guest => ContentLevel::Standard,
+            _ => ContentLevel::Restricted,
+        };
+
+        let query = GetDiscoveryFeedQuery {
+            ranking,
+            viewer,
+            content_level,
+            lat:        req.lat,
+            lng:        req.lng,
+            limit:      req.limit,
+            page_token: if req.page_token.is_empty() { None } else { Some(req.page_token) },
+        };
+
+        let page = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+
+        let items = page
+            .items
+            .into_iter()
+            .map(|e| proto::FeedItem {
+                post_id:         e.post_id.to_string(),
+                author_id:       e.author_id.to_string(),
+                published_at_ms: e.published_at_ms,
+            })
+            .collect();
+
+        Ok(Response::new(proto::GetDiscoveryFeedResponse {
+            items,
+            next_page_token:       page.next_page_token.unwrap_or_default(),
+            region_applied:        String::new(), // v1: one global pool
+            content_level_applied: match content_level {
+                ContentLevel::Restricted => proto::ContentLevel::Restricted,
+                ContentLevel::Standard => proto::ContentLevel::Standard,
+            } as i32,
+        }))
+    }
+}
+
+/// The reader, from how the request arrived (never a request field), and
+/// whether it is a guest session (or an anonymous caller).
+fn viewer_of<T>(request: &Request<T>) -> (Viewer, bool) {
+    match edge::viewer(request) {
+        edge::Viewer::Internal => (Viewer::Internal, false),
+        edge::Viewer::Anonymous => (Viewer::Profiles(Vec::new()), true),
+        edge::Viewer::Member { profile_ids, .. } => {
+            let guest = edge::principal(request).is_some_and(|p| p.is_guest());
+            (Viewer::Profiles(profile_ids), guest)
+        }
+    }
+}
+
 // ── Proto trait implementation ────────────────────────────────────────────────
 
 #[tonic::async_trait]
@@ -125,6 +202,13 @@ where
         request: Request<proto::GetAudioFeedRequest>,
     ) -> Result<Response<proto::GetAudioFeedResponse>, Status> {
         self.get_audio_feed(request).await
+    }
+
+    async fn get_discovery_feed(
+        &self,
+        request: Request<proto::GetDiscoveryFeedRequest>,
+    ) -> Result<Response<proto::GetDiscoveryFeedResponse>, Status> {
+        self.get_discovery_feed(request).await
     }
 }
 

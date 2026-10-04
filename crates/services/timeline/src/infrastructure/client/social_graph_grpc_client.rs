@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use transport::grpc::client::ResilientChannel;
 
 use crate::application::port::SocialGraphClient;
-use crate::domain::value_object::{AuthorId, ProfileId};
+use crate::domain::value_object::{AuthorId, ContentAccess, ProfileId};
 use crate::error::TimelineError;
 
 // ── Generated social-graph client stubs ──────────────────────────────────────
@@ -13,8 +15,31 @@ use social_graph_api as sg_proto;
 
 use sg_proto::{
     social_graph_service_client::SocialGraphServiceClient,
-    ListFollowersRequest, ListFollowingRequest,
+    CheckAccessRequest, ContentAccess as ProtoAccess, ListFollowersRequest, ListFollowingRequest,
 };
+
+/// `CheckAccess` caps: viewer profiles and target authors per call.
+const MAX_VIEWERS_PER_CALL: usize = 20;
+const MAX_TARGETS_PER_CALL: usize = 100;
+
+/// Folds one more chunk's answer into an author's running answer: a block from
+/// any profile hides; otherwise any profile that may see it opens it — exactly
+/// what one unchunked call would answer.
+fn fold(current: Option<ContentAccess>, answer: ContentAccess) -> ContentAccess {
+    match (current, answer) {
+        (Some(ContentAccess::Hidden), _) | (_, ContentAccess::Hidden) => ContentAccess::Hidden,
+        (Some(ContentAccess::Visible), _) | (_, ContentAccess::Visible) => ContentAccess::Visible,
+        _ => ContentAccess::HeaderOnly,
+    }
+}
+
+fn access_from_proto(value: i32) -> ContentAccess {
+    match ProtoAccess::try_from(value) {
+        Ok(ProtoAccess::Visible) => ContentAccess::Visible,
+        Ok(ProtoAccess::HeaderOnly) => ContentAccess::HeaderOnly,
+        _ => ContentAccess::Hidden, // unknown → fail closed
+    }
+}
 
 // ── Client ────────────────────────────────────────────────────────────────────
 
@@ -120,5 +145,51 @@ impl SocialGraphClient for SocialGraphGrpcClient {
         }
 
         Ok(all_ids)
+    }
+
+    /// Split to the RPC's caps (≤ 20 viewers × ≤ 100 authors per call) and
+    /// recombined per author.
+    async fn check_access(
+        &self,
+        viewers: &[String],
+        authors: &[AuthorId],
+    ) -> Result<HashMap<AuthorId, ContentAccess>, TimelineError> {
+        let mut client = self.client();
+        let viewer_chunks: Vec<&[String]> =
+            if viewers.is_empty() { vec![&[]] } else { viewers.chunks(MAX_VIEWERS_PER_CALL).collect() };
+        let mut answers: HashMap<AuthorId, ContentAccess> = HashMap::new();
+        for v in &viewer_chunks {
+            for t in authors.chunks(MAX_TARGETS_PER_CALL) {
+                let response = client
+                    .check_access(CheckAccessRequest {
+                        viewer_profile_ids: v.to_vec(),
+                        target_profile_ids: t.iter().map(AuthorId::to_string).collect(),
+                    })
+                    .await
+                    .map_err(|status| TimelineError::AccessCheckUnavailable { reason: status.to_string() })?
+                    .into_inner();
+                for target in response.targets {
+                    let Ok(author) = AuthorId::try_from(target.target_profile_id.as_str()) else { continue };
+                    let current = answers.get(&author).copied();
+                    answers.insert(author, fold(current, access_from_proto(target.access)));
+                }
+            }
+        }
+        Ok(answers)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunked_answers_fold_like_one_call() {
+        use ContentAccess::*;
+        assert_eq!(fold(Some(HeaderOnly), Visible), Visible);
+        assert_eq!(fold(Some(Visible), Hidden), Hidden);
+        assert_eq!(fold(Some(Hidden), Visible), Hidden);
+        assert_eq!(fold(None, HeaderOnly), HeaderOnly);
+        assert_eq!(access_from_proto(ProtoAccess::Unspecified as i32), Hidden);
     }
 }

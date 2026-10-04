@@ -1,19 +1,25 @@
+pub mod audience;
 pub mod audio_feed_repository;
 pub mod audio_feed_store;
 pub mod author_post_repository;
+pub mod discovery_pool;
 pub mod feed_repository;
 pub mod feed_store;
 pub mod following_store;
+pub mod nearby_posts;
 pub mod social_graph_client;
 pub mod tier_cache;
 pub mod vip_registry;
 
 pub use audio_feed_repository::{AudioFeedRepository, AudioFeedRow};
 pub use audio_feed_store::{AudioFeedMember, AudioFeedStore};
+pub use audience::visible_authors;
 pub use author_post_repository::AuthorPostRepository;
+pub use discovery_pool::{DiscoveryPool, PoolEntry};
 pub use feed_repository::FeedRepository;
 pub use feed_store::FeedStore;
 pub use following_store::FollowingStore;
+pub use nearby_posts::NearbyPosts;
 pub use social_graph_client::SocialGraphClient;
 pub use tier_cache::TierCache;
 pub use vip_registry::VipRegistry;

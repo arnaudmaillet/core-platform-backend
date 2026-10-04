@@ -39,6 +39,7 @@ tracing   = { workspace = true }
 
 # ── gRPC / proto ─────────────────────────────────────────────────────────────
 social-graph-api = { workspace = true }   # cross-service client stubs (contracts tier)
+geo-discovery-api = { workspace = true }
 tonic            = { workspace = true }
 tonic-reflection = { workspace = true }
 http             = { workspace = true }
@@ -65,3 +66,8 @@ async-trait  = { workspace = true }
 futures      = { workspace = true }
 uuid         = { workspace = true }
 chrono       = { workspace = true }
+# Wire-contract tests: the discovery worker decodes events serialized by their
+# producers' own types.
+post         = { workspace = true }
+moderation   = { workspace = true }
+counter      = { workspace = true }

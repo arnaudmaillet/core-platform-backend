@@ -17,7 +17,7 @@ use cqrs::query::InMemoryQueryBus;
 use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 use service_runtime::{HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::authenticated;
+use service_runtime::edge::{authenticated, public_read};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -26,7 +26,7 @@ use transport::kafka::config::KafkaClientConfig;
 
 use crate::app::{App, AppConfig, Backends};
 use crate::config::TimelineConfig;
-use crate::infrastructure::client::SocialGraphGrpcClient;
+use crate::infrastructure::client::{GrpcNearbyPosts, SocialGraphGrpcClient};
 use crate::infrastructure::grpc::handler::{TimelineServiceHandler, TimelineServiceServer};
 use crate::infrastructure::grpc::server::FILE_DESCRIPTOR_SET;
 
@@ -36,6 +36,9 @@ type TimelineServer = TimelineServiceServer<TimelineServiceHandler<Arc<InMemoryQ
 /// resilience profile is bound to under `[resilience.bindings]` in `infrastructure.toml`
 /// (falls back to the default profile when unbound).
 const SOCIAL_GRAPH_DEPENDENCY: &str = "social-graph";
+
+/// Logical dependency name for the outbound geo-discovery channel (NEARBY).
+const GEO_DISCOVERY_DEPENDENCY: &str = "geo-discovery";
 
 /// The timeline service as hosted by [`service_runtime`].
 pub struct TimelineService {
@@ -55,6 +58,9 @@ impl Service for TimelineService {
         // Not viewer-aware yet (lists posts/authors unfiltered): members only until
         // it filters on the audience (CheckAccess). Guest access: later.
         authenticated("/timeline.v1.TimelineService/GetAudioFeed"),
+        // Viewer-aware (audience via CheckAccess, fail closed): members and
+        // guests; a guest always gets the RESTRICTED content level.
+        public_read("/timeline.v1.TimelineService/GetDiscoveryFeed"),
     ];
 
     async fn build(infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -76,6 +82,11 @@ impl Service for TimelineService {
             kafka_group_post_deleted:   cfg.kafka_group_post_deleted.clone(),
             kafka_group_sg_followed:    cfg.kafka_group_sg_followed.clone(),
             kafka_group_sg_unfollowed:  cfg.kafka_group_sg_unfollowed.clone(),
+            discovery_window_secs:      cfg.discovery_window_secs,
+            discovery_pool_cap:         cfg.discovery_pool_cap,
+            discovery_hot_gravity_secs: cfg.discovery_hot_gravity_secs,
+            nearby_candidates:          cfg.nearby_candidates,
+            kafka_group_discovery:      cfg.kafka_group_discovery.clone(),
         };
 
         let backends = Backends {
@@ -96,7 +107,19 @@ impl Service for TimelineService {
         .map_err(|e| anyhow::anyhow!("build social-graph client: {e}"))?;
         let social_graph = Arc::new(SocialGraphGrpcClient::new(channel));
 
-        let app = App::build(&app_config, backends, social_graph)
+        let geo_channel = GrpcClientBuilder::new(
+            GrpcClientConfig::new(cfg.geo_discovery_endpoint.clone())
+                .with_dependency(GEO_DISCOVERY_DEPENDENCY),
+        )
+        .build_from_registry_lazy(&infra.resilience())
+        .map_err(|e| anyhow::anyhow!("build geo-discovery client: {e}"))?;
+        let nearby = Arc::new(GrpcNearbyPosts::new(
+            geo_channel,
+            cfg.nearby_radius_km,
+            cfg.nearby_close_radius_km,
+        ));
+
+        let app = App::build(&app_config, backends, social_graph, nearby)
             .await
             .map_err(|e| anyhow::anyhow!("timeline app build: {e}"))?;
 

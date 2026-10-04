@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package timeline.v1;
 
+import "timeline/v1/enums.proto";
+
 // A single slot in a user's following feed.
 //
 // Intentionally minimal: only the identifiers needed for BFF hydration.
@@ -66,4 +68,40 @@ message GetAudioFeedResponse {
     repeated AudioFeedItem items      = 1;
     // Opaque cursor for the next page. Empty when no more items exist.
     string                 next_token = 2;
+}
+
+// Request for a page of the discovery feed (For You, Trending, Recent, Nearby).
+//
+// The reader is the caller's token (a member, or a guest session), never a
+// request field: posts by authors the reader may not see (private profile not
+// followed, block, hidden profile) are left out.
+message GetDiscoveryFeedRequest {
+    DiscoveryRanking ranking       = 1;
+    // ISO 3166-1 alpha-2 country the client is browsing from. Accepted for
+    // forward compatibility: v1 ranks one global pool (see region_applied).
+    string           region        = 2;
+    // Required for NEARBY (WGS-84), ignored otherwise.
+    optional double  lat           = 3;
+    optional double  lng           = 4;
+    // Guests always get RESTRICTED.
+    ContentLevel     content_level = 5;
+    // Opaque cursor from the previous response's next_page_token, for the same
+    // ranking. Omit or send empty for the first page.
+    string           page_token    = 6;
+    // Server clamps to TIMELINE_MAX_PAGE_SIZE; <= 0 means 20.
+    int32            limit         = 7;
+}
+
+message GetDiscoveryFeedResponse {
+    // Identifiers only, as for the following feed: the client hydrates through
+    // post.GetPost. A post can come back on a later page when it moves between
+    // rankings (a fresh post gaining popularity): de-duplicate by post_id.
+    repeated FeedItem items                 = 1;
+    // Empty when the pool is exhausted. A page can hold fewer items than asked
+    // (even none) with a non-empty token: keep paging.
+    string            next_page_token       = 2;
+    // The region the ranking was computed for; empty = global (v1 always).
+    string            region_applied        = 3;
+    // The content level actually applied.
+    ContentLevel      content_level_applied = 4;
 }

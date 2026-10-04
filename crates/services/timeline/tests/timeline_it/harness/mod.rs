@@ -20,13 +20,13 @@ use scylla_storage::ScyllaConfig;
 
 use timeline::app::{App, AppConfig, Backends};
 use timeline::application::command::ingest_post_published::IngestPostPublishedCommand;
-use timeline::application::port::{FeedStore, FollowingStore, TierCache, VipRegistry};
+use timeline::application::port::{DiscoveryPool, FeedStore, FollowingStore, TierCache, VipRegistry};
 use timeline::application::query::get_following_feed::{FollowingFeedPage, GetFollowingFeedQuery};
 
 pub use timeline::domain::value_object::{AuthorId, ProfileId};
 pub use test_support::await_until;
 
-use crate::timeline_it::fakes::FakeSocialGraph;
+use crate::timeline_it::fakes::{FakeNearby, FakeSocialGraph};
 
 /// Generous default patience for a cross-component assertion (Redis round-trip,
 /// async warm-up task completion).
@@ -61,6 +61,8 @@ pub struct TestHarness {
     pub tier_cache:      Arc<dyn TierCache>,
     pub following_store: Arc<dyn FollowingStore>,
     pub social_graph:    Arc<FakeSocialGraph>,
+    pub discovery_pool:  Arc<dyn DiscoveryPool>,
+    pub nearby:          Arc<FakeNearby>,
 }
 
 impl TestHarness {
@@ -96,10 +98,16 @@ impl TestHarness {
             kafka_group_post_deleted:   "timeline-it-post-deleted".to_owned(),
             kafka_group_sg_followed:    "timeline-it-sg-followed".to_owned(),
             kafka_group_sg_unfollowed:  "timeline-it-sg-unfollowed".to_owned(),
+            discovery_window_secs:      259_200,
+            discovery_pool_cap:         10_000,
+            discovery_hot_gravity_secs: 45_000.0,
+            nearby_candidates:          300,
+            kafka_group_discovery:      "timeline-it-discovery".to_owned(),
         };
 
         let social_graph = Arc::new(FakeSocialGraph::new());
-        let app = App::build(&config, backends, Arc::clone(&social_graph))
+        let nearby = Arc::new(FakeNearby::default());
+        let app = App::build(&config, backends, Arc::clone(&social_graph), Arc::clone(&nearby) as _)
             .await
             .expect("integration: build timeline app");
 
@@ -111,6 +119,8 @@ impl TestHarness {
             tier_cache:      app.tier_cache,
             following_store: app.following_store,
             social_graph,
+            discovery_pool:  app.discovery_pool,
+            nearby,
         }
     }
 

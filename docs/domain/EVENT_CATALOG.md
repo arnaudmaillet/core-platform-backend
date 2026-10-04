@@ -47,8 +47,8 @@ producer's `DOMAIN.md §8`.
 | `chat.member.joined` | `chat` | — *(orphan — see below)* |
 | `chat.member.left` | `chat` | — *(orphan — see below)* |
 | `chat.message.sent` | `chat` | — *(orphan — see below)* |
-| `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery` |
-| `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery` |
+| `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery`, `timeline` |
+| `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline` |
 | `auth.v1.events` | `auth` | `audit` |
 | `media.v1.events` | `media` | `media` |
 
