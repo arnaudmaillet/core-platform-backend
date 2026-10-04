@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::{
-    application::port::PostRepository,
+    application::port::{author_visible_to, AudienceGate, PostRepository},
     domain::{aggregate::Post, value_object::{PostId, Viewer}},
     error::PostError,
 };
@@ -21,16 +21,25 @@ impl Query for GetPostQuery {
 
 pub struct GetPostHandler<R> {
     pub repository: Arc<R>,
+    pub audience:   Arc<dyn AudienceGate>,
 }
 
 impl<R: PostRepository> QueryHandler<GetPostQuery> for GetPostHandler<R> {
     type Error = PostError;
 
     async fn handle(&self, envelope: Envelope<GetPostQuery>) -> Result<Post, PostError> {
-        let query   = &envelope.payload;
-        let post_id = PostId::try_from(query.post_id.as_str())?;
-        self.repository.find_by_id(&post_id).await?
+        let query     = &envelope.payload;
+        let post_id   = PostId::try_from(query.post_id.as_str())?;
+        let not_found = || PostError::PostNotFound { post_id: post_id.as_str() };
+
+        // The post's own state first (no network hop), then its author's
+        // audience: private, blocked or hidden authors (fail closed).
+        let post = self.repository.find_by_id(&post_id).await?
             .filter(|post| post.is_visible_to(&query.viewer))
-            .ok_or_else(|| PostError::PostNotFound { post_id: post_id.as_str() })
+            .ok_or_else(not_found)?;
+        if !author_visible_to(self.audience.as_ref(), &query.viewer, post.profile_id()).await? {
+            return Err(not_found());
+        }
+        Ok(post)
     }
 }

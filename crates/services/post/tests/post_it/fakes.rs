@@ -47,3 +47,41 @@ impl EventPublisher for CapturingPublisher {
         Ok(())
     }
 }
+
+/// A scriptable stand-in for social-graph's audience check: every author is
+/// `Visible` unless scripted otherwise, and the gate can be made to fail.
+#[derive(Default)]
+pub struct ScriptedGate {
+    access: Mutex<std::collections::HashMap<String, post::domain::value_object::ContentAccess>>,
+    down:   Mutex<bool>,
+}
+
+impl ScriptedGate {
+    pub fn set(&self, author: &str, access: post::domain::value_object::ContentAccess) {
+        self.access.lock().unwrap().insert(author.to_owned(), access);
+    }
+
+    pub fn set_down(&self, down: bool) {
+        *self.down.lock().unwrap() = down;
+    }
+}
+
+#[async_trait]
+impl post::application::port::AudienceGate for ScriptedGate {
+    async fn access(
+        &self,
+        _viewers: &[post::domain::value_object::ProfileId],
+        author: &post::domain::value_object::ProfileId,
+    ) -> Result<post::domain::value_object::ContentAccess, PostError> {
+        if *self.down.lock().unwrap() {
+            return Err(PostError::AccessCheckUnavailable { reason: "scripted outage".into() });
+        }
+        Ok(self
+            .access
+            .lock()
+            .unwrap()
+            .get(&author.as_str())
+            .copied()
+            .unwrap_or(post::domain::value_object::ContentAccess::Visible))
+    }
+}

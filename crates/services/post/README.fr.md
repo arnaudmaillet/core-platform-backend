@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 902a2548242f30281d4d73e0f2f0be7ba33c49567a863059fc6e9800fc340351
+  source_sha256: d61e4f57cf0e9daa950ac0def221aeaf2925b790f7a46af33db0620af973bd11
   translated_at: 2026-10-04
   status: complete
 ---
@@ -131,7 +131,11 @@ son auteur (tout profil des `pids` du jeton) et des appelants du mesh ; tout aut
 `PST-1001` de `GetPost` et ne le voit pas dans `ListPostsByProfile` (filtré par page : une page peut
 revenir plus courte tandis que `next_token` reste valide). `PostView.moderation` /
 `PostSummary.moderation` indiquent à l'auteur ce qui est en vigueur ; les posts `LIMITED` et
-`AGE_GATED` restent lisibles (la découverte les applique).
+`AGE_GATED` restent lisibles (la découverte les applique). Vient ensuite l'**audience de l'auteur**,
+via le `CheckAccess` (mesh uniquement) de social-graph : un auteur privé que le lecteur ne suit pas,
+un blocage dans un sens ou l'autre, ou un auteur masqué → `PST-1001` / une liste vide. L'auteur et
+les appelants du mesh sautent ce contrôle ; tout autre lecteur (anonyme compris) en dépend, et une
+panne échoue fermé avec `PST-5001` (`UNAVAILABLE`), jamais en servant le post.
 
 ### Contrat d'erreur (`PST-xxxx`)
 
@@ -146,6 +150,7 @@ revenir plus courte tandis que `next_token` reste valide). `PostView.moderation`
 | PST-9001/9002 | invalid post/profile ID | 422 |
 | PST-9003 | `AttachmentsCorrupted` (JSON deser) | 500 |
 | PST-9004 | `DomainViolation` | 422 |
+| PST-5001 | `AccessCheckUnavailable` (social-graph `CheckAccess` did not answer; retryable) | 503 → `UNAVAILABLE` |
 
 ---
 
@@ -231,6 +236,8 @@ async fn main() -> anyhow::Result<()> {
 | `SCYLLA_KEYSPACE` | No | `post` | Keyspace (NTS RF=3, LZ4). |
 | `KAFKA_BROKERS` | **Yes** | — | Kafka brokers for `post.*`. |
 | `POST_GRPC_ADDR` | No | `0.0.0.0:50056` | gRPC bind address. |
+| `POST_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Oui** (prod) | `http://localhost:50053` | Endpoint mesh de social-graph pour le contrôle d'audience (`CheckAccess`). Les lectures par tout autre que l'auteur échouent fermé (`PST-5001`, `UNAVAILABLE`) s'il ne répond pas. |
+| `POST_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | Non | `1000` / `1000` | Délais de cet appel. |
 
 > Le réglage complet `SCYLLA_*` / `KAFKA_*` vit dans les crates partagés storage/transport.
 

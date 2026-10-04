@@ -19,7 +19,9 @@ use transport::kafka::consumer::{KafkaConsumerBuilder, KafkaConsumerHandle};
 use transport::kafka::producer::{KafkaProducerBuilder, KafkaProducerHandle};
 
 use crate::app::{App, Backends};
-use crate::application::port::AuthorTierStore;
+use crate::application::port::{AudienceGate, AuthorTierStore};
+use crate::infrastructure::client::GrpcAudienceGate;
+use tonic::transport::Channel;
 use crate::infrastructure::consumer::{run_author_tier_consumer, run_moderation_consumer};
 use crate::infrastructure::grpc::handler::post_service_handler::PostServiceServer;
 use crate::infrastructure::grpc::handler::PostServiceHandler;
@@ -71,7 +73,20 @@ impl Service for PostService {
             .build()?;
         let publisher = Arc::new(KafkaEventPublisher::new(producer));
 
-        let app = App::build(backends, publisher)
+        // The audience check (social-graph CheckAccess). Lazy connect, so a cold
+        // start does not need social-graph up; both deadlines are mandatory
+        // (tonic has no default request timeout). Reads fail closed without it.
+        let social_graph_endpoint = std::env::var("POST_SOCIAL_GRAPH_GRPC_ENDPOINT")
+            .unwrap_or_else(|_| "http://localhost:50053".to_owned());
+        let rpc_timeout = env_ms("POST_SOCIAL_GRAPH_RPC_TIMEOUT_MS", 1_000);
+        let social_graph = Channel::from_shared(social_graph_endpoint)
+            .map_err(|e| anyhow::anyhow!("invalid POST_SOCIAL_GRAPH_GRPC_ENDPOINT: {e}"))?
+            .timeout(rpc_timeout)
+            .connect_timeout(env_ms("POST_SOCIAL_GRAPH_CONNECT_TIMEOUT_MS", 1_000))
+            .connect_lazy();
+        let audience: Arc<dyn AudienceGate> = Arc::new(GrpcAudienceGate::new(social_graph));
+
+        let app = App::build(backends, publisher, audience)
             .await
             .map_err(|e| anyhow::anyhow!("post app build: {e}"))?;
 
@@ -165,4 +180,9 @@ fn build_consumer(
         .build()
         .map_err(|e| anyhow::anyhow!("build {label} dead-letter producer: {e}"))?;
     Ok((consumer, producer))
+}
+
+/// A millisecond duration from `key`, or `default_ms`.
+fn env_ms(key: &str, default_ms: u64) -> Duration {
+    Duration::from_millis(std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default_ms))
 }
