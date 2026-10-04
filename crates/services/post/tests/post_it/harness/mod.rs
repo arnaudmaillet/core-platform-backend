@@ -27,7 +27,7 @@ use post::application::query::list_posts_by_profile::ListPostsByProfileQuery;
 
 pub use post::application::port::PostSummary;
 pub use post::domain::aggregate::Post;
-pub use post::application::port::{AuthorLocationStore, AuthorWindowStore, PostRepository};
+pub use post::application::port::{AuthorLocationStore, AuthorWindowStore, PostRepository, ReuseDefaults, ReuseRegistry};
 use post::infrastructure::persistence::ScyllaPostRepository;
 pub use post::domain::value_object::{
     ContentAccess, LocationSharing, ModerationRestriction, PostStatus, ProfileId, Viewer,
@@ -59,6 +59,8 @@ pub struct TestHarness {
     pub locations:   Arc<dyn AuthorLocationStore>,
     /// The authors' post window (the `profile.v1.events` projection).
     pub windows:     Arc<dyn AuthorWindowStore>,
+    /// The authors' reuse defaults and sound origins (#669).
+    pub reuse:       Arc<dyn ReuseRegistry>,
     /// Direct store access, to seed posts dated in the past.
     pub repository:  Arc<ScyllaPostRepository>,
 }
@@ -90,6 +92,7 @@ impl TestHarness {
             gate,
             locations:   app.author_location_store,
             windows:     app.author_window_store,
+            reuse:       app.reuse_registry,
             repository:  Arc::new(ScyllaPostRepository::new(Arc::clone(&app.scylla))),
         }
     }
@@ -133,6 +136,27 @@ impl TestHarness {
             ModerationState::default(),
         );
         self.repository.insert(&post).await.expect("seed post");
+    }
+
+    /// Tries to create a post with a sound (and, optionally, the post's own
+    /// reuse permission); the error when it is refused.
+    pub async fn try_create_with_sound(
+        &self,
+        post_id: &str,
+        profile_id: &str,
+        audio_id: &str,
+        original: bool,
+        allow_sound_reuse: Option<bool>,
+    ) -> Result<(), CqrsError> {
+        use post::domain::aggregate::ReuseOverrides;
+        use post::domain::value_object::{AudioId, AudioKind, AudioReference};
+        let mut cmd = create_command(post_id.to_owned(), profile_id.to_owned());
+        cmd.audio_ref = Some(AudioReference {
+            audio_id:   AudioId::try_from(audio_id).expect("audio id"),
+            audio_kind: if original { AudioKind::OriginalSound } else { AudioKind::Reused },
+        });
+        cmd.reuse = ReuseOverrides { allow_remix: None, allow_sound_reuse };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await
     }
 
     /// Publishes a draft post.
@@ -242,6 +266,7 @@ fn create_command(post_id: String, profile_id: String) -> CreatePostCommand {
         root_id:     None,
         audio_ref:   None,
         location:    None,
+        reuse:       Default::default(),
     }
 }
 

@@ -171,6 +171,11 @@ message InteractionSettings {
     InteractionAudience messages         = 3;
     bool                allow_downloads  = 4;
     bool                show_like_counts = 5;
+    // Whether others may remix this profile's posts / reuse their original
+    // sound (#669; a post may override). Always set on a view; on a set
+    // request, absent keeps the stored value.
+    optional bool       allow_remix       = 6;
+    optional bool       allow_sound_reuse = 7;
 }
 
 // The whole set at once (an UNSPECIFIED audience is refused).

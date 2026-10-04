@@ -18,7 +18,7 @@ use crate::application::query::{
     list_posts_by_profile::ListPostsByProfileQuery,
     list_recently_deleted::ListRecentlyDeletedQuery,
 };
-use crate::domain::aggregate::Post;
+use crate::domain::aggregate::{Post, ReuseOverrides};
 use crate::domain::entity::MediaAttachment;
 use crate::domain::value_object::{AudioId, AudioKind, AudioReference, PostId, ProfileId, Viewer};
 
@@ -76,6 +76,7 @@ where
             root_id:     Some(req.root_id).filter(|s| !s.is_empty()),
             audio_ref,
             location:    req.location.map(|g| (g.lat, g.lng)),
+            reuse:       ReuseOverrides { allow_remix: req.allow_remix, allow_sound_reuse: req.allow_sound_reuse },
         };
 
         self.command_bus
@@ -294,6 +295,8 @@ fn post_to_proto(post: Post) -> proto::PostView {
         audio_ref:       domain_audio_ref_to_proto(post.audio_ref()),
         location:        post.location().map(|g| proto::GeoPoint { lat: g.lat(), lng: g.lng() }),
         moderation:      post.moderation().restriction.as_tinyint() as i32 + 1,
+        allow_remix:       post.reuse().allow_remix,
+        allow_sound_reuse: post.reuse().allow_sound_reuse,
     }
 }
 

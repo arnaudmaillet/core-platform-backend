@@ -60,6 +60,12 @@ pub struct InteractionSettings {
     pub allow_downloads: bool,
     /// Whether others see like counts on this profile's posts.
     pub show_like_counts: bool,
+    /// Whether others may remix this profile's posts (#669; a post may
+    /// override it).
+    pub allow_remix: bool,
+    /// Whether others may reuse the original sound of this profile's posts
+    /// (#669; a post may override it). post enforces it.
+    pub allow_sound_reuse: bool,
 }
 
 impl Default for InteractionSettings {
@@ -70,6 +76,8 @@ impl Default for InteractionSettings {
             messages: InteractionAudience::Everyone,
             allow_downloads: true,
             show_like_counts: true,
+            allow_remix: true,
+            allow_sound_reuse: true,
         }
     }
 }
@@ -77,7 +85,8 @@ impl Default for InteractionSettings {
 impl InteractionSettings {
     /// The teen defaults (13–17): only followers comment, mention or message
     /// (a teen's profile is private, so followers are the approved ones), and
-    /// nobody downloads their posts. The holder may relax them later.
+    /// nobody downloads, remixes or reuses the sound of their posts. The holder
+    /// may relax them later.
     pub fn teen() -> Self {
         Self {
             comments: InteractionAudience::Followers,
@@ -85,6 +94,8 @@ impl InteractionSettings {
             messages: InteractionAudience::Followers,
             allow_downloads: false,
             show_like_counts: true,
+            allow_remix: false,
+            allow_sound_reuse: false,
         }
     }
 

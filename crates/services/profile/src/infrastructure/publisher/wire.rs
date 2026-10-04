@@ -73,6 +73,9 @@ pub enum ProfileEventWire {
         messages: String,
         allow_downloads: bool,
         show_like_counts: bool,
+        /// Remix / original-sound reuse defaults (#669); `post` applies them.
+        allow_remix: bool,
+        allow_sound_reuse: bool,
         occurred_at_ms: i64,
     },
     /// Ghost mode and location precision (`precise` | `city`).
@@ -215,6 +218,8 @@ impl From<&DomainEvent> for ProfileEventWire {
                     messages: e.settings.messages.as_str().to_owned(),
                     allow_downloads: e.settings.allow_downloads,
                     show_like_counts: e.settings.show_like_counts,
+                    allow_remix: e.settings.allow_remix,
+                    allow_sound_reuse: e.settings.allow_sound_reuse,
                     occurred_at_ms: e.occurred_at.timestamp_millis(),
                 }
             }

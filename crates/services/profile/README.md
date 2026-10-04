@@ -115,7 +115,7 @@ service ProfileService {
   rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);
   rpc UpdateBanner(UpdateBannerRequest) returns (CommandResponse);
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
-  rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // who may comment / mention / message, downloads, like counts; teens start with followers-only
+  rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // who may comment / mention / message, downloads, like counts, remix and original-sound reuse (#669; absent on a set request ⇒ unchanged); teens start with followers-only and no downloads / remix / sound reuse
   rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse); // ghost mode + precise / city level (owner-only on the view); teens start ghosted; geo-discovery applies it
   rpc SetFeedSettings(SetFeedSettingsRequest) returns (CommandResponse); // #662 sensitive content less (default) / standard, synced across devices; the client sends it as timeline's content_level; owner-only on the view
   rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse); // #664 post window (all / 6 months / 1 month / 3 days; post hides older posts from visitors) + likes / saved / reposts / places tab visibility (stored; no tab served yet); partial; owner-only on the view

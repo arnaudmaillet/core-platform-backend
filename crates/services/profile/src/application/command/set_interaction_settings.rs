@@ -13,6 +13,10 @@ use crate::error::ProfileError;
 pub struct SetInteractionSettingsCommand {
     pub profile_id: String,
     pub settings:   InteractionSettings,
+    /// `None` keeps the stored value (a client unaware of the field).
+    pub allow_remix: Option<bool>,
+    /// `None` keeps the stored value.
+    pub allow_sound_reuse: Option<bool>,
 }
 
 impl Command for SetInteractionSettingsCommand {}
@@ -54,7 +58,13 @@ impl CommandHandler<SetInteractionSettingsCommand> for SetInteractionSettingsHan
             .await?
             .ok_or_else(|| ProfileError::ProfileNotFound { id: cmd.profile_id.clone() })?;
 
-        if !profile.set_interaction_settings(cmd.settings, envelope.correlation_id)? {
+        let current = profile.interaction();
+        let settings = InteractionSettings {
+            allow_remix: cmd.allow_remix.unwrap_or(current.allow_remix),
+            allow_sound_reuse: cmd.allow_sound_reuse.unwrap_or(current.allow_sound_reuse),
+            ..cmd.settings
+        };
+        if !profile.set_interaction_settings(settings, envelope.correlation_id)? {
             return Ok(());
         }
         self.repo.save(&profile).await?;

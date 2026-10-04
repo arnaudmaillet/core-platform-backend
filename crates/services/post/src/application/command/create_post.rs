@@ -4,11 +4,11 @@ use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
 use crate::{
-    application::port::{EventPublisher, PostRepository},
+    application::port::{EventPublisher, PostRepository, ReuseRegistry},
     domain::{
-        aggregate::Post,
+        aggregate::{Post, ReuseOverrides},
         entity::MediaAttachment,
-        value_object::{AudioReference, Caption, CdnUrl, GeoPoint, MimeType, PostId, PostKind, ProfileId},
+        value_object::{AudioId, AudioKind, AudioReference, Caption, CdnUrl, GeoPoint, MimeType, PostId, PostKind, ProfileId},
     },
     error::PostError,
 };
@@ -35,6 +35,9 @@ pub struct CreatePostCommand {
     /// `GeoPoint` during handling. Absent → the post carries no location and is
     /// not geo-indexed downstream.
     pub location:    Option<(f64, f64)>,
+    /// The post's own remix / original-sound reuse permission (#669); `None`
+    /// follows the author's default.
+    pub reuse:       ReuseOverrides,
 }
 
 impl Command for CreatePostCommand {}
@@ -81,6 +84,30 @@ pub(crate) fn parse_attachments(inputs: &[AttachmentInput]) -> Result<Vec<MediaA
 pub struct CreatePostHandler<R, P> {
     pub repository: Arc<R>,
     pub publisher:  Arc<P>,
+    /// Who may reuse whose original sound (#669).
+    pub reuse:      Arc<dyn ReuseRegistry>,
+}
+
+/// May `author` reuse `audio`? Allowed unless the sound's original post (by
+/// someone else) or, failing a post override, its author forbids it. A sound
+/// the platform does not know (a library track) is free to use.
+async fn may_reuse_sound<R: PostRepository>(
+    repository: &R,
+    reuse: &dyn ReuseRegistry,
+    author: &ProfileId,
+    audio: &AudioId,
+) -> Result<bool, PostError> {
+    let Some((origin_post, origin_author)) = reuse.origin(audio).await? else {
+        return Ok(true);
+    };
+    if origin_author.as_uuid() == author.as_uuid() {
+        return Ok(true);
+    }
+    let override_ = repository.find_by_id(&origin_post).await?.and_then(|p| p.reuse().allow_sound_reuse);
+    match override_ {
+        Some(allowed) => Ok(allowed),
+        None => Ok(reuse.defaults(&origin_author).await?.allow_sound_reuse),
+    }
 }
 
 impl<R, P> CommandHandler<CreatePostCommand> for CreatePostHandler<R, P>
@@ -124,8 +151,21 @@ where
             .map(|(lat, lng)| GeoPoint::new(lat, lng))
             .transpose()?;
 
-        let post = Post::create(post_id, profile_id, kind, caption, attachments, parent_id, root_id, cmd.audio_ref.clone(), location)?;
+        // Using someone else's original sound needs their permission (#669),
+        // whatever the request calls it.
+        if let Some(audio) = cmd.audio_ref.as_ref()
+            && !may_reuse_sound(self.repository.as_ref(), self.reuse.as_ref(), &profile_id, &audio.audio_id).await?
+        {
+            return Err(PostError::SoundReuseNotAllowed { audio_id: audio.audio_id.as_str() });
+        }
+
+        let post = Post::create(post_id, profile_id, kind, caption, attachments, parent_id, root_id, cmd.audio_ref.clone(), location)?
+            .with_reuse(cmd.reuse);
         self.repository.insert(&post).await?;
+        // An original sound belongs to the post that made it.
+        if let Some(audio) = cmd.audio_ref.as_ref().filter(|a| a.audio_kind == AudioKind::OriginalSound) {
+            self.reuse.record_origin(&audio.audio_id, post.id(), post.profile_id()).await?;
+        }
         Ok(())
     }
 }
