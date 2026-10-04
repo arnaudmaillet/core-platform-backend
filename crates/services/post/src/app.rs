@@ -21,7 +21,7 @@ use crate::application::command::create_post::{CreatePostCommand, CreatePostHand
 use crate::application::command::delete_post::{DeletePostCommand, DeletePostHandler};
 use crate::application::command::publish_post::{PublishPostCommand, PublishPostHandler};
 use crate::application::command::update_post::{UpdatePostCommand, UpdatePostHandler};
-use crate::application::port::{AuthorTierStore, EventPublisher};
+use crate::application::port::{AudienceGate, AuthorTierStore, EventPublisher};
 use crate::application::query::get_post::{GetPostHandler, GetPostQuery};
 use crate::application::query::list_posts_by_profile::{
     ListPostsByProfileHandler, ListPostsByProfileQuery,
@@ -55,6 +55,7 @@ impl App {
     pub async fn build<P: EventPublisher>(
         backends:  Backends,
         publisher: Arc<P>,
+        audience:  Arc<dyn AudienceGate>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let scylla_client = Arc::new(ScyllaSessionBuilder::new(backends.scylla).build().await?);
         let repository = Arc::new(ScyllaPostRepository::new(Arc::clone(&scylla_client)));
@@ -90,9 +91,11 @@ impl App {
             QueryBusBuilder::new()
                 .register::<GetPostQuery, _>(GetPostHandler {
                     repository: Arc::clone(&repository),
+                    audience:   Arc::clone(&audience),
                 })?
                 .register::<ListPostsByProfileQuery, _>(ListPostsByProfileHandler {
                     repository: Arc::clone(&repository),
+                    audience,
                 })?
                 .build(),
         );

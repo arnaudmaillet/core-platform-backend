@@ -297,6 +297,8 @@ services:
       SCYLLA_LOCAL_DC: datacenter1
       SCYLLA_KEYSPACE: post
       KAFKA_BROKERS: redpanda:9092
+      # Audience check (CheckAccess). Non-author reads fail closed without it.
+      POST_SOCIAL_GRAPH_GRPC_ENDPOINT: http://social-graph-server:50053
     ports:
       - "50056:50056"
     depends_on:

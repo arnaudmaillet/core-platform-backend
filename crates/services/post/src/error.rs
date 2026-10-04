@@ -61,6 +61,11 @@ pub enum PostError {
 
     #[error("domain violation on field '{field}': {message}")]
     DomainViolation { field: String, message: String },
+
+    /// The audience check (social-graph `CheckAccess`) could not answer. Reads
+    /// fail closed rather than risk showing a private or blocked author's post.
+    #[error("audience check unavailable: {reason}")]
+    AccessCheckUnavailable { reason: String },
 }
 
 impl AppError for PostError {
@@ -85,6 +90,7 @@ impl AppError for PostError {
             Self::AttachmentsCorrupted { .. } => "PST-9003",
             Self::DomainViolation { .. }      => "PST-9004",
             Self::InvalidAudioId(_)           => "PST-9005",
+            Self::AccessCheckUnavailable { .. } => "PST-5001",
         }
     }
 
@@ -109,6 +115,7 @@ impl AppError for PostError {
             | Self::InvalidAudioId(_)
             | Self::DomainViolation { .. }    => StatusCode::UNPROCESSABLE_ENTITY,
             Self::AttachmentsCorrupted { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::AccessCheckUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -118,7 +125,8 @@ impl AppError for PostError {
             Self::Validation(e) => e.severity(),
             Self::AttachmentsCorrupted { .. } => Severity::High,
             Self::AuthorMismatch { .. }
-            | Self::DomainViolation { .. }    => Severity::Medium,
+            | Self::DomainViolation { .. }
+            | Self::AccessCheckUnavailable { .. } => Severity::Medium,
             _                                 => Severity::Low,
         }
     }
@@ -126,6 +134,7 @@ impl AppError for PostError {
     fn is_retryable(&self) -> bool {
         match self {
             Self::Storage(e) => e.is_retryable(),
+            Self::AccessCheckUnavailable { .. } => true,
             _                => false,
         }
     }
@@ -146,6 +155,7 @@ impl AppError for PostError {
             | Self::InvalidMimeType { .. }
             | Self::InvalidCdnUrl { .. }
             | Self::InvalidDimensions { .. }    => "attachment",
+            Self::AccessCheckUnavailable { .. } => "dependency",
             _                                   => "PST",
         }
     }
@@ -154,6 +164,7 @@ impl AppError for PostError {
         match self {
             Self::Storage(_)
             | Self::AttachmentsCorrupted { .. } => "An internal error occurred. Please try again later.",
+            Self::AccessCheckUnavailable { .. } => "This content is temporarily unavailable. Please try again later.",
             Self::PostNotFound { .. }            => "The requested post was not found.",
             Self::PostAlreadyPublished { .. }    => "This post has already been published.",
             Self::PostAlreadyDeleted { .. }      => "This post has already been deleted.",

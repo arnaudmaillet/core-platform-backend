@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::{
-    application::port::{PostRepository, PostSummary},
+    application::port::{author_visible_to, AudienceGate, PostRepository, PostSummary},
     domain::value_object::{ProfileId, Viewer},
     error::PostError,
 };
@@ -23,6 +23,7 @@ impl Query for ListPostsByProfileQuery {
 
 pub struct ListPostsByProfileHandler<R> {
     pub repository: Arc<R>,
+    pub audience:   Arc<dyn AudienceGate>,
 }
 
 impl<R: PostRepository> QueryHandler<ListPostsByProfileQuery> for ListPostsByProfileHandler<R> {
@@ -37,6 +38,11 @@ impl<R: PostRepository> QueryHandler<ListPostsByProfileQuery> for ListPostsByPro
     ) -> Result<(Vec<PostSummary>, Option<String>), PostError> {
         let query      = &envelope.payload;
         let profile_id = ProfileId::try_from(query.profile_id.as_str())?;
+        // A private author the reader does not follow, a block either way or a
+        // hidden author: no posts at all (fail closed on a check error).
+        if !author_visible_to(self.audience.as_ref(), &query.viewer, &profile_id).await? {
+            return Ok((Vec::new(), None));
+        }
         let (mut posts, next) = self
             .repository
             .list_by_profile(&profile_id, query.limit, query.page_token.as_deref())

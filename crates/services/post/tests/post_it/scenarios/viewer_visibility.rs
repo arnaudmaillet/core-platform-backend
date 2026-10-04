@@ -6,7 +6,9 @@
 //! caller (the mesh) sees everything, as before. A post moderation removed goes
 //! back to its author alone, in both tables, until the enforcement is reversed.
 
-use crate::post_it::harness::{self, ModerationRestriction, ProfileId, TestHarness, Viewer};
+use crate::post_it::harness::{
+    self, ContentAccess, ModerationRestriction, ProfileId, TestHarness, Viewer,
+};
 
 #[tokio::test]
 async fn drafts_and_deleted_posts_are_visible_to_their_author_only() {
@@ -75,4 +77,42 @@ async fn a_removed_post_is_its_authors_alone_until_reversed() {
 
     // An outcome for a post that does not exist is a no-op, not an error.
     h.moderate(&harness::random_id(), ModerationRestriction::Removed, 1).await;
+}
+
+#[tokio::test]
+async fn the_authors_audience_gates_its_posts_and_an_outage_fails_closed() {
+    let h = TestHarness::start().await;
+
+    let author_id = harness::random_id();
+    let post_id = harness::random_id();
+    let author = Viewer::Profiles(vec![ProfileId::try_from(author_id.as_str()).unwrap()]);
+    let reader = Viewer::Profiles(vec![ProfileId::try_from(harness::random_id().as_str()).unwrap()]);
+    h.create(&post_id, &author_id).await;
+    h.publish(&post_id, &author_id).await;
+
+    // A private author the reader does not follow, or a block: no posts.
+    for access in [ContentAccess::HeaderOnly, ContentAccess::Hidden] {
+        h.gate.set(&author_id, access);
+        assert!(h.get_as(&post_id, reader.clone()).await.is_err(), "{access:?}");
+        assert!(h.get_as(&post_id, Viewer::Anonymous).await.is_err(), "{access:?}");
+        assert!(h.list_as(&author_id, reader.clone()).await.is_empty(), "{access:?}");
+        // The author and the mesh never depend on the check.
+        assert!(h.get_as(&post_id, author.clone()).await.is_ok());
+        assert!(h.get_as(&post_id, Viewer::Internal).await.is_ok());
+    }
+
+    // Visible (public, or a follower of a private author).
+    h.gate.set(&author_id, ContentAccess::Visible);
+    assert!(h.get_as(&post_id, reader.clone()).await.is_ok());
+    assert_eq!(h.list_as(&author_id, reader.clone()).await.len(), 1);
+
+    // social-graph down: fail closed (an error, never the post), except for
+    // the author and the mesh.
+    h.gate.set_down(true);
+    let Err(err) = h.get_as(&post_id, reader.clone()).await else {
+        panic!("an outage must not serve the post");
+    };
+    assert!(err.to_string().contains("audience check unavailable"), "{err}");
+    assert!(h.get_as(&post_id, author).await.is_ok());
+    assert!(h.get_as(&post_id, Viewer::Internal).await.is_ok());
 }

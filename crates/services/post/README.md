@@ -119,6 +119,10 @@ profile in the token's `pids`) and to mesh callers only; anyone else gets `PST-1
 and does not see it in `ListPostsByProfile` (filtered per page, so a page can come back short
 while `next_token` stays valid). `PostView.moderation` / `PostSummary.moderation` tell the author
 what is in force; `LIMITED` and `AGE_GATED` posts stay readable (discovery applies those).
+Then the **author's audience**, from social-graph's mesh-only `CheckAccess`: a private author the
+reader does not follow, a block either way, or a hidden author → `PST-1001` / an empty list. The
+author and mesh callers skip the check; anyone else (anonymous included) depends on it, and an
+outage fails closed with `PST-5001` (`UNAVAILABLE`), never by serving the post.
 
 ### Error contract (`PST-xxxx`)
 
@@ -133,6 +137,7 @@ what is in force; `LIMITED` and `AGE_GATED` posts stay readable (discovery appli
 | PST-9001/9002 | invalid post/profile ID | 422 |
 | PST-9003 | `AttachmentsCorrupted` (JSON deser) | 500 |
 | PST-9004 | `DomainViolation` | 422 |
+| PST-5001 | `AccessCheckUnavailable` (social-graph `CheckAccess` did not answer; retryable) | 503 → `UNAVAILABLE` |
 
 ---
 
@@ -216,6 +221,8 @@ async fn main() -> anyhow::Result<()> {
 | `SCYLLA_KEYSPACE` | No | `post` | Keyspace (NTS RF=3, LZ4). |
 | `KAFKA_BROKERS` | **Yes** | — | Kafka brokers for `post.*`. |
 | `POST_GRPC_ADDR` | No | `0.0.0.0:50056` | gRPC bind address. |
+| `POST_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Yes** (prod) | `http://localhost:50053` | social-graph mesh endpoint for the audience check (`CheckAccess`). Reads by anyone but the author fail closed (`PST-5001`, `UNAVAILABLE`) when it does not answer. |
+| `POST_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Deadlines for that call. |
 
 > Full `SCYLLA_*` / `KAFKA_*` tuning lives in the shared storage/transport crates.
 

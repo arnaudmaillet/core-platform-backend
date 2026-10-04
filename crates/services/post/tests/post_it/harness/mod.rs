@@ -27,10 +27,12 @@ use post::application::query::list_posts_by_profile::ListPostsByProfileQuery;
 
 pub use post::application::port::PostSummary;
 pub use post::domain::aggregate::Post;
-pub use post::domain::value_object::{ModerationRestriction, PostStatus, ProfileId, Viewer};
+pub use post::domain::value_object::{
+    ContentAccess, ModerationRestriction, PostStatus, ProfileId, Viewer,
+};
 pub use test_support::await_until;
 
-use crate::post_it::fakes::CapturingPublisher;
+use crate::post_it::fakes::{CapturingPublisher, ScriptedGate};
 
 /// Generous default patience for a cross-component assertion (ScyllaDB
 /// dual-table write visibility).
@@ -49,6 +51,8 @@ pub struct TestHarness {
     pub command_bus: Arc<InMemoryCommandBus>,
     pub query_bus:   Arc<InMemoryQueryBus>,
     pub publisher:   Arc<CapturingPublisher>,
+    /// The audience check: authors are visible unless a scenario scripts it.
+    pub gate:        Arc<ScriptedGate>,
 }
 
 impl TestHarness {
@@ -66,11 +70,12 @@ impl TestHarness {
         };
 
         let publisher = Arc::new(CapturingPublisher::new());
-        let app = App::build(backends, Arc::clone(&publisher))
+        let gate = Arc::new(ScriptedGate::default());
+        let app = App::build(backends, Arc::clone(&publisher), Arc::clone(&gate) as _)
             .await
             .expect("integration: build post app");
 
-        Self { command_bus: app.command_bus, query_bus: app.query_bus, publisher }
+        Self { command_bus: app.command_bus, query_bus: app.query_bus, publisher, gate }
     }
 
     /// Creates a `TextOnly` post, expecting success.
