@@ -62,6 +62,8 @@ impl Service for AccountService {
         authenticated("/account.v1.AccountService/UpdateConsents"),
         authenticated("/account.v1.AccountService/GetAccountById"),
         authenticated("/account.v1.AccountService/GetAccountStatus"),
+        // The holder's own date of birth, once (accounts created without one).
+        authenticated("/account.v1.AccountService/SetDateOfBirth"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

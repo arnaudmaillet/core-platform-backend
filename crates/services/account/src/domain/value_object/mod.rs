@@ -1,6 +1,7 @@
 pub mod account_id;
 pub mod account_role;
 pub mod account_status;
+pub mod age_bracket;
 pub mod consent_purpose;
 pub mod country_code;
 pub mod email_address;
@@ -14,6 +15,7 @@ pub mod recovery_code_hash;
 pub use account_id::AccountId;
 pub use account_role::AccountRole;
 pub use account_status::AccountStatus;
+pub use age_bracket::{check_date_of_birth, AgeBracket, MINIMUM_AGE};
 pub use consent_purpose::ConsentPurpose;
 pub use country_code::CountryCode;
 pub use email_address::EmailAddress;

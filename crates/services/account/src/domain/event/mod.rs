@@ -6,6 +6,7 @@ pub mod account_suspended;
 pub mod email_changed;
 pub mod email_verified;
 pub mod consents_updated;
+pub mod date_of_birth_set;
 pub mod gdpr_data_export_requested;
 pub mod gdpr_deletion_cancelled;
 pub mod gdpr_deletion_requested;
@@ -25,6 +26,7 @@ pub use account_suspended::AccountSuspended;
 pub use email_changed::EmailChanged;
 pub use email_verified::EmailVerified;
 pub use consents_updated::{ConsentChange, ConsentsUpdated};
+pub use date_of_birth_set::DateOfBirthSet;
 pub use gdpr_data_export_requested::GdprDataExportRequested;
 pub use gdpr_deletion_cancelled::GdprDeletionCancelled;
 pub use gdpr_deletion_requested::GdprDeletionRequested;
@@ -63,6 +65,7 @@ pub enum DomainEvent {
     GdprDataExportRequested(GdprDataExportRequested),
     ConsentsUpdated(ConsentsUpdated),
     GdprDeletionCancelled(GdprDeletionCancelled),
+    DateOfBirthSet(DateOfBirthSet),
 }
 
 impl DomainEvent {
@@ -86,6 +89,7 @@ impl DomainEvent {
             Self::GdprDataExportRequested(_) => "account.gdpr_data_export_requested",
             Self::ConsentsUpdated(_)         => "account.consents_updated",
             Self::GdprDeletionCancelled(_)   => "account.gdpr_deletion_cancelled",
+            Self::DateOfBirthSet(_)          => "account.date_of_birth_set",
         }
     }
 }

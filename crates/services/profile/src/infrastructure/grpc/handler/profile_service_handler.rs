@@ -63,6 +63,9 @@ where
         request: Request<proto::CreateProfileRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
         edge::require_account(&request, &request.get_ref().account_id)?;
+        // Teen default: a 13–17 holder's profile starts private (they may open
+        // it later with SetVisibility).
+        let private = edge::principal(&request).is_some_and(|p| p.is_minor());
         let req = request.into_inner();
         let kind = profile_kind_i32_to_str(req.profile_kind)
             .ok_or_else(|| Status::invalid_argument("unknown profile_kind"))?;
@@ -75,6 +78,7 @@ where
             banner_url:   Some(req.banner_url).filter(|s| !s.is_empty()),
             profile_kind: kind.to_owned(),
             locale:       req.locale,
+            private,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))

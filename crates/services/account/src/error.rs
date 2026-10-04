@@ -14,6 +14,8 @@ use thiserror::Error;
 /// | ACC-2001 | AccountNotActive           | 422  | Medium   | No        |
 /// | ACC-2002 | InvalidStatusTransition    | 422  | Medium   | No        |
 /// | ACC-2003 | EmailAlreadyVerified       | 409  | Low      | No        |
+/// | ACC-2004 | AgeBelowMinimum            | 422  | Low      | No        |
+/// | ACC-2005 | DateOfBirthAlreadySet      | 409  | Low      | No        |
 /// | ACC-4001 | ConcurrentModification     | 409  | High     | **Yes**   |
 /// | ACC-5001 | MfaAlreadyEnrolled         | 409  | Low      | No        |
 /// | ACC-5002 | MfaNotEnrolled             | 422  | Low      | No        |
@@ -86,6 +88,14 @@ pub enum AccountError {
     #[error("KYC status transition from '{from}' to '{to}' is not permitted")]
     InvalidKycTransition { from: String, to: String },
 
+    /// Under the minimum age (13; 16 where the country of residence says so).
+    #[error("the account holder is under the minimum age of {minimum}")]
+    AgeBelowMinimum { minimum: u32 },
+
+    /// A date of birth is on file already: only support may change it.
+    #[error("a date of birth is already on file")]
+    DateOfBirthAlreadySet,
+
     // ── GDPR / compliance (ACC-7xxx) ──────────────────────────────────────────
 
     #[error("a GDPR deletion request has already been submitted for this account")]
@@ -156,6 +166,8 @@ impl AppError for AccountError {
             AccountError::AccountNotActive { .. }          => "ACC-2001",
             AccountError::InvalidStatusTransition { .. }   => "ACC-2002",
             AccountError::EmailAlreadyVerified             => "ACC-2003",
+            AccountError::AgeBelowMinimum { .. }           => "ACC-2004",
+            AccountError::DateOfBirthAlreadySet            => "ACC-2005",
 
             AccountError::ConcurrentModification           => "ACC-4001",
 
@@ -198,6 +210,7 @@ impl AppError for AccountError {
             | AccountError::ConcurrentModification
             | AccountError::MfaAlreadyEnrolled
             | AccountError::GdprDeletionAlreadyRequested
+            | AccountError::DateOfBirthAlreadySet
             | AccountError::RoleAlreadyAssigned(_) => StatusCode::CONFLICT,
 
             AccountError::EventPublishFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -254,6 +267,8 @@ impl AppError for AccountError {
             AccountError::MfaNotEnrolled                   => "Multi-factor authentication is not configured.",
             AccountError::InvalidKycTransition { .. }      => "This KYC status transition is not permitted.",
             AccountError::GdprDeletionAlreadyRequested     => "A deletion request has already been submitted.",
+            AccountError::AgeBelowMinimum { .. }           => "You are not old enough to use this service.",
+            AccountError::DateOfBirthAlreadySet            => "Your date of birth is already on file; contact support to change it.",
             AccountError::AccountAlreadyAnonymized         => "This account has already been anonymized.",
             AccountError::NoPendingGdprDeletion            => "No deletion is pending for this account.",
             AccountError::GdprGracePeriodOver              => "This account's deletion can no longer be cancelled.",

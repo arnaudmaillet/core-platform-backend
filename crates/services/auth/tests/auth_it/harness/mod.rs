@@ -105,6 +105,7 @@ impl AccountDirectory for StubDirectory {
         Ok(AccountSnapshot {
             activation: AccountActivation::Active,
             permissions: vec![Permission::new("posts:write")],
+            age_bracket: None,
         })
     }
 

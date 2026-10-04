@@ -5,6 +5,7 @@ use uuid::Uuid;
 use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
+use crate::domain::value_object::AgeBracket;
 use crate::application::command::{
     anonymize_account::AnonymizeAccountCommand,
     assign_role::AssignRoleCommand,
@@ -21,6 +22,7 @@ use crate::application::command::{
     resume_deactivated_account::ResumeDeactivatedAccountCommand,
     revoke_mfa::RevokeMfaCommand,
     revoke_role::RevokeRoleCommand,
+    set_date_of_birth::SetDateOfBirthCommand,
     suspend_account::SuspendAccountCommand,
     update_consents::UpdateConsentsCommand,
     update_kyc_status::UpdateKycStatusCommand,
@@ -111,6 +113,7 @@ where
             country_of_residence: Some(req.country_of_residence).filter(|s| !s.is_empty()),
             role: None,
             created_by: Some(req.created_by).filter(|s| !s.is_empty()),
+            date_of_birth: Some(req.date_of_birth).filter(|s| !s.is_empty()),
         };
         self.command_bus
             .dispatch(Envelope::new(correlation_id, cmd))
@@ -421,6 +424,30 @@ where
         Ok(Response::new(account_view_to_proto(view)))
     }
 
+    /// Records the holder's date of birth when none is on file; returns the
+    /// updated view (with its age bracket).
+    pub async fn set_date_of_birth(
+        &self,
+        request: Request<proto::SetDateOfBirthRequest>,
+    ) -> Result<Response<proto::AccountView>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let cmd = SetDateOfBirthCommand {
+            account_id: req.account_id.clone(),
+            date_of_birth: req.date_of_birth,
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map_err(cqrs_error_to_status)?;
+        let view: AccountView = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), GetAccountByIdQuery { account_id: req.account_id }))
+            .await
+            .map_err(cqrs_error_to_status)?;
+        Ok(Response::new(account_view_to_proto(view)))
+    }
+
     pub async fn get_account_by_identity_id(
         &self,
         request: Request<proto::GetAccountByIdentityIdRequest>,
@@ -557,7 +584,18 @@ fn account_view_to_proto(v: AccountView) -> proto::AccountView {
         version: v.version,
         created_at: Some(dt_to_ts(v.created_at)),
         updated_at: Some(dt_to_ts(v.updated_at)),
+        age_bracket: age_bracket_to_proto(v.age_bracket),
+        date_of_birth: v.date_of_birth.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default(),
     }
+}
+
+fn age_bracket_to_proto(bracket: Option<AgeBracket>) -> i32 {
+    (match bracket {
+        None => proto::AgeBracket::Unspecified,
+        Some(AgeBracket::Teen13To15) => proto::AgeBracket::AgeBracket1315,
+        Some(AgeBracket::Teen16To17) => proto::AgeBracket::AgeBracket1617,
+        Some(AgeBracket::Adult) => proto::AgeBracket::Adult,
+    }) as i32
 }
 
 fn account_status_str_to_i32(s: &str) -> i32 {

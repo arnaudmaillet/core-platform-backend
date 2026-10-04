@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::domain::value_object::{AccountId, IdpSubject, Permission};
+use crate::domain::value_object::{AccountId, AgeBracket, IdpSubject, Permission};
 use crate::error::AuthError;
 
 /// Whether an account may currently establish or keep a session.
@@ -28,6 +28,8 @@ pub struct AccountSnapshot {
     /// re-read on every login and refresh (a role change takes effect at the next
     /// token mint, not at the next full sign-in).
     pub permissions: Vec<Permission>,
+    /// From the account's date of birth, today; `None` when none is on file.
+    pub age_bracket: Option<AgeBracket>,
 }
 
 /// Outbound port to the `account` service (gRPC adapter in Phase 4).

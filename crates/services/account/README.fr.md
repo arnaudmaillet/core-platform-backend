@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: e491b5143d72695790d89b342db59a1046c4786724fe8df6aedcf237a86e0151
+  source_sha256: 20952a3cb38587d963c7e587bf049fc670447365eaf14f3b2d894c8a80f742ed
   translated_at: 2026-10-04
   status: complete
 ---
@@ -142,6 +142,7 @@ service AccountService {
   rpc GetAccountById (GetAccountByIdRequest) returns (AccountView);
   rpc GetAccountByIdentityId (GetAccountByIdentityIdRequest) returns (AccountView);
   rpc GetAccountStatus (GetAccountStatusRequest) returns (AccountStatusView); // auth hot path
+  rpc SetDateOfBirth (SetDateOfBirthRequest) returns (AccountView);          // une fois, si absente ; âge minimum 13 ans (16 en AU)
   rpc GetGdprRecord (GetGdprRecordRequest) returns (GdprRecordView);          // le sien propre en périphérie
   rpc UpdateConsents (UpdateConsentsRequest) returns (GdprRecordView);         // GDPR Art. 7 consents + history
   rpc ListAccountsByStatus (ListAccountsByStatusRequest) returns (ListAccountsByStatusResponse);
@@ -188,7 +189,7 @@ Les codes stables vont de `ACC-1xxx` (lifecycle) à `ACC-9xxx` (identifiers), vi
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `ConsentsUpdated` | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `ConsentsUpdated`, `DateOfBirthSet` | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
 
 **Consomme :** rien — `account` est un producteur d'événements pur.
 

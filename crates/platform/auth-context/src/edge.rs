@@ -12,6 +12,7 @@
 //! | `pids`  | the **profile** ids the account owns ([`EDGE_PROFILES_CLAIM`]) |
 //! | `did`   | the device the session is bound to ([`EDGE_DEVICE_CLAIM`]); absent when the client sent none |
 //! | `auth_time` | when the caller last proved a credential ([`EDGE_AUTH_TIME_CLAIM`], Unix seconds): set on tokens minted by `Login` and `VerifyCredentials` (step-up), absent on refreshed ones |
+//! | `age`   | the holder's age bracket ([`EDGE_AGE_CLAIM`]: `"13-15"`, `"16-17"` or `"18+"`), re-read from `account` at every mint; absent when no date of birth is on file |
 //! | `kind`  | `"guest"` on a guest token ([`EDGE_KIND_CLAIM`]: `sub = "guest:<id>"`, `perms = ["read:public"]`, no `pids`); absent on a member's |
 //!
 //! `pids` exists because the client-facing surface is keyed by profile id while
@@ -70,6 +71,26 @@ pub const STEP_UP_MAX_AGE_SECS: i64 = 300;
 /// token says so.
 pub fn auth_time(claims: &OidcClaims) -> Option<i64> {
     claims.extra.get(EDGE_AUTH_TIME_CLAIM).and_then(|v| v.as_i64())
+}
+
+/// The claim carrying the holder's age bracket: [`AGE_13_15`], [`AGE_16_17`] or
+/// [`AGE_ADULT`]. `auth` computes it from the account's date of birth at every
+/// mint, so a birthday shows up within one access-token lifetime. Absent when
+/// the account has no date of birth on file (treated as an adult).
+pub const EDGE_AGE_CLAIM: &str = "age";
+pub const AGE_13_15: &str = "13-15";
+pub const AGE_16_17: &str = "16-17";
+pub const AGE_ADULT: &str = "18+";
+
+/// The token's age bracket, if any.
+pub fn age_bracket(claims: &OidcClaims) -> Option<&str> {
+    claims.extra.get(EDGE_AGE_CLAIM).and_then(|v| v.as_str())
+}
+
+/// `true` for a 13–17 holder: the teen protections apply (private by
+/// default, no messages from strangers, location off…).
+pub fn is_minor(claims: &OidcClaims) -> bool {
+    matches!(age_bracket(claims), Some(AGE_13_15 | AGE_16_17))
 }
 
 /// The decoder specialisation every edge-token verifier in the fleet uses.
@@ -186,5 +207,27 @@ mod guest_tests {
         assert!(is_guest(&claims(serde_json::json!({"sub": "guest:g-1", "exp": exp}))), "no kind");
         assert!(is_guest(&claims(serde_json::json!({"sub": "acct-1", "exp": exp, "kind": "guest"}))), "no prefix");
         assert!(!is_guest(&claims(serde_json::json!({"sub": "acct-1", "exp": exp}))));
+    }
+}
+
+#[cfg(test)]
+mod age_tests {
+    use super::*;
+
+    fn with_age(age: Option<&str>) -> OidcClaims {
+        let mut json = serde_json::json!({"sub": "acct-1", "exp": 4_102_444_800_i64});
+        if let Some(age) = age {
+            json["age"] = serde_json::json!(age);
+        }
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn only_the_teen_brackets_are_minors() {
+        assert!(is_minor(&with_age(Some(AGE_13_15))));
+        assert!(is_minor(&with_age(Some(AGE_16_17))));
+        assert!(!is_minor(&with_age(Some(AGE_ADULT))));
+        assert!(!is_minor(&with_age(None)), "an unknown age is not a minor");
+        assert_eq!(age_bracket(&with_age(Some(AGE_16_17))), Some("16-17"));
     }
 }

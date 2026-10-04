@@ -108,6 +108,7 @@ async fn minted_edge_token_is_verified_by_auth_context() {
         device_id: None,
         kind: SessionKind::Member,
         auth_time: None,
+        age_bracket: None,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
@@ -138,6 +139,7 @@ async fn auth_context_rejects_a_token_for_a_different_audience() {
         device_id: None,
         kind: SessionKind::Member,
         auth_time: None,
+        age_bracket: None,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
@@ -160,6 +162,7 @@ async fn fleet_edge_decoder_sees_the_did_claim_realtime_requires() {
         device_id: Some("ios-install-1".to_owned()),
         kind: SessionKind::Member,
         auth_time: None,
+        age_bracket: None,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
@@ -203,6 +206,7 @@ async fn fleet_edge_decoder_sees_auth_time_only_when_minted_after_a_credential_p
         device_id: None,
         kind: SessionKind::Member,
         auth_time: Some(proved_at),
+        age_bracket: None,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
@@ -242,6 +246,7 @@ async fn fleet_edge_decoder_recognises_a_guest_token() {
         device_id: Some("install-1".to_owned()),
         kind: SessionKind::Guest,
         auth_time: None,
+        age_bracket: None,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
@@ -268,4 +273,40 @@ async fn fleet_edge_decoder_recognises_a_guest_token() {
 #[test]
 fn the_step_up_window_auth_reports_is_the_one_verifiers_enforce() {
     assert_eq!(auth::application::command::STEP_UP_WINDOW_SECS, auth_context::edge::STEP_UP_MAX_AGE_SECS);
+}
+
+/// The `age` claim survives the fleet edge decoder, where `is_minor` reads it.
+#[tokio::test]
+async fn fleet_edge_decoder_sees_the_age_bracket() {
+    use auth::domain::value_object::AgeBracket;
+    let (private_pem, public_pem) = keypair();
+    let claims = AccessTokenClaims {
+        account_id: AccountId::from_uuid(Uuid::now_v7()),
+        session_id: SessionId::new(),
+        generation: Generation::INITIAL,
+        permissions: vec![],
+        profile_ids: Vec::new(),
+        device_id: None,
+        kind: SessionKind::Member,
+        auth_time: None,
+        age_bracket: Some(AgeBracket::Teen13To15),
+        issued_at: Utc::now(),
+        expires_at: Utc::now() + Duration::minutes(10),
+    };
+    let minter = minter(&private_pem, &public_pem, AUDIENCE);
+    let token = minter.mint_access(&claims).await.unwrap();
+    assert_eq!(minter.verify_access(&token).await.unwrap().age_bracket, Some(AgeBracket::Teen13To15));
+
+    let cache = JwksCache::new();
+    let mut keys = HashMap::new();
+    keys.insert(KID.to_owned(), DecodingKey::from_ec_pem(&public_pem).unwrap());
+    cache.replace(keys).await;
+    let config = AuthContextConfig {
+        expected_issuer: Some(ISSUER.to_owned()),
+        expected_audience: Some(AUDIENCE.to_owned()),
+        ..AuthContextConfig::default()
+    };
+    let principal = auth_context::edge::edge_decoder(&config, cache).decode(&token).await.unwrap();
+    assert_eq!(auth_context::edge::age_bracket(&principal.raw_claims), Some("13-15"));
+    assert!(auth_context::edge::is_minor(&principal.raw_claims));
 }

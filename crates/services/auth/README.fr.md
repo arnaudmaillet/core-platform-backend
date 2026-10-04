@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: f1cecfc8098802f2be004d356b09646ef3f99df09c195eba8c43bc0688ada135
+  source_sha256: 3e50ebe638f98268c85b79b030fc71ed62966fef1b6e79f6c89ae8ca5b54cc36
   translated_at: 2026-10-04
   status: complete
 ---
@@ -98,6 +98,12 @@ pas) — porte `auth_time` ; un jeton rafraîchi non. Les RPC destructives aille
 répondent sinon `PERMISSION_DENIED` `step_up_required…` ; `account` protège `DeactivateAccount` /
 `RequestGdprDeletion` derrière `ACCOUNT_REQUIRE_STEP_UP`. `VerifyCredentials` ré-émet le jeton
 d'accès de l'appelant (même session, même refresh token).
+
+**Tranche d'âge.** Chaque émission membre (`Login`, `Refresh`, `VerifyCredentials`) relit la tranche
+d'âge du compte et la porte dans le claim `age` (`13-15` / `16-17` / `18+` ; absent sans date de
+naissance), donc un anniversaire apparaît en moins d'une durée de vie de jeton d'accès. Les services
+orientés client en tirent les protections ados (`EdgePrincipal::is_minor`), p. ex. le nouveau profil
+d'un titulaire de 13 à 17 ans démarre privé.
 
 ## 📐 Architecture & concepts
 

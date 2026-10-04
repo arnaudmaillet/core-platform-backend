@@ -84,6 +84,12 @@ credential RPCs answer `UNAVAILABLE` (`AUT-5005`).
 `RequestGdprDeletion` behind `ACCOUNT_REQUIRE_STEP_UP`. `VerifyCredentials` re-mints the caller's
 access token (same session, same refresh token).
 
+**Age bracket.** Every member mint (`Login`, `Refresh`, `VerifyCredentials`) re-reads the account's
+age bracket and carries it as the `age` claim (`13-15` / `16-17` / `18+`; absent without a date of
+birth), so a birthday shows up within one access-token lifetime. Client-facing services apply the
+teen protections from it (`EdgePrincipal::is_minor`), e.g. a 13–17 holder's new profile starts
+private.
+
 ## 📐 Architecture & Concepts
 
 Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS command/query buses,

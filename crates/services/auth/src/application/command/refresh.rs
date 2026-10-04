@@ -120,12 +120,15 @@ impl RefreshHandler {
 
         // 5. Re-read authoritative permissions; a deactivated account cannot
         //    refresh. A guest has no account: it keeps `read:public` only.
-        let permissions = match session.kind() {
-            SessionKind::Guest => vec![Permission::read_public()],
+        //    The age bracket is re-read too: a birthday shows up at the next mint.
+        let (permissions, age_bracket) = match session.kind() {
+            SessionKind::Guest => (vec![Permission::read_public()], None),
             SessionKind::Member => {
                 let snapshot = self.directory.lookup(&account_id).await?;
                 match snapshot.activation {
-                    AccountActivation::Active => Permission::with_read_public(snapshot.permissions),
+                    AccountActivation::Active => {
+                        (Permission::with_read_public(snapshot.permissions), snapshot.age_bracket)
+                    }
                     // Only a fresh login resumes a deactivated account.
                     AccountActivation::Deactivated => {
                         return Err(AuthError::AccountNotActive { current: "deactivated".into() });
@@ -149,8 +152,9 @@ impl RefreshHandler {
             SessionKind::Guest => Vec::new(),
             SessionKind::Member => profile_ids_or_empty(&self.profiles, &account_id).await,
         };
-        let claims =
+        let mut claims =
             session.mint_access_token(now, self.policy.access_ttl, permissions, profile_ids)?;
+        claims.age_bracket = age_bracket;
         let access_token = self.minter.mint_access(&claims).await?;
 
         Ok(IssuedSession {
@@ -279,6 +283,25 @@ mod tests {
 
         assert!(matches!(err, AuthError::AccountNotActive { .. }));
         assert!(fx.directory.resumed().is_empty());
+    }
+
+    /// The age bracket is re-read at every mint: a 13–15 holder who turns 16
+    /// carries the new bracket from the next refresh.
+    #[tokio::test]
+    async fn the_age_bracket_rides_in_the_token_and_follows_birthdays() {
+        use crate::domain::value_object::AgeBracket;
+        let fx = Fixture::new();
+        let first = login(&fx).await;
+        assert_eq!(fx.minter.verify_access(&first.access_token).await.unwrap().age_bracket, None);
+
+        fx.directory.set_age_bracket(&first.account_id, Some(AgeBracket::Teen16To17));
+        let next = fx
+            .refresh_handler()
+            .handle(refresh_env(&first.refresh_token), t0() + Duration::minutes(1))
+            .await
+            .unwrap();
+        let claims = fx.minter.verify_access(&next.access_token).await.unwrap();
+        assert_eq!(claims.age_bracket, Some(AgeBracket::Teen16To17));
     }
 
     #[tokio::test]
