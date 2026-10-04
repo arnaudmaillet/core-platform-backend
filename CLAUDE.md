@@ -97,7 +97,8 @@ allow-listed listener (see the edge rule below). Each service owns an error-code
   staff/admin RPCs stay off the edge until a permission catalogue exists. **Guest
   tokens** (`kind = guest`, `sub = guest:<id>`) are refused on every `authenticated`
   rule and only reach `permission(…, "read:public")` rules (members carry `read:public`
-  too). Reads that depend on who
+  too). Declare a public read with `public_read(…)`, and only on a viewer-aware
+  handler: its reader may be a guest. Reads that depend on who
   is reading (drafts, private profiles, blocks) take the reader from `edge::viewer`
   (`Internal` = mesh, unfiltered; `Anonymous`; `Member` + `pids`), never from a
   request field.

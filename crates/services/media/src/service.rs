@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use postgres_storage::PostgresConfig;
 use redis_storage::RedisConfig;
 use service_runtime::{FnProbe, HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::authenticated;
+use service_runtime::edge::{authenticated, public_read};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -66,8 +66,8 @@ impl Service for MediaService {
         authenticated("/media.v1.MediaService/AbortUpload"),
         authenticated("/media.v1.MediaService/GetAsset"),
         authenticated("/media.v1.MediaService/DeleteAsset"),
-        authenticated("/media.v1.MediaService/ResolveDelivery"),
-        authenticated("/media.v1.MediaService/BatchResolveDelivery"),
+        public_read("/media.v1.MediaService/ResolveDelivery"),
+        public_read("/media.v1.MediaService/BatchResolveDelivery"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

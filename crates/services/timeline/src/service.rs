@@ -52,6 +52,8 @@ impl Service for TimelineService {
     /// else on this service is mesh-only. See `transport::grpc::edge`.
     const EDGE_POLICY: EdgePolicy = &[
         authenticated("/timeline.v1.TimelineService/GetFollowingFeed"),
+        // Not viewer-aware yet (lists posts/authors unfiltered): members only until
+        // it filters on the audience (CheckAccess). Guest access: later.
         authenticated("/timeline.v1.TimelineService/GetAudioFeed"),
     ];
 

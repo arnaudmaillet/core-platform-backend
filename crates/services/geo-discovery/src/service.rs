@@ -12,7 +12,7 @@ use cqrs::query::InMemoryQueryBus;
 use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 use service_runtime::{HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::authenticated;
+use service_runtime::edge::public_read;
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -39,8 +39,8 @@ impl Service for GeoDiscoveryService {
     /// The RPCs exposed on the client edge listener (`GRPC_EDGE_ADDR`); anything
     /// else on this service is mesh-only. See `transport::grpc::edge`.
     const EDGE_POLICY: EdgePolicy = &[
-        authenticated("/geo_discovery.v1.GeoDiscoveryService/QueryTile"),
-        authenticated("/geo_discovery.v1.GeoDiscoveryService/GetGeoTimeline"),
+        public_read("/geo_discovery.v1.GeoDiscoveryService/QueryTile"),
+        public_read("/geo_discovery.v1.GeoDiscoveryService/GetGeoTimeline"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
