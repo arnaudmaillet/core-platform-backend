@@ -25,4 +25,12 @@ pub struct GuestRecord {
 pub trait GuestRegistry: Send + Sync + 'static {
     /// Records a new guest. Idempotent on `guest_id`.
     async fn record(&self, guest: &GuestRecord) -> Result<(), AuthError>;
+
+    /// The guest became `account_id` (it signed up or signed in on its device).
+    async fn mark_upgraded(
+        &self,
+        guest_id: &AccountId,
+        account_id: &AccountId,
+        at: DateTime<Utc>,
+    ) -> Result<(), AuthError>;
 }

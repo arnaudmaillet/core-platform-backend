@@ -17,11 +17,12 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    ChangePasswordHandler, LoginHandler, LogoutAllSessionsHandler, LogoutHandler, RefreshHandler,
-    StartGuestSessionHandler, VerifyCredentialsHandler,
+    ChangePasswordHandler, LoginHandler, LogoutAllSessionsHandler, LogoutHandler, MemberSessions,
+    RefreshHandler, SignUpHandler, StartGuestSessionHandler, VerifyCredentialsHandler,
 };
 use crate::application::port::{
-    AccountDirectory, CredentialAdmin, EventPublisher, GuestRegistry, IdentityProvider,
+    AccountDirectory, CredentialAdmin, EventPublisher, FederatedTokenVerifier, GuestRegistry,
+    IdentityProvider,
     ProfileDirectory,
     RefreshTokenRepository,
     SessionCache, SessionRepository, SubjectLinkRepository, TokenMinter,
@@ -36,7 +37,8 @@ use crate::infrastructure::event::pg_outbox_publisher::PgOutboxPublisher;
 use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 use crate::infrastructure::grpc::handler::AuthServiceHandler;
 use crate::infrastructure::idp::{
-    KeycloakCredentialAdmin, KeycloakIdentityProvider, UnconfiguredCredentialAdmin,
+    JwksFederatedTokenVerifier, KeycloakCredentialAdmin, KeycloakIdentityProvider,
+    UnconfiguredCredentialAdmin,
 };
 use crate::infrastructure::persistence::{
     PgGuestRegistry, PgRefreshTokenRepository, PgSessionRepository, PgSubjectLinkRepository,
@@ -60,6 +62,8 @@ pub struct AppDeps {
     pub guests: Arc<dyn GuestRegistry>,
     /// `StartGuestSession` kill switch (`AUTH_GUEST_SESSIONS_ENABLED`).
     pub guest_sessions_enabled: bool,
+    /// Native Sign in with Apple / Google id_tokens (SignUp, id_token Login).
+    pub federated: Arc<dyn FederatedTokenVerifier>,
     pub policy: SessionPolicy,
 }
 
@@ -101,6 +105,22 @@ impl App {
             Arc::clone(&deps.minter),
             Arc::clone(&deps.publisher),
             deps.policy.clone(),
+        )
+        .with_federated(Arc::clone(&deps.federated), Arc::clone(&deps.guests)));
+        let sign_up = Arc::new(SignUpHandler::new(
+            Arc::clone(&deps.federated),
+            Arc::clone(&deps.directory),
+            Arc::clone(&deps.links),
+            Arc::clone(&deps.guests),
+            MemberSessions {
+                profiles: Arc::clone(&deps.profiles),
+                sessions: Arc::clone(&deps.sessions),
+                refresh_tokens: Arc::clone(&deps.refresh_tokens),
+                cache: Arc::clone(&deps.cache),
+                minter: Arc::clone(&deps.minter),
+                publisher: Arc::clone(&deps.publisher),
+                policy: deps.policy.clone(),
+            },
         ));
         let refresh = Arc::new(RefreshHandler::new(
             Arc::clone(&deps.directory),
@@ -169,6 +189,7 @@ impl App {
             change_password,
             verify_credentials,
         )
+        .with_sign_up(sign_up)
     }
 
     /// Builds the concrete adapter graph from config + backend connections.
@@ -233,6 +254,15 @@ impl App {
             Arc::new(UnconfiguredCredentialAdmin)
         };
 
+        // Native Sign in with Apple / Google: a provider with no client id is off.
+        let mut federated = JwksFederatedTokenVerifier::new();
+        if let Some(apple) = JwksFederatedTokenVerifier::apple(config.apple_audiences.clone(), config.federated_jwks_timeout) {
+            federated = federated.with(crate::domain::value_object::FederatedProvider::Apple, apple);
+        }
+        if let Some(google) = JwksFederatedTokenVerifier::google(config.google_audiences.clone(), config.federated_jwks_timeout) {
+            federated = federated.with(crate::domain::value_object::FederatedProvider::Google, google);
+        }
+
         let deps = AppDeps {
             idp: Arc::new(KeycloakIdentityProvider::new(idp_client, config.keycloak)),
             credentials,
@@ -246,6 +276,7 @@ impl App {
             publisher,
             guests: Arc::new(PgGuestRegistry::new(tx.clone())),
             guest_sessions_enabled: config.guest_sessions_enabled,
+            federated: Arc::new(federated),
             policy: config.policy,
         };
 
@@ -276,6 +307,7 @@ mod tests {
             publisher: fx.publisher.clone(),
             guests: fx.guests.clone(),
             guest_sessions_enabled: true,
+            federated: Arc::new(JwksFederatedTokenVerifier::new()),
             policy: fx.policy.clone(),
         })
     }
@@ -296,6 +328,7 @@ mod tests {
                 username: "user".into(),
                 password: "secret".into(),
             })),
+            guest_refresh_token: String::new(),
         });
 
         let response = handler.login(request).await.unwrap().into_inner();
@@ -316,6 +349,7 @@ mod tests {
             device: None,
             grant_type: proto::GrantType::Unspecified as i32,
             credential: None,
+            guest_refresh_token: String::new(),
         });
         let status = handler.login(request).await.unwrap_err();
         assert_eq!(status.code(), Code::InvalidArgument);

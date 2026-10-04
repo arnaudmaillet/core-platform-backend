@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3e50ebe638f98268c85b79b030fc71ed62966fef1b6e79f6c89ae8ca5b54cc36
+  source_sha256: d0dc5025efaa5b97de2e723939da8f094f8bd6574711bb96caa6c77016437f3b
   translated_at: 2026-10-04
   status: complete
 ---
@@ -80,6 +80,26 @@ une fois par appareil à l'inscription). L'edge client refuse un jeton invité s
 l'outbox (le plan d'audit enregistre des comptes). La vérification App Attest et les limites par IP
 / par appareil sur `StartGuestSession` relèvent de la tranche anti-abus (B5) ; d'ici là, la RPC est
 **désactivée par défaut** (`AUTH_GUEST_SESSIONS_ENABLED` ; la fleet locale l'active).
+
+### Inscription avec Apple / Google (mode invité)
+
+`SignUp` (edge **public**) crée un compte à partir d'un id_token natif **Sign in with Apple /
+Google**. auth vérifie lui-même le jeton contre les JWKS du fournisseur (signature, émetteur,
+audience = les client ids de l'app `AUTH_APPLE_AUDIENCES` / `AUTH_GOOGLE_AUDIENCES`, expiration,
+nonce — le nonce brut ou son SHA-256 hex) ; un fournisseur sans client id est désactivé (`AUT-5009`).
+La requête porte aussi la **date de naissance** (sous l'âge minimum → `AUT-6005`, rien n'est créé),
+le **consentement** (version de la politique, traitement des données obligatoire, marketing,
+analytics) et le **pays d'origine**. Le compte est créé via `account` (`CreateAccount` →
+`VerifyEmail` quand le fournisseur garantit l'adresse → `UpdateConsents` ; chaque étape est
+idempotente, donc une inscription relancée termine une inscription interrompue), l'identité est liée
+(`subject_links`, `auth.subject_linked`) et une session membre s'ouvre. **Une personne, un compte :**
+si l'identité, ou son e-mail vérifié par le fournisseur, a déjà un compte, la réponse est
+`existing_account{method}` (APPLE / GOOGLE / PASSWORD) — seul l'e-mail d'un jeton vérifié est
+recherché, et les adresses relais privées d'Apple ne correspondent jamais. Le profil suit
+(`profile.CreateProfile`, puis `Refresh` pour que `pids` le porte). `Login` accepte le même
+id_token (`IdTokenGrant`) pour les retours ; une identité sans compte reçoit `AUT-6004` (`NOT_FOUND`)
+et l'app enchaîne sur `SignUp`. Les deux acceptent le **refresh token invité** de l'appareil : cette
+session invitée se termine (`guest_upgraded`) et `guest_principals` enregistre le compte devenu.
 
 ### Identifiants et step-up
 
@@ -188,6 +208,8 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_ACCOUNT_RPC_TIMEOUT_MS` · `AUTH_ACCOUNT_CONNECT_TIMEOUT_MS` | Deadlines par requête / de connexion sur le canal `account` (chemin chaud du login — échouer vite, ne jamais bloquer) | `2000` · `2000` |
 | `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Deadlines de requête / de connexion des appels HTTP Keycloak (échange de token) | `5000` · `2000` |
 | `AUTH_GUEST_SESSIONS_ENABLED` | Interrupteur de `StartGuestSession`. **Désactivé par défaut** : il écrit une session par appel sans identifiant, donc à laisser éteint partout où les contrôles anti-abus (limites par IP / par appareil, App Attest) ne sont pas devant lui. Éteint → `AUT-1005` (`PERMISSION_DENIED`). | `false` |
+| `AUTH_APPLE_AUDIENCES` · `AUTH_GOOGLE_AUDIENCES` | Client ids (séparés par des virgules) pour lesquels un id_token Apple / Google doit être émis (`aud` : bundle / services ids de l'app ; client ids OAuth Google). Vide = l'inscription par ce fournisseur est désactivée (`AUT-5009`). | — |
+| `AUTH_FEDERATED_JWKS_TIMEOUT_MS` | Délai de récupération des JWKS d'un fournisseur. | `3000` |
 | Postgres / Redis / Kafka | via les `from_env()` des crates de stockage partagées | — |
 
 ## 🧪 Développement local

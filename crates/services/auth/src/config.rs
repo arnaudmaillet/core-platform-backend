@@ -45,6 +45,12 @@ pub struct AuthConfig {
     /// the abuse controls (per-IP / per-device limits, App Attest — B5) are not
     /// in front of it yet. The local fleet turns it on.
     pub guest_sessions_enabled: bool,
+    /// Native Sign in with Apple / Google: the app's client ids a provider's
+    /// id_token must be minted for (`aud`). Empty = that provider is off.
+    pub apple_audiences: Vec<String>,
+    pub google_audiences: Vec<String>,
+    /// Deadline on fetching a provider's JWKS.
+    pub federated_jwks_timeout: std::time::Duration,
 }
 
 impl AuthConfig {
@@ -109,8 +115,18 @@ impl AuthConfig {
             idp_connect_timeout: env_ms("AUTH_IDP_CONNECT_TIMEOUT_MS", 2_000),
             guest_sessions_enabled: std::env::var("AUTH_GUEST_SESSIONS_ENABLED")
                 .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes")),
+            apple_audiences: env_list("AUTH_APPLE_AUDIENCES"),
+            google_audiences: env_list("AUTH_GOOGLE_AUDIENCES"),
+            federated_jwks_timeout: env_ms("AUTH_FEDERATED_JWKS_TIMEOUT_MS", 3_000),
         })
     }
+}
+
+/// A comma-separated list (blank entries dropped).
+fn env_list(key: &str) -> Vec<String> {
+    std::env::var(key)
+        .map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect())
+        .unwrap_or_default()
 }
 
 fn env_or(key: &str, default: impl Into<String>) -> String {

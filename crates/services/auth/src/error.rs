@@ -32,10 +32,16 @@ use thiserror::Error;
 /// | AUT-5005 | CredentialManagementUnavailable | 503 | High   | **Yes**   |
 /// | AUT-5006 | PasswordRejected             | 422  | Low      | No        |
 /// | AUT-5007 | VerificationMethodUnavailable | 422 | Low      | No        |
+/// | AUT-5008 | IdTokenRejected              | 401  | Low      | No        |
+/// | AUT-5009 | FederatedProviderNotConfigured | 422 | Medium  | No        |
+/// | AUT-5010 | IdTokenWithoutEmail          | 422  | Low      | No        |
 /// | AUT-1005 | GuestSessionsDisabled        | 403  | Low      | No        |
 /// | AUT-6001 | AccountNotActive             | 403  | Medium   | No        |
 /// | AUT-6002 | AccountDirectoryUnavailable  | 503  | High     | **Yes**   |
 /// | AUT-6003 | ProfileDirectoryUnavailable  | 503  | Medium   | **Yes**   |
+/// | AUT-6004 | NoAccountForIdentity         | 404  | Low      | No        |
+/// | AUT-6005 | AgeBelowMinimum              | 422  | Low      | No        |
+/// | AUT-6006 | EmailAlreadyRegistered       | 409  | Low      | No        |
 /// | AUT-9001 | DomainViolation              | 422  | Medium   | No        |
 /// | AUT-9002 | InvalidSessionId             | 422  | Low      | No        |
 /// | AUT-9003 | InvalidAccountId             | 422  | Low      | No        |
@@ -137,6 +143,20 @@ pub enum AuthError {
     #[error("this verification method is not available for the account")]
     VerificationMethodUnavailable,
 
+    /// An Apple / Google id_token failed verification (signature, issuer,
+    /// audience, expiry or nonce). The reason is logged, never returned.
+    #[error("the identity token was rejected: {reason}")]
+    IdTokenRejected { reason: String },
+
+    /// No client id is configured for this provider (`AUTH_APPLE_AUDIENCES` /
+    /// `AUTH_GOOGLE_AUDIENCES`): its sign-in is off.
+    #[error("sign-in with {provider} is not configured")]
+    FederatedProviderNotConfigured { provider: String },
+
+    /// The id_token carries no email: an account cannot be created from it.
+    #[error("the identity token carries no email address")]
+    IdTokenWithoutEmail,
+
     // ── Account directory (AUT-6xxx) ──────────────────────────────────────────
     #[error("account is not active; current status: '{current}'")]
     AccountNotActive { current: String },
@@ -148,6 +168,18 @@ pub enum AuthError {
     /// degrade to an empty `pids` claim rather than failing the mint.
     #[error("profile directory service is unavailable")]
     ProfileDirectoryUnavailable,
+
+    /// An Apple / Google identity with no account: the client goes on with SignUp.
+    #[error("no account for this identity")]
+    NoAccountForIdentity,
+
+    /// The date of birth is under the minimum age; nothing was created.
+    #[error("the account holder is under the minimum age")]
+    AgeBelowMinimum,
+
+    /// The email is already an account's (a concurrent sign-up won).
+    #[error("this email address already belongs to an account")]
+    EmailAlreadyRegistered,
 
     // ── Domain invariants & parse errors (AUT-9xxx) ───────────────────────────
     #[error("domain invariant violated on '{field}': {message}")]
@@ -198,10 +230,16 @@ impl AppError for AuthError {
             AuthError::CredentialManagementUnavailable => "AUT-5005",
             AuthError::PasswordRejected { .. } => "AUT-5006",
             AuthError::VerificationMethodUnavailable => "AUT-5007",
+            AuthError::IdTokenRejected { .. } => "AUT-5008",
+            AuthError::FederatedProviderNotConfigured { .. } => "AUT-5009",
+            AuthError::IdTokenWithoutEmail => "AUT-5010",
 
             AuthError::AccountNotActive { .. } => "AUT-6001",
             AuthError::AccountDirectoryUnavailable => "AUT-6002",
             AuthError::ProfileDirectoryUnavailable => "AUT-6003",
+            AuthError::NoAccountForIdentity => "AUT-6004",
+            AuthError::AgeBelowMinimum => "AUT-6005",
+            AuthError::EmailAlreadyRegistered => "AUT-6006",
 
             AuthError::DomainViolation { .. } => "AUT-9001",
             AuthError::InvalidSessionId(_) => "AUT-9002",
@@ -219,9 +257,9 @@ impl AppError for AuthError {
             AuthError::EventPublishFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AuthError::ConcurrentModification => StatusCode::CONFLICT,
 
-            AuthError::SessionNotFound { .. } | AuthError::SubjectLinkNotFound { .. } => {
-                StatusCode::NOT_FOUND
-            }
+            AuthError::SessionNotFound { .. }
+            | AuthError::SubjectLinkNotFound { .. }
+            | AuthError::NoAccountForIdentity => StatusCode::NOT_FOUND,
 
             AuthError::SessionRevoked
             | AuthError::SessionExpired
@@ -231,9 +269,10 @@ impl AppError for AuthError {
             | AuthError::RefreshTokenAlreadyRotated
             | AuthError::InvalidTokenGeneration
             | AuthError::IdpAuthenticationFailed
-            | AuthError::IdpTokenRejected => StatusCode::UNAUTHORIZED,
+            | AuthError::IdpTokenRejected
+            | AuthError::IdTokenRejected { .. } => StatusCode::UNAUTHORIZED,
 
-            AuthError::SubjectAlreadyLinked { .. } => StatusCode::CONFLICT,
+            AuthError::SubjectAlreadyLinked { .. } | AuthError::EmailAlreadyRegistered => StatusCode::CONFLICT,
 
             AuthError::AccountNotActive { .. } | AuthError::GuestSessionsDisabled => StatusCode::FORBIDDEN,
 
@@ -332,6 +371,12 @@ impl AppError for AuthError {
             AuthError::AccountDirectoryUnavailable => "The account service is temporarily unavailable.",
             AuthError::ProfileDirectoryUnavailable => "The profile service is temporarily unavailable.",
             AuthError::GuestSessionsDisabled => "Browsing without an account is not available right now.",
+            AuthError::IdTokenRejected { .. } => "Your sign-in could not be verified; please try again.",
+            AuthError::FederatedProviderNotConfigured { .. } => "This sign-in method is not available right now.",
+            AuthError::IdTokenWithoutEmail => "This sign-in did not share an email address; please allow it and try again.",
+            AuthError::NoAccountForIdentity => "There is no account for this sign-in yet.",
+            AuthError::AgeBelowMinimum => "You are not old enough to create an account.",
+            AuthError::EmailAlreadyRegistered => "This email address already has an account.",
             _ => "A domain constraint was violated.",
         }
     }

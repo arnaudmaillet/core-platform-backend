@@ -32,6 +32,37 @@ pub struct AccountSnapshot {
     pub age_bracket: Option<AgeBracket>,
 }
 
+/// The consent given at sign-up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignUpConsent {
+    pub policy_version:  String,
+    pub data_processing: bool,
+    pub marketing:       bool,
+    pub analytics:       bool,
+}
+
+/// An account to create at sign-up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAccount {
+    pub subject:        IdpSubject,
+    pub email:          String,
+    /// The IdP vouches for the address: the account is active at once.
+    pub email_verified: bool,
+    /// ISO 8601; the `account` service enforces the minimum age.
+    pub date_of_birth:  String,
+    /// ISO 3166-1 alpha-2 (the home country), if known.
+    pub country:        Option<String>,
+    pub consent:        SignUpConsent,
+}
+
+/// The account holding an email address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmailHolder {
+    pub account_id:  AccountId,
+    /// Its `identity_id` (`issuer#subject`).
+    pub identity_id: String,
+}
+
 /// Outbound port to the `account` service (gRPC adapter in Phase 4).
 ///
 /// Auth reads identity here and writes one thing only: resuming an account its
@@ -52,4 +83,13 @@ pub trait AccountDirectory: Send + Sync + 'static {
     /// is). Fails with [`AuthError::AccountNotActive`] if the account is in any
     /// other state by now — e.g. suspended in the meantime.
     async fn resume_deactivated(&self, account_id: &AccountId) -> Result<(), AuthError>;
+
+    /// Creates the account for a sign-up and returns its id: idempotent for the
+    /// same subject (a retried sign-up finishes the steps a failed one left).
+    /// Fails with [`AuthError::AgeBelowMinimum`] under the minimum age (nothing
+    /// is created) or [`AuthError::EmailAlreadyRegistered`].
+    async fn provision(&self, account: &NewAccount) -> Result<AccountId, AuthError>;
+
+    /// The account holding `email`, if any.
+    async fn find_by_email(&self, email: &str) -> Result<Option<EmailHolder>, AuthError>;
 }

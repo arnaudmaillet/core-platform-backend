@@ -76,6 +76,17 @@ message PasswordGrant {
     string  password  = 2;
 }
 
+// A native Sign in with Apple / Google id_token. Verified here against the
+// provider's published keys: signature, issuer, audience (the app's client
+// ids), expiry, and the nonce.
+message IdTokenGrant {
+    FederatedProvider   provider  = 1;
+    string              id_token  = 2;
+    // The raw nonce the app generated for this sign-in. The token's `nonce`
+    // claim must equal it, or its SHA-256 hex (what the app passes to Apple).
+    string              nonce     = 3;
+}
+
 message LoginRequest {
     DeviceContext   device  = 1;
     GrantType       grant_type = 2;
@@ -83,7 +94,13 @@ message LoginRequest {
     oneof credential {
         AuthorizationCodeGrant  authorization_code  = 3;
         PasswordGrant           password            = 4;
+        // An id_token whose identity has no account yet fails NOT_FOUND
+        // (AUT-6004): the app goes on with SignUp.
+        IdTokenGrant            id_token            = 5;
     }
+    // Optional: the refresh token of the guest session this device was using.
+    // A successful login ends that guest session (the guest becomes the member).
+    string          guest_refresh_token = 6;
 }
 
 message LoginResponse {
@@ -97,6 +114,55 @@ message LoginResponse {
     // reactivated it (its profiles become visible again) — the app can welcome
     // the user back. A suspended account is never reactivated by a login.
     bool        reactivated = 4;
+}
+
+// ── Sign-up ───────────────────────────────────────────────────────────────────
+
+// The consent given at sign-up (account's GDPR record).
+message SignUpConsent {
+    // The privacy-policy version shown (required).
+    string  policy_version   = 1;
+    // Required: true. Processing personal data is what the service needs.
+    bool    data_processing  = 2;
+    bool    marketing        = 3;
+    bool    analytics        = 4;
+}
+
+message SignUpRequest {
+    DeviceContext   device              = 1;
+    // Sign in with Apple / Google. (Email / phone with a code: later.)
+    IdTokenGrant    id_token            = 2;
+    // ISO 8601 (YYYY-MM-DD). Under the minimum age (13; 16 in some countries)
+    // → FAILED_PRECONDITION AUT-6005, and nothing is created or kept.
+    string          date_of_birth       = 3;
+    SignUpConsent   consent             = 4;
+    // ISO 3166-1 alpha-2: the current country (guest country access), else the
+    // App Store storefront country. Becomes the account's home country.
+    string          home_country        = 5;
+    // Optional: the refresh token of the guest session this device was using;
+    // it ends on success (the guest becomes the member).
+    string          guest_refresh_token = 6;
+}
+
+message SignedUp {
+    string      account_id  = 1;
+    // A member session. The account has no profile yet: create it
+    // (profile.CreateProfile), then Refresh so the token's `pids` carry it.
+    TokenPair   tokens      = 2;
+}
+
+// The identity has an account already (the same Apple / Google account, or
+// its verified email under another method): sign in with that method instead.
+// Apple private-relay addresses never match.
+message ExistingAccount {
+    SignInMethod    method  = 1;
+}
+
+message SignUpResponse {
+    oneof outcome {
+        SignedUp        signed_up         = 1;
+        ExistingAccount existing_account  = 2;
+    }
 }
 
 // ── Refresh ───────────────────────────────────────────────────────────────────
