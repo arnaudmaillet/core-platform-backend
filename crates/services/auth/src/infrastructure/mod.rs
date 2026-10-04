@@ -9,5 +9,6 @@ pub mod event;
 pub mod grpc;
 pub mod http;
 pub mod idp;
+pub mod notify;
 pub mod persistence;
 pub mod token;

@@ -18,7 +18,7 @@ use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
     ChangePasswordHandler, LoginHandler, LogoutAllSessionsHandler, LogoutHandler, MemberSessions,
-    RefreshHandler, SignUpHandler, StartGuestSessionHandler, VerifyCredentialsHandler,
+    RefreshHandler, SignUpHandler, StartGuestSessionHandler, VerificationCodes, VerifyCredentialsHandler,
 };
 use crate::application::port::{
     AccountDirectory, CredentialAdmin, EventPublisher, FederatedTokenVerifier, GuestRegistry,
@@ -30,7 +30,9 @@ use crate::application::port::{
 use crate::application::query::{IntrospectHandler, ListSessionsHandler};
 use crate::application::SessionPolicy;
 use crate::config::AuthConfig;
-use crate::infrastructure::cache::RedisSessionCache;
+use crate::infrastructure::cache::{RedisSessionCache, RedisVerificationStore};
+use crate::infrastructure::notify::{LogCodeSender, SmtpCodeSender, UnconfiguredCodeSender};
+use crate::application::port::CodeSender;
 use crate::infrastructure::directory::{GrpcAccountDirectory, GrpcProfileDirectory};
 use crate::infrastructure::event::outbox_relay::OutboxRelay;
 use crate::infrastructure::event::pg_outbox_publisher::PgOutboxPublisher;
@@ -64,6 +66,8 @@ pub struct AppDeps {
     pub guest_sessions_enabled: bool,
     /// Native Sign in with Apple / Google id_tokens (SignUp, id_token Login).
     pub federated: Arc<dyn FederatedTokenVerifier>,
+    /// Email one-time codes (StartVerification, code SignUp / Login).
+    pub codes: Arc<VerificationCodes>,
     pub policy: SessionPolicy,
 }
 
@@ -106,7 +110,8 @@ impl App {
             Arc::clone(&deps.publisher),
             deps.policy.clone(),
         )
-        .with_federated(Arc::clone(&deps.federated), Arc::clone(&deps.guests)));
+        .with_federated(Arc::clone(&deps.federated), Arc::clone(&deps.guests))
+        .with_codes(Arc::clone(&deps.codes)));
         let sign_up = Arc::new(SignUpHandler::new(
             Arc::clone(&deps.federated),
             Arc::clone(&deps.directory),
@@ -121,7 +126,8 @@ impl App {
                 publisher: Arc::clone(&deps.publisher),
                 policy: deps.policy.clone(),
             },
-        ));
+        )
+        .with_codes(Arc::clone(&deps.codes)));
         let refresh = Arc::new(RefreshHandler::new(
             Arc::clone(&deps.directory),
             Arc::clone(&deps.profiles),
@@ -190,6 +196,7 @@ impl App {
             verify_credentials,
         )
         .with_sign_up(sign_up)
+        .with_codes(deps.codes)
     }
 
     /// Builds the concrete adapter graph from config + backend connections.
@@ -254,6 +261,18 @@ impl App {
             Arc::new(UnconfiguredCredentialAdmin)
         };
 
+        // One-time codes: SMTP (Amazon SES) when configured, a log line for local
+        // runs, otherwise off (StartVerification fails FAILED_PRECONDITION).
+        let code_sender: Arc<dyn CodeSender> = match (config.verification_sender.as_str(), &config.smtp) {
+            ("smtp", Some(smtp)) => Arc::new(SmtpCodeSender::new(smtp.clone()).map_err(|e| e.to_string())?),
+            ("smtp", None) => return Err("AUTH_VERIFICATION_SENDER=smtp needs AUTH_SMTP_HOST".into()),
+            ("log", _) => {
+                tracing::warn!("one-time codes are only logged (AUTH_VERIFICATION_SENDER=log): local runs only");
+                Arc::new(LogCodeSender)
+            }
+            _ => Arc::new(UnconfiguredCodeSender),
+        };
+
         // Native Sign in with Apple / Google: a provider with no client id is off.
         let mut federated = JwksFederatedTokenVerifier::new();
         if let Some(apple) = JwksFederatedTokenVerifier::apple(config.apple_audiences.clone(), config.federated_jwks_timeout) {
@@ -277,6 +296,11 @@ impl App {
             guests: Arc::new(PgGuestRegistry::new(tx.clone())),
             guest_sessions_enabled: config.guest_sessions_enabled,
             federated: Arc::new(federated),
+            codes: Arc::new(VerificationCodes::new(
+                Arc::new(RedisVerificationStore::new(redis.clone())),
+                code_sender,
+                config.verification.clone(),
+            )),
             policy: config.policy,
         };
 
@@ -308,6 +332,11 @@ mod tests {
             guests: fx.guests.clone(),
             guest_sessions_enabled: true,
             federated: Arc::new(JwksFederatedTokenVerifier::new()),
+            codes: Arc::new(VerificationCodes::new(
+                Arc::new(crate::application::fakes::InMemoryVerificationStore::default()),
+                Arc::new(crate::application::fakes::RecordingCodeSender::default()),
+                crate::application::command::VerificationPolicy::default(),
+            )),
             policy: fx.policy.clone(),
         })
     }

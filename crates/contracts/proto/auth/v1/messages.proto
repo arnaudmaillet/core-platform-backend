@@ -87,6 +87,12 @@ message IdTokenGrant {
     string              nonce     = 3;
 }
 
+// A one-time code from StartVerification, proving control of the address.
+message VerificationCodeGrant {
+    string  challenge_id  = 1;
+    string  code          = 2;
+}
+
 message LoginRequest {
     DeviceContext   device  = 1;
     GrantType       grant_type = 2;
@@ -97,6 +103,9 @@ message LoginRequest {
         // An id_token whose identity has no account yet fails NOT_FOUND
         // (AUT-6004): the app goes on with SignUp.
         IdTokenGrant            id_token            = 5;
+        // A code sent to the account's email address (passwordless accounts).
+        // An address with no such account fails NOT_FOUND (AUT-6004): SignUp.
+        VerificationCodeGrant   verification_code   = 7;
     }
     // Optional: the refresh token of the guest session this device was using.
     // A successful login ends that guest session (the guest becomes the member).
@@ -130,8 +139,10 @@ message SignUpConsent {
 
 message SignUpRequest {
     DeviceContext   device              = 1;
-    // Sign in with Apple / Google. (Email / phone with a code: later.)
+    // Exactly one of `id_token` (Sign in with Apple / Google) and
+    // `verification_code` (an email address proven by a code).
     IdTokenGrant    id_token            = 2;
+    VerificationCodeGrant verification_code = 7;
     // ISO 8601 (YYYY-MM-DD). Under the minimum age (13; 16 in some countries)
     // → FAILED_PRECONDITION AUT-6005, and nothing is created or kept.
     string          date_of_birth       = 3;
@@ -163,6 +174,28 @@ message SignUpResponse {
         SignedUp        signed_up         = 1;
         ExistingAccount existing_account  = 2;
     }
+}
+
+// ── One-time codes ────────────────────────────────────────────────────────────
+
+// Sends a one-time code to an address, for SignUp or Login. The answer is the
+// same whether or not the address has an account (nothing to enumerate); what
+// the address leads to is only told to whoever enters the code.
+message StartVerificationRequest {
+    VerificationChannel channel     = 1;
+    // An email address (EMAIL).
+    string              destination = 2;
+    // BCP-47, for the message's language.
+    string              locale      = 3;
+    DeviceContext       device      = 4;
+}
+
+message StartVerificationResponse {
+    string  challenge_id       = 1;
+    // The code expires after this many seconds (and after 5 wrong tries).
+    int64   expires_in_secs    = 2;
+    // A new code for the same address can be asked for after this many seconds.
+    int64   resend_after_secs  = 3;
 }
 
 // ── Refresh ───────────────────────────────────────────────────────────────────

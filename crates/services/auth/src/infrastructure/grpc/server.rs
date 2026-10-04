@@ -25,6 +25,13 @@ impl AuthService for AuthServiceHandler {
         self.refresh(request).await
     }
 
+    async fn start_verification(
+        &self,
+        request: Request<proto::StartVerificationRequest>,
+    ) -> Result<Response<proto::StartVerificationResponse>, Status> {
+        self.start_verification(request).await
+    }
+
     async fn sign_up(
         &self,
         request: Request<proto::SignUpRequest>,

@@ -44,7 +44,7 @@ chrono     = { workspace = true }
 
 # ── Persistence / cache / transport adapters (Phase 4) ────────────────────────
 sqlx             = { workspace = true }
-fred             = { workspace = true }
+fred             = { workspace = true, features = ["i-scripts"] }
 tonic            = { workspace = true }
 tonic-reflection = { workspace = true }
 prost-types      = { workspace = true }
@@ -55,6 +55,9 @@ reqwest      = { workspace = true }
 rand         = { workspace = true }
 sha2         = { workspace = true }
 base64       = { workspace = true }
+# One-time codes by email: SMTP to Amazon SES (STARTTLS, system roots, like the
+# fleet's other TLS clients).
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "hostname", "tokio1", "tokio1-rustls", "ring", "rustls-native-certs"] }
 # JWKS fetching / key cache for native Sign in with Apple / Google id_tokens.
 auth-context = { workspace = true }
 # P-256 public-key parsing for JWKS publication (key-ring rotation, Phase 7).
