@@ -51,7 +51,7 @@ gRPC ─► ProfileServiceHandler ─► Command bus            Query bus ─►
 
    Redis cache-aside: profile:v1:{id} TTL 300s · handle:v1:{handle} TTL 600s · account:profiles:v1:{id} TTL 120s
 
-   Kafka account.v1.events ─► AccountSuspended→HideProfile · AccountDeleted→HideProfile · AccountActivated→RestoreProfile
+   Kafka account.v1.events ─► account_suspended / account_deleted → hide every profile of the account · account_activated → restore the ones the suspension hid
 ```
 
 **Cache-key versioning.** All keys carry a `v1:` prefix — bumping the suffix performs a zero-downtime
@@ -126,6 +126,13 @@ service ProfileService {
 }
 ```
 
+**Viewer-aware reads.** `GetProfileById/ByHandle` take the reader from the transport
+(`edge::viewer`). The owner (token `sub` = the profile's account) and mesh callers get the full
+view. Anyone else gets an **active** profile only (hidden, suspended and deleted ones are
+`NOT_FOUND`), with the owner-only fields cleared: `account_id` (it would link an account's
+profiles together), `locale`, `timezone`, `masked_at`, `masking_reason`. A private profile still
+returns its header; its posts and lists are what privacy withholds.
+
 ### Rust ports (hexagonal contract)
 
 ```rust
@@ -165,7 +172,7 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
-| `account.v1.events` | `profile-account-events` | `AccountSuspended/Deleted` → `HideProfile`; `AccountActivated` → `RestoreProfile`; unknown kinds = no-op commit | DLQ `account.v1.events.dlq` |
+| `account.v1.events` | `profile-account-events` | account's `DomainEvent` (tagged on `type`, snake_case): `account_suspended` / `account_deleted` → hide **every** profile of the account (`HideAccountProfiles`); `account_activated` → restore the profiles the suspension hid (`RestoreAccountProfiles`; a content-policy hide stays). Idempotent per profile, so a redelivery finishes a partial walk. Other types = no-op commit | DLQ `account.v1.events.dlq` |
 | `social-graph.author_tier_changed` | `profile-author-tier` | denormalize the author tier onto the profile (`SetProfileTier`) → re-emit on `profile.v1.events` (`ProfileTierChanged`); idempotent on unchanged tier | DLQ `social-graph.author_tier_changed.dlq` |
 
 > **Runtime contract (mandatory):** the account-event consumer runs under `run_consumer` — manual

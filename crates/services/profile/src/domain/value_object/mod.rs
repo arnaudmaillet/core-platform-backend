@@ -11,6 +11,7 @@ pub mod profile_kind;
 pub mod profile_status;
 pub mod profile_visibility;
 pub mod verification_kind;
+pub mod viewer;
 pub mod website_url;
 
 pub use account_id::AccountId;
@@ -26,4 +27,5 @@ pub use profile_kind::ProfileKind;
 pub use profile_status::ProfileStatus;
 pub use profile_visibility::ProfileVisibility;
 pub use verification_kind::VerificationKind;
+pub use viewer::Viewer;
 pub use website_url::WebsiteUrl;

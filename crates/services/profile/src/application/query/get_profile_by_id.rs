@@ -3,12 +3,15 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::application::port::{ProfileCache, ProfileRepository, ProfileView};
-use crate::domain::value_object::ProfileId;
+use crate::domain::value_object::{ProfileId, Viewer};
 use crate::error::ProfileError;
 
 #[derive(Debug, Clone)]
 pub struct GetProfileByIdQuery {
     pub profile_id: String,
+    /// Who is reading: decides whether the profile is found and which fields
+    /// come back (see [`ProfileView::for_viewer`]).
+    pub viewer: Viewer,
 }
 
 impl Query for GetProfileByIdQuery {
@@ -33,7 +36,7 @@ impl QueryHandler<GetProfileByIdQuery> for GetProfileByIdHandler {
         let id = ProfileId::try_from(envelope.payload.profile_id.as_str())?;
 
         if let Some(view) = self.cache.get_by_id(&id).await? {
-            return Ok(Some(view));
+            return Ok(view.for_viewer(&envelope.payload.viewer));
         }
 
         let profile = match self.repo.find_by_id(&id).await? {
@@ -44,6 +47,6 @@ impl QueryHandler<GetProfileByIdQuery> for GetProfileByIdHandler {
         let view = ProfileView::from(&profile);
         let _ = self.cache.set_by_id(&view).await;
 
-        Ok(Some(view))
+        Ok(view.for_viewer(&envelope.payload.viewer))
     }
 }

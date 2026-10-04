@@ -11,6 +11,7 @@ use crate::application::command::{
     UpdateProfileCommand, VerifyProfileCommand,
 };
 use crate::application::port::{ProfileSummary, ProfileView};
+use crate::domain::value_object::Viewer;
 use crate::application::query::{
     GetProfileByHandleQuery, GetProfileByIdQuery, ListProfilesByAccountQuery,
 };
@@ -258,8 +259,9 @@ where
         &self,
         request: Request<proto::GetProfileByIdRequest>,
     ) -> Result<Response<proto::ProfileView>, Status> {
+        let viewer = viewer_of(&request);
         let req = request.into_inner();
-        let query = GetProfileByIdQuery { profile_id: req.profile_id };
+        let query = GetProfileByIdQuery { profile_id: req.profile_id, viewer };
         let view: Option<ProfileView> = self.query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
@@ -274,8 +276,9 @@ where
         &self,
         request: Request<proto::GetProfileByHandleRequest>,
     ) -> Result<Response<proto::ProfileView>, Status> {
+        let viewer = viewer_of(&request);
         let req = request.into_inner();
-        let query = GetProfileByHandleQuery { handle: req.handle };
+        let query = GetProfileByHandleQuery { handle: req.handle, viewer };
         let view: Option<ProfileView> = self.query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
@@ -318,6 +321,15 @@ fn dt_to_ts(dt: DateTime<Utc>) -> prost_types::Timestamp {
     prost_types::Timestamp {
         seconds: dt.timestamp(),
         nanos:   dt.timestamp_subsec_nanos() as i32,
+    }
+}
+
+/// The reader of a viewer-aware RPC, from how the request arrived.
+fn viewer_of<T>(request: &Request<T>) -> Viewer {
+    match edge::viewer(request) {
+        edge::Viewer::Internal => Viewer::Internal,
+        edge::Viewer::Anonymous => Viewer::Anonymous,
+        edge::Viewer::Member { account_id, .. } => Viewer::Account(account_id),
     }
 }
 
