@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 1c778bdaccacae89efddba09c3fda0a2baccaf3be14dcc66d3869ae9266b5b23
-  translated_at: 2026-07-03
+  source_sha256: 2de9076adb28bcc7cc737359f87ed886f442fc9987778a5d86210a798c37af6c
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -183,7 +183,16 @@ service ChatService {
 
 **Invariants à la frontière :** `StreamConversation` exige l'appartenance au roster (`PERMISSION_DENIED`
 sinon) ; `StreamPublic` exige `visibility == Public` (`FAILED_PRECONDITION` sinon) ; le flux audience
-est structurellement incapable de transporter présence/saisie/accusés.
+est structurellement incapable de transporter présence/saisie/accusés. `Heartbeat` et `SendTyping`
+exigent aussi l'appartenance au roster (un non-membre ne peut pas injecter de signaux du Member Plane).
+
+**Réglages de présence (#661).** Un membre qui a désactivé son **statut d'activité** (réglages de
+découvrabilité du profil) n'annonce aucune présence : ni événement en ligne/hors ligne, ni battement. Celui
+qui a désactivé ses **accusés de lecture** ne diffuse aucun `ReceiptEvent`, et `ListMembers` masque son
+`last_read` aux autres membres (il voit toujours le sien ; son état non lu ne change pas). Les réglages sont
+projetés depuis `profile.v1.events` (`ProfileDiscoverySettingsChanged`, groupe `chat-presence-settings`,
+depuis l'offset le plus ancien) dans `chat.presence_settings` ; s'ils ne peuvent pas être lus, présence et
+accusés sont retenus (échec fermé).
 
 ### Ports Rust (contrat hexagonal)
 

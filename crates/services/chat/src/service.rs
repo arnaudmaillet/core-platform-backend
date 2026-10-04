@@ -88,6 +88,7 @@ impl Service for ChatService {
             // Production reuses the presence TTL for the Audience Plane.
             audience_ttl_secs:           config.presence_ttl_secs,
             visibility_consumer_group:   "chat-visibility-consumer".to_owned(),
+            presence_settings_consumer_group: "chat-presence-settings".to_owned(),
         };
 
         let backends = Backends {

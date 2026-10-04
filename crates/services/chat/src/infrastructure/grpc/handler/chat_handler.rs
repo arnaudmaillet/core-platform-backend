@@ -19,8 +19,8 @@ use crate::application::command::{
     SubscribeCommand, ToggleVisibilityCommand, UnsubscribeCommand,
 };
 use crate::application::port::{
-    ConversationRepository, MemberRepository, MessageSummary, PresenceStore, ReceiptStore,
-    RoutingRegistry,
+    ConversationRepository, MemberRepository, MessageSummary, PresenceSettingsStore, PresenceStore,
+    ReceiptStore, RoutingRegistry,
 };
 use crate::application::query::{
     GetHistoryQuery, ListMembersQuery, ListSubscriptionsQuery, MemberView as QueryMemberView,
@@ -61,6 +61,7 @@ pub struct ChatServiceHandler<CB, QB> {
     routing:           Arc<dyn RoutingRegistry>,
     conversation_repo: Arc<dyn ConversationRepository>,
     member_repo:       Arc<dyn MemberRepository>,
+    presence_settings: Arc<dyn PresenceSettingsStore>,
     params:            StreamingParams,
 }
 
@@ -82,6 +83,7 @@ where
         routing:           Arc<dyn RoutingRegistry>,
         conversation_repo: Arc<dyn ConversationRepository>,
         member_repo:       Arc<dyn MemberRepository>,
+        presence_settings: Arc<dyn PresenceSettingsStore>,
         params:            StreamingParams,
     ) -> Self {
         Self {
@@ -96,8 +98,22 @@ where
             routing,
             conversation_repo,
             member_repo,
+            presence_settings,
             params,
         }
+    }
+
+    /// Member-Plane signals (presence, typing) come from roster members only.
+    async fn require_member(&self, conversation_id: &ConversationId, member_id: &ProfileId) -> Result<(), Status> {
+        let member = self
+            .member_repo
+            .find(conversation_id, member_id)
+            .await
+            .map_err(chat_err_to_status)?;
+        if member.is_none() {
+            return Err(Status::permission_denied("not a member of this conversation"));
+        }
+        Ok(())
     }
 
     // ── Commands ────────────────────────────────────────────────────────────
@@ -256,7 +272,8 @@ where
             ConversationId::try_from(req.conversation_id.as_str()),
             ProfileId::try_from(req.member_id.as_str()),
             MessageId::try_from(req.message_id.as_str()),
-        ) {
+        ) && self.presence_settings.get_or_withheld(&member_id).await.read_receipts
+        {
             let _ = self.receipt.set(&conversation_id, &member_id, message_id).await;
             let event = PlaneEvent::Receipt {
                 member_id: member_id.as_str(),
@@ -276,6 +293,7 @@ where
         let req = request.into_inner();
         let conversation_id = parse_conversation(&req.conversation_id)?;
         let member_id       = parse_profile(&req.member_id)?;
+        self.require_member(&conversation_id, &member_id).await?;
         let now             = Utc::now().timestamp_millis();
 
         let _ = self
@@ -296,6 +314,11 @@ where
         let req = request.into_inner();
         let conversation_id = parse_conversation(&req.conversation_id)?;
         let member_id       = parse_profile(&req.member_id)?;
+        self.require_member(&conversation_id, &member_id).await?;
+        // Activity status off: nothing to announce.
+        if !self.presence_settings.get_or_withheld(&member_id).await.activity_status {
+            return Ok(ok_response());
+        }
         let now             = Utc::now().timestamp_millis();
 
         let _ = self
@@ -341,6 +364,7 @@ where
     ) -> Result<Response<proto::ListMembersResponse>, Status> {
         edge::require_profile(&request, &request.get_ref().requester_id)?;
         let req = request.into_inner();
+        let requester_id = req.requester_id.clone();
         let query = ListMembersQuery {
             conversation_id: req.conversation_id,
             requester_id:    req.requester_id,
@@ -351,6 +375,22 @@ where
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
+
+        // Read receipts are shared only by members who share them (#661); a
+        // member always sees its own. Unreadable settings withhold them.
+        let mut members: Vec<QueryMemberView> = members;
+        let ids: Vec<ProfileId> = members.iter().map(|m| ProfileId::from_uuid(m.profile_id)).collect();
+        let shared = self.presence_settings.get_many(&ids).await;
+        for m in &mut members {
+            let own = m.profile_id.to_string() == requester_id;
+            let shares = match &shared {
+                Ok(map) => map.get(&ProfileId::from_uuid(m.profile_id)).is_none_or(|s| s.read_receipts),
+                Err(_) => false,
+            };
+            if !own && !shares {
+                m.last_read = None;
+            }
+        }
 
         Ok(Response::new(proto::ListMembersResponse {
             members: members.into_iter().map(member_view_to_proto).collect(),
@@ -407,21 +447,26 @@ where
         self.attach.attach_member(&conversation_id).await.map_err(chat_err_to_status)?;
         let rx = self.member_registry.subscribe(&conversation_id);
 
-        // Announce presence and keep it alive for the duration of the stream.
-        let now = Utc::now().timestamp_millis();
-        let _ = self
-            .presence
-            .heartbeat(&conversation_id, &member_id, now, self.params.presence_ttl_secs)
-            .await;
-        let online = PlaneEvent::Presence { member_id: member_id.as_str(), online: true };
-        let _ = self.fanout.dispatch_member_signal(&conversation_id, &online).await;
-
-        let heartbeat = spawn_presence_heartbeat(
-            Arc::clone(&self.presence),
-            conversation_id,
-            member_id,
-            self.params.presence_ttl_secs,
-        );
+        // Announce presence and keep it alive for the duration of the stream —
+        // unless the member turned activity status off (#661).
+        let announce = self.presence_settings.get_or_withheld(&member_id).await.activity_status;
+        let heartbeat = if announce {
+            let now = Utc::now().timestamp_millis();
+            let _ = self
+                .presence
+                .heartbeat(&conversation_id, &member_id, now, self.params.presence_ttl_secs)
+                .await;
+            let online = PlaneEvent::Presence { member_id: member_id.as_str(), online: true };
+            let _ = self.fanout.dispatch_member_signal(&conversation_id, &online).await;
+            Some(spawn_presence_heartbeat(
+                Arc::clone(&self.presence),
+                conversation_id,
+                member_id,
+                self.params.presence_ttl_secs,
+            ))
+        } else {
+            None
+        };
 
         let guard = MemberStreamGuard {
             attach:          Arc::clone(&self.attach),
@@ -567,12 +612,14 @@ struct MemberStreamGuard {
     fanout:          Arc<dyn Fanout>,
     conversation_id: ConversationId,
     member_id:       ProfileId,
-    heartbeat:       JoinHandle<()>,
+    /// `None` when the member does not share activity status (nothing was
+    /// announced, so nothing is withdrawn).
+    heartbeat:       Option<JoinHandle<()>>,
 }
 
 impl Drop for MemberStreamGuard {
     fn drop(&mut self) {
-        self.heartbeat.abort();
+        let announced = self.heartbeat.take().map(|h| h.abort()).is_some();
         let attach   = Arc::clone(&self.attach);
         let presence = Arc::clone(&self.presence);
         let fanout   = Arc::clone(&self.fanout);
@@ -580,9 +627,11 @@ impl Drop for MemberStreamGuard {
         let member   = self.member_id;
         tokio::spawn(async move {
             let _ = attach.detach_member(&conv).await;
-            let _ = presence.leave(&conv, &member).await;
-            let offline = PlaneEvent::Presence { member_id: member.as_str(), online: false };
-            let _ = fanout.dispatch_member_signal(&conv, &offline).await;
+            if announced {
+                let _ = presence.leave(&conv, &member).await;
+                let offline = PlaneEvent::Presence { member_id: member.as_str(), online: false };
+                let _ = fanout.dispatch_member_signal(&conv, &offline).await;
+            }
         });
     }
 }
