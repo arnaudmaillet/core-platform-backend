@@ -5,6 +5,8 @@ use cqrs::{Envelope, QueryBus};
 
 use crate::application::query::get_geo_timeline::GetGeoTimelineQuery;
 use crate::application::query::query_tile::QueryTileQuery;
+use crate::domain::value_object::Viewer;
+use transport::grpc::edge;
 
 // ── Proto inclusion ───────────────────────────────────────────────────────────
 
@@ -40,6 +42,7 @@ where
         &self,
         request: Request<proto::QueryTileRequest>,
     ) -> Result<Response<proto::QueryTileResponse>, Status> {
+        let viewer   = viewer_of(&request);
         let req      = request.into_inner();
         let viewport = req.viewport.ok_or_else(|| Status::invalid_argument("viewport is required"))?;
 
@@ -49,6 +52,7 @@ where
             ne_lat:     viewport.ne_lat,
             ne_lng:     viewport.ne_lng,
             zoom_level: req.zoom_level,
+            viewer,
         };
 
         let result = self.query_bus
@@ -71,6 +75,7 @@ where
         &self,
         request: Request<proto::GetGeoTimelineRequest>,
     ) -> Result<Response<proto::GetGeoTimelineResponse>, Status> {
+        let viewer = viewer_of(&request);
         let req = request.into_inner();
 
         // Parse the requested ids, skipping any that are not valid UUIDs rather
@@ -85,7 +90,7 @@ where
         }
 
         let result = self.query_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), GetGeoTimelineQuery { post_ids }))
+            .dispatch(Envelope::new(Uuid::now_v7(), GetGeoTimelineQuery { post_ids, viewer }))
             .await
             .map_err(cqrs_to_status)?;
 
@@ -121,6 +126,16 @@ where
 }
 
 // ── Conversion helpers ────────────────────────────────────────────────────────
+
+/// The reader, from how the request arrived: the mesh is unfiltered; an
+/// anonymous client has no profiles.
+fn viewer_of<T>(request: &Request<T>) -> Viewer {
+    match edge::viewer(request) {
+        edge::Viewer::Internal => Viewer::Internal,
+        edge::Viewer::Anonymous => Viewer::Profiles(Vec::new()),
+        edge::Viewer::Member { profile_ids, .. } => Viewer::Profiles(profile_ids),
+    }
+}
 
 fn pin_to_proto(pin: crate::domain::entity::RadarPin) -> proto::RadarPin {
     proto::RadarPin {

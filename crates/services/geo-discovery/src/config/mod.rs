@@ -44,6 +44,9 @@ pub struct GeoDiscoveryConfig {
 
     /// Kafka consumer group ID for `counter.v1.popularity`.
     pub score_updater_group_id: String,
+
+    /// Kafka consumer group ID for `post.deleted` + `moderation.v1.events`.
+    pub visibility_group_id: String,
 }
 
 impl GeoDiscoveryConfig {
@@ -83,6 +86,9 @@ impl GeoDiscoveryConfig {
 
             score_updater_group_id: std::env::var("GEO_SCORE_UPDATER_GROUP_ID")
                 .unwrap_or_else(|_| "geo-discovery-score-updater".to_owned()),
+
+            visibility_group_id: std::env::var("GEO_VISIBILITY_GROUP_ID")
+                .unwrap_or_else(|_| "geo-discovery-visibility".to_owned()),
         }
     }
 }

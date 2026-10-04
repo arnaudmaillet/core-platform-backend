@@ -3,9 +3,9 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::port::{PinStore, SpatialIndex};
+use crate::application::port::{visible_authors, AudienceGate, PinStore, SpatialIndex};
 use crate::domain::entity::RadarPin;
-use crate::domain::value_object::{GeoCoordinate, zoom_to_resolution};
+use crate::domain::value_object::{GeoCoordinate, Viewer, zoom_to_resolution};
 use crate::error::GeoDiscoveryError;
 use crate::infrastructure::h3::h3_codec;
 
@@ -21,6 +21,8 @@ pub struct QueryTileQuery {
     pub ne_lat:     f64,
     pub ne_lng:     f64,
     pub zoom_level: i32,
+    /// Who is looking: a client only gets pins of authors it may see.
+    pub viewer:     Viewer,
 }
 
 pub struct QueryTileResult {
@@ -60,6 +62,7 @@ impl Validate for QueryTileQuery {
 pub struct QueryTileHandler<SI, PS> {
     pub spatial_index: Arc<SI>,
     pub pin_store:     Arc<PS>,
+    pub audience:      Arc<dyn AudienceGate>,
 }
 
 impl<SI, PS> QueryHandler<QueryTileQuery> for QueryTileHandler<SI, PS>
@@ -119,7 +122,19 @@ where
         // No ScyllaDB fallback: the Radar pan path is fail-open. A pin absent from
         // Redis is silently dropped — the user pans again, or taps a neighbour.
         let cached = self.pin_store.mget(&post_ids).await?;
-        let pins: Vec<RadarPin> = cached.into_iter().flatten().collect();
+        let mut pins: Vec<RadarPin> = cached.into_iter().flatten().collect();
+
+        // ── Phase 3: the reader's audience (one bulk CheckAccess; fail closed).
+        //   A pin without a recorded author is unverifiable: dropped for a client.
+        if let Some(visible) = visible_authors(
+            self.audience.as_ref(),
+            &q.viewer,
+            pins.iter().filter_map(|p| p.author_id),
+        )
+        .await?
+        {
+            pins.retain(|p| p.author_id.is_some_and(|a| visible.contains(&a)));
+        }
 
         // Fire-and-forget: update hot_tiles scores for the queried tiles.
         let touch_pairs: Vec<_> = tiles.iter().map(|t| (*t, resolution)).collect();

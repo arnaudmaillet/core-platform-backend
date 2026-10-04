@@ -49,6 +49,7 @@ impl Service for GeoDiscoveryService {
             scylla: ScyllaConfig::from_env(),
             redis:  RedisConfig::from_env(),
             kafka:  Some(KafkaClientConfig::from_env()),
+            audience: audience_gate_from_env()?,
         };
 
         let app = App::build(cfg, backends)
@@ -75,4 +76,23 @@ impl Service for GeoDiscoveryService {
         routes.add_service(GeoDiscoveryServiceServer::new(handler));
         Ok(())
     }
+}
+
+/// The map's audience check: social-graph `CheckAccess` over a lazily-connected
+/// channel (a cold start needs social-graph down or up alike). Both deadlines
+/// are mandatory (tonic has none); client reads fail closed without an answer.
+pub(crate) fn audience_gate_from_env() -> anyhow::Result<Arc<dyn crate::application::port::AudienceGate>> {
+    let ms = |key: &str, default: u64| {
+        std::time::Duration::from_millis(
+            std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default),
+        )
+    };
+    let endpoint = std::env::var("GEO_SOCIAL_GRAPH_GRPC_ENDPOINT")
+        .unwrap_or_else(|_| "http://localhost:50053".to_owned());
+    let channel = tonic::transport::Channel::from_shared(endpoint)
+        .map_err(|e| anyhow::anyhow!("invalid GEO_SOCIAL_GRAPH_GRPC_ENDPOINT: {e}"))?
+        .timeout(ms("GEO_AUDIENCE_RPC_TIMEOUT_MS", 500))
+        .connect_timeout(ms("GEO_AUDIENCE_CONNECT_TIMEOUT_MS", 500))
+        .connect_lazy();
+    Ok(Arc::new(crate::infrastructure::client::GrpcAudienceGate::new(channel)))
 }

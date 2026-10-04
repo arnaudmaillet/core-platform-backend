@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 76fce60cded72ac0e48068a810e08d8f0debc39021f26ddfd9e10b0cc81a6865
+  source_sha256: 019c8caba000d403f729c4eefb3514b8d135c41e49bf3f1da9e872e380506c44
   translated_at: 2026-10-04
   status: complete
 ---
@@ -45,7 +45,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |
 | `post.updated` | `post` | — *(orphan — see below)* |
-| `post.deleted` | `post` | `timeline` |
+| `post.deleted` | `post` | `timeline`, `geo-discovery` |
 | `post.v1.events` | `post` | `timeline`, `search`, `realtime` |
 | `comment.created` | `comment` | `notification`, `engagement` |
 | `comment.deleted` | `comment` | `engagement` |
@@ -61,7 +61,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `chat.member.left` | `chat` | — *(orphan — see below)* |
 | `chat.message.sent` | `chat` | — *(orphan — see below)* |
 | `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery` |
-| `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post` |
+| `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery` |
 | `auth.v1.events` | `auth` | `audit` |
 | `media.v1.events` | `media` | `media` |
 
@@ -155,7 +155,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | Événement | Signifie | Émis quand | Consommateurs & pourquoi |
 |---|---|---|---|
 | `decision_recorded` | une décision d'intégrité faisant autorité a été prise — porte *qui a décidé* + *pourquoi* (SoR DSA) | une décision est enregistrée (auto-screen / revue humaine / réversion d'appel) | `audit` (scelle la justification en enveloppe crypto-shred) |
-| `enforcement_applied` / `enforcement_reversed` | une conséquence a été appliquée/levée contre un acteur (versionnée) | l'enforcement commite | `timeline`, `chat`, `account` (dénorm Plane-B) ; `post` (garde la restriction qu'appliquent ses lectures : `remove_content` → auteur seul) ; `search`, `media` (visibilité / retrait) ; `audit` |
+| `enforcement_applied` / `enforcement_reversed` | une conséquence a été appliquée/levée contre un acteur (versionnée) | l'enforcement commite | `timeline`, `chat`, `account` (dénorm Plane-B) ; `post` (garde la restriction qu'appliquent ses lectures : `remove_content` → auteur seul) ; `search`, `media` (visibilité / retrait) ; `geo-discovery` (suppression de la carte : `remove_content` / `visibility_limit` masquent un post, une réversion le restaure) ; `audit` |
 | `case_opened` / `case_resolved` | une unité de revue a été ouverte/fermée | seuil d'ingestion / action du relecteur | consommateurs Plane-B |
 | `appeal_resolved` | un appel a été tranché | résolution de l'appel | consommateurs Plane-B |
 

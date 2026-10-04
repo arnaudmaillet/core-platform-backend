@@ -6,7 +6,8 @@ use validate_core::{FieldViolation, Validate};
 use crate::application::port::{CardStore, PinStore, SpatialIndex, TileRepository};
 use crate::domain::entity::{MapPostCard, RadarPin};
 use crate::domain::value_object::{
-    AuthorId, GeoCoordinate, H3Index, H3Resolution, PostId, RetentionTtl, ViralityScore,
+    AuthorId, GeoCoordinate, H3Index, H3Resolution, PostId, RetentionTtl, Suppression,
+    ViralityScore,
 };
 use crate::error::GeoDiscoveryError;
 
@@ -105,7 +106,22 @@ where
             virality_score:    score.as_f32(),
             published_at_ms:   cmd.published_at_ms,
             author_tier:       cmd.author_tier,
+            lat:               Some(cmd.lat),
+            lng:               Some(cmd.lng),
         };
+
+        // A post the map already suppressed (deleted or moderated, possibly
+        // before this event: a tombstone) must not surface. The card is still
+        // stored (a reversal rebuilds the pin from it), and the visibility is
+        // re-stamped with the card's TTL so it never expires before the card.
+        if let Some((_, visibility, _)) = self.tile_repository.get_card_with_visibility(&post_id).await?
+            && visibility.suppression != Suppression::None
+        {
+            self.tile_repository.upsert_card(&card, ttl).await?;
+            self.tile_repository.set_visibility(&post_id, visibility, ttl).await?;
+            tracing::debug!(post_id = %post_id, "post.published for a suppressed map post — card stored, map untouched");
+            return Ok(());
+        }
 
         // ── 1. ScyllaDB (durable, always first) ───────────────────────────────
         let (r5, r7, r9, card_res) = tokio::join!(
@@ -134,6 +150,7 @@ where
             lat:           cmd.lat,
             lng:           cmd.lng,
             thumbnail_url: cmd.thumbnail_url.clone(),
+            author_id:     Some(author_id.as_uuid()),
         };
         if let Err(e) = self.pin_store.set(&pin, ttl).await {
             tracing::warn!(post_id = %post_id, error = %e, "pin store write failed — Radar will miss this post until reindex");

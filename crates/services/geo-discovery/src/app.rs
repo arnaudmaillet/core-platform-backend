@@ -20,16 +20,17 @@ use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 use transport::kafka::config::client::KafkaClientConfig;
 
 use crate::application::command::{
-    IndexPostCommand, IndexPostHandler,
+    ApplyMapVisibilityCommand, ApplyMapVisibilityHandler, IndexPostCommand, IndexPostHandler,
     UpdateViralityWithTilesCommand, UpdateViralityWithTilesHandler,
 };
+use crate::application::port::AudienceGate;
 use crate::application::query::get_geo_timeline::{GetGeoTimelineHandler, GetGeoTimelineQuery};
 use crate::application::query::query_tile::{QueryTileHandler, QueryTileQuery};
 use crate::config::GeoDiscoveryConfig;
 use crate::infrastructure::cache::{RedisCardStore, RedisGeoSpatialIndex, RedisPinStore};
 use crate::infrastructure::persistence::ScyllaTileRepository;
 use crate::infrastructure::worker::{
-    PostIndexerWorker, ScoreUpdaterWorker, TilePrunerWorker,
+    PostIndexerWorker, ScoreUpdaterWorker, TilePrunerWorker, VisibilityWorker,
 };
 
 /// Storage/transport endpoints the graph is wired against.
@@ -41,6 +42,9 @@ pub struct Backends {
     pub scylla: ScyllaConfig,
     pub redis:  RedisConfig,
     pub kafka:  Option<KafkaClientConfig>,
+    /// The audience check (social-graph `CheckAccess`) the read paths apply to
+    /// clients. Injected so the harness can script it.
+    pub audience: Arc<dyn AudienceGate>,
 }
 
 /// A fully-wired geo-discovery service bound to its backends. The buses exposed
@@ -64,7 +68,7 @@ impl App {
         cfg:      GeoDiscoveryConfig,
         backends: Backends,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let Backends { scylla, redis, kafka } = backends;
+        let Backends { scylla, redis, kafka, audience } = backends;
 
         let scylla_client = Arc::new(ScyllaSessionBuilder::new(scylla).build().await?);
         let redis_client = RedisClientBuilder::new(redis).build().await?;
@@ -87,6 +91,12 @@ impl App {
                     spatial_index:   Arc::clone(&spatial_index),
                     tile_repository: Arc::clone(&tile_repository),
                 })?
+                .register::<ApplyMapVisibilityCommand, _>(ApplyMapVisibilityHandler {
+                    spatial_index:   Arc::clone(&spatial_index),
+                    card_store:      Arc::clone(&card_store),
+                    tile_repository: Arc::clone(&tile_repository),
+                    pin_store:       Arc::clone(&pin_store),
+                })?
                 .build(),
         );
 
@@ -96,11 +106,13 @@ impl App {
                 .register::<QueryTileQuery, _>(QueryTileHandler {
                     spatial_index: Arc::clone(&spatial_index),
                     pin_store:     Arc::clone(&pin_store),
+                    audience:      Arc::clone(&audience),
                 })?
                 // Focus (tap): hydrates full cards, Redis + ScyllaDB fallback.
                 .register::<GetGeoTimelineQuery, _>(GetGeoTimelineHandler {
                     card_store:      Arc::clone(&card_store),
                     tile_repository: Arc::clone(&tile_repository),
+                    audience,
                 })?
                 .build(),
         );
@@ -125,6 +137,17 @@ impl App {
                     Arc::clone(&spatial_index),
                     Arc::clone(&tile_repository),
                     cfg.score_updater_group_id.clone(),
+                )
+                .run(),
+            );
+            tokio::spawn(
+                VisibilityWorker::new(
+                    kafka_config.clone(),
+                    Arc::clone(&spatial_index),
+                    Arc::clone(&card_store),
+                    Arc::clone(&tile_repository),
+                    Arc::clone(&pin_store),
+                    cfg.visibility_group_id.clone(),
                 )
                 .run(),
             );

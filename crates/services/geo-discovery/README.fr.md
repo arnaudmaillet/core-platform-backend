@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 7f21ef0432ee239e4b2b70af9793eb6fc10b65bcc28cd8033c2d9e3051c2ed70
-  translated_at: 2026-06-29
+  source_sha256: f302ac844b44863eb9e9d065e3cb30330d36afee65e9d740bb0f82ac2c67fc51
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -20,7 +20,7 @@ i18n:
 > | **Palier (Tier)** | **TIER-1** — surface de lecture seule ; dégradable vers ScyllaDB |
 > | **Binaire déployable** | `crates/apps/geo-discovery-server` (crate bibliothèque : `crates/services/geo-discovery`) |
 > | **Bases de données** | Redis (index ZSET + projections pin & carte msgpack) · ScyllaDB keyspace `geo_discovery` |
-> | **Asynchrone** | ne publie rien · consomme `post.published` / `engagement.score_updated` / `profile.tier_changed` |
+> | **Asynchrone** | ne publie rien · consomme `post.published` / `post.deleted` / `moderation.v1.events` / `engagement.score_updated` / `profile.tier_changed` |
 > | **Appelants amont** | `<TODO: BFF / clients carte>` |
 > | **Dépendances aval** | Redis, ScyllaDB, Kafka |
 > | **SLO** | requête de tuile p99 **< 50 ms** à l'échelle continentale |
@@ -156,6 +156,20 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > désormais **réservé**, les pins prenant un nouveau numéro de champ pour rester compatibles wire/JSON
 > (`buf WIRE_JSON`).
 
+> **Ce que la carte peut montrer.** Un post quitte la carte quand il est **supprimé** (`post.deleted`,
+> définitivement) ou quand la modération le **retire ou le limite** (`moderation.v1.events` :
+> `remove_content` / `visibility_limit` sur un post — la carte est une surface de découverte). La
+> ligne de la fiche est marquée (`suppressed`, `moderation_version` ; les écritures portent le TTL
+> restant de la ligne) et son pin et sa fiche en cache quittent Redis, si bien que les deux chemins
+> l'ignorent ; une réversion **plus récente** le restaure et reconstruit le pin et les entrées de
+> l'index spatial à partir des coordonnées stockées sur la fiche. Les deux consumers ne sont pas
+> ordonnés : une décision arrivée avant son post.published est conservée comme **pierre tombale**
+> (cellules de visibilité seules, TTL 30 jours), puis l'indexeur stocke la fiche sans l'afficher, en
+> ré-estampillant la visibilité avec le TTL de la fiche pour qu'elle n'expire jamais avant elle. **Par lecteur :** pour tout appelant hors mesh, pins et fiches ne
+> sont gardés que pour les auteurs que le lecteur peut voir (`CheckAccess` de social-graph, un appel
+> groupé ; auteurs privés qu'il ne suit pas, blocages dans un sens ou l'autre et auteurs masqués sont
+> retirés ; ses propres posts restent toujours). Ce contrôle échoue **fermé** (`GEO-6001`, `UNAVAILABLE`).
+
 > **Contrat de sérialisation :** `AuthorTier` est basé sur 0 **avec** un défaut sûr `UNSPECIFIED=0`
 > (= Standard) ; `STANDARD=1, PREMIUM=2, VIP=3`. Rendu du badge : `author_tier` → badge statique ;
 > `is_friend`/`is_following` sont délibérément **absents** (résolus côté client depuis le graphe social de
@@ -180,6 +194,7 @@ pub trait TileRepository: Send + Sync { /* insert_tile_entry, upsert_card, updat
 | GEO-4001 | 500 | Lua returned unexpected value |
 | GEO-5001/5002 | 500 | msgpack ser / deser failure |
 | GEO-9001..9003 | 422 | malformed UUIDs / domain violation |
+| GEO-6001 | 503 | audience check (social-graph `CheckAccess`) unavailable; client reads fail closed (`UNAVAILABLE`, retryable) |
 
 ---
 
@@ -192,6 +207,7 @@ pub trait TileRepository: Send + Sync { /* insert_tile_entry, upsert_card, updat
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
+| `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | suppression de la carte : suppression → définitive ; `remove_content` / `visibility_limit` sur un post → masqué ; une réversion plus récente → restauré (gardé par version ; événements au niveau de l'acteur et autres ignorés) | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |
 
@@ -263,6 +279,9 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_TILE_PRUNER_INTERVAL_SECS` | No | `60` | Cold-tile eviction tick. |
 | `GEO_TILE_COLD_THRESHOLD_SECS` | No | `1800` | Inactivity window before a tile ZSET is evicted. |
 | `GEO_POST_INDEXER_GROUP_ID` / `GEO_SCORE_UPDATER_GROUP_ID` / `GEO_TIER_SYNC_GROUP_ID` | No | service-specific | Kafka consumer groups. |
+| `GEO_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Oui** (prod) | `http://localhost:50053` | endpoint social-graph du filtre d'audience par lecteur (`CheckAccess`) ; sans lui, les lectures clientes échouent fermé. |
+| `GEO_AUDIENCE_RPC_TIMEOUT_MS` / `GEO_AUDIENCE_CONNECT_TIMEOUT_MS` | Non | `500` / `500` | délais de cet appel. |
+| `GEO_VISIBILITY_GROUP_ID` | Non | `geo-discovery-visibility` | groupe Kafka du consumer de suppression de la carte. |
 
 > Aucun flag de feature de compilation. `build.rs` compile `proto/geo_discovery/v1/*.proto`. Profils
 > ScyllaDB : Strict (`LocalQuorum`) pour les mutations, Fast (`LocalOne` + spéculatif) pour les lectures.

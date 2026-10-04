@@ -48,6 +48,12 @@ pub enum GeoDiscoveryError {
 
     #[error("domain violation on field '{field}': {message}")]
     DomainViolation { field: String, message: String },
+
+    // ── GEO-6xxx: dependencies ────────────────────────────────────────────────
+    /// social-graph's `CheckAccess` could not answer. Client reads fail closed
+    /// rather than risk showing a private, blocked or hidden author's post.
+    #[error("audience check unavailable: {reason}")]
+    AccessCheckUnavailable { reason: String },
 }
 
 impl AppError for GeoDiscoveryError {
@@ -71,6 +77,7 @@ impl AppError for GeoDiscoveryError {
             Self::InvalidPostId(_)    => "GEO-9001",
             Self::InvalidAuthorId(_)  => "GEO-9002",
             Self::DomainViolation { .. } => "GEO-9003",
+            Self::AccessCheckUnavailable { .. } => "GEO-6001",
         }
     }
 
@@ -92,6 +99,8 @@ impl AppError for GeoDiscoveryError {
             Self::SpatialLuaReturnInvalid
             | Self::CardSerializationFailed { .. }
             | Self::CardDeserializationFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+
+            Self::AccessCheckUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -113,6 +122,8 @@ impl AppError for GeoDiscoveryError {
             | Self::InvalidZoomLevel(_)
             | Self::InvalidPostId(_)
             | Self::InvalidAuthorId(_) => Severity::Low,
+
+            Self::AccessCheckUnavailable { .. } => Severity::Medium,
         }
     }
 
@@ -120,6 +131,7 @@ impl AppError for GeoDiscoveryError {
         match self {
             Self::Scylla(e) => e.is_retryable(),
             Self::Redis(e)  => e.is_retryable(),
+            Self::AccessCheckUnavailable { .. } => true,
             _               => false,
         }
     }
@@ -158,6 +170,9 @@ impl AppError for GeoDiscoveryError {
                 "The request contains an invalid domain value.",
 
             Self::Validation(e) => e.user_facing_message(),
+
+            Self::AccessCheckUnavailable { .. } =>
+                "The map is temporarily unavailable. Please try again later.",
         }
     }
 }

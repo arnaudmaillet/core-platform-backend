@@ -36,6 +36,12 @@ pub struct MapPostCard {
     /// Resolved client-side against the session's social graph for friend/following badges.
     #[serde(default)]
     pub author_tier:       u8,
+    /// The post location, kept so a lifted suppression can rebuild the pin.
+    /// `None` on cards indexed before it was stored.
+    #[serde(default)]
+    pub lat:               Option<f64>,
+    #[serde(default)]
+    pub lng:               Option<f64>,
 }
 
 impl MapPostCard {

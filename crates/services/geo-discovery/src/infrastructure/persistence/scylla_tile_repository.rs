@@ -9,7 +9,9 @@ use uuid::Uuid;
 
 use crate::application::port::TileRepository;
 use crate::domain::entity::MapPostCard;
-use crate::domain::value_object::{H3Index, H3Resolution, PostId, RetentionTtl};
+use crate::domain::value_object::{
+    H3Index, H3Resolution, MapVisibility, PostId, RetentionTtl, Suppression,
+};
 use crate::error::GeoDiscoveryError;
 use crate::infrastructure::persistence::model::{MapCardRow, PostTileRow};
 
@@ -107,8 +109,9 @@ impl TileRepository for ScyllaTileRepository {
         let stmt = self.strict_stmt(
             "INSERT INTO geo_discovery.map_post_cards \
              (post_id, author_id, author_handle, author_avatar_url, thumbnail_url, \
-              caption, h3_index_r7, virality_score, published_at, expires_at, author_tier) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+              caption, h3_index_r7, virality_score, published_at, expires_at, author_tier, \
+              lat, lng) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              USING TTL ?",
         );
         self.client
@@ -127,6 +130,8 @@ impl TileRepository for ScyllaTileRepository {
                     CqlTimestamp(card.published_at_ms),
                     CqlTimestamp(expires_at_ms),
                     card.author_tier as i8,
+                    card.lat,
+                    card.lng,
                     ttl.as_scylla_ttl(),
                 ),
             )
@@ -157,9 +162,24 @@ impl TileRepository for ScyllaTileRepository {
         &self,
         post_id: &PostId,
     ) -> Result<Option<MapPostCard>, GeoDiscoveryError> {
+        // A suppressed card is absent from every read path.
+        Ok(self
+            .get_card_with_visibility(post_id)
+            .await?
+            .filter(|(_, visibility, _)| visibility.suppression == Suppression::None)
+            .and_then(|(card, _, _)| card))
+    }
+
+    async fn get_card_with_visibility(
+        &self,
+        post_id: &PostId,
+    ) -> Result<Option<(Option<MapPostCard>, MapVisibility, Option<i32>)>, GeoDiscoveryError> {
+        // TTL(author_handle): the row's real remaining life (author_handle is
+        // written once, with the row), not published_at + retention.
         let stmt = self.fast_stmt(
             "SELECT post_id, author_id, author_handle, author_avatar_url, thumbnail_url, \
-             caption, h3_index_r7, virality_score, published_at, expires_at, author_tier \
+             caption, h3_index_r7, virality_score, published_at, expires_at, author_tier, \
+             suppressed, moderation_version, lat, lng, TTL(author_handle) AS ttl_secs \
              FROM geo_discovery.map_post_cards \
              WHERE post_id = ?",
         );
@@ -176,10 +196,45 @@ impl TileRepository for ScyllaTileRepository {
             .map_err(|e| row_err("get_card:iter", e))?;
 
         match rows.next() {
-            Some(Ok(row)) => Ok(Some(MapPostCard::from(row))),
+            Some(Ok(row)) => {
+                let visibility = MapVisibility {
+                    suppression:        Suppression::from_tinyint(row.suppressed),
+                    moderation_version: row.moderation_version.unwrap_or(0),
+                };
+                Ok(Some((row.card(), visibility, row.ttl_secs)))
+            }
             Some(Err(e))  => Err(row_err("get_card:deser", e)),
             None          => Ok(None),
         }
+    }
+
+    async fn set_visibility(
+        &self,
+        post_id:    &PostId,
+        visibility: MapVisibility,
+        ttl:        RetentionTtl,
+    ) -> Result<(), GeoDiscoveryError> {
+        // USING TTL = the row's remaining life, so the cells this writes expire
+        // with the row instead of keeping it alive.
+        let stmt = self.strict_stmt(
+            "UPDATE geo_discovery.map_post_cards USING TTL ? \
+             SET suppressed = ?, moderation_version = ? \
+             WHERE post_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(
+                stmt,
+                (
+                    ttl.as_scylla_ttl(),
+                    visibility.suppression.as_tinyint(),
+                    visibility.moderation_version,
+                    post_id.as_uuid(),
+                ),
+            )
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
     }
 
     async fn list_tile_post_ids(

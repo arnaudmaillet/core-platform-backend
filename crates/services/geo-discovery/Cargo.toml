@@ -9,6 +9,7 @@ description = "Geo-discovery microservice — H3 spatial indexing engine with Re
 
 [dependencies]
 geo-discovery-api = { workspace = true }
+social-graph-api  = { workspace = true }   # CheckAccess client (map audience filter)
 error          = { workspace = true }
 validate-core  = { workspace = true }
 validation     = { workspace = true }
@@ -50,7 +51,11 @@ rmp-serde = "1.3"
 integration-geo-discovery = []
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tokio = { workspace = true }
+# Wire contract test in the visibility worker: decode events serialized by
+# moderation's own types, so a casing drift fails here (see search #687).
+moderation = { workspace = true }
 
 # ── Integration suite (feature = "integration-geo-discovery") ────────────────
 # Container orchestration, the RF=1 migration runner, and `await_until` come from

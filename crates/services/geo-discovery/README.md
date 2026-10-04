@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-1** — query-only read surface; degradable to ScyllaDB |
 > | **Deployable** | `crates/apps/geo-discovery-server` (library crate: `crates/services/geo-discovery`) |
 > | **Datastores** | Redis (ZSET index + msgpack pin & card projections) · ScyllaDB keyspace `geo_discovery` |
-> | **Async** | publishes nothing · consumes `post.published` / `engagement.score_updated` / `profile.tier_changed` |
+> | **Async** | publishes nothing · consumes `post.published` / `post.deleted` / `moderation.v1.events` / `engagement.score_updated` / `profile.tier_changed` |
 > | **Upstream callers** | `<TODO: BFF / map clients>` |
 > | **Downstream deps** | Redis, ScyllaDB, Kafka |
 > | **SLO** | tile query p99 **< 50 ms** at continental scale |
@@ -142,6 +142,19 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > fallback). `QueryTileResponse` field **1** previously held `repeated MapPostCard cards`; it is now
 > **reserved**, with pins on a fresh field number to stay wire/JSON-compatible (`buf WIRE_JSON`).
 
+> **What the map may show.** A post leaves the map when it is **deleted** (`post.deleted`, for good)
+> or when moderation **removes or limits** it (`moderation.v1.events`: `remove_content` /
+> `visibility_limit` on a post — the map is a discovery surface). The card row is marked
+> (`suppressed`, `moderation_version`; writes carry the row's remaining TTL) and its pin and cached
+> card leave Redis, so both paths drop it; a **newer** reversal restores it and rebuilds the pin
+> and spatial-index entries from the card's stored coordinates. The two consumers are unordered: a
+> decision that arrives before its post.published is kept as a **tombstone** (visibility cells only,
+> 30-day TTL), and the indexer then stores the card without surfacing it, re-stamping the
+> visibility with the card's TTL so it never expires first. **Per reader:** for any caller but the mesh, pins and cards are
+> kept only for authors the reader may see (social-graph `CheckAccess`, one bulk call; private authors
+> they don't follow, blocks either way and hidden authors are dropped; one's own posts always stay).
+> That check fails **closed** (`GEO-6001`, `UNAVAILABLE`).
+
 > **Wire contract:** `AuthorTier` is 0-based **with** an `UNSPECIFIED=0` safe default (= Standard);
 > `STANDARD=1, PREMIUM=2, VIP=3`. Badge rendering: `author_tier` → static badge; `is_friend`/`is_following`
 > are deliberately **absent** (resolved client-side from the session social graph). `author_handle` /
@@ -165,6 +178,7 @@ pub trait TileRepository: Send + Sync { /* insert_tile_entry, upsert_card, updat
 | GEO-4001 | 500 | Lua returned unexpected value |
 | GEO-5001/5002 | 500 | msgpack ser / deser failure |
 | GEO-9001..9003 | 422 | malformed UUIDs / domain violation |
+| GEO-6001 | 503 | audience check (social-graph `CheckAccess`) unavailable; client reads fail closed (`UNAVAILABLE`, retryable) |
 
 ---
 
@@ -177,6 +191,7 @@ pub trait TileRepository: Send + Sync { /* insert_tile_entry, upsert_card, updat
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
+| `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | map suppression: delete → permanent; `remove_content` / `visibility_limit` on a post → hidden; a newer reversal → restored (version-guarded; actor-level and other events skipped) | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |
 
@@ -245,6 +260,9 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_TILE_PRUNER_INTERVAL_SECS` | No | `60` | Cold-tile eviction tick. |
 | `GEO_TILE_COLD_THRESHOLD_SECS` | No | `1800` | Inactivity window before a tile ZSET is evicted. |
 | `GEO_POST_INDEXER_GROUP_ID` / `GEO_SCORE_UPDATER_GROUP_ID` / `GEO_TIER_SYNC_GROUP_ID` | No | service-specific | Kafka consumer groups. |
+| `GEO_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Yes** (prod) | `http://localhost:50053` | social-graph endpoint for the per-reader audience filter (`CheckAccess`); client reads fail closed without it. |
+| `GEO_AUDIENCE_RPC_TIMEOUT_MS` / `GEO_AUDIENCE_CONNECT_TIMEOUT_MS` | No | `500` / `500` | deadlines on that call. |
+| `GEO_VISIBILITY_GROUP_ID` | No | `geo-discovery-visibility` | Kafka group of the map-suppression consumer. |
 
 > No compile-time feature flags. `build.rs` compiles `proto/geo_discovery/v1/*.proto`. ScyllaDB profiles:
 > Strict (`LocalQuorum`) for mutations, Fast (`LocalOne` + speculative) for reads.

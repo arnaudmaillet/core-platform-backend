@@ -32,7 +32,7 @@ producer's `DOMAIN.md §8`.
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |
 | `post.updated` | `post` | — *(orphan — see below)* |
-| `post.deleted` | `post` | `timeline` |
+| `post.deleted` | `post` | `timeline`, `geo-discovery` |
 | `post.v1.events` | `post` | `timeline`, `search`, `realtime` |
 | `comment.created` | `comment` | `notification`, `engagement` |
 | `comment.deleted` | `comment` | `engagement` |
@@ -48,7 +48,7 @@ producer's `DOMAIN.md §8`.
 | `chat.member.left` | `chat` | — *(orphan — see below)* |
 | `chat.message.sent` | `chat` | — *(orphan — see below)* |
 | `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery` |
-| `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post` |
+| `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery` |
 | `auth.v1.events` | `auth` | `audit` |
 | `media.v1.events` | `media` | `media` |
 
@@ -142,7 +142,7 @@ producer's `DOMAIN.md §8`.
 | Event | Means | Emitted when | Consumers & why |
 |---|---|---|---|
 | `decision_recorded` | an authoritative integrity ruling was made — carries *who decided* + *why* (DSA SoR) | a decision is recorded (auto-screen / human review / appeal reversal) | `audit` (seals rationale in crypto-shred envelope) |
-| `enforcement_applied` / `enforcement_reversed` | a consequence was applied/lifted against an actor (versioned) | enforcement commits | `timeline`, `chat`, `account` (Plane-B denorm); `post` (holds the restriction its reads apply: `remove_content` → author-only); `search`, `media` (visibility / takedown); `audit` |
+| `enforcement_applied` / `enforcement_reversed` | a consequence was applied/lifted against an actor (versioned) | enforcement commits | `timeline`, `chat`, `account` (Plane-B denorm); `post` (holds the restriction its reads apply: `remove_content` → author-only); `search`, `media` (visibility / takedown); `geo-discovery` (map suppression: `remove_content` / `visibility_limit` hide a post, a reversal restores it); `audit` |
 | `case_opened` / `case_resolved` | a review unit opened/closed | ingestion threshold / reviewer action | Plane-B consumers |
 | `appeal_resolved` | an appeal was decided | appeal resolution | Plane-B consumers |
 

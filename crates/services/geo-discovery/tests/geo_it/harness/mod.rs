@@ -4,7 +4,8 @@
 //! through the viewport query.
 #![allow(dead_code)]
 
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use uuid::Uuid;
@@ -16,10 +17,14 @@ use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 
 use geo_discovery::app::{App, Backends};
-use geo_discovery::application::command::IndexPostCommand;
+use geo_discovery::application::command::{ApplyMapVisibilityCommand, IndexPostCommand};
+use geo_discovery::application::port::AudienceGate;
 use geo_discovery::application::query::get_geo_timeline::{GetGeoTimelineQuery, GetGeoTimelineResult};
 use geo_discovery::application::query::query_tile::{QueryTileQuery, QueryTileResult};
 use geo_discovery::config::GeoDiscoveryConfig;
+use geo_discovery::error::GeoDiscoveryError;
+
+pub use geo_discovery::domain::value_object::{ContentAccess, VisibilityChange, Viewer};
 
 pub use test_support::await_until;
 
@@ -36,10 +41,38 @@ const MIGRATIONS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
 /// score threshold, governs what a query returns.
 pub const ZOOM_R9: i32 = 15;
 
+/// A scripted audience check: every author `Visible` unless set; can fail.
+#[derive(Default)]
+pub struct ScriptedGate {
+    access: Mutex<HashMap<Uuid, ContentAccess>>,
+    down:   Mutex<bool>,
+}
+
+impl ScriptedGate {
+    pub fn set(&self, author: Uuid, access: ContentAccess) {
+        self.access.lock().unwrap().insert(author, access);
+    }
+    pub fn set_down(&self, down: bool) {
+        *self.down.lock().unwrap() = down;
+    }
+}
+
+#[async_trait::async_trait]
+impl AudienceGate for ScriptedGate {
+    async fn access(&self, _: &[String], authors: &[Uuid]) -> Result<HashMap<Uuid, ContentAccess>, GeoDiscoveryError> {
+        if *self.down.lock().unwrap() {
+            return Err(GeoDiscoveryError::AccessCheckUnavailable { reason: "scripted outage".into() });
+        }
+        let access = self.access.lock().unwrap();
+        Ok(authors.iter().map(|a| (*a, access.get(a).copied().unwrap_or(ContentAccess::Visible))).collect())
+    }
+}
+
 /// A fully-wired geo-discovery service bound to ephemeral infra, plus the buses.
 pub struct TestHarness {
     pub command_bus: Arc<InMemoryCommandBus>,
     pub query_bus:   Arc<InMemoryQueryBus>,
+    pub gate:        Arc<ScriptedGate>,
 }
 
 impl TestHarness {
@@ -49,6 +82,7 @@ impl TestHarness {
         let scylla_cp = test_support::containers::scylla_ready(KEYSPACE, MIGRATIONS_DIR).await;
         let redis_endpoint = test_support::containers::redis_endpoint().await;
 
+        let gate = Arc::new(ScriptedGate::default());
         let backends = Backends {
             scylla: ScyllaConfig {
                 contact_points: vec![scylla_cp],
@@ -57,13 +91,14 @@ impl TestHarness {
             },
             redis: RedisConfig { hosts: vec![redis_endpoint], ..RedisConfig::default() },
             kafka: None,
+            audience: Arc::clone(&gate) as _,
         };
 
         let app = App::build(GeoDiscoveryConfig::from_env(), backends)
             .await
             .expect("integration: build geo-discovery app");
 
-        Self { command_bus: app.command_bus, query_bus: app.query_bus }
+        Self { command_bus: app.command_bus, query_bus: app.query_bus, gate }
     }
 
     /// Indexes a post at `(lat, lng)` with the given virality, returning its uuid.
@@ -81,10 +116,42 @@ impl TestHarness {
         caption:   &str,
         thumbnail: &str,
     ) -> Uuid {
+        self.index_post_by(Uuid::now_v7(), lat, lng, virality, caption, thumbnail).await
+    }
+
+    /// Indexes a post with a given id (to replay events out of order).
+    pub async fn index_post_with_id(&self, post: Uuid, lat: f64, lng: f64) {
+        let cmd = IndexPostCommand {
+            post_id:           post.to_string(),
+            author_id:         Uuid::now_v7().to_string(),
+            author_handle:     "tester".to_owned(),
+            author_avatar_url: String::new(),
+            thumbnail_url:     String::new(),
+            caption:           String::new(),
+            lat,
+            lng,
+            virality_score:    5.0,
+            published_at_ms:   chrono::Utc::now().timestamp_millis(),
+            retention_secs:    None,
+            author_tier:       0,
+        };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
+    }
+
+    /// Indexes a post by `author`.
+    pub async fn index_post_by(
+        &self,
+        author:    Uuid,
+        lat:       f64,
+        lng:       f64,
+        virality:  f64,
+        caption:   &str,
+        thumbnail: &str,
+    ) -> Uuid {
         let post_uuid = Uuid::now_v7();
         let cmd = IndexPostCommand {
             post_id:           post_uuid.to_string(),
-            author_id:         Uuid::now_v7().to_string(),
+            author_id:         author.to_string(),
             author_handle:     "tester".to_owned(),
             author_avatar_url: String::new(),
             thumbnail_url:     thumbnail.to_owned(),
@@ -92,7 +159,7 @@ impl TestHarness {
             lat,
             lng,
             virality_score:    virality,
-            published_at_ms:   1_000,
+            published_at_ms:   chrono::Utc::now().timestamp_millis(),
             retention_secs:    None,
             author_tier:       0,
         };
@@ -103,15 +170,44 @@ impl TestHarness {
         post_uuid
     }
 
-    /// Focus path: hydrates the given post ids into full cards.
+    /// Applies a map visibility change, as the visibility worker does.
+    pub async fn change_visibility(&self, post: Uuid, change: VisibilityChange) {
+        let cmd = ApplyMapVisibilityCommand { post_id: post.to_string(), change };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("visibility");
+    }
+
+    /// Focus path: hydrates the given post ids into full cards (mesh caller).
     pub async fn get_timeline(&self, post_ids: &[Uuid]) -> GetGeoTimelineResult {
+        self.try_get_timeline_as(post_ids, Viewer::Internal).await.expect("get_geo_timeline")
+    }
+
+    /// Focus path as `viewer` (`Err` on an audience-check outage).
+    pub async fn try_get_timeline_as(
+        &self,
+        post_ids: &[Uuid],
+        viewer:   Viewer,
+    ) -> Result<GetGeoTimelineResult, cqrs::CqrsError> {
         self.query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
-                GetGeoTimelineQuery { post_ids: post_ids.to_vec() },
+                GetGeoTimelineQuery { post_ids: post_ids.to_vec(), viewer },
             ))
             .await
-            .expect("get_geo_timeline")
+    }
+
+    /// The post ids a Radar query around `(lat, lng)` returns to `viewer`.
+    pub async fn pins_near_as(&self, lat: f64, lng: f64, viewer: Viewer) -> HashSet<Uuid> {
+        self.query_bus
+            .dispatch(Envelope::new(
+                Uuid::now_v7(),
+                QueryTileQuery {
+                    sw_lat: lat - 0.01, sw_lng: lng - 0.01, ne_lat: lat + 0.01, ne_lng: lng + 0.01,
+                    zoom_level: ZOOM_R9, viewer,
+                },
+            ))
+            .await
+            .map(|r: QueryTileResult| r.pins.into_iter().map(|p| p.post_id).collect())
+            .expect("query_tile")
     }
 
     /// Queries a viewport box (`sw` < `ne`) at the given zoom.
@@ -126,7 +222,7 @@ impl TestHarness {
         self.query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
-                QueryTileQuery { sw_lat, sw_lng, ne_lat, ne_lng, zoom_level: zoom },
+                QueryTileQuery { sw_lat, sw_lng, ne_lat, ne_lng, zoom_level: zoom, viewer: Viewer::Internal },
             ))
             .await
             .expect("query_tile")
