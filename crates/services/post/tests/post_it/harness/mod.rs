@@ -26,7 +26,7 @@ use post::application::query::list_posts_by_profile::ListPostsByProfileQuery;
 
 pub use post::application::port::PostSummary;
 pub use post::domain::aggregate::Post;
-pub use post::domain::value_object::PostStatus;
+pub use post::domain::value_object::{PostStatus, ProfileId, Viewer};
 pub use test_support::await_until;
 
 use crate::post_it::fakes::CapturingPublisher;
@@ -103,20 +103,40 @@ impl TestHarness {
             .expect("delete_post");
     }
 
-    /// Reads a single post from the `posts` table (`Err` when absent).
+    /// Reads a single post from the `posts` table (`Err` when absent), as a
+    /// trusted internal caller.
     pub async fn get(&self, post_id: &str) -> Result<Post, CqrsError> {
+        self.get_as(post_id, Viewer::Internal).await
+    }
+
+    /// Reads a single post as `viewer` (`Err` when absent or not visible).
+    pub async fn get_as(&self, post_id: &str, viewer: Viewer) -> Result<Post, CqrsError> {
         self.query_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), GetPostQuery { post_id: post_id.to_owned() }))
+            .dispatch(Envelope::new(
+                Uuid::now_v7(),
+                GetPostQuery { post_id: post_id.to_owned(), viewer },
+            ))
             .await
     }
 
-    /// Lists a profile's posts from the `posts_by_profile` table.
+    /// Lists a profile's posts from the `posts_by_profile` table, as a trusted
+    /// internal caller.
     pub async fn list(&self, profile_id: &str) -> Vec<PostSummary> {
+        self.list_as(profile_id, Viewer::Internal).await
+    }
+
+    /// Lists a profile's posts as `viewer`.
+    pub async fn list_as(&self, profile_id: &str, viewer: Viewer) -> Vec<PostSummary> {
         let (summaries, _next) = self
             .query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
-                ListPostsByProfileQuery { profile_id: profile_id.to_owned(), limit: 100, page_token: None },
+                ListPostsByProfileQuery {
+                    profile_id: profile_id.to_owned(),
+                    limit:      100,
+                    page_token: None,
+                    viewer,
+                },
             ))
             .await
             .expect("list_posts_by_profile");

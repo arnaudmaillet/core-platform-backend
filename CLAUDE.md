@@ -94,7 +94,10 @@ allow-listed listener (see the edge rule below). Each service owns an error-code
   field must equal the token `sub`) or `edge::require_profile` (profile-id field
   must be in the token's `pids`). Never read the actor from the request alone on
   an edge-exposed RPC. Only `auth.Login`/`Refresh` are `public`; staff/admin RPCs
-  stay off the edge until a permission catalogue exists.
+  stay off the edge until a permission catalogue exists. Reads that depend on who
+  is reading (drafts, private profiles, blocks) take the reader from `edge::viewer`
+  (`Internal` = mesh, unfiltered; `Anonymous`; `Member` + `pids`), never from a
+  request field.
 
 ## Cross-repo contract (with `core-platform-infra`)
 

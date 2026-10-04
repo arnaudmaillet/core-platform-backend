@@ -3,7 +3,9 @@ use crate::{
     domain::{
         entity::MediaAttachment,
         event::{DomainEvent, PostDeletedEvent, PostPublishedEvent, PostUpdatedEvent},
-        value_object::{AudioReference, Caption, GeoPoint, PostId, PostKind, PostStatus, ProfileId},
+        value_object::{
+            AudioReference, Caption, GeoPoint, PostId, PostKind, PostStatus, ProfileId, Viewer,
+        },
     },
     error::PostError,
 };
@@ -183,6 +185,12 @@ impl Post {
         }));
 
         Ok(now)
+    }
+
+    /// Whether `viewer` may read this post: drafts and deleted posts are their
+    /// author's alone.
+    pub fn is_visible_to(&self, viewer: &Viewer) -> bool {
+        viewer.may_see(&self.profile_id, self.status)
     }
 
     pub fn take_events(&mut self) -> Vec<DomainEvent> {

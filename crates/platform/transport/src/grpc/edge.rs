@@ -20,7 +20,17 @@
 //! [`require_account`] (the field is an account id: must equal `sub`) or
 //! [`require_profile`] (the field is a profile id: must be one the account owns,
 //! i.e. in the `pids` claim). On the mesh listener there is no principal and both
-//! helpers are no-ops, so in-cluster callers keep working unchanged.
+//! helpers are no-ops, so in-cluster callers keep working unchanged. On the edge, a
+//! [`EdgeAccess::Public`] method carries no principal either, and both helpers
+//! refuse it: a public method has no identity to bind a field to.
+//!
+//! # Who is reading
+//!
+//! Reads that depend on the caller (drafts only for their author, private
+//! profiles only for followers) take the reader from [`viewer`], never from a
+//! request field: [`Viewer::Internal`] for a trusted mesh caller (unfiltered),
+//! [`Viewer::Anonymous`] for an edge caller with no identity, and
+//! [`Viewer::Member`] for a verified caller and the profiles its account owns.
 
 use std::sync::Arc;
 
@@ -140,17 +150,72 @@ impl std::fmt::Debug for EdgePrincipal {
     }
 }
 
+/// Marks a request that reached an [`EdgeAccess::Public`] method on the edge
+/// listener: it came from a client, but with no verified identity. Without the
+/// marker it would be indistinguishable from a trusted mesh call.
+#[derive(Debug, Clone, Copy)]
+pub struct EdgeAnonymous;
+
 /// The verified edge caller, or `None` when the request came in over the mesh
 /// listener (or hit a [`EdgeAccess::Public`] method).
 pub fn principal<T>(request: &tonic::Request<T>) -> Option<&EdgePrincipal> {
     request.extensions().get::<EdgePrincipal>()
 }
 
+/// The reader of a viewer-aware read, taken from how the request arrived.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Viewer {
+    /// A mesh caller: an in-cluster service, trusted like the network it sits
+    /// on. Sees everything, as before viewer-aware reads existed.
+    Internal,
+    /// An edge caller with no verified identity (an [`EdgeAccess::Public`]
+    /// method). Sees only what is public.
+    Anonymous,
+    /// A verified edge caller: its account and the profiles it owns (`pids`).
+    Member { account_id: String, profile_ids: Vec<String> },
+}
+
+impl Viewer {
+    /// `true` when `profile_id` is one of the viewer's own profiles. An internal
+    /// caller owns no profile; check [`Viewer::Internal`] first where it should
+    /// see everything.
+    pub fn owns_profile(&self, profile_id: &str) -> bool {
+        match self {
+            Self::Member { profile_ids, .. } => profile_ids.iter().any(|p| p == profile_id),
+            Self::Internal | Self::Anonymous => false,
+        }
+    }
+}
+
+/// Who is making `request`: see [`Viewer`].
+pub fn viewer<T>(request: &tonic::Request<T>) -> Viewer {
+    if let Some(p) = principal(request) {
+        return Viewer::Member {
+            account_id: p.account_id().to_owned(),
+            profile_ids: p.profile_ids().map(str::to_owned).collect(),
+        };
+    }
+    if request.extensions().get::<EdgeAnonymous>().is_some() {
+        return Viewer::Anonymous;
+    }
+    Viewer::Internal
+}
+
+/// The error for an actor binding on an edge request that has no identity.
+fn anonymous_actor() -> Status {
+    Status::unauthenticated("this call needs an authenticated caller")
+}
+
+fn is_anonymous_edge<T>(request: &tonic::Request<T>) -> bool {
+    request.extensions().get::<EdgeAnonymous>().is_some()
+}
+
 /// Binds a request's **account**-id actor field to the verified caller: on the
 /// edge the field must equal the token subject; over the mesh (no principal) it
-/// is accepted as-is.
+/// is accepted as-is. An anonymous edge call (a public method) is refused.
 pub fn require_account<T>(request: &tonic::Request<T>, account_id: &str) -> Result<(), Status> {
     match principal(request) {
+        None if is_anonymous_edge(request) => Err(anonymous_actor()),
         None => Ok(()),
         Some(p) if p.account_id() == account_id => Ok(()),
         Some(_) => Err(Status::permission_denied(
@@ -161,9 +226,10 @@ pub fn require_account<T>(request: &tonic::Request<T>, account_id: &str) -> Resu
 
 /// Binds a request's **profile**-id actor field to the verified caller: on the
 /// edge the profile must be one the token's account owns (`pids`); over the mesh
-/// (no principal) it is accepted as-is.
+/// (no principal) it is accepted as-is. An anonymous edge call is refused.
 pub fn require_profile<T>(request: &tonic::Request<T>, profile_id: &str) -> Result<(), Status> {
     match principal(request) {
+        None if is_anonymous_edge(request) => Err(anonymous_actor()),
         None => Ok(()),
         Some(p) if p.owns_profile(profile_id) => Ok(()),
         Some(_) => Err(Status::permission_denied(
@@ -173,9 +239,11 @@ pub fn require_profile<T>(request: &tonic::Request<T>, profile_id: &str) -> Resu
 }
 
 /// Requires the verified caller to carry `permission`. Over the mesh (no
-/// principal) it is a no-op, like the actor helpers.
+/// principal) it is a no-op, like the actor helpers; an anonymous edge call is
+/// refused.
 pub fn require_permission<T>(request: &tonic::Request<T>, permission: &str) -> Result<(), Status> {
     match principal(request) {
+        None if is_anonymous_edge(request) => Err(anonymous_actor()),
         None => Ok(()),
         Some(p) if p.has_permission(permission) => Ok(()),
         Some(_) => Err(Status::permission_denied("missing permission")),
@@ -256,6 +324,44 @@ mod tests {
         let req = edge_request(principal_with(&[], &["audit:read"]));
         require_permission(&req, "audit:read").unwrap();
         assert!(require_permission(&req, "audit:export").is_err());
+    }
+
+    fn anonymous_edge_request() -> tonic::Request<()> {
+        let mut req = tonic::Request::new(());
+        req.extensions_mut().insert(EdgeAnonymous);
+        req
+    }
+
+    #[test]
+    fn anonymous_edge_requests_fail_every_actor_check() {
+        let req = anonymous_edge_request();
+        assert!(principal(&req).is_none());
+        for err in [
+            require_account(&req, "acct-1").unwrap_err(),
+            require_profile(&req, "p-1").unwrap_err(),
+            require_permission(&req, "audit:read").unwrap_err(),
+        ] {
+            assert_eq!(err.code(), tonic::Code::Unauthenticated);
+        }
+    }
+
+    #[test]
+    fn viewer_tells_mesh_anonymous_and_member_apart() {
+        assert_eq!(viewer(&tonic::Request::new(())), Viewer::Internal);
+        assert_eq!(viewer(&anonymous_edge_request()), Viewer::Anonymous);
+
+        let member = viewer(&edge_request(principal_with(&["p-1", "p-2"], &[])));
+        assert_eq!(
+            member,
+            Viewer::Member {
+                account_id: "acct-1".into(),
+                profile_ids: vec!["p-1".into(), "p-2".into()],
+            }
+        );
+        assert!(member.owns_profile("p-2"));
+        assert!(!member.owns_profile("acct-1"));
+        assert!(!Viewer::Internal.owns_profile("p-1"));
+        assert!(!Viewer::Anonymous.owns_profile("p-1"));
     }
 
     #[test]

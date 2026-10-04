@@ -9,6 +9,7 @@ pub mod post_id;
 pub mod post_kind;
 pub mod post_status;
 pub mod profile_id;
+pub mod viewer;
 
 pub use audio_id::AudioId;
 pub use audio_kind::AudioKind;
@@ -21,3 +22,4 @@ pub use post_id::PostId;
 pub use post_kind::PostKind;
 pub use post_status::PostStatus;
 pub use profile_id::ProfileId;
+pub use viewer::Viewer;
