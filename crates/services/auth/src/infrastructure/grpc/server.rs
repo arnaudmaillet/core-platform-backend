@@ -52,4 +52,11 @@ impl AuthService for AuthServiceHandler {
     ) -> Result<Response<proto::ListSessionsResponse>, Status> {
         self.list_sessions(request).await
     }
+
+    async fn start_guest_session(
+        &self,
+        request: Request<proto::StartGuestSessionRequest>,
+    ) -> Result<Response<proto::StartGuestSessionResponse>, Status> {
+        self.start_guest_session(request).await
+    }
 }

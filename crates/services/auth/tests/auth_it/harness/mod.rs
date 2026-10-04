@@ -29,7 +29,7 @@ use auth::infrastructure::cache::RedisSessionCache;
 use auth::infrastructure::event::LogEventPublisher;
 use auth::infrastructure::grpc::handler::{proto, AuthServiceHandler};
 use auth::infrastructure::persistence::{
-    PgRefreshTokenRepository, PgSessionRepository, PgSubjectLinkRepository,
+    PgGuestRegistry, PgRefreshTokenRepository, PgSessionRepository, PgSubjectLinkRepository,
 };
 use auth::infrastructure::token::{Es256TokenMinter, EsKeyMaterial};
 
@@ -156,6 +156,7 @@ impl Harness {
             cache: Arc::new(RedisSessionCache::new(redis.clone())),
             minter: Arc::new(minter),
             publisher: Arc::new(LogEventPublisher) as Arc<dyn EventPublisher>,
+            guests: Arc::new(PgGuestRegistry::new(tx.clone())),
             policy: SessionPolicy::new(
                 ChronoDuration::minutes(10),
                 ChronoDuration::minutes(30),
@@ -179,6 +180,37 @@ impl Harness {
             })),
         });
         self.handler.login(request).await.map(|r| r.into_inner())
+    }
+
+    pub async fn start_guest(&self, device_id: &str) -> Result<proto::StartGuestSessionResponse, Status> {
+        let request = Request::new(proto::StartGuestSessionRequest {
+            device: Some(proto::DeviceContext {
+                user_agent: String::new(),
+                ip_address: String::new(),
+                device_id: device_id.to_owned(),
+            }),
+            attestation: "assertion".to_owned(),
+            locale: "fr-FR".to_owned(),
+            region_hint: "FR".to_owned(),
+            current_country: String::new(),
+        });
+        self.handler.start_guest_session(request).await.map(|r| r.into_inner())
+    }
+
+    pub async fn refresh_on(
+        &self,
+        refresh_token: &str,
+        device_id: &str,
+    ) -> Result<proto::RefreshResponse, Status> {
+        let request = Request::new(proto::RefreshRequest {
+            refresh_token: refresh_token.to_owned(),
+            device: Some(proto::DeviceContext {
+                user_agent: String::new(),
+                ip_address: String::new(),
+                device_id: device_id.to_owned(),
+            }),
+        });
+        self.handler.refresh(request).await.map(|r| r.into_inner())
     }
 
     pub async fn refresh(&self, refresh_token: &str) -> Result<proto::RefreshResponse, Status> {
@@ -217,6 +249,26 @@ impl Harness {
     }
 
     // ── Direct DB assertions ─────────────────────────────────────────────────
+
+    /// The device recorded for `guest_id` in `guest_principals`, if any.
+    pub async fn guest_device(&self, guest_id: &str) -> Option<String> {
+        let id = Uuid::parse_str(guest_id).unwrap();
+        sqlx::query_scalar("SELECT device_id FROM guest_principals WHERE guest_id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .unwrap()
+    }
+
+    /// The `kind` of a session row.
+    pub async fn session_kind(&self, session_id: &str) -> String {
+        let id = Uuid::parse_str(session_id).unwrap();
+        sqlx::query_scalar("SELECT kind FROM sessions WHERE id = $1")
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .unwrap()
+    }
 
     pub async fn count_active_sessions(&self, account_id: &str) -> i64 {
         let id = Uuid::parse_str(account_id).unwrap();

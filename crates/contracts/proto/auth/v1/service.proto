@@ -39,6 +39,14 @@ service AuthService {
     // entire session generation.
     rpc Refresh(RefreshRequest) returns (RefreshResponse);
 
+    // Start an anonymous GUEST session for an app installation (guest mode:
+    // browse before sign-up). No account is created. The edge token carries
+    // sub = "guest:<guest_id>", kind = "guest", perms = ["read:public"], no
+    // profiles, and the installation's device id (`did`); it is refreshed with
+    // Refresh. The client edge refuses a guest token on every `authenticated`
+    // method: guests only read public content.
+    rpc StartGuestSession(StartGuestSessionRequest) returns (StartGuestSessionResponse);
+
     // ── Revocation ────────────────────────────────────────────────────────────
 
     // Revoke a single session (the caller's current one by default). Idempotent.

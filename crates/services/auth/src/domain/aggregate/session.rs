@@ -5,13 +5,15 @@ use uuid::Uuid;
 use crate::domain::event::{DomainEvent, SessionIssued, SessionRevoked};
 use crate::domain::value_object::{
     AccessTokenClaims, AccountId, DeviceFingerprint, Generation, IdpSubject, Permission,
-    RevocationReason, SessionId, SessionStatus, ProfileId};
+    RevocationReason, SessionId, SessionKind, SessionStatus, ProfileId};
 use crate::error::AuthError;
 
 /// Parameters to establish a new [`Session`].
 #[derive(Debug, Clone)]
 pub struct SessionIssueParams {
+    /// A member's account, or a guest's id ([`SessionKind::Guest`]).
     pub account_id: AccountId,
+    pub kind: SessionKind,
     pub subject: IdpSubject,
     /// The account's current generation at issue time.
     pub generation: Generation,
@@ -43,6 +45,8 @@ pub struct SessionIssueParams {
 pub struct Session {
     id: SessionId,
     account_id: AccountId,
+    #[serde(default)]
+    kind: SessionKind,
     subject: IdpSubject,
     generation: Generation,
     status: SessionStatus,
@@ -93,6 +97,7 @@ impl Session {
         Ok(Self {
             id,
             account_id: params.account_id,
+            kind: params.kind,
             subject: params.subject,
             generation: params.generation,
             status: SessionStatus::Active,
@@ -111,6 +116,7 @@ impl Session {
     pub fn reconstitute(
         id: SessionId,
         account_id: AccountId,
+        kind: SessionKind,
         subject: IdpSubject,
         generation: Generation,
         status: SessionStatus,
@@ -124,6 +130,7 @@ impl Session {
         Self {
             id,
             account_id,
+            kind,
             subject,
             generation,
             status,
@@ -145,6 +152,10 @@ impl Session {
 
     pub fn account_id(&self) -> AccountId {
         self.account_id
+    }
+
+    pub fn kind(&self) -> SessionKind {
+        self.kind
     }
 
     pub fn subject(&self) -> &IdpSubject {
@@ -226,6 +237,7 @@ impl Session {
             permissions,
             profile_ids,
             self.device.device_id().map(str::to_owned),
+            self.kind,
             now,
             expires_at,
         ))
@@ -323,6 +335,7 @@ mod tests {
     fn params() -> SessionIssueParams {
         let now = t0();
         SessionIssueParams {
+            kind: SessionKind::Member,
             account_id: AccountId::from_uuid(Uuid::now_v7()),
             subject: IdpSubject::new("iss", "sub").unwrap(),
             generation: Generation::INITIAL,

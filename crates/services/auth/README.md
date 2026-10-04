@@ -51,6 +51,20 @@ adapter and zero domain change.
 
 ---
 
+### Guest sessions (guest mode)
+
+`StartGuestSession` (edge **public**) gives an app installation an anonymous, **read-only** session
+before sign-up. No account is created or looked up: the session's `account_id` is a fresh **guest
+id**, and the row is `kind = 'guest'`. The edge token carries `sub = "guest:<guest_id>"`,
+`kind = "guest"`, `perms = ["read:public"]`, no `pids`, and the installation's `did`; `Refresh`
+rotates it like a member's (no directory or profile lookup). `device.device_id` is **required**; the
+device, attestation flag, locale and hints are recorded in `guest_principals` (the welcome gift is
+once per device at sign-up). The client edge refuses a guest token on every `authenticated` method
+(`PERMISSION_DENIED`), so guests only reach `permission(…, "read:public")` routes; realtime refuses
+guest handshakes. **Members carry `read:public` too** (added at every mint). Guest session issuance
+is not published to the outbox (the audit plane records accounts). App Attest verification and
+per-IP / per-device limits on `StartGuestSession` are the abuse-control slice (B5).
+
 ## 📐 Architecture & Concepts
 
 Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS command/query buses,

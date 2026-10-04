@@ -11,6 +11,7 @@
 //! | `perms` | normalised permissions ([`EDGE_PERMISSIONS_CLAIM`])  |
 //! | `pids`  | the **profile** ids the account owns ([`EDGE_PROFILES_CLAIM`]) |
 //! | `did`   | the device the session is bound to ([`EDGE_DEVICE_CLAIM`]); absent when the client sent none |
+//! | `kind`  | `"guest"` on a guest token ([`EDGE_KIND_CLAIM`]: `sub = "guest:<id>"`, `perms = ["read:public"]`, no `pids`); absent on a member's |
 //!
 //! `pids` exists because the client-facing surface is keyed by profile id while
 //! the token subject is an account id (one account owns N profiles): a service
@@ -32,6 +33,17 @@ pub const EDGE_PROFILES_CLAIM: &str = "pids";
 
 /// The claim carrying the session id.
 pub const EDGE_SESSION_CLAIM: &str = "sid";
+
+/// The claim marking a guest token (`"guest"`); absent on a member's token.
+pub const EDGE_KIND_CLAIM: &str = "kind";
+
+/// The `kind` value of a guest token.
+pub const GUEST_KIND: &str = "guest";
+
+/// `true` when the verified token is a guest's (anonymous, read-only).
+pub fn is_guest(claims: &OidcClaims) -> bool {
+    claims.extra.get(EDGE_KIND_CLAIM).and_then(|v| v.as_str()) == Some(GUEST_KIND)
+}
 
 /// The claim carrying the device id the session was bound to at login
 /// (`auth.v1.DeviceContext.device_id`). The realtime gateway keys a socket by it.

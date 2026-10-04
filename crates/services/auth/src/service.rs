@@ -37,11 +37,14 @@ impl Service for AuthService {
 
     /// The RPCs exposed on the client edge listener (`GRPC_EDGE_ADDR`); anything
     /// else on this service is mesh-only. See `transport::grpc::edge`.
-    // Login/Refresh are the only anonymous RPCs in the fleet (they *produce* the
-    // session). Introspect is INTERNAL and stays mesh-only.
+    // Login/Refresh/StartGuestSession are the only anonymous RPCs in the fleet
+    // (they *produce* the session). Introspect is INTERNAL and stays mesh-only.
     const EDGE_POLICY: EdgePolicy = &[
         public("/auth.v1.AuthService/Login"),
         public("/auth.v1.AuthService/Refresh"),
+        // Guest mode: an installation starts an anonymous, read-only session.
+        // Abuse controls (App Attest, per-IP / per-device limits) come with B5.
+        public("/auth.v1.AuthService/StartGuestSession"),
         authenticated("/auth.v1.AuthService/Logout"),
         authenticated("/auth.v1.AuthService/LogoutAllSessions"),
         authenticated("/auth.v1.AuthService/ListSessions"),

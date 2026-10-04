@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{AccountId, Generation, Permission, ProfileId, SessionId};
+use super::{AccountId, Generation, Permission, ProfileId, SessionId, SessionKind};
 
 /// The normalized claim set for an edge access token, produced by
 /// [`Session::mint_access_token`](crate::domain::aggregate::Session::mint_access_token).
@@ -30,6 +30,10 @@ pub struct AccessTokenClaims {
     /// rejects a handshake without it. `None` when the client sent no device id.
     #[serde(default)]
     pub device_id: Option<String>,
+    /// `kind` — a member, or a guest (then `account_id` is a guest id, the
+    /// wire `sub` is `guest:<id>`, and `profile_ids` is empty).
+    #[serde(default)]
+    pub kind: SessionKind,
     pub issued_at: DateTime<Utc>,
     /// Always ≤ the session's sliding and absolute expiry.
     pub expires_at: DateTime<Utc>,
@@ -44,6 +48,7 @@ impl AccessTokenClaims {
         permissions: Vec<Permission>,
         profile_ids: Vec<ProfileId>,
         device_id: Option<String>,
+        kind: SessionKind,
         issued_at: DateTime<Utc>,
         expires_at: DateTime<Utc>,
     ) -> Self {
@@ -54,6 +59,7 @@ impl AccessTokenClaims {
             permissions,
             profile_ids,
             device_id,
+            kind,
             issued_at,
             expires_at,
         }

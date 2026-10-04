@@ -17,10 +17,11 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    LoginHandler, LogoutAllSessionsHandler, LogoutHandler, RefreshHandler,
+    LoginHandler, LogoutAllSessionsHandler, LogoutHandler, RefreshHandler, StartGuestSessionHandler,
 };
 use crate::application::port::{
-    AccountDirectory, EventPublisher, IdentityProvider, ProfileDirectory, RefreshTokenRepository,
+    AccountDirectory, EventPublisher, GuestRegistry, IdentityProvider, ProfileDirectory,
+    RefreshTokenRepository,
     SessionCache, SessionRepository, SubjectLinkRepository, TokenMinter,
 };
 use crate::application::query::{IntrospectHandler, ListSessionsHandler};
@@ -34,7 +35,7 @@ use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 use crate::infrastructure::grpc::handler::AuthServiceHandler;
 use crate::infrastructure::idp::KeycloakIdentityProvider;
 use crate::infrastructure::persistence::{
-    PgRefreshTokenRepository, PgSessionRepository, PgSubjectLinkRepository,
+    PgGuestRegistry, PgRefreshTokenRepository, PgSessionRepository, PgSubjectLinkRepository,
 };
 use crate::infrastructure::token::Es256TokenMinter;
 
@@ -49,6 +50,8 @@ pub struct AppDeps {
     pub cache: Arc<dyn SessionCache>,
     pub minter: Arc<dyn TokenMinter>,
     pub publisher: Arc<dyn EventPublisher>,
+    /// Guest records (`StartGuestSession`).
+    pub guests: Arc<dyn GuestRegistry>,
     pub policy: SessionPolicy,
 }
 
@@ -118,8 +121,24 @@ impl App {
         let introspect =
             Arc::new(IntrospectHandler::new(Arc::clone(&deps.minter), Arc::clone(&deps.cache)));
         let list_sessions = Arc::new(ListSessionsHandler::new(Arc::clone(&deps.sessions)));
+        let start_guest = Arc::new(StartGuestSessionHandler::new(
+            Arc::clone(&deps.sessions),
+            Arc::clone(&deps.refresh_tokens),
+            Arc::clone(&deps.cache),
+            Arc::clone(&deps.minter),
+            Arc::clone(&deps.guests),
+            deps.policy.clone(),
+        ));
 
-        AuthServiceHandler::new(login, refresh, logout, logout_all, introspect, list_sessions)
+        AuthServiceHandler::new(
+            login,
+            refresh,
+            logout,
+            logout_all,
+            introspect,
+            list_sessions,
+            start_guest,
+        )
     }
 
     /// Builds the concrete adapter graph from config + backend connections.
@@ -184,6 +203,7 @@ impl App {
             cache: Arc::new(RedisSessionCache::new(redis.clone())),
             minter: Arc::new(minter),
             publisher,
+            guests: Arc::new(PgGuestRegistry::new(tx.clone())),
             policy: config.policy,
         };
 
@@ -211,6 +231,7 @@ mod tests {
             cache: fx.cache.clone(),
             minter: fx.minter.clone(),
             publisher: fx.publisher.clone(),
+            guests: fx.guests.clone(),
             policy: fx.policy.clone(),
         })
     }

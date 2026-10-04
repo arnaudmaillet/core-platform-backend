@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./0005-auth-federated-idp-with-platform-edge-tokens.md
-  source_sha256: 4ca1da5a557ab52f99d96bc11159d9cc94f024f48e0b1391ff3f4503ab6705ad
+  source_sha256: 4d67d490cc7bb1286ab101b84a5d34ca691b306d31e7f1646cd82be54038cd42
   translated_at: 2026-10-04
   status: complete
 ---
@@ -68,6 +68,18 @@ valeur par défaut de `REALTIME_DEVICE_CLAIM` côté realtime). Il vient de la s
 la requête de refresh, et reste donc stable pendant toute la vie de la session. Il est omis
 quand le client n'a envoyé aucun id d'appareil, et un tel jeton échoue toujours au handshake
 realtime.
+
+## Amendement 2026-10-04 — les jetons invité
+
+Le mode invité permet à une installation de l'app de lire le contenu public avant l'inscription.
+Plutôt qu'un edge en « authentification optionnelle » (pas de jeton = anonyme), invisible pour la
+limitation de débit et l'attribution, `auth` émet des **sessions invité** (`StartGuestSession`,
+publique sur l'edge) : une session sans compte derrière, dont le jeton edge porte
+`sub = "guest:<guest_id>"`, `kind = "guest"`, `perms = ["read:public"]`, aucun `pids`, et un `did`.
+Le préfixe empêche un invité de jamais correspondre à un id de compte dans `require_account`. L'edge
+client refuse les invités sur toute règle `authenticated` et les admet sur les règles
+`permission(…, "read:public")` ; les membres portent aussi `read:public`, si bien que les lectures
+publiques passent à cette permission. Les invités n'ont pas de connexion realtime.
 
 ## Alternatives rejetées
 

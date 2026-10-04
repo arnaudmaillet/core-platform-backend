@@ -9,7 +9,8 @@ use uuid::Uuid;
 use transport::grpc::edge;
 use crate::application::command::{
     IssuedSession, LoginCommand, LoginHandler, LogoutAllSessionsCommand, LogoutAllSessionsHandler,
-    LogoutCommand, LogoutHandler, RefreshCommand, RefreshHandler,
+    LogoutCommand, LogoutHandler, RefreshCommand, RefreshHandler, StartGuestSessionCommand,
+    StartGuestSessionHandler,
 };
 use crate::application::port::AuthnGrant;
 use crate::application::query::{
@@ -36,6 +37,7 @@ pub struct AuthServiceHandler {
     logout_all: Arc<LogoutAllSessionsHandler>,
     introspect: Arc<IntrospectHandler>,
     list_sessions: Arc<ListSessionsHandler>,
+    start_guest: Arc<StartGuestSessionHandler>,
 }
 
 impl AuthServiceHandler {
@@ -46,8 +48,35 @@ impl AuthServiceHandler {
         logout_all: Arc<LogoutAllSessionsHandler>,
         introspect: Arc<IntrospectHandler>,
         list_sessions: Arc<ListSessionsHandler>,
+        start_guest: Arc<StartGuestSessionHandler>,
     ) -> Self {
-        Self { login, refresh, logout, logout_all, introspect, list_sessions }
+        Self { login, refresh, logout, logout_all, introspect, list_sessions, start_guest }
+    }
+
+    pub async fn start_guest_session(
+        &self,
+        request: Request<proto::StartGuestSessionRequest>,
+    ) -> Result<Response<proto::StartGuestSessionResponse>, Status> {
+        let req = request.into_inner();
+        let non_empty = |s: String| if s.trim().is_empty() { None } else { Some(s) };
+        let cmd = StartGuestSessionCommand {
+            device: device_from_proto(req.device),
+            attestation: non_empty(req.attestation),
+            locale: non_empty(req.locale),
+            region_hint: non_empty(req.region_hint),
+            current_country: non_empty(req.current_country),
+        };
+
+        let issued = self
+            .start_guest
+            .handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+
+        Ok(Response::new(proto::StartGuestSessionResponse {
+            guest_id: issued.account_id.as_str(),
+            tokens: Some(token_pair(&issued)),
+        }))
     }
 
     pub async fn login(

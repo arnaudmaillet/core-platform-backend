@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 0664bb8c82394e879f557777f3ac4d0f4db37d86f292c223490426db2fa456d3
-  translated_at: 2026-07-03
+  source_sha256: f77268d84631f802ee3b4f6743e64a6bd4c48cfd7ebb8d11764bf18684e6ef9c
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -63,6 +63,22 @@ Cognito/Okta/custom est un nouvel adaptateur d'infrastructure et zéro changemen
 | Vérification entrante des jetons sur le chemin chaud | bibliothèque plateforme `auth-context` |
 
 ---
+
+### Sessions invité (mode invité)
+
+`StartGuestSession` (edge **public**) donne à une installation de l'app une session anonyme en
+**lecture seule** avant l'inscription. Aucun compte n'est créé ni consulté : l'`account_id` de la
+session est un **id invité** neuf, et la ligne est `kind = 'guest'`. Le jeton edge porte
+`sub = "guest:<guest_id>"`, `kind = "guest"`, `perms = ["read:public"]`, aucun `pids`, et le `did`
+de l'installation ; `Refresh` le fait tourner comme celui d'un membre (sans consulter l'annuaire ni
+les profils). `device.device_id` est **obligatoire** ; l'appareil, l'indicateur d'attestation, la
+locale et les indices sont enregistrés dans `guest_principals` (le cadeau de bienvenue est crédité
+une fois par appareil à l'inscription). L'edge client refuse un jeton invité sur toute méthode
+`authenticated` (`PERMISSION_DENIED`) : les invités n'atteignent que les routes
+`permission(…, "read:public")` ; realtime refuse les handshakes invité. **Les membres portent aussi
+`read:public`** (ajoutée à chaque émission). L'émission d'une session invité n'est pas publiée dans
+l'outbox (le plan d'audit enregistre des comptes). La vérification App Attest et les limites par IP
+/ par appareil sur `StartGuestSession` relèvent de la tranche anti-abus (B5).
 
 ## 📐 Architecture & concepts
 

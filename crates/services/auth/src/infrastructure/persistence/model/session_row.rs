@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::domain::aggregate::Session;
 use crate::domain::value_object::{
-    AccountId, DeviceFingerprint, Generation, IdpSubject, SessionId, SessionStatus,
+    AccountId, DeviceFingerprint, Generation, IdpSubject, SessionId, SessionKind, SessionStatus,
 };
 use crate::error::AuthError;
 
@@ -14,6 +14,8 @@ use crate::error::AuthError;
 pub struct SessionRow {
     pub id: Uuid,
     pub account_id: Uuid,
+    /// `member` | `guest` (migration 0003; existing rows default to `member`).
+    pub kind: String,
     pub issuer: String,
     pub subject: String,
     pub generation: i64,
@@ -35,10 +37,12 @@ impl TryFrom<SessionRow> for Session {
         let subject = IdpSubject::new(row.issuer, row.subject)?;
         let device = DeviceFingerprint::new(row.device_user_agent, row.device_ip, row.device_id);
         let status = SessionStatus::try_from(row.status.as_str())?;
+        let kind = SessionKind::try_from(row.kind.as_str())?;
 
         Ok(Session::reconstitute(
             SessionId::from_uuid(row.id),
             AccountId::from_uuid(row.account_id),
+            kind,
             subject,
             Generation::from_i64(row.generation),
             status,

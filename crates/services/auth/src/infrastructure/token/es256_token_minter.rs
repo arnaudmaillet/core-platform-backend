@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use crate::application::port::{GeneratedRefresh, TokenMinter};
 use crate::domain::value_object::{
     AccessTokenClaims, AccountId, Generation, Permission, ProfileId, RefreshTokenHash, SessionId,
+    SessionKind,
 };
 use crate::error::AuthError;
 
@@ -63,7 +64,15 @@ struct EdgeClaims {
     /// client sent no device id, rather than minted as an empty string.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     did: Option<String>,
+    /// `"guest"` on a guest token (`auth_context::edge::EDGE_KIND_CLAIM`);
+    /// absent on a member's, so member tokens are unchanged on the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
 }
+
+/// A guest token's `sub`: the guest id under a prefix no account id can take,
+/// so a guest can never pass for an account in `require_account`.
+const GUEST_SUB_PREFIX: &str = "guest:";
 
 /// A verifying key plus the SPKI PEM it was built from (retained so the JWKS can
 /// be regenerated without a second source of truth).
@@ -197,8 +206,15 @@ fn jwk_from_pem(kid: &str, public_pem: &[u8]) -> Result<Jwk, AuthError> {
 #[async_trait]
 impl TokenMinter for Es256TokenMinter {
     async fn mint_access(&self, claims: &AccessTokenClaims) -> Result<String, AuthError> {
+        let (sub, kind) = match claims.kind {
+            SessionKind::Member => (claims.account_id.as_str(), None),
+            SessionKind::Guest => (
+                format!("{GUEST_SUB_PREFIX}{}", claims.account_id.as_str()),
+                Some(SessionKind::Guest.as_str().to_owned()),
+            ),
+        };
         let edge = EdgeClaims {
-            sub: claims.account_id.as_str(),
+            sub,
             sid: claims.session_id.as_str(),
             generation: claims.generation.value(),
             iss: self.issuer.clone(),
@@ -208,6 +224,7 @@ impl TokenMinter for Es256TokenMinter {
             perms: claims.permissions.iter().map(|p| p.as_str().to_owned()).collect(),
             pids: claims.profile_ids.iter().map(ProfileId::as_str).collect(),
             did: claims.device_id.clone(),
+            kind,
         };
         encode(&self.header, &edge, &self.encoding_key).map_err(|_| AuthError::TokenSigningFailed)
     }
@@ -222,7 +239,15 @@ impl TokenMinter for Es256TokenMinter {
             .map_err(|_| AuthError::IdpTokenRejected)?;
         let c = data.claims;
 
-        let account_id = AccountId::try_from(c.sub.as_str())?;
+        let kind = match c.kind.as_deref() {
+            None => SessionKind::Member,
+            Some(k) => SessionKind::try_from(k).map_err(|_| AuthError::IdpTokenRejected)?,
+        };
+        let raw_id = match kind {
+            SessionKind::Member => c.sub.as_str(),
+            SessionKind::Guest => c.sub.strip_prefix(GUEST_SUB_PREFIX).ok_or(AuthError::IdpTokenRejected)?,
+        };
+        let account_id = AccountId::try_from(raw_id)?;
         let session_id = SessionId::try_from(c.sid.as_str())?;
         let to_utc = |secs: i64| {
             Utc.timestamp_opt(secs, 0).single().ok_or_else(|| AuthError::DomainViolation {
@@ -247,6 +272,7 @@ impl TokenMinter for Es256TokenMinter {
             permissions,
             profile_ids,
             device_id: c.did,
+            kind,
             issued_at,
             expires_at,
         })
@@ -307,6 +333,7 @@ mod tests {
             permissions: vec![Permission::new("posts:write")],
             profile_ids: vec![ProfileId::from_uuid(Uuid::now_v7())],
             device_id: Some("ios-install-1".into()),
+            kind: SessionKind::Member,
             issued_at: now,
             expires_at: now + ttl,
         }
@@ -338,6 +365,44 @@ mod tests {
         assert_eq!(json["pids"], serde_json::json!([claims.profile_ids[0].as_str()]));
         assert_eq!(json["perms"], serde_json::json!(["posts:write"]));
         assert_eq!(json["did"], serde_json::json!("ios-install-1"));
+    }
+
+    #[tokio::test]
+    async fn a_guest_token_carries_its_kind_and_a_prefixed_sub_and_round_trips() {
+        let minter = single_key_minter();
+        let claims = AccessTokenClaims {
+            kind: SessionKind::Guest,
+            permissions: vec![Permission::read_public()],
+            profile_ids: Vec::new(),
+            ..claims_at(Utc::now(), Duration::minutes(10))
+        };
+        let token = minter.mint_access(&claims).await.unwrap();
+        let payload = token.split('.').nth(1).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["kind"], "guest");
+        assert_eq!(json["sub"], format!("guest:{}", claims.account_id.as_str()));
+        assert_eq!(json["perms"], serde_json::json!(["read:public"]));
+        assert_eq!(json["pids"], serde_json::json!([]));
+
+        let back = minter.verify_access(&token).await.unwrap();
+        assert_eq!(back.kind, SessionKind::Guest);
+        assert_eq!(back.account_id, claims.account_id);
+    }
+
+    #[tokio::test]
+    async fn a_member_token_has_no_kind_claim() {
+        let minter = single_key_minter();
+        let token = minter.mint_access(&claims_at(Utc::now(), Duration::minutes(10))).await.unwrap();
+        let payload = token.split('.').nth(1).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).unwrap(),
+        )
+        .unwrap();
+        assert!(json.get("kind").is_none());
+        assert_eq!(minter.verify_access(&token).await.unwrap().kind, SessionKind::Member);
     }
 
     #[tokio::test]
