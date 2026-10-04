@@ -1,12 +1,13 @@
 //! One-time codes against a live Redis: a code proves its address once, wrong
-//! codes burn the challenge, and sends are budgeted per address.
+//! codes burn the challenge, sends are budgeted per address, and SMS against a
+//! service-wide daily budget.
 
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
 use auth::application::command::{StartVerificationCommand, VerificationCodes, VerificationPolicy};
-use auth::application::port::{CodeSender, VerificationChannel};
+use auth::application::port::{CodeSender, VerificationChannel, VerificationStore};
 use auth::error::AuthError;
 use auth::infrastructure::cache::RedisVerificationStore;
 
@@ -86,4 +87,37 @@ async fn codes_prove_an_address_once_and_sends_are_budgeted() {
     assert!(matches!(codes.verify(&fourth.challenge_id, &code).await, Err(AuthError::VerificationCodeInvalid)), "a right code is refused once locked");
     tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
     assert!(matches!(codes.start(start(&locked)).await, Err(AuthError::VerificationRateLimited { retry_after_secs }) if retry_after_secs > 3_600));
+}
+
+#[tokio::test]
+async fn sms_spend_a_daily_budget_shared_by_the_whole_service() {
+    use fred::interfaces::KeysInterface;
+
+    let h = Harness::start().await;
+    // This scenario is the only SMS sender of the suite: it owns today's counter.
+    let key = format!("auth:{{sms-budget}}:{}", chrono::Utc::now().format("%Y%m%d"));
+    let _: i64 = h.redis.del(&key).await.unwrap();
+
+    let store = RedisVerificationStore::new(h.redis.clone());
+    assert!(store.reserve_sms(2).await.unwrap());
+    assert!(store.reserve_sms(2).await.unwrap());
+    assert!(!store.reserve_sms(2).await.unwrap(), "the third SMS of the day is over budget");
+    let ttl: i64 = h.redis.ttl(&key).await.unwrap();
+    assert!((1..=172_800).contains(&ttl), "the day's counter expires ({ttl})");
+
+    // Through StartVerification: over budget is AUT-5016, not a send.
+    let outbox = Arc::new(Outbox::default());
+    let codes = VerificationCodes::new(
+        Arc::new(store),
+        Arc::clone(&outbox) as _,
+        VerificationPolicy { sms_daily_budget: 2, ..VerificationPolicy::default() },
+    );
+    let sms = StartVerificationCommand {
+        channel: VerificationChannel::Sms,
+        destination: "+33 6 12 34 56 78".into(),
+        locale: None,
+    };
+    assert!(matches!(codes.start(sms).await, Err(AuthError::SmsBudgetExhausted)));
+    assert!(outbox.0.lock().unwrap().is_empty());
+    let _: i64 = h.redis.del(&key).await.unwrap();
 }

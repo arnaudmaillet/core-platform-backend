@@ -788,6 +788,7 @@ pub struct InMemoryVerificationStore {
     challenges: Mutex<HashMap<String, StoredChallenge>>,
     sends: Mutex<HashMap<String, u32>>,
     failures: Mutex<HashMap<String, u32>>,
+    sms_today: Mutex<u32>,
 }
 
 impl InMemoryVerificationStore {
@@ -860,6 +861,12 @@ impl super::port::VerificationStore for InMemoryVerificationStore {
     async fn discard(&self, challenge_id: &str) -> Result<(), AuthError> {
         self.challenges.lock().unwrap().remove(challenge_id);
         Ok(())
+    }
+
+    async fn reserve_sms(&self, daily_budget: u32) -> Result<bool, AuthError> {
+        let mut sent = self.sms_today.lock().unwrap();
+        *sent += 1;
+        Ok(*sent <= daily_budget)
     }
 }
 

@@ -6,7 +6,12 @@
 //! the same whether or not the address has an account: what the address leads
 //! to (a new account, an existing one, another sign-in method) is only told to
 //! whoever enters the code — someone who controls the address.
+//!
+//! SMS costs money per message and is the toll-fraud vector (SMS pumping), so
+//! it has two more gates: the number must be a valid mobile number of a country
+//! on the SMS allow-list, and every SMS counts against a global daily budget.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use chrono::Duration;
@@ -30,16 +35,41 @@ use crate::error::AuthError;
 /// million codes, every hour. After `max_failures` wrong codes within
 /// `failure_window` (across challenges), the address gets no new code and even
 /// a right one is refused until the window ends.
+///
+/// SMS also needs the number's country in `sms_countries` (ISO 3166-1 alpha-2)
+/// and room in `sms_daily_budget`, the SMS the whole service may send per UTC
+/// day.
 #[derive(Debug, Clone)]
 pub struct VerificationPolicy {
-    pub ttl:            Duration,
-    pub max_attempts:   u32,
-    pub per_hour:       u32,
-    pub per_day:        u32,
-    pub resend:         Duration,
-    pub max_failures:   u32,
-    pub failure_window: Duration,
+    pub ttl:              Duration,
+    pub max_attempts:     u32,
+    pub per_hour:         u32,
+    pub per_day:          u32,
+    pub resend:           Duration,
+    pub max_failures:     u32,
+    pub failure_window:   Duration,
+    pub sms_countries:    BTreeSet<String>,
+    pub sms_daily_budget: u32,
 }
+
+/// Where SMS codes may go: the launch markets. It MUST equal the SNS protect
+/// configuration's allow-list (core-platform-infra `global/messaging/sms`,
+/// `allowed_countries`), or a code is "sent" to a number SNS silently drops.
+/// US / CA wait for a registered toll-free or 10DLC number.
+pub const SMS_LAUNCH_COUNTRIES: [&str; 37] = [
+    // EU 27
+    "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GR", "HR", "HU", "IE", "IT", "LT", "LU",
+    "LV", "MT", "NL", "PL", "PT", "RO", "SE", "SI", "SK",
+    // EEA (non-EU), the UK, Switzerland
+    "IS", "LI", "NO", "GB", "CH",
+    // French overseas departments
+    "GP", "GF", "MQ", "RE", "YT",
+];
+
+/// The default SMS budget per UTC day, for the whole service. Sized against the
+/// SNS monthly spend limit (≈ limit / 30 / price per SMS): exhausting SNS's
+/// limit would stop every SMS until the month ends.
+pub const DEFAULT_SMS_DAILY_BUDGET: u32 = 50;
 
 impl Default for VerificationPolicy {
     fn default() -> Self {
@@ -51,6 +81,8 @@ impl Default for VerificationPolicy {
             resend: Duration::seconds(30),
             max_failures: 15,
             failure_window: Duration::hours(24),
+            sms_countries: SMS_LAUNCH_COUNTRIES.iter().map(|c| (*c).to_owned()).collect(),
+            sms_daily_budget: DEFAULT_SMS_DAILY_BUDGET,
         }
     }
 }
@@ -117,6 +149,20 @@ pub fn normalize_phone(raw: &str) -> Option<String> {
     valid.then(|| format!("+{digits}"))
 }
 
+/// The country (ISO 3166-1 alpha-2) of an E.164 number that can receive an SMS
+/// — a valid mobile number (or one the numbering plan cannot tell from a fixed
+/// line) — or `None` (invalid, fixed line, premium rate, shared cost, VoIP…).
+/// Territories that share a calling code resolve to their own country (Jersey
+/// is `JE`, not `GB`; Mayotte is `YT`), as SNS resolves them.
+pub fn sms_country(e164: &str) -> Option<String> {
+    use phonenumber::{metadata::DATABASE, Type};
+    let number = phonenumber::parse(None, e164).ok()?;
+    if !number.is_valid() || !matches!(number.number_type(&DATABASE), Type::Mobile | Type::FixedLineOrMobile) {
+        return None;
+    }
+    number.country().id().map(|id| id.as_ref().to_owned())
+}
+
 /// `SHA-256(challenge_id ":" code)` hex: what is stored and compared.
 pub fn code_hash(challenge_id: &str, code: &str) -> String {
     Sha256::digest(format!("{challenge_id}:{}", code.trim()).as_bytes())
@@ -151,9 +197,17 @@ impl VerificationCodes {
             VerificationChannel::Email => normalize_email(&cmd.destination).ok_or_else(|| {
                 AuthError::DomainViolation { field: "destination".into(), message: "not an email address".into() }
             })?,
-            VerificationChannel::Sms => normalize_phone(&cmd.destination).ok_or_else(|| {
-                AuthError::DomainViolation { field: "destination".into(), message: "not a phone number".into() }
-            })?,
+            VerificationChannel::Sms => {
+                let number = normalize_phone(&cmd.destination).ok_or_else(|| AuthError::DomainViolation {
+                    field: "destination".into(),
+                    message: "not a phone number".into(),
+                })?;
+                // Only from the number's format: telling it apart enumerates nothing.
+                match sms_country(&number) {
+                    Some(country) if self.policy.sms_countries.contains(&country) => number,
+                    _ => return Err(AuthError::SmsDestinationNotSupported),
+                }
+            }
         };
 
         let key = destination_key(cmd.channel, &destination);
@@ -169,6 +223,14 @@ impl VerificationCodes {
             SendAdmission::Refused { retry_after_secs } => {
                 return Err(AuthError::VerificationRateLimited { retry_after_secs });
             }
+        }
+        // Last gate, so only an SMS that would go out spends the budget.
+        if cmd.channel == VerificationChannel::Sms && !self.store.reserve_sms(self.policy.sms_daily_budget).await? {
+            tracing::error!(
+                budget = self.policy.sms_daily_budget,
+                "the daily SMS budget is spent: no SMS code until the next UTC day (possible SMS pumping)"
+            );
+            return Err(AuthError::SmsBudgetExhausted);
         }
 
         let challenge_id = Uuid::now_v7().to_string();
@@ -238,6 +300,66 @@ mod tests {
         }
     }
 
+    fn sms(destination: &str) -> StartVerificationCommand {
+        StartVerificationCommand { channel: VerificationChannel::Sms, destination: destination.into(), locale: None }
+    }
+
+    #[test]
+    fn the_sms_allow_list_is_the_sns_one() {
+        // core-platform-infra global/messaging/sms `allowed_countries`, in order.
+        let infra = "AT BE BG CY CZ DE DK EE ES FI FR GR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK \
+                     IS LI NO GB CH GP GF MQ RE YT";
+        assert_eq!(SMS_LAUNCH_COUNTRIES.join(" "), infra.split_whitespace().collect::<Vec<_>>().join(" "));
+        for country in SMS_LAUNCH_COUNTRIES {
+            assert!(country.parse::<phonenumber::country::Id>().is_ok(), "{country}");
+        }
+    }
+
+    #[test]
+    fn sms_numbers_resolve_to_their_country_mobiles_only() {
+        for (number, country) in [
+            ("+33612345678", "FR"),
+            ("+447400123456", "GB"),
+            ("+491701234567", "DE"),
+            ("+41781234567", "CH"),
+            ("+262639012345", "YT"),
+            ("+262692123456", "RE"),
+            ("+590690123456", "GP"),
+            ("+447797123456", "JE"),
+            ("+447624123456", "IM"),
+            ("+12025550123", "US"),
+        ] {
+            assert_eq!(sms_country(number).as_deref(), Some(country), "{number}");
+        }
+        // A fixed line, a premium-rate line, a number that does not exist.
+        for number in ["+33142685300", "+33899123456", "+33012345678"] {
+            assert_eq!(sms_country(number), None, "{number}");
+        }
+    }
+
+    #[tokio::test]
+    async fn sms_goes_only_to_allowed_countries_within_the_daily_budget() {
+        let (sender, store) = (Arc::new(RecordingCodeSender::default()), Arc::new(InMemoryVerificationStore::default()));
+        let codes = VerificationCodes::new(
+            Arc::clone(&store) as _,
+            Arc::clone(&sender) as _,
+            VerificationPolicy { sms_daily_budget: 2, ..VerificationPolicy::default() },
+        );
+        // Off the allow-list (the US, Jersey under +44), or not a mobile: refused
+        // before anything is counted or sent.
+        for number in ["+1 202 555 0123", "+44 7797 123456", "+33 1 42 68 53 00"] {
+            assert!(matches!(codes.start(sms(number)).await, Err(AuthError::SmsDestinationNotSupported)), "{number}");
+        }
+        assert!(sender.last().is_none());
+
+        assert!(codes.start(sms("+33 6 12 34 56 78")).await.is_ok());
+        assert!(codes.start(sms("+44 7400 123456")).await.is_ok());
+        // The budget is global: a third number is refused, email still goes.
+        assert!(matches!(codes.start(sms("+49 170 1234567")).await, Err(AuthError::SmsBudgetExhausted)));
+        assert_eq!(sender.last().unwrap().0, "+447400123456");
+        assert!(codes.start(email("ada@example.com")).await.is_ok());
+    }
+
     #[test]
     fn numbers_normalize_to_e164_or_are_refused() {
         assert_eq!(normalize_phone("+33 6 12 34 56 78"), Some("+33612345678".into()));
@@ -300,9 +422,8 @@ mod tests {
         assert!(codes.start(email("other@example.com")).await.is_ok(), "another address has its own budget");
 
         // SMS goes through its own sender (the recording one takes any channel).
-        let sms = StartVerificationCommand { channel: VerificationChannel::Sms, destination: "+33 6 00 00 00 00".into(), locale: None };
-        assert!(codes.start(sms).await.is_ok());
-        assert_eq!(sender.last().unwrap().0, "+33600000000");
+        assert!(codes.start(sms("+33 6 12 34 56 78")).await.is_ok());
+        assert_eq!(sender.last().unwrap().0, "+33612345678");
 
         sender.fail();
         let before = store.len();

@@ -138,9 +138,33 @@ impl AuthConfig {
                 resend: chrono::Duration::seconds(env_secs("AUTH_VERIFICATION_RESEND_SECS", 30)),
                 max_failures: env_secs("AUTH_VERIFICATION_MAX_FAILURES", 15).max(1) as u32,
                 failure_window: chrono::Duration::hours(24),
+                sms_countries: sms_countries_from_env().map_err(anyhow::Error::msg)?,
+                sms_daily_budget: env_secs(
+                    "AUTH_SMS_DAILY_BUDGET",
+                    i64::from(crate::application::command::DEFAULT_SMS_DAILY_BUDGET),
+                )
+                .max(0) as u32,
             },
         })
     }
+}
+
+/// Where SMS codes may go: `AUTH_SMS_COUNTRIES` (comma-separated ISO 3166-1
+/// alpha-2), or the launch markets. An unknown code fails the boot.
+fn sms_countries_from_env() -> Result<std::collections::BTreeSet<String>, String> {
+    let listed = env_list("AUTH_SMS_COUNTRIES");
+    if listed.is_empty() {
+        return Ok(crate::application::command::SMS_LAUNCH_COUNTRIES.iter().map(|c| (*c).to_owned()).collect());
+    }
+    listed
+        .iter()
+        .map(|c| {
+            let c = c.trim().to_ascii_uppercase();
+            c.parse::<phonenumber::country::Id>()
+                .map(|_| c.clone())
+                .map_err(|_| format!("AUTH_SMS_COUNTRIES: unknown country code {c:?}"))
+        })
+        .collect()
 }
 
 /// The SMTP relay for email codes, when `AUTH_SMTP_HOST` is set.

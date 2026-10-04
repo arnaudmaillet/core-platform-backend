@@ -7,7 +7,6 @@ use crate::error::AuthError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerificationChannel {
     Email,
-    /// Not exposed yet (phone accounts need `account` to make the email optional).
     Sms,
 }
 
@@ -89,6 +88,10 @@ pub trait VerificationStore: Send + Sync + 'static {
     async fn consume(&self, challenge_id: &str, code_hash: &str) -> Result<ConsumeOutcome, AuthError>;
 
     async fn discard(&self, challenge_id: &str) -> Result<(), AuthError>;
+
+    /// Counts one SMS against the service-wide budget of the current UTC day;
+    /// `false` once `daily_budget` SMS went out today.
+    async fn reserve_sms(&self, daily_budget: u32) -> Result<bool, AuthError>;
 }
 
 /// Delivers a one-time code (email via SES SMTP; a log line locally).
