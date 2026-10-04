@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::{
-    application::port::{filter_page, CommentRepository, CommentSummary, ReadGate},
+    application::port::{filter_page, CommentRepository, CommentSummary, OwnerFilters, ReadGate},
     domain::value_object::{CommentId, PostId, Viewer},
     error::CommentError,
 };
@@ -24,6 +24,7 @@ impl Query for ListRepliesQuery {
 pub struct ListRepliesHandler<R> {
     pub repository: Arc<R>,
     pub gate:       Arc<dyn ReadGate>,
+    pub filters:    OwnerFilters,
 }
 
 impl<R: CommentRepository> QueryHandler<ListRepliesQuery> for ListRepliesHandler<R> {
@@ -40,6 +41,6 @@ impl<R: CommentRepository> QueryHandler<ListRepliesQuery> for ListRepliesHandler
             .repository
             .list_replies(&post_id, &comment_id, q.limit, q.page_token.as_deref())
             .await?;
-        filter_page(self.gate.as_ref(), &q.viewer, &post_id, page).await
+        filter_page(self.gate.as_ref(), &self.filters, &q.viewer, &post_id, page).await
     }
 }

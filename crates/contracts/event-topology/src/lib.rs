@@ -114,6 +114,8 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("social-graph.followed", "timeline"),
     ("social-graph.unfollowed", "timeline"),
     ("social-graph.author_tier_changed", "profile"),
+    // profile hidden words / offensive filter → comment reads
+    ("profile.v1.events", "comment"),
     // chat visibility teardown (self-consume)
     ("chat.conversation.unpublished", "chat"),
     // profile presence settings (activity status, read receipts) → chat

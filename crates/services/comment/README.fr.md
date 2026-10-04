@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: abd392a6848b4d151ffb76ec02ae919f0856d2359bf43b324f2f0705fa53b3cb
+  source_sha256: 458fb2706bc75c4b3e9ff6a628f337cf8f334ec09880e8551ad70696bfbedc15
   translated_at: 2026-10-04
   status: complete
 ---
@@ -144,7 +144,13 @@ la page) :
   revenir plus courte tandis que `next_token` reste valide ;
 - les commentaires d'un profil que le **propriétaire du post a restreint** (#659) ne sont vus que par
   ce profil et le propriétaire : pour tout autre lecteur, un appel social-graph de plus,
-  `ListRestrictedAmong(propriétaire, commentateurs)`, les retire.
+  `ListRestrictedAmong(propriétaire, commentateurs)`, les retire ;
+- les commentaires que le **filtre du propriétaire du post** masque (#660) ne sont vus que par leur
+  auteur, propriétaire compris : un des mots masqués du propriétaire (sans casse, mots entiers ; un emoji
+  n'importe où), ou un terme de la liste offensante tant que le propriétaire garde le filtre offensant
+  activé (par défaut). Le filtre est projeté depuis le `ProfileCommentFiltersChanged` de profile dans
+  `comment.comment_filters` ; la liste offensante est le fichier `COMMENT_OFFENSIVE_TERMS_FILE`
+  (propriété de trust & safety ; sans lui ce filtre ne masque rien).
 
 Le gate échoue fermé : une panne renvoie `CMT-5001` (`UNAVAILABLE`), jamais les commentaires.
 
@@ -174,7 +180,9 @@ Le gate échoue fermé : une panne renvoie `CMT-5001` (`UNAVAILABLE`), jamais le
 | `comment.created` | `CreateComment` success | `comment_id` | `comment_id, post_id, author_id, parent_id, created_at_ms` | `engagement` (incr), `notification` |
 | `comment.deleted` | `DeleteComment` (either strategy) | `comment_id` | `comment_id, post_id, author_id, deleted_at_ms` | `engagement` (decr) |
 
-**Consomme :** rien.
+**Consomme :** `profile.v1.events` (groupe `comment-filters`, depuis l'offset le plus ancien) : les filtres
+de commentaires des propriétaires de posts (`ProfileCommentFiltersChanged`) ; les autres types sont ignorés.
+Poison → `profile.v1.events.dlq`.
 
 > **Contrat d'exécution :** les événements sont publiés après l'écriture durable. Les
 > `engagement-comment-consumer` et `notification-comment-consumer` aval gèrent leur propre traitement
@@ -235,6 +243,7 @@ async fn main() -> anyhow::Result<()> {
 | `KAFKA_BOOTSTRAP_SERVERS` | **Yes** | — | Kafka brokers. |
 | `KAFKA_SECURITY_PROTOCOL` / `KAFKA_SASL_*` | No | `PLAINTEXT` | Auth for managed Kafka. |
 | `COMMENT_GRPC_ADDR` | No | `0.0.0.0:50057` | gRPC bind address. |
+| `COMMENT_OFFENSIVE_TERMS_FILE` | Non | non défini | Un terme offensant par ligne (commentaires `#`) pour le filtre de commentaires offensants (#660). Non défini ou illisible : ce filtre ne masque rien (journalisé) ; les mots masqués s'appliquent toujours. |
 | `COMMENT_POST_GRPC_ENDPOINT` / `COMMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Oui** (prod) | `http://localhost:50056` / `:50053` | Endpoints mesh du read gate (`GetPost`, `CheckAccess`). Sans eux, les lectures hors mesh échouent fermé (`CMT-5001`). |
 | `COMMENT_GATE_RPC_TIMEOUT_MS` / `COMMENT_GATE_CONNECT_TIMEOUT_MS` | Non | `1000` / `1000` | Délais de ces appels. |
 

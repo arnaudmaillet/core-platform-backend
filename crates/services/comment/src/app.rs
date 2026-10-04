@@ -18,11 +18,12 @@ use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 
 use crate::application::command::create_comment::{CreateCommentCommand, CreateCommentHandler};
 use crate::application::command::delete_comment::{DeleteCommentCommand, DeleteCommentHandler};
-use crate::application::port::{CommentEventPublisher, ReadGate};
+use crate::application::port::{CommentEventPublisher, CommentFilterStore, OwnerFilters, ReadGate};
 use crate::application::query::get_comment::{GetCommentHandler, GetCommentQuery};
 use crate::application::query::list_replies::{ListRepliesHandler, ListRepliesQuery};
 use crate::application::query::list_top_level::{ListTopLevelHandler, ListTopLevelQuery};
-use crate::infrastructure::persistence::ScyllaCommentRepository;
+use crate::domain::comment_filter::TermList;
+use crate::infrastructure::persistence::{ScyllaCommentFilterStore, ScyllaCommentRepository};
 
 /// Storage endpoints the graph is wired against. Comment is ScyllaDB-only; its
 /// events are emitted through the injected publisher.
@@ -40,6 +41,9 @@ pub struct App {
     /// Live storage client, retained so the runtime's readiness loop can probe
     /// its liveness (see [`crate::service`]).
     pub scylla:      Arc<ScyllaClient>,
+    /// The post owners' comment filters, exposed so the serving binary can
+    /// wire its `profile.v1.events` consumer against the same instance.
+    pub filter_store: Arc<dyn CommentFilterStore>,
 }
 
 impl App {
@@ -49,9 +53,13 @@ impl App {
         backends:  Backends,
         publisher: Arc<P>,
         gate:      Arc<dyn ReadGate>,
+        offensive: Arc<TermList>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let scylla_client = Arc::new(ScyllaSessionBuilder::new(backends.scylla).build().await?);
         let repository = Arc::new(ScyllaCommentRepository::new(Arc::clone(&scylla_client)));
+        let filter_store: Arc<dyn CommentFilterStore> =
+            Arc::new(ScyllaCommentFilterStore::new(Arc::clone(&scylla_client)));
+        let filters = OwnerFilters { store: Arc::clone(&filter_store), offensive };
 
         let command_bus = Arc::new(
             CommandBusBuilder::new()
@@ -72,18 +80,21 @@ impl App {
                 .register::<GetCommentQuery, _>(GetCommentHandler {
                     repository: Arc::clone(&repository),
                     gate:       Arc::clone(&gate),
+                    filters:    filters.clone(),
                 })?
                 .register::<ListTopLevelQuery, _>(ListTopLevelHandler {
                     repository: Arc::clone(&repository),
                     gate:       Arc::clone(&gate),
+                    filters:    filters.clone(),
                 })?
                 .register::<ListRepliesQuery, _>(ListRepliesHandler {
                     repository: Arc::clone(&repository),
                     gate,
+                    filters,
                 })?
                 .build(),
         );
 
-        Ok(Self { command_bus, query_bus, scylla: scylla_client })
+        Ok(Self { command_bus, query_bus, scylla: scylla_client, filter_store })
     }
 }

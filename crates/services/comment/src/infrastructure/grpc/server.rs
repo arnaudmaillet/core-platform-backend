@@ -37,7 +37,7 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
 
     let backends = Backends { scylla: ScyllaConfig::from_env() };
     let gate = crate::service::read_gate_from_env().map_err(|e| e.to_string())?;
-    let app = App::build(backends, publisher, gate).await?;
+    let app = App::build(backends, publisher, gate, crate::service::offensive_terms_from_env()).await?;
 
     // ── gRPC server ───────────────────────────────────────────────────────────
 

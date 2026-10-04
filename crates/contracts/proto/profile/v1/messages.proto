@@ -44,6 +44,8 @@ message ProfileView {
     LocationSettings                location_settings    = 23;
     // Owner-only (unset for anyone else): presence and discoverability.
     DiscoverySettings               discovery_settings   = 24;
+    // Owner-only (unset for anyone else): hidden words, offensive filter.
+    CommentFilters                  comment_filters      = 25;
 }
 
 message ProfileSummaryView {
@@ -209,4 +211,19 @@ message SetDiscoverySettingsRequest {
     optional bool by_handle_search = 6;
     optional bool by_qr            = 7;
     optional bool in_suggestions   = 8;
+}
+
+// What the owner hides from the comments on their posts (#660): hidden words
+// (words, phrases or emoji, case-insensitive; ≤ 200, each ≤ 64 chars) and the
+// offensive-comment filter (on by default). A matching comment is seen only by
+// its author.
+message CommentFilters {
+    repeated string hidden_words     = 1;
+    bool            filter_offensive = 2;
+}
+
+// Replaces the hidden words and sets the offensive filter.
+message SetCommentFiltersRequest {
+    string         profile_id = 1;
+    CommentFilters filters    = 2;
 }

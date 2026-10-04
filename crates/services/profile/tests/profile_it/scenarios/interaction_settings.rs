@@ -88,3 +88,29 @@ async fn discovery_settings_update_partially_stay_owner_only_and_are_announced()
     assert_eq!(h.get_by_handle_as(&handle, other).await.unwrap().discovery, None, "owner-only");
     assert!(h.publisher.published().iter().any(|t| t == "ProfileDiscoverySettingsChanged"));
 }
+
+#[tokio::test]
+async fn comment_filters_are_normalised_owner_only_and_announced() {
+    use profile::application::command::SetCommentFiltersCommand;
+    use profile::domain::value_object::{CommentFilters, Viewer};
+
+    let h = TestHarness::start().await;
+    let (account, handle) = (harness::random_account_id(), harness::random_handle());
+    h.create(&account, &handle, "Alice").await;
+    let profile = h.get_by_handle(&handle).await.expect("created");
+    assert_eq!(profile.comment_filters, Some(CommentFilters::default()), "offensive filter on by default");
+
+    let cmd = SetCommentFiltersCommand {
+        profile_id: profile.id.clone(),
+        hidden_words: vec![" Spoiler ".into(), "spoiler".into(), "🍕".into()],
+        filter_offensive: false,
+    };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("set");
+
+    let stored = h.get_by_id(&profile.id).await.unwrap().comment_filters.expect("owner sees them");
+    assert_eq!(stored.hidden_words, vec!["spoiler".to_owned(), "🍕".to_owned()]);
+    assert!(!stored.filter_offensive);
+    let other = Viewer::Account(harness::random_account_id());
+    assert_eq!(h.get_by_handle_as(&handle, other).await.unwrap().comment_filters, None, "owner-only");
+    assert!(h.publisher.published().iter().any(|t| t == "ProfileCommentFiltersChanged"));
+}

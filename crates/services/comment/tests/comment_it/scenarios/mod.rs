@@ -5,3 +5,4 @@
 mod dual_table_threading;
 mod tombstone_vs_purge;
 mod read_gate;
+mod hidden_words;

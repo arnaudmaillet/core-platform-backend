@@ -18,7 +18,10 @@ use scylla_storage::ScyllaConfig;
 use comment::app::{App, Backends};
 use comment::application::command::create_comment::CreateCommentCommand;
 use comment::application::command::delete_comment::DeleteCommentCommand;
-use comment::application::port::{CommentEventPublisher, CommentSummary, CommentAdmission, ReadGate};
+use comment::application::port::{
+    CommentAdmission, CommentEventPublisher, CommentFilterStore, CommentSummary, ReadDecision, ReadGate,
+};
+use comment::domain::comment_filter::TermList;
 use comment::application::query::get_comment::GetCommentQuery;
 use comment::application::query::list_replies::ListRepliesQuery;
 use comment::application::query::list_top_level::ListTopLevelQuery;
@@ -32,6 +35,9 @@ pub use test_support::await_until;
 /// Generous default patience for a cross-component assertion (ScyllaDB dual-table
 /// write visibility).
 pub const DEADLINE: Duration = Duration::from_secs(10);
+
+/// The one term of the scenarios' offensive list.
+pub const OFFENSIVE_TERM: &str = "nastyword";
 
 /// ScyllaDB keyspace the migrations provision.
 const KEYSPACE: &str = "comment";
@@ -56,6 +62,8 @@ pub struct ScriptedGate {
     unreadable_posts: Mutex<HashSet<String>>,
     hidden_authors:   Mutex<HashSet<String>>,
     restricted_posts: Mutex<HashSet<String>>,
+    /// post → its author, so the owner's comment filter applies.
+    post_authors:     Mutex<std::collections::HashMap<String, ProfileId>>,
     down:             Mutex<bool>,
 }
 
@@ -70,6 +78,9 @@ impl ScriptedGate {
     pub fn restrict_comments(&self, post_id: &str) {
         self.restricted_posts.lock().unwrap().insert(post_id.to_owned());
     }
+    pub fn set_post_author(&self, post_id: &str, author: &ProfileId) {
+        self.post_authors.lock().unwrap().insert(post_id.to_owned(), author.clone());
+    }
     pub fn set_down(&self, down: bool) {
         *self.down.lock().unwrap() = down;
     }
@@ -82,7 +93,7 @@ impl ReadGate for ScriptedGate {
         _viewer: &Viewer,
         post_id: &PostId,
         comment_authors: &[ProfileId],
-    ) -> Result<Option<HashSet<ProfileId>>, CommentError> {
+    ) -> Result<Option<ReadDecision>, CommentError> {
         if *self.down.lock().unwrap() {
             return Err(CommentError::AccessCheckUnavailable { reason: "scripted outage".into() });
         }
@@ -90,7 +101,10 @@ impl ReadGate for ScriptedGate {
             return Ok(None);
         }
         let hidden = self.hidden_authors.lock().unwrap();
-        Ok(Some(comment_authors.iter().filter(|a| hidden.contains(&a.as_str())).cloned().collect()))
+        Ok(Some(ReadDecision {
+            hidden_authors: comment_authors.iter().filter(|a| hidden.contains(&a.as_str())).cloned().collect(),
+            post_author:    self.post_authors.lock().unwrap().get(&post_id.as_str()).cloned(),
+        }))
     }
 
     async fn may_comment(&self, _author: &ProfileId, post_id: &PostId) -> Result<CommentAdmission, CommentError> {
@@ -112,6 +126,8 @@ pub struct TestHarness {
     pub command_bus: Arc<InMemoryCommandBus>,
     pub query_bus:   Arc<InMemoryQueryBus>,
     pub gate:        Arc<ScriptedGate>,
+    /// The post owners' comment filters (the `profile.v1.events` projection).
+    pub filters:     Arc<dyn CommentFilterStore>,
 }
 
 impl TestHarness {
@@ -129,11 +145,12 @@ impl TestHarness {
         };
 
         let gate = Arc::new(ScriptedGate::default());
-        let app = App::build(backends, Arc::new(NoopPublisher), Arc::clone(&gate) as _)
+        let offensive = Arc::new(TermList::new([OFFENSIVE_TERM.to_owned()]));
+        let app = App::build(backends, Arc::new(NoopPublisher), Arc::clone(&gate) as _, offensive)
             .await
             .expect("integration: build comment app");
 
-        Self { command_bus: app.command_bus, query_bus: app.query_bus, gate }
+        Self { command_bus: app.command_bus, query_bus: app.query_bus, gate, filters: app.filter_store }
     }
 
     /// Creates a comment (top-level when `parent` is `None`, else a reply) authored
@@ -155,6 +172,24 @@ impl TestHarness {
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await
             .expect("create_comment");
+        comment_id
+    }
+
+    /// Creates a top-level comment with `body`, returning its id.
+    pub async fn create_with_body(&self, post_id: &str, author_id: &str, body: &str) -> String {
+        let comment_id = Uuid::now_v7().to_string();
+        let cmd = CreateCommentCommand {
+            comment_id: comment_id.clone(),
+            post_id:    post_id.to_owned(),
+            author_id:  author_id.to_owned(),
+            parent_id:  None,
+            body:       Some(body.to_owned()),
+            gif_id:     None,
+            gif_url:    None,
+            gif_width:  None,
+            gif_height: None,
+        };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("create_comment");
         comment_id
     }
 

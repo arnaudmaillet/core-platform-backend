@@ -52,6 +52,13 @@ where
         self.update_banner(request).await
     }
 
+    async fn set_comment_filters(
+        &self,
+        request: Request<proto::SetCommentFiltersRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.set_comment_filters(request).await
+    }
+
     async fn set_discovery_settings(
         &self,
         request: Request<proto::SetDiscoverySettingsRequest>,

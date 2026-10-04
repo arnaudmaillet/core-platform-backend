@@ -127,7 +127,13 @@ transport (`edge::viewer`). For anyone but a mesh caller, a **read gate** decide
   `next_token` stays valid;
 - comments by a profile the **post's owner restricted** (#659) are seen only by that profile and the
   owner: for any other reader one more social-graph call, `ListRestrictedAmong(owner, commenters)`,
-  drops them.
+  drops them;
+- comments the **post owner's filter** hides (#660) are seen only by their author, the owner included:
+  one of the owner's hidden words (case-insensitive, whole words; an emoji anywhere), or a term of the
+  offensive list while the owner keeps the offensive filter on (the default). The filter is projected
+  from profile's `ProfileCommentFiltersChanged` into `comment.comment_filters`; the offensive list is
+  the file at `COMMENT_OFFENSIVE_TERMS_FILE` (owned by trust & safety; without it that filter hides
+  nothing).
 
 The gate fails closed: an outage is `CMT-5001` (`UNAVAILABLE`), never the comments.
 
@@ -157,7 +163,8 @@ The gate fails closed: an outage is `CMT-5001` (`UNAVAILABLE`), never the commen
 | `comment.created` | `CreateComment` success | `comment_id` | `comment_id, post_id, author_id, parent_id, created_at_ms` | `engagement` (incr), `notification` |
 | `comment.deleted` | `DeleteComment` (either strategy) | `comment_id` | `comment_id, post_id, author_id, deleted_at_ms` | `engagement` (decr) |
 
-**Consumes:** none.
+**Consumes:** `profile.v1.events` (group `comment-filters`, from the earliest offset): the post owners'
+comment filters (`ProfileCommentFiltersChanged`); every other type is skipped. Poison → `profile.v1.events.dlq`.
 
 > **Runtime contract:** events are published after the durable write. The downstream
 > `engagement-comment-consumer` and `notification-comment-consumer` own at-least-once handling under
@@ -218,6 +225,7 @@ async fn main() -> anyhow::Result<()> {
 | `KAFKA_BOOTSTRAP_SERVERS` | **Yes** | — | Kafka brokers. |
 | `KAFKA_SECURITY_PROTOCOL` / `KAFKA_SASL_*` | No | `PLAINTEXT` | Auth for managed Kafka. |
 | `COMMENT_GRPC_ADDR` | No | `0.0.0.0:50057` | gRPC bind address. |
+| `COMMENT_OFFENSIVE_TERMS_FILE` | No | unset | One offensive term per line (`#` comments) for the offensive-comment filter (#660). Unset or unreadable: that filter hides nothing (logged); hidden words still apply. |
 | `COMMENT_POST_GRPC_ENDPOINT` / `COMMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Yes** (prod) | `http://localhost:50056` / `:50053` | Mesh endpoints of the read gate (`GetPost`, `CheckAccess`). Non-mesh reads fail closed (`CMT-5001`) without them. |
 | `COMMENT_GATE_RPC_TIMEOUT_MS` / `COMMENT_GATE_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Deadlines for those calls. |
 

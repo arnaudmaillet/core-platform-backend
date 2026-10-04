@@ -50,6 +50,9 @@ service ProfileService {
     // (owner only).
     rpc SetDiscoverySettings(SetDiscoverySettingsRequest) returns (CommandResponse);
 
+    // Hidden words and the offensive-comment filter (owner only).
+    rpc SetCommentFilters(SetCommentFiltersRequest) returns (CommandResponse);
+
     // Grant a platform verification badge (admin only).
     rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
 
