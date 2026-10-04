@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{Value, json};
 
-use super::mappings::{MAPPING_VERSION, index_body};
+use super::mappings::{MAPPING_VERSION, common_properties, index_body};
 use crate::application::port::{IndexAdmin, SearchIndex, WriteOutcome};
 use crate::domain::{
     AuthorId, DocVersion, EntityKind, HitDisplay, IndexDocument, Searchable, SearchHit, SearchQuery,
@@ -353,6 +353,18 @@ impl IndexAdmin for OpenSearchIndex {
             if !status.is_success() && !already_exists(&value) {
                 return Err(write_status_error(status, &value));
             }
+            // Bring an existing index up to the mapping's additive fields (new
+            // fields only; changing a field or an analyzer needs a reindex).
+            let (status, value) = self
+                .send(
+                    Method::PUT,
+                    &format!("{}/_mapping", encode_path(&physical)),
+                    Some(json!({ "properties": common_properties() })),
+                )
+                .await?;
+            if !status.is_success() {
+                return Err(write_status_error(status, &value));
+            }
             // Point both aliases at it.
             let actions = json!({ "actions": [
                 { "add": { "index": physical, "alias": self.read_alias(kind) } },
@@ -485,11 +497,13 @@ fn search_body(query: &SearchQuery) -> Value {
     })
 }
 
-/// `must_not` clauses excluding any document hidden by either authority.
+/// `must_not` clauses excluding any document hidden by any authority (a missing
+/// flag counts as visible).
 fn visibility_must_not() -> Vec<Value> {
     vec![
         json!({ "term": { "moderation_searchable": false } }),
         json!({ "term": { "owner_searchable": false } }),
+        json!({ "term": { "discoverable": false } }),
     ]
 }
 

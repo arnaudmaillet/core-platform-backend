@@ -6,6 +6,7 @@ pub mod mask_account_profiles;
 pub mod restore_profile;
 pub mod set_tier;
 pub mod set_interaction_settings;
+pub mod set_discovery_settings;
 pub mod set_location_settings;
 pub mod set_visibility;
 pub mod update_avatar;
@@ -23,6 +24,7 @@ pub use mask_account_profiles::{
 pub use restore_profile::{RestoreProfileCommand, RestoreProfileHandler};
 pub use set_tier::{SetProfileTierCommand, SetProfileTierHandler};
 pub use set_interaction_settings::{SetInteractionSettingsCommand, SetInteractionSettingsHandler};
+pub use set_discovery_settings::{SetDiscoverySettingsCommand, SetDiscoverySettingsHandler};
 pub use set_location_settings::{SetLocationSettingsCommand, SetLocationSettingsHandler};
 pub use set_visibility::{SetVisibilityCommand, SetVisibilityHandler};
 pub use update_avatar::{UpdateAvatarCommand, UpdateAvatarHandler};

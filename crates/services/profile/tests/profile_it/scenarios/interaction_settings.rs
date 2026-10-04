@@ -61,3 +61,30 @@ async fn location_settings_round_trip_owner_only_and_are_announced() {
     assert_eq!(h.get_by_handle_as(&handle, other).await.unwrap().location, None);
     assert!(h.publisher.published().iter().any(|t| t == "ProfileLocationSettingsChanged"));
 }
+
+#[tokio::test]
+async fn discovery_settings_update_partially_stay_owner_only_and_are_announced() {
+    use profile::application::command::SetDiscoverySettingsCommand;
+    use profile::domain::value_object::{DiscoverySettings, Viewer};
+
+    let h = TestHarness::start().await;
+    let (account, handle) = (harness::random_account_id(), harness::random_handle());
+    h.create(&account, &handle, "Alice").await;
+    let profile = h.get_by_handle(&handle).await.expect("created");
+    assert_eq!(profile.discovery, Some(DiscoverySettings::default()), "everything on until set");
+
+    // Only the listed flags change.
+    let cmd = SetDiscoverySettingsCommand {
+        profile_id: profile.id.clone(),
+        by_handle_search: Some(false),
+        read_receipts: Some(false),
+        ..Default::default()
+    };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("set");
+
+    let expected = DiscoverySettings { by_handle_search: false, read_receipts: false, ..DiscoverySettings::default() };
+    assert_eq!(h.get_by_id(&profile.id).await.unwrap().discovery, Some(expected));
+    let other = Viewer::Account(harness::random_account_id());
+    assert_eq!(h.get_by_handle_as(&handle, other).await.unwrap().discovery, None, "owner-only");
+    assert!(h.publisher.published().iter().any(|t| t == "ProfileDiscoverySettingsChanged"));
+}

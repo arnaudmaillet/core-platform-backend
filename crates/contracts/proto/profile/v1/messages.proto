@@ -42,6 +42,8 @@ message ProfileView {
     InteractionSettings             interaction_settings = 22;
     // Owner-only (unset for anyone else): ghost mode and location precision.
     LocationSettings                location_settings    = 23;
+    // Owner-only (unset for anyone else): presence and discoverability.
+    DiscoverySettings               discovery_settings   = 24;
 }
 
 message ProfileSummaryView {
@@ -180,4 +182,31 @@ message LocationSettings {
 message SetLocationSettingsRequest {
     string           profile_id = 1;
     LocationSettings settings   = 2;
+}
+
+// Presence and discoverability (#661); every flag is on by default. Teens
+// (13–17) start unfindable by phone, email and suggestions. Honoured today:
+// by_handle_search (search), activity_status and read_receipts (chat). Phone /
+// email lookup, QR and suggestions have no server surface yet.
+message DiscoverySettings {
+    bool activity_status  = 1;
+    bool read_receipts    = 2;
+    bool by_phone         = 3;
+    bool by_email         = 4;
+    bool by_handle_search = 5;
+    // Reachable through a QR code or a shared profile link.
+    bool by_qr            = 6;
+    bool in_suggestions   = 7;
+}
+
+// An unset flag keeps its value.
+message SetDiscoverySettingsRequest {
+    string        profile_id       = 1;
+    optional bool activity_status  = 2;
+    optional bool read_receipts    = 3;
+    optional bool by_phone         = 4;
+    optional bool by_email         = 5;
+    optional bool by_handle_search = 6;
+    optional bool by_qr            = 7;
+    optional bool in_suggestions   = 8;
 }

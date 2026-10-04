@@ -52,6 +52,13 @@ where
         self.update_banner(request).await
     }
 
+    async fn set_discovery_settings(
+        &self,
+        request: Request<proto::SetDiscoverySettingsRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.set_discovery_settings(request).await
+    }
+
     async fn set_location_settings(
         &self,
         request: Request<proto::SetLocationSettingsRequest>,

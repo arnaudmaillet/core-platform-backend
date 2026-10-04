@@ -86,18 +86,22 @@ struct Entry {
     content_version: Option<DocVersion>,
     moderation: Vis,
     owner: Vis,
+    discovery: Vis,
     doc: Option<IndexDocument>,
 }
 
 impl Entry {
     fn visible(&self) -> bool {
-        self.moderation.searchable.is_visible() && self.owner.searchable.is_visible()
+        self.moderation.searchable.is_visible()
+            && self.owner.searchable.is_visible()
+            && self.discovery.searchable.is_visible()
     }
 
     fn vis(&self, authority: VisibilityAuthority) -> Vis {
         match authority {
             VisibilityAuthority::Moderation => self.moderation,
             VisibilityAuthority::Owner => self.owner,
+            VisibilityAuthority::Discovery => self.discovery,
         }
     }
 
@@ -105,6 +109,7 @@ impl Entry {
         match authority {
             VisibilityAuthority::Moderation => self.moderation = vis,
             VisibilityAuthority::Owner => self.owner = vis,
+            VisibilityAuthority::Discovery => self.discovery = vis,
         }
     }
 }
@@ -176,6 +181,7 @@ impl SearchIndex for InMemorySearchIndex {
             Some(e) => {
                 let moderation = e.moderation;
                 let owner = e.owner;
+                let discovery = e.discovery;
                 store.insert(
                     key,
                     Entry {
@@ -183,6 +189,7 @@ impl SearchIndex for InMemorySearchIndex {
                         content_version: Some(document.version()),
                         moderation,
                         owner,
+                        discovery,
                         doc: Some(document.clone()),
                     },
                 );
@@ -201,6 +208,8 @@ impl SearchIndex for InMemorySearchIndex {
                         content_version: Some(document.version()),
                         moderation: seed,
                         owner: seed,
+                        // Never seeded by content (a missing flag is visible).
+                        discovery: Vis::visible(),
                         doc: Some(document.clone()),
                     },
                 );
@@ -235,6 +244,7 @@ impl SearchIndex for InMemorySearchIndex {
                     content_version: None,
                     moderation: Vis::visible(),
                     owner: Vis::visible(),
+                    discovery: Vis::visible(),
                     doc: None,
                 };
                 entry.set_vis(authority, Vis { searchable, version });

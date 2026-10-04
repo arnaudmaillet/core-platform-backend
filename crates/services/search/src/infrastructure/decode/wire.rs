@@ -106,6 +106,12 @@ pub enum ProfileWireEvent {
         profile_id: String,
         occurred_at_ms: i64,
     },
+    /// Presence and discoverability (#661); search reads `by_handle_search`.
+    ProfileDiscoverySettingsChanged {
+        profile_id: String,
+        by_handle_search: bool,
+        occurred_at_ms: i64,
+    },
     #[serde(other)]
     Unknown,
 }

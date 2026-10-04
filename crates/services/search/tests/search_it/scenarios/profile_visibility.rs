@@ -81,3 +81,28 @@ async fn owner_mask_survives_a_profile_content_edit() {
     h.owner_restore("prof-1", 200).await;
     assert_eq!(h.search_ids("edited").await, vec!["prof-1".to_owned()]);
 }
+
+#[tokio::test]
+async fn a_profile_not_findable_by_search_leaves_it_and_masking_cannot_undo_that() {
+    let h = Harness::start().await;
+    h.index_profile("prof-1", "alice", "Alice", "rust engineer", 1)
+        .await;
+
+    h.discoverable("prof-1", false, 100).await;
+    h.refresh().await;
+    assert!(h.search("alice").await.hits.is_empty());
+
+    // Restoring after a mask is the owner authority: it leaves the choice alone.
+    h.owner_hide("prof-1", 200).await;
+    h.owner_restore("prof-1", 300).await;
+    h.refresh().await;
+    assert!(h.search("alice").await.hits.is_empty(), "masking must not undo the setting");
+
+    // A stale replay of an older "findable" is rejected by the version guard.
+    h.discoverable("prof-1", true, 50).await;
+    h.refresh().await;
+    assert!(h.search("alice").await.hits.is_empty(), "stale event");
+
+    h.discoverable("prof-1", true, 400).await;
+    assert_eq!(h.search_ids("alice").await, vec!["prof-1".to_owned()]);
+}
