@@ -106,10 +106,13 @@ where
         // Unix ms). The deadline is the window's stable epoch — it makes the flushed
         // notification id deterministic, so a retried flush overwrites the same row.
         let members: Vec<(String, f64)> = match self.redis.inner
+            // f64 bounds: a numeric string would go to fred as a LEX bound
+            // ("[1759…"), which Redis rejects for ZRANGEBYSCORE — every flush
+            // cycle failed that way and collapsed notifications never left.
             .zrangebyscore(
                 SCHEDULE_KEY,
-                "-inf",
-                now_score.to_string().as_str(),
+                f64::NEG_INFINITY,
+                now_score,
                 true,
                 Some((0i64, SCAN_BATCH as i64)),
             )

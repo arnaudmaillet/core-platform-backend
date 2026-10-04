@@ -68,3 +68,22 @@ async fn viewport_excludes_posts_outside_it() {
         "a viewport over New York must not return a post indexed in San Francisco",
     );
 }
+
+/// Regression: below zoom 13 the band has a virality floor (R7: 50 / 5, R5:
+/// 500), sent to Redis as a score bound. fred took the old numeric *string* for
+/// a LEX bound and Redis refused every such query ("min or max is not a
+/// float") — the map only ever worked at street level. Each band now answers,
+/// and the floor still filters.
+#[tokio::test]
+async fn every_zoom_band_answers_and_applies_its_virality_floor() {
+    let h = TestHarness::start().await;
+    let (lat, lng) = (45.7640, 4.8357); // Lyon
+    let viral = h.index_post(lat, lng, 900.0).await;
+    let quiet = h.index_post(lat + 0.001, lng + 0.001, 10.0).await;
+
+    for (zoom, d, quiet_shows) in [(3, 0.5, false), (7, 0.1, false), (10, 0.05, true), (15, 0.01, true)] {
+        let result = h.query_viewport(lat - d, lng - d, lat + d, lng + d, zoom).await;
+        assert!(harness::result_contains(&result, &viral), "zoom {zoom}: a viral post shows");
+        assert_eq!(harness::result_contains(&result, &quiet), quiet_shows, "zoom {zoom}: the floor");
+    }
+}
