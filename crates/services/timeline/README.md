@@ -151,8 +151,10 @@ A non-personalised feed that needs no follow graph: For You for guests and membe
   virality floor, plus a close ring with no floor), ranked by hot score; a guest only gets its granted
   country (geo-discovery country access, passed as `guest_principal`).
 - **Filters.** Deleted, removed and visibility-limited posts are never shown; age-gated ones only at
-  `CONTENT_LEVEL_STANDARD`. A **guest always gets `RESTRICTED`**; anyone else gets what it asks for,
-  `RESTRICTED` by default (no date of birth is known server-side yet). The reader comes from the token
+  `CONTENT_LEVEL_STANDARD`. A **guest or a 13–17 reader (the token's `age` bracket) always gets
+  `RESTRICTED`**; anyone else gets what it asks for (the client sends the profile's sensitive-content
+  setting, #662), `RESTRICTED` by default. The discovery feeds involve no profiling (DSA Art. 38: FOR_YOU
+  ranks one global pool by popularity and recency), and the following feed is chronological. The reader comes from the token
   (`edge::viewer`): authors it may not see (`CheckAccess` ≠ `VISIBLE`) are left out, and the read **fails
   closed** (`TML-8002`, UNAVAILABLE) when social-graph cannot answer. Mesh callers are unfiltered by audience.
 - **Mutes (#659).** Posts by authors any of the reader's profiles muted (scope posts) are left out of the

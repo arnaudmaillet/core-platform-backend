@@ -8,6 +8,7 @@ pub mod set_tier;
 pub mod set_interaction_settings;
 pub mod set_comment_filters;
 pub mod set_discovery_settings;
+pub mod set_feed_settings;
 pub mod set_location_settings;
 pub mod set_tab_settings;
 pub mod set_visibility;
@@ -29,6 +30,7 @@ pub use set_interaction_settings::{SetInteractionSettingsCommand, SetInteraction
 pub use set_comment_filters::{SetCommentFiltersCommand, SetCommentFiltersHandler};
 pub use set_discovery_settings::{SetDiscoverySettingsCommand, SetDiscoverySettingsHandler};
 pub use set_tab_settings::{SetTabSettingsCommand, SetTabSettingsHandler};
+pub use set_feed_settings::{SetFeedSettingsCommand, SetFeedSettingsHandler};
 pub use set_location_settings::{SetLocationSettingsCommand, SetLocationSettingsHandler};
 pub use set_visibility::{SetVisibilityCommand, SetVisibilityHandler};
 pub use update_avatar::{UpdateAvatarCommand, UpdateAvatarHandler};

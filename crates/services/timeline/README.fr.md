@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 2d805fc217035b67bd2eb35a41b25c0a28d2d2be4045f9ec08f918134ed0be69
-  translated_at: 2026-10-04
+  source_sha256: f9372de531cee2a886687ab1504fd5e44361a315938bd14f4449e818dcd41e80
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -171,8 +171,10 @@ Un fil non personnalisé qui n'a besoin d'aucun graphe de suivi : le For You des
   pays de geo-discovery, transmis en `guest_principal`).
 - **Filtres.** Les posts supprimés, retirés ou à visibilité limitée ne sont jamais montrés ; les posts
   soumis à une limite d'âge seulement en `CONTENT_LEVEL_STANDARD`. Un **invité a toujours `RESTRICTED`** ;
-  les autres obtiennent ce qu'ils demandent, `RESTRICTED` par défaut (aucune date de naissance n'est connue
-  côté serveur pour l'instant). Le lecteur vient du jeton (`edge::viewer`) : les auteurs qu'il ne peut pas
+  les autres obtiennent ce qu'ils demandent (le client envoie le réglage de contenu sensible du profil,
+  #662), `RESTRICTED` par défaut ; un **lecteur de 13 à 17 ans** (tranche `age` du jeton) aussi a toujours
+  `RESTRICTED`. Les fils de découverte n'impliquent aucun profilage (DSA art. 38 : FOR_YOU classe un pool
+  global par popularité et récence), et le fil des abonnements est chronologique. Le lecteur vient du jeton (`edge::viewer`) : les auteurs qu'il ne peut pas
   voir (`CheckAccess` ≠ `VISIBLE`) sont exclus, et la lecture **échoue fermée** (`TML-8002`, UNAVAILABLE)
   quand social-graph ne peut pas répondre. Les appelants mesh ne sont pas filtrés par audience.
 - **Mises en sourdine (#659).** Les posts des auteurs qu'un des profils du lecteur a mis en sourdine (portée
