@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 1d85fe95f28e4c2756a6c9623b14f754c23edb02fde4360a44db55faf0218e4a
+  source_sha256: 01f625b9a0564895b8ef4a7483c0be0bb68e3192e945af9692dab2f7f04ff716
   translated_at: 2026-10-04
   status: complete
 ---
@@ -128,6 +128,7 @@ service ProfileService {
   rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);
   rpc UpdateBanner(UpdateBannerRequest) returns (CommandResponse);
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
+  rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // qui peut commenter / mentionner / écrire, téléchargements, compteurs de likes ; les ados démarrent abonnés uniquement
   rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
   rpc HideProfile(HideProfileRequest) returns (CommandResponse);
   rpc RestoreProfile(RestoreProfileRequest) returns (CommandResponse);

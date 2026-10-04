@@ -5,11 +5,12 @@ use uuid::Uuid;
 use crate::domain::entity::ProfileLink;
 use crate::domain::event::{
     DomainEvent, HandleChanged, ProfileCreated, ProfileDeleted, ProfileHidden, ProfileRestored,
-    ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
+    InteractionSettingsChanged, ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
 };
 use crate::domain::value_object::{
-    AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, Locale, MaskingReason, ProfileId,
-    ProfileKind, ProfileStatus, ProfileVisibility, VerificationKind, WebsiteUrl,
+    AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, InteractionSettings, Locale,
+    MaskingReason, ProfileId, ProfileKind, ProfileStatus, ProfileVisibility, VerificationKind,
+    WebsiteUrl,
 };
 use crate::error::ProfileError;
 
@@ -24,6 +25,8 @@ pub struct ProfileCreateParams {
     pub locale: Locale,
     /// `Private` for a 13–17 holder (the teen default); `Public` otherwise.
     pub visibility: ProfileVisibility,
+    /// [`InteractionSettings::teen`] for a 13–17 holder; the defaults otherwise.
+    pub interaction: InteractionSettings,
     pub correlation_id: Uuid,
 }
 
@@ -53,6 +56,9 @@ pub struct Profile {
     custom_links: Vec<ProfileLink>,
     profile_kind: ProfileKind,
     visibility: ProfileVisibility,
+    /// Who may comment / mention / message, downloads, like counts.
+    #[serde(default)]
+    interaction: InteractionSettings,
     verified: bool,
     verification_kind: Option<VerificationKind>,
     /// Author tier (0=Standard, 1=Premium, 2=Vip), denormalized from
@@ -101,6 +107,7 @@ impl Profile {
             custom_links: Vec::new(),
             profile_kind: params.profile_kind,
             visibility: params.visibility,
+            interaction: params.interaction,
             verified: false,
             verification_kind: None,
             tier: 0,
@@ -119,6 +126,16 @@ impl Profile {
         // ProfileCreated carries no visibility; projections (social-graph's
         // audience, search) assume public until told otherwise, so a profile
         // born private says so right away.
+        if params.interaction != InteractionSettings::default() {
+            profile.pending_events.push(DomainEvent::InteractionSettingsChanged(
+                InteractionSettingsChanged {
+                    profile_id: id,
+                    settings: params.interaction,
+                    occurred_at: now,
+                    correlation_id: params.correlation_id,
+                },
+            ));
+        }
         if params.visibility == ProfileVisibility::Private {
             profile.pending_events.push(DomainEvent::VisibilityChanged(VisibilityChanged {
                 profile_id: id,
@@ -170,6 +187,7 @@ impl Profile {
             custom_links,
             profile_kind,
             visibility,
+            interaction: InteractionSettings::default(),
             verified,
             verification_kind,
             tier,
@@ -273,6 +291,43 @@ impl Profile {
             correlation_id,
         }));
         Ok(())
+    }
+
+    /// Changes who may comment / mention / message, downloads and like counts.
+    /// An unchanged value is a no-op (no write, no event).
+    pub fn set_interaction_settings(
+        &mut self,
+        settings: InteractionSettings,
+        correlation_id: Uuid,
+    ) -> Result<bool, ProfileError> {
+        if self.status == ProfileStatus::Deleted {
+            return Err(ProfileError::ProfileNotActive {
+                current: self.status.as_str().to_owned(),
+            });
+        }
+        if settings == self.interaction {
+            return Ok(false);
+        }
+        self.interaction = settings;
+        let now = self.touch_now();
+        self.pending_events.push(DomainEvent::InteractionSettingsChanged(InteractionSettingsChanged {
+            profile_id: self.id,
+            settings,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(true)
+    }
+
+    /// Restores the stored interaction settings (a column added after
+    /// [`Self::reconstitute`]'s set).
+    pub fn with_interaction(mut self, settings: InteractionSettings) -> Self {
+        self.interaction = settings;
+        self
+    }
+
+    pub fn interaction(&self) -> InteractionSettings {
+        self.interaction
     }
 
     pub fn set_visibility(
@@ -474,6 +529,7 @@ mod tests {
             profile_kind: ProfileKind::try_from("personal").unwrap(),
             locale: Locale::new("en-US").unwrap(),
             visibility: ProfileVisibility::Public,
+            interaction: InteractionSettings::default(),
             correlation_id: Uuid::now_v7(),
         });
         p.drain_events(); // discard the ProfileCreated event
@@ -493,14 +549,30 @@ mod tests {
             profile_kind: ProfileKind::try_from("personal").unwrap(),
             locale: Locale::new("en-US").unwrap(),
             visibility: ProfileVisibility::Private,
+            interaction: InteractionSettings::teen(),
             correlation_id: Uuid::now_v7(),
         });
         assert_eq!(p.visibility(), ProfileVisibility::Private);
+        assert_eq!(p.interaction(), InteractionSettings::teen());
         let events = p.drain_events();
         assert!(matches!(events.as_slice(), [
             DomainEvent::ProfileCreated(_),
+            DomainEvent::InteractionSettingsChanged(_),
             DomainEvent::VisibilityChanged(VisibilityChanged { visibility: ProfileVisibility::Private, .. })
         ]));
+    }
+
+    #[test]
+    fn interaction_settings_change_once_and_emit_only_on_change() {
+        use crate::domain::value_object::InteractionAudience;
+        let mut p = sample_profile();
+        let version = p.version();
+        let quieter = InteractionSettings { comments: InteractionAudience::Mutuals, ..InteractionSettings::default() };
+        assert!(p.set_interaction_settings(quieter, Uuid::now_v7()).unwrap());
+        assert_eq!(p.version(), version + 1);
+        assert!(matches!(p.drain_events().as_slice(), [DomainEvent::InteractionSettingsChanged(_)]));
+        assert!(!p.set_interaction_settings(quieter, Uuid::now_v7()).unwrap(), "unchanged ⇒ no-op");
+        assert!(p.drain_events().is_empty());
     }
 
     #[test]

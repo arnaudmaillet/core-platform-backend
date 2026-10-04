@@ -21,6 +21,24 @@ pub trait ReadGate: Send + Sync + 'static {
         post_id: &PostId,
         comment_authors: &[ProfileId],
     ) -> Result<Option<HashSet<ProfileId>>, CommentError>;
+
+    /// May `author` comment on `post_id`? The post must be one they can read
+    /// (published and visible to them — or their own), and its author's
+    /// interaction settings must let them comment (social-graph
+    /// `CheckInteraction`: everyone / followers / mutuals / no one, a block
+    /// either way refuses). Errors are `AccessCheckUnavailable`; the write
+    /// fails closed.
+    async fn may_comment(&self, author: &ProfileId, post_id: &PostId) -> Result<CommentAdmission, CommentError>;
+}
+
+/// The answer to [`ReadGate::may_comment`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommentAdmission {
+    Allowed,
+    /// Missing, or not one the author may read: indistinguishable on purpose.
+    PostUnavailable,
+    /// The post's author does not take comments from this profile.
+    Restricted,
 }
 
 /// Applies the gate to a page of comments on `post_id`: the whole page goes when

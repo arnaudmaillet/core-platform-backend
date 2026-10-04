@@ -7,7 +7,8 @@ use uuid::Uuid;
 use crate::domain::aggregate::Profile;
 use crate::domain::entity::ProfileLink;
 use crate::domain::value_object::{
-    AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, Locale, MaskingReason, ProfileId,
+    AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, InteractionSettings, Locale,
+    MaskingReason, ProfileId,
     ProfileKind, ProfileStatus, ProfileVisibility, VerificationKind, WebsiteUrl,
 };
 use crate::error::ProfileError;
@@ -44,6 +45,8 @@ pub struct ProfileRow {
     pub created_at:        CqlTimestamp,
     pub updated_at:        CqlTimestamp,
     pub deleted_at:        Option<CqlTimestamp>,
+    /// JSON; NULL on rows predating the column → the defaults.
+    pub interaction_settings: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -141,6 +144,6 @@ impl TryFrom<ProfileRow> for Profile {
             created_at,
             updated_at,
             deleted_at,
-        ))
+        ).with_interaction(InteractionSettings::from_json(row.interaction_settings.as_deref())))
     }
 }

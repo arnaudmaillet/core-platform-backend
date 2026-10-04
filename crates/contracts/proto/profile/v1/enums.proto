@@ -51,3 +51,14 @@ enum HandleAvailability {
     // In use, or released less than 30 days ago.
     HANDLE_AVAILABILITY_TAKEN       = 3;
 }
+
+// Who may interact with a profile in a given way (enforced server-side through
+// social-graph's CheckInteraction; a block always wins).
+enum InteractionAudience {
+    INTERACTION_AUDIENCE_UNSPECIFIED = 0;
+    INTERACTION_AUDIENCE_EVERYONE    = 1;
+    INTERACTION_AUDIENCE_FOLLOWERS   = 2;
+    // Profiles this one follows back.
+    INTERACTION_AUDIENCE_MUTUALS     = 3;
+    INTERACTION_AUDIENCE_NO_ONE      = 4;
+}

@@ -58,6 +58,7 @@ impl App {
                 .register::<CreateCommentCommand, _>(CreateCommentHandler {
                     repository: Arc::clone(&repository),
                     publisher:  Arc::clone(&publisher),
+                    gate:       Arc::clone(&gate),
                 })?
                 .register::<DeleteCommentCommand, _>(DeleteCommentHandler {
                     repository: Arc::clone(&repository),

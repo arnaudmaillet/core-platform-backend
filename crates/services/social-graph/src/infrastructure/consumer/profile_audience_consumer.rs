@@ -10,6 +10,7 @@ use transport::kafka::consumer::{run_consumer, KafkaConsumerHandle, ProcessOutco
 use transport::kafka::producer::KafkaProducerHandle;
 
 use crate::application::command::{AudienceFact, RecordProfileAudienceCommand};
+use crate::domain::interaction::{InteractionAudience, InteractionPolicy};
 
 /// Lenient read DTO for `profile.v1.events` (internally tagged on `type`,
 /// PascalCase — profile's `ProfileEventWire`). Only the audience facts are
@@ -23,6 +24,13 @@ struct ProfileV1Event {
     /// `public` | `private`, on `ProfileVisibilityChanged`.
     #[serde(default)]
     visibility: Option<String>,
+    /// Audiences on `ProfileInteractionSettingsChanged`.
+    #[serde(default)]
+    comments: Option<String>,
+    #[serde(default)]
+    mentions: Option<String>,
+    #[serde(default)]
+    messages: Option<String>,
 }
 
 /// What an event means for the audience projection, if anything.
@@ -35,6 +43,19 @@ fn fact(event: &ProfileV1Event) -> Result<Option<AudienceFact>, String> {
         },
         "ProfileHidden" | "ProfileDeleted" => AudienceFact::Hidden(true),
         "ProfileRestored" => AudienceFact::Hidden(false),
+        "ProfileInteractionSettingsChanged" => {
+            let audience = |field: &Option<String>, name: &str| {
+                field
+                    .as_deref()
+                    .and_then(InteractionAudience::parse)
+                    .ok_or_else(|| format!("ProfileInteractionSettingsChanged with {name} {field:?}"))
+            };
+            AudienceFact::Interaction(InteractionPolicy {
+                comments: audience(&event.comments, "comments")?,
+                mentions: audience(&event.mentions, "mentions")?,
+                messages: audience(&event.messages, "messages")?,
+            })
+        }
         _ => return Ok(None),
     }))
 }
@@ -111,6 +132,27 @@ mod tests {
         assert_eq!(fact(&wire(restored)), Ok(Some(AudienceFact::Hidden(false))));
         let event = wire(ProfileEventWire::ProfileRestored { profile_id: "p-9".into(), occurred_at_ms: 1 });
         assert_eq!(event.profile_id, "p-9");
+    }
+
+    #[test]
+    fn interaction_settings_are_read_from_profiles_own_wire() {
+        let settings = ProfileEventWire::ProfileInteractionSettingsChanged {
+            profile_id: "p-1".into(),
+            comments: "followers".into(),
+            mentions: "mutuals".into(),
+            messages: "no_one".into(),
+            allow_downloads: false,
+            show_like_counts: true,
+            occurred_at_ms: 1,
+        };
+        assert_eq!(
+            fact(&wire(settings)),
+            Ok(Some(AudienceFact::Interaction(InteractionPolicy {
+                comments: InteractionAudience::Followers,
+                mentions: InteractionAudience::Mutuals,
+                messages: InteractionAudience::NoOne,
+            })))
+        );
     }
 
     #[test]

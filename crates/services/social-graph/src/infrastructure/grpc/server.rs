@@ -25,6 +25,13 @@ where
         self.follow(request).await
     }
 
+    async fn check_interaction(
+        &self,
+        request: Request<proto::CheckInteractionRequest>,
+    ) -> Result<Response<proto::CheckInteractionResponse>, Status> {
+        self.check_interaction(request).await
+    }
+
     async fn list_follow_requests(
         &self,
         request: Request<proto::ListFollowRequestsRequest>,

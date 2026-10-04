@@ -5,7 +5,9 @@ use uuid::Uuid;
 use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
+use crate::domain::value_object::{InteractionAudience, InteractionSettings};
 use crate::application::command::{
+    SetInteractionSettingsCommand,
     ChangeHandleCommand, CreateProfileCommand, DeleteProfileCommand, HideProfileCommand,
     RestoreProfileCommand, SetVisibilityCommand, UpdateAvatarCommand, UpdateBannerCommand,
     UpdateProfileCommand, VerifyProfileCommand,
@@ -63,9 +65,10 @@ where
         request: Request<proto::CreateProfileRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
         edge::require_account(&request, &request.get_ref().account_id)?;
-        // Teen default: a 13–17 holder's profile starts private (they may open
-        // it later with SetVisibility).
-        let private = edge::principal(&request).is_some_and(|p| p.is_minor());
+        // Teen defaults: a 13–17 holder's profile starts private, with only
+        // followers commenting / mentioning / messaging and no downloads (they
+        // may relax them later).
+        let minor = edge::principal(&request).is_some_and(|p| p.is_minor());
         let req = request.into_inner();
         let kind = profile_kind_i32_to_str(req.profile_kind)
             .ok_or_else(|| Status::invalid_argument("unknown profile_kind"))?;
@@ -78,7 +81,7 @@ where
             banner_url:   Some(req.banner_url).filter(|s| !s.is_empty()),
             profile_kind: kind.to_owned(),
             locale:       req.locale,
-            private,
+            minor,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -175,6 +178,31 @@ where
         let cmd = SetVisibilityCommand {
             profile_id: req.profile_id.clone(),
             visibility: visibility.to_owned(),
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_cmd(&req.profile_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    /// The owner's interaction settings (edge: one of the caller's profiles).
+    pub async fn set_interaction_settings(
+        &self,
+        request: Request<proto::SetInteractionSettingsRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let s = req.settings.ok_or_else(|| Status::invalid_argument("settings are required"))?;
+        let cmd = SetInteractionSettingsCommand {
+            profile_id: req.profile_id.clone(),
+            settings: InteractionSettings {
+                comments: audience_from_proto(s.comments)?,
+                mentions: audience_from_proto(s.mentions)?,
+                messages: audience_from_proto(s.messages)?,
+                allow_downloads: s.allow_downloads,
+                show_like_counts: s.show_like_counts,
+            },
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -396,6 +424,36 @@ fn profile_view_to_proto(v: ProfileView) -> proto::ProfileView {
         created_at:        Some(dt_to_ts(v.created_at)),
         updated_at:        Some(dt_to_ts(v.updated_at)),
         version:           v.version,
+        interaction_settings: Some(interaction_to_proto(v.interaction)),
+    }
+}
+
+fn audience_to_proto(a: InteractionAudience) -> i32 {
+    (match a {
+        InteractionAudience::Everyone => proto::InteractionAudience::Everyone,
+        InteractionAudience::Followers => proto::InteractionAudience::Followers,
+        InteractionAudience::Mutuals => proto::InteractionAudience::Mutuals,
+        InteractionAudience::NoOne => proto::InteractionAudience::NoOne,
+    }) as i32
+}
+
+fn audience_from_proto(v: i32) -> Result<InteractionAudience, Status> {
+    match proto::InteractionAudience::try_from(v) {
+        Ok(proto::InteractionAudience::Everyone) => Ok(InteractionAudience::Everyone),
+        Ok(proto::InteractionAudience::Followers) => Ok(InteractionAudience::Followers),
+        Ok(proto::InteractionAudience::Mutuals) => Ok(InteractionAudience::Mutuals),
+        Ok(proto::InteractionAudience::NoOne) => Ok(InteractionAudience::NoOne),
+        _ => Err(Status::invalid_argument("every interaction audience must be set")),
+    }
+}
+
+fn interaction_to_proto(s: InteractionSettings) -> proto::InteractionSettings {
+    proto::InteractionSettings {
+        comments: audience_to_proto(s.comments),
+        mentions: audience_to_proto(s.mentions),
+        messages: audience_to_proto(s.messages),
+        allow_downloads: s.allow_downloads,
+        show_like_counts: s.show_like_counts,
     }
 }
 

@@ -195,7 +195,7 @@ pub async fn dispatch_create(
         banner_url:   None,
         profile_kind: "personal".to_owned(),
         locale:       "en-US".to_owned(),
-        private:      false,
+        minor:        false,
     };
     command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await
 }

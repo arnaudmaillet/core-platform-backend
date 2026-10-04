@@ -63,6 +63,18 @@ pub enum ProfileEventWire {
         visibility: String,
         occurred_at_ms: i64,
     },
+    /// The owner changed who may comment / mention / message (`everyone`,
+    /// `followers`, `mutuals`, `no_one`), downloads and like counts.
+    /// `social-graph` projects it for `CheckInteraction`.
+    ProfileInteractionSettingsChanged {
+        profile_id: String,
+        comments: String,
+        mentions: String,
+        messages: String,
+        allow_downloads: bool,
+        show_like_counts: bool,
+        occurred_at_ms: i64,
+    },
 }
 
 impl ProfileEventWire {
@@ -77,7 +89,8 @@ impl ProfileEventWire {
             | ProfileEventWire::ProfileRestored { profile_id, .. }
             | ProfileEventWire::ProfileDeleted { profile_id, .. }
             | ProfileEventWire::ProfileTierChanged { profile_id, .. }
-            | ProfileEventWire::ProfileVisibilityChanged { profile_id, .. } => profile_id,
+            | ProfileEventWire::ProfileVisibilityChanged { profile_id, .. }
+            | ProfileEventWire::ProfileInteractionSettingsChanged { profile_id, .. } => profile_id,
         }
     }
 
@@ -93,6 +106,9 @@ impl ProfileEventWire {
             ProfileEventWire::ProfileDeleted { .. } => "ProfileDeleted",
             ProfileEventWire::ProfileTierChanged { .. } => "ProfileTierChanged",
             ProfileEventWire::ProfileVisibilityChanged { .. } => "ProfileVisibilityChanged",
+            ProfileEventWire::ProfileInteractionSettingsChanged { .. } => {
+                "ProfileInteractionSettingsChanged"
+            }
         }
     }
 }
@@ -143,6 +159,17 @@ impl From<&DomainEvent> for ProfileEventWire {
                 visibility: e.visibility.as_str().to_owned(),
                 occurred_at_ms: e.occurred_at.timestamp_millis(),
             },
+            DomainEvent::InteractionSettingsChanged(e) => {
+                ProfileEventWire::ProfileInteractionSettingsChanged {
+                    profile_id: e.profile_id.to_string(),
+                    comments: e.settings.comments.as_str().to_owned(),
+                    mentions: e.settings.mentions.as_str().to_owned(),
+                    messages: e.settings.messages.as_str().to_owned(),
+                    allow_downloads: e.settings.allow_downloads,
+                    show_like_counts: e.settings.show_like_counts,
+                    occurred_at_ms: e.occurred_at.timestamp_millis(),
+                }
+            }
         }
     }
 }

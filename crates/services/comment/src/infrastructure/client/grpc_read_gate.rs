@@ -7,11 +7,11 @@ use async_trait::async_trait;
 use post_api::post_service_client::PostServiceClient;
 use post_api::{GetPostRequest, ModerationRestriction, PostStatus};
 use social_graph_api::social_graph_service_client::SocialGraphServiceClient;
-use social_graph_api::{CheckAccessRequest, ContentAccess};
+use social_graph_api::{CheckAccessRequest, CheckInteractionRequest, ContentAccess, InteractionKind};
 use tonic::transport::Channel;
 use tonic::Code;
 
-use crate::application::port::ReadGate;
+use crate::application::port::{CommentAdmission, ReadGate};
 use crate::domain::value_object::{PostId, ProfileId, Viewer};
 use crate::error::CommentError;
 
@@ -178,6 +178,59 @@ impl ReadGate for GrpcReadGate {
         }
         let answers = combine(&targets, &responses);
         Ok(decide(&answers, viewers, &view.profile_id, comment_authors))
+    }
+
+    async fn may_comment(&self, author: &ProfileId, post_id: &PostId) -> Result<CommentAdmission, CommentError> {
+        let view = match self
+            .post
+            .clone()
+            .get_post(GetPostRequest { post_id: post_id.as_str() })
+            .await
+        {
+            Ok(response) => response.into_inner(),
+            Err(status) if status.code() == Code::NotFound => return Ok(CommentAdmission::PostUnavailable),
+            Err(status) => return Err(unavailable(status)),
+        };
+        // Commenting on your own post is always allowed.
+        if view.profile_id == author.as_str() {
+            return Ok(CommentAdmission::Allowed);
+        }
+        if !post_is_public(&view) {
+            return Ok(CommentAdmission::PostUnavailable);
+        }
+        // Readable for this commenter (a private author they don't follow, a
+        // block or a hidden author ⇒ not)…
+        let access = self
+            .social_graph
+            .clone()
+            .check_access(CheckAccessRequest {
+                viewer_profile_ids: vec![author.as_str()],
+                target_profile_ids: vec![view.profile_id.clone()],
+            })
+            .await
+            .map_err(unavailable)?
+            .into_inner();
+        let visible = access
+            .targets
+            .iter()
+            .any(|t| t.target_profile_id == view.profile_id && t.access == ContentAccess::Visible as i32);
+        if !visible {
+            return Ok(CommentAdmission::PostUnavailable);
+        }
+        // …and its author takes comments from them.
+        let allowed = self
+            .social_graph
+            .clone()
+            .check_interaction(CheckInteractionRequest {
+                actor_profile_id: author.as_str(),
+                target_profile_id: view.profile_id,
+                kind: InteractionKind::Comment as i32,
+            })
+            .await
+            .map_err(unavailable)?
+            .into_inner()
+            .allowed;
+        Ok(if allowed { CommentAdmission::Allowed } else { CommentAdmission::Restricted })
     }
 }
 

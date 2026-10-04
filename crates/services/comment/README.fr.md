@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 96f0f709b3177d1b70afc262e065b5dac8a38a5114a122d9cb0ab2dfeaa6e808
+  source_sha256: eacc89d43357d5e4a942ef46727cf3fc8705d0118854ed3080289f0e69a8591c
   translated_at: 2026-10-04
   status: complete
 ---
@@ -145,6 +145,8 @@ la page) :
 
 Le gate échoue fermé : une panne renvoie `CMT-5001` (`UNAVAILABLE`), jamais les commentaires.
 
+**Les écritures sont aussi contrôlées** (#656) : `CreateComment` exige un post que le commentateur peut lire (sinon `CMT-1004`, `NOT_FOUND`) et dont l'auteur accepte ses commentaires — `CheckInteraction(COMMENT)` de social-graph sur les réglages d'interaction de l'auteur (tout le monde / abonnés / mutuels / personne) et les blocages (sinon `CMT-1005`, `PERMISSION_DENIED`). Commenter son propre post est toujours permis ; une panne refuse l'écriture (`CMT-5001`).
+
 ### Contrat d'erreur (`CMT-xxxx`)
 
 | Code | Error | HTTP |
@@ -152,6 +154,8 @@ Le gate échoue fermé : une panne renvoie `CMT-5001` (`UNAVAILABLE`), jamais le
 | CMT-1001/1002/1003 | not found / already deleted / author mismatch | 404 / 409 / 403 |
 | CMT-2001/2002/2003 | nesting depth / parent not found / parent deleted | 422 / 404 / 422 |
 | CMT-3001/3002 | empty content / incomplete GIF metadata | 422 |
+| CMT-1004 | `PostNotFound` (absent, ou non lisible par le commentateur) | 404 → `NOT_FOUND` |
+| CMT-1005 | `CommentsRestricted` (l'auteur du post n'accepte pas les commentaires de ce profil) | 403 → `PERMISSION_DENIED` |
 | CMT-5001 | `AccessCheckUnavailable` (read gate down; retryable) | 503 → `UNAVAILABLE` |
 | CMT-4001 | Kafka publish failed | 500 |
 | CMT-9001..9004 | invalid ids / domain violation | 422 |

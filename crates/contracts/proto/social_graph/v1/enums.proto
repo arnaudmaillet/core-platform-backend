@@ -41,3 +41,14 @@ enum ContentAccess {
     // Nothing: a block either way, or a hidden profile.
     CONTENT_ACCESS_HIDDEN      = 3;
 }
+
+// An interaction a profile's owner controls (profile.v1 InteractionSettings).
+enum InteractionKind {
+    INTERACTION_KIND_UNSPECIFIED = 0;
+    // Commenting on the target's posts.
+    INTERACTION_KIND_COMMENT     = 1;
+    // Mentioning or tagging the target.
+    INTERACTION_KIND_MENTION     = 2;
+    // Messaging the target directly.
+    INTERACTION_KIND_MESSAGE     = 3;
+}

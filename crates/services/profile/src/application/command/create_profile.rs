@@ -6,7 +6,8 @@ use validate_core::{FieldViolation, Validate};
 use crate::application::port::{EventPublisher, ProfileCache, ProfileRepository};
 use crate::domain::aggregate::{Profile, ProfileCreateParams};
 use crate::domain::value_object::{
-    AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, Locale, ProfileKind, ProfileVisibility,
+    AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, InteractionSettings, Locale, ProfileKind,
+    ProfileVisibility,
 };
 use crate::error::ProfileError;
 
@@ -20,8 +21,9 @@ pub struct CreateProfileCommand {
     pub banner_url: Option<String>,
     pub profile_kind: String,
     pub locale: String,
-    /// Create it private: the creator is 13–17 (the token's `age` claim).
-    pub private: bool,
+    /// The creator is 13–17 (the token's `age` claim): the profile starts
+    /// private, with the teen interaction defaults.
+    pub minor: bool,
 }
 
 impl Command for CreateProfileCommand {}
@@ -87,7 +89,8 @@ impl CommandHandler<CreateProfileCommand> for CreateProfileHandler {
             banner_url,
             profile_kind,
             locale,
-            visibility: if cmd.private { ProfileVisibility::Private } else { ProfileVisibility::Public },
+            visibility: if cmd.minor { ProfileVisibility::Private } else { ProfileVisibility::Public },
+            interaction: if cmd.minor { InteractionSettings::teen() } else { InteractionSettings::default() },
             correlation_id: envelope.correlation_id,
         });
 

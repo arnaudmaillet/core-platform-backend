@@ -115,6 +115,7 @@ service ProfileService {
   rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);
   rpc UpdateBanner(UpdateBannerRequest) returns (CommandResponse);
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
+  rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // who may comment / mention / message, downloads, like counts; teens start with followers-only
   rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
   rpc HideProfile(HideProfileRequest) returns (CommandResponse);
   rpc RestoreProfile(RestoreProfileRequest) returns (CommandResponse);

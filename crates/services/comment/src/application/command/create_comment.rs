@@ -4,7 +4,7 @@ use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
 use crate::{
-    application::port::{CommentEventPublisher, CommentRepository},
+    application::port::{CommentAdmission, CommentEventPublisher, CommentRepository, ReadGate},
     domain::{
         aggregate::Comment,
         entity::GifAttachment,
@@ -56,6 +56,9 @@ impl Validate for CreateCommentCommand {
 pub struct CreateCommentHandler<R, P> {
     pub repository: Arc<R>,
     pub publisher:  Arc<P>,
+    /// The post must be readable to the commenter and its author must take
+    /// their comments (interaction settings, blocks).
+    pub gate:       Arc<dyn ReadGate>,
 }
 
 impl<R, P> CommandHandler<CreateCommentCommand> for CreateCommentHandler<R, P>
@@ -84,6 +87,16 @@ where
             cmd.gif_width,
             cmd.gif_height,
         )?;
+
+        match self.gate.may_comment(&author_id, &post_id).await? {
+            CommentAdmission::Allowed => {}
+            CommentAdmission::PostUnavailable => {
+                return Err(CommentError::PostNotFound { post_id: cmd.post_id.clone() });
+            }
+            CommentAdmission::Restricted => {
+                return Err(CommentError::CommentsRestricted { post_id: cmd.post_id.clone() });
+            }
+        }
 
         let (parent_id, parent_is_top_level) = resolve_parent(
             cmd.parent_id.as_deref(),

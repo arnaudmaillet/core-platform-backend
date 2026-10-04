@@ -10,10 +10,11 @@ use crate::application::command::{
     UnfollowProfileCommand, WithdrawFollowRequestCommand,
 };
 use crate::application::query::{
-    CheckAccessQuery, GetRelationStatusQuery, ListBlocksQuery, ListFollowRequestsQuery,
+    CheckAccessQuery, CheckInteractionQuery, GetRelationStatusQuery, ListBlocksQuery, ListFollowRequestsQuery,
     ListFollowersQuery, ListFollowingQuery,
 };
 use crate::domain::access::{ContentAccess, Viewer};
+use crate::domain::interaction::InteractionKind;
 use crate::application::query::get_relation_status::RelationStatusView;
 use crate::domain::entity::{BlockEdge, FollowEdge};
 use crate::domain::value_object::RelationStatus;
@@ -60,6 +61,16 @@ where
     }
 }
 
+
+fn interaction_kind_from_proto(v: i32) -> Result<InteractionKind, Status> {
+    match proto::InteractionKind::try_from(v) {
+        Ok(proto::InteractionKind::Comment) => Ok(InteractionKind::Comment),
+        Ok(proto::InteractionKind::Mention) => Ok(InteractionKind::Mention),
+        Ok(proto::InteractionKind::Message) => Ok(InteractionKind::Message),
+        _ => Err(Status::invalid_argument("unknown interaction kind")),
+    }
+}
+
 // ── Command implementations ───────────────────────────────────────────────────
 
 impl<CB, QB> SocialGraphServiceHandler<CB, QB>
@@ -96,6 +107,25 @@ where
     }
 
     /// The owner's inbox of a private profile (edge: the caller's own profile).
+    /// Mesh-only (absent from the edge policy): the owning service asks.
+    pub async fn check_interaction(
+        &self,
+        request: Request<proto::CheckInteractionRequest>,
+    ) -> Result<Response<proto::CheckInteractionResponse>, Status> {
+        let req = request.into_inner();
+        let query = CheckInteractionQuery {
+            actor_id:  req.actor_profile_id,
+            target_id: req.target_profile_id,
+            kind:      interaction_kind_from_proto(req.kind)?,
+        };
+        let allowed: bool = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::CheckInteractionResponse { allowed }))
+    }
+
     pub async fn list_follow_requests(
         &self,
         request: Request<proto::ListFollowRequestsRequest>,
