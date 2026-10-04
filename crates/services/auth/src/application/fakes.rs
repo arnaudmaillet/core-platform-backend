@@ -66,6 +66,8 @@ impl IdentityProvider for StubIdentityProvider {
 pub struct StubAccountDirectory {
     subjects: Mutex<HashMap<IdpSubject, AccountId>>,
     snapshots: Mutex<HashMap<AccountId, AccountSnapshot>>,
+    /// Every account looked up, in order.
+    looked_up: Mutex<Vec<AccountId>>,
 }
 
 impl Default for StubAccountDirectory {
@@ -76,7 +78,16 @@ impl Default for StubAccountDirectory {
 
 impl StubAccountDirectory {
     pub fn new() -> Self {
-        Self { subjects: Mutex::new(HashMap::new()), snapshots: Mutex::new(HashMap::new()) }
+        Self {
+            subjects: Mutex::new(HashMap::new()),
+            snapshots: Mutex::new(HashMap::new()),
+            looked_up: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The accounts looked up so far.
+    pub fn lookups(&self) -> Vec<AccountId> {
+        self.looked_up.lock().unwrap().clone()
     }
 
     /// Pre-binds a subject to a known account with the given activation + perms.
@@ -112,6 +123,7 @@ impl AccountDirectory for StubAccountDirectory {
     }
 
     async fn lookup(&self, account_id: &AccountId) -> Result<AccountSnapshot, AuthError> {
+        self.looked_up.lock().unwrap().push(*account_id);
         Ok(self.snapshots.lock().unwrap().get(account_id).cloned().unwrap_or(AccountSnapshot {
             activation: AccountActivation::Active,
             permissions: Vec::new(),
@@ -383,6 +395,24 @@ impl TokenMinter for StubTokenMinter {
     }
 }
 
+// ─── GuestRegistry ───────────────────────────────────────────────────────────
+
+#[derive(Default)]
+pub struct InMemoryGuestRegistry {
+    pub records: Mutex<Vec<super::port::GuestRecord>>,
+}
+
+#[async_trait]
+impl super::port::GuestRegistry for InMemoryGuestRegistry {
+    async fn record(&self, guest: &super::port::GuestRecord) -> Result<(), AuthError> {
+        let mut records = self.records.lock().unwrap();
+        if !records.iter().any(|r| r.guest_id == guest.guest_id) {
+            records.push(guest.clone());
+        }
+        Ok(())
+    }
+}
+
 // ─── EventPublisher ──────────────────────────────────────────────────────────
 
 pub struct RecordingEventPublisher {
@@ -432,6 +462,7 @@ pub struct Fixture {
     pub cache: Arc<InMemorySessionCache>,
     pub minter: Arc<StubTokenMinter>,
     pub publisher: Arc<RecordingEventPublisher>,
+    pub guests: Arc<InMemoryGuestRegistry>,
     pub policy: SessionPolicy,
 }
 
@@ -454,8 +485,20 @@ impl Fixture {
             cache: Arc::new(InMemorySessionCache::new()),
             minter: Arc::new(StubTokenMinter::new()),
             publisher: Arc::new(RecordingEventPublisher::new()),
+            guests: Arc::new(InMemoryGuestRegistry::default()),
             policy: SessionPolicy::test_default(),
         }
+    }
+
+    pub fn start_guest_handler(&self) -> super::command::StartGuestSessionHandler {
+        super::command::StartGuestSessionHandler::new(
+            Arc::clone(&self.sessions) as _,
+            Arc::clone(&self.refresh_tokens) as _,
+            Arc::clone(&self.cache) as _,
+            Arc::clone(&self.minter) as _,
+            Arc::clone(&self.guests) as _,
+            self.policy.clone(),
+        )
     }
 
     pub fn login_handler(&self) -> super::command::LoginHandler {

@@ -107,6 +107,29 @@ message RefreshResponse {
     TokenPair   tokens  = 1;
 }
 
+// ── Guest session ─────────────────────────────────────────────────────────────
+
+message StartGuestSessionRequest {
+    // Required: device_id identifies the installation (the token's `did`; the
+    // welcome gift is once per device).
+    DeviceContext   device          = 1;
+    // App Attest assertion (DeviceCheck fallback). Recorded; verified by the
+    // abuse controls.
+    string          attestation     = 2;
+    // BCP-47, e.g. "fr-FR".
+    string          locale          = 3;
+    // Store country, a discovery hint.
+    string          region_hint     = 4;
+    // ISO 3166-1 alpha-2 country derived on the device from location, when the
+    // user allowed it. Never a coordinate.
+    string          current_country = 5;
+}
+
+message StartGuestSessionResponse {
+    string      guest_id    = 1;
+    TokenPair   tokens      = 2;
+}
+
 // ── Logout ────────────────────────────────────────────────────────────────────
 
 message LogoutRequest {

@@ -28,7 +28,7 @@
 //! Every rejection increments `infra_edge_rejected` (Prometheus:
 //! `infra_edge_rejected_total`) labelled by `route` (policy-known methods only —
 //! unknown paths collapse to `<unlisted>` to bound cardinality) and `reason`
-//! (`unlisted` | `missing_token` | `invalid_token` | `expired_token` | `forbidden`).
+//! (`unlisted` | `missing_token` | `invalid_token` | `expired_token` | `forbidden` | `guest`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -56,7 +56,7 @@ fn reject_counter() -> Counter<u64> {
         .u64_counter(REJECT_METRIC)
         .with_description(
             "Requests rejected at the client edge, labelled by route and reason \
-             (unlisted|missing_token|invalid_token|expired_token|forbidden).",
+             (unlisted|missing_token|invalid_token|expired_token|forbidden|guest).",
         )
         .build()
 }
@@ -215,6 +215,17 @@ where
                     return Ok(status.into_http());
                 }
             };
+
+            // A guest (anonymous, read-only) never reaches an `authenticated`
+            // method: those act as an account. It reaches `permission` rules.
+            if access == EdgeAccess::Authenticated && auth_context::edge::is_guest(&principal.raw_claims) {
+                counter.add(1, &reject_attrs(&method, "guest"));
+                tracing::debug!(rpc.method = %method, "edge: guest token on a member method");
+                return Ok(Status::permission_denied(
+                    "this call needs an account: guests may only read public content",
+                )
+                .into_http());
+            }
 
             if let EdgeAccess::Permission(required) = access
                 && !principal.has_permission(required)

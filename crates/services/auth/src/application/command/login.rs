@@ -14,7 +14,7 @@ use crate::application::port::{
 use crate::domain::aggregate::{
     RefreshToken, RefreshTokenIssueParams, Session, SessionIssueParams, SubjectLink,
 };
-use crate::domain::value_object::{AccountId, DeviceFingerprint, IdpSubject};
+use crate::domain::value_object::{AccountId, DeviceFingerprint, IdpSubject, Permission, SessionKind};
 use crate::error::AuthError;
 
 /// Establish a session by brokering a credential to the IdP.
@@ -159,6 +159,7 @@ impl LoginHandler {
         // 5. Issue the session under the account's current generation.
         let generation = self.cache.current_generation(&account_id).await?;
         let mut session = Session::issue(SessionIssueParams {
+            kind: SessionKind::Member,
             account_id,
             subject,
             generation,
@@ -186,6 +187,8 @@ impl LoginHandler {
         // services can bind profile-keyed actors to the caller. Fail-safe: an
         // outage mints a token with no profile grants, never a failed login.
         let profile_ids = profile_ids_or_empty(&self.profiles, &account_id).await;
+        // Every member may read public content (the edge's `read:public` routes).
+        let permissions = Permission::with_read_public(permissions);
         let claims =
             session.mint_access_token(now, self.policy.access_ttl, permissions, profile_ids)?;
         let access_token = self.minter.mint_access(&claims).await?;

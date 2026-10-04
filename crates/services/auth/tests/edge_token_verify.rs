@@ -10,7 +10,9 @@ use std::collections::HashMap;
 
 use auth::application::SessionPolicy;
 use auth::application::port::TokenMinter;
-use auth::domain::value_object::{AccessTokenClaims, AccountId, Generation, Permission, SessionId};
+use auth::domain::value_object::{
+    AccessTokenClaims, AccountId, Generation, Permission, SessionId, SessionKind,
+};
 use auth::infrastructure::token::{Es256TokenMinter, EsKeyMaterial};
 
 use auth_context::{
@@ -104,6 +106,7 @@ async fn minted_edge_token_is_verified_by_auth_context() {
         permissions: vec![Permission::new("posts:write"), Permission::new("ROLE_ADMIN")],
         profile_ids: Vec::new(),
         device_id: None,
+        kind: SessionKind::Member,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
@@ -132,6 +135,7 @@ async fn auth_context_rejects_a_token_for_a_different_audience() {
         permissions: vec![],
         profile_ids: Vec::new(),
         device_id: None,
+        kind: SessionKind::Member,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
@@ -152,6 +156,7 @@ async fn fleet_edge_decoder_sees_the_did_claim_realtime_requires() {
         permissions: vec![],
         profile_ids: Vec::new(),
         device_id: Some("ios-install-1".to_owned()),
+        kind: SessionKind::Member,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
@@ -177,4 +182,40 @@ async fn fleet_edge_decoder_sees_the_did_claim_realtime_requires() {
         .get(auth_context::edge::EDGE_DEVICE_CLAIM)
         .and_then(|v| v.as_str());
     assert_eq!(did, Some("ios-install-1"));
+}
+
+/// A guest token as the fleet edge decoder sees it: `kind = "guest"`, a
+/// `guest:`-prefixed subject, `read:public` only, no profiles.
+#[tokio::test]
+async fn fleet_edge_decoder_recognises_a_guest_token() {
+    let (private_pem, public_pem) = keypair();
+    let guest = AccountId::from_uuid(Uuid::now_v7());
+    let claims = AccessTokenClaims {
+        account_id: guest,
+        session_id: SessionId::new(),
+        generation: Generation::INITIAL,
+        permissions: vec![Permission::read_public()],
+        profile_ids: Vec::new(),
+        device_id: Some("install-1".to_owned()),
+        kind: SessionKind::Guest,
+        issued_at: Utc::now(),
+        expires_at: Utc::now() + Duration::minutes(10),
+    };
+    let token = minter(&private_pem, &public_pem, AUDIENCE).mint_access(&claims).await.unwrap();
+
+    let cache = JwksCache::new();
+    let mut keys = HashMap::new();
+    keys.insert(KID.to_owned(), DecodingKey::from_ec_pem(&public_pem).unwrap());
+    cache.replace(keys).await;
+    let config = AuthContextConfig {
+        expected_issuer: Some(ISSUER.to_owned()),
+        expected_audience: Some(AUDIENCE.to_owned()),
+        ..AuthContextConfig::default()
+    };
+    let principal = auth_context::edge::edge_decoder(&config, cache).decode(&token).await.unwrap();
+
+    assert!(auth_context::edge::is_guest(&principal.raw_claims));
+    assert_eq!(principal.user_id.0, format!("guest:{}", guest.as_str()));
+    assert!(principal.has_permission("read:public"));
+    assert_eq!(auth_context::edge::profile_ids(&principal.raw_claims).count(), 0);
 }

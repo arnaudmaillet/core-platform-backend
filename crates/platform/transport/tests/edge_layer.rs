@@ -136,8 +136,22 @@ fn header<'a>(resp: &'a http::Response<Body>, name: &str) -> Option<&'a str> {
 static POLICY: &[EdgeRule] = &[
     public("/auth.v1.AuthService/Login"),
     authenticated("/post.v1.PostService/CreatePost"),
+    permission("/post.v1.PostService/GetPost", "read:public"),
     permission("/audit.v1.AuditService/Export", "audit:export"),
 ];
+
+/// Mints a guest token the way `auth` does: `sub = "guest:<id>"`, `kind`,
+/// `read:public`, no `pids`.
+fn mint_guest(key: &TestKey) -> String {
+    let mut header = Header::new(Algorithm::ES256);
+    header.kid = Some(KID.to_owned());
+    let claims = json!({
+        "sub": "guest:0190f0a0-0000-7000-8000-000000000001", "sid": "sess-g", "gen": 0,
+        "iss": ISSUER, "aud": AUDIENCE, "iat": now(), "exp": now() + 600,
+        "perms": ["read:public"], "pids": [], "did": "install-1", "kind": "guest",
+    });
+    encode(&header, &claims, &key.encoding).unwrap()
+}
 
 #[tokio::test]
 async fn unlisted_methods_are_unimplemented_even_with_a_valid_token() {
@@ -239,6 +253,32 @@ async fn expired_wrong_key_wrong_audience_and_garbage_are_unauthenticated() {
     r.headers_mut().insert("authorization", "Basic abc".parse().unwrap());
     let resp = svc.oneshot(r).await.unwrap();
     assert_eq!(grpc_status(&resp), Some("16"));
+}
+
+#[tokio::test]
+async fn a_guest_reads_public_routes_but_is_refused_member_methods() {
+    let key = test_key();
+    let svc = layer(guard(&key, POLICY).await).layer(echo_service!());
+    let guest = mint_guest(&key);
+
+    // `authenticated` = acts as an account: refused.
+    let resp = svc.clone().oneshot(req("/post.v1.PostService/CreatePost", Some(&guest))).await.unwrap();
+    assert_eq!(grpc_status(&resp), Some("7")); // PERMISSION_DENIED
+
+    // `permission(read:public)`: forwarded, with the guest as principal.
+    let resp = svc.clone().oneshot(req("/post.v1.PostService/GetPost", Some(&guest))).await.unwrap();
+    assert!(grpc_status(&resp).is_none());
+    assert_eq!(header(&resp, "x-seen-principal"), Some("guest:0190f0a0-0000-7000-8000-000000000001"));
+    assert_eq!(header(&resp, "x-seen-pids"), Some(""));
+
+    // A member token without `read:public` (minted before it existed) is refused
+    // there until its next refresh; one with it passes.
+    let old_member = mint(&key, "acct-1", &["p-1"], &[], now() + 600, KID);
+    let resp = svc.clone().oneshot(req("/post.v1.PostService/GetPost", Some(&old_member))).await.unwrap();
+    assert_eq!(grpc_status(&resp), Some("7"));
+    let member = mint(&key, "acct-1", &["p-1"], &["read:public"], now() + 600, KID);
+    let resp = svc.oneshot(req("/post.v1.PostService/GetPost", Some(&member))).await.unwrap();
+    assert!(grpc_status(&resp).is_none());
 }
 
 #[tokio::test]

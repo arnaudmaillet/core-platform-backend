@@ -55,6 +55,7 @@ impl TokenVerifier for AuthContextTokenVerifier {
         now: DateTime<Utc>,
     ) -> Result<Session, RealtimeError> {
         let principal = self.decoder.decode(edge_token).await.map_err(map_auth_err)?;
+        reject_guest(&principal.raw_claims)?;
 
         let user_id = UserId::new(principal.user_id.as_str().to_owned())?;
 
@@ -80,5 +81,33 @@ impl TokenVerifier for AuthContextTokenVerifier {
         let device_id = DeviceId::new(device.to_owned())?;
 
         Ok(Session::new(user_id, device_id, expires_at))
+    }
+}
+
+/// Guests (anonymous, read-only sessions) get no realtime connection in v1:
+/// live delivery is per account and device, and a guest has no account.
+fn reject_guest(claims: &auth_context::OidcClaims) -> Result<(), RealtimeError> {
+    if auth_context::edge::is_guest(claims) {
+        return Err(RealtimeError::HandshakeRejected {
+            reason: "guest sessions cannot open a realtime connection".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod guest_tests {
+    use super::*;
+
+    fn claims(json: serde_json::Value) -> auth_context::OidcClaims {
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn a_guest_token_is_refused_a_member_token_is_not() {
+        let guest = claims(serde_json::json!({ "sub": "guest:g-1", "exp": 4_102_444_800_i64, "kind": "guest", "did": "d" }));
+        assert!(matches!(reject_guest(&guest), Err(RealtimeError::HandshakeRejected { .. })));
+        let member = claims(serde_json::json!({ "sub": "acct-1", "exp": 4_102_444_800_i64, "did": "d" }));
+        assert!(reject_guest(&member).is_ok());
     }
 }

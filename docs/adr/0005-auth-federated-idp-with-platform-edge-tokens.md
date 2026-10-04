@@ -57,6 +57,17 @@ login and refresh (`auth_context::edge::EDGE_DEVICE_CLAIM`, realtime's default
 stable for the session's life. It is omitted when the client sent no device id, and such a
 token still fails the realtime handshake.
 
+## Amendment 2026-10-04 — guest tokens
+
+Guest mode lets an app installation read public content before sign-up. Rather than an
+"optional auth" edge (no token = anonymous), which would be invisible to rate limiting and
+attribution, `auth` issues **guest sessions** (`StartGuestSession`, edge-public): a session with no
+account behind it, whose edge token carries `sub = "guest:<guest_id>"`, `kind = "guest"`,
+`perms = ["read:public"]`, no `pids`, and a `did`. The prefix keeps a guest from ever matching an
+account id in `require_account`. The client edge refuses guests on every `authenticated` rule and
+admits them on `permission(…, "read:public")` rules; members carry `read:public` too, so public
+reads move to that permission. Guests get no realtime connection.
+
 ## Alternatives rejected
 
 | Option | Why rejected |

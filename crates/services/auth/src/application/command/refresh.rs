@@ -11,7 +11,9 @@ use crate::application::port::{
     profile_ids_or_empty, AccountActivation, AccountDirectory, EventPublisher, ProfileDirectory,
     RefreshTokenRepository, SessionCache, SessionRepository, TokenMinter,
 };
-use crate::domain::value_object::{AccountId, DeviceFingerprint, RevocationReason, SessionId, SessionStatus};
+use crate::domain::value_object::{
+    AccountId, DeviceFingerprint, Permission, RevocationReason, SessionId, SessionKind, SessionStatus,
+};
 use crate::error::AuthError;
 
 /// Rotate a refresh token and mint a fresh edge token.
@@ -116,12 +118,18 @@ impl RefreshHandler {
             });
         }
 
-        // 5. Re-read authoritative permissions; a deactivated account cannot refresh.
-        let snapshot = self.directory.lookup(&account_id).await?;
-        let permissions = match snapshot.activation {
-            AccountActivation::Active => snapshot.permissions,
-            AccountActivation::Inactive { reason } => {
-                return Err(AuthError::AccountNotActive { current: reason });
+        // 5. Re-read authoritative permissions; a deactivated account cannot
+        //    refresh. A guest has no account: it keeps `read:public` only.
+        let permissions = match session.kind() {
+            SessionKind::Guest => vec![Permission::read_public()],
+            SessionKind::Member => {
+                let snapshot = self.directory.lookup(&account_id).await?;
+                match snapshot.activation {
+                    AccountActivation::Active => Permission::with_read_public(snapshot.permissions),
+                    AccountActivation::Inactive { reason } => {
+                        return Err(AuthError::AccountNotActive { current: reason });
+                    }
+                }
             }
         };
 
@@ -133,7 +141,10 @@ impl RefreshHandler {
 
         // Re-read the owned profiles too: a profile created since the last mint
         // becomes actionable at the next refresh (fail-safe, see login).
-        let profile_ids = profile_ids_or_empty(&self.profiles, &account_id).await;
+        let profile_ids = match session.kind() {
+            SessionKind::Guest => Vec::new(),
+            SessionKind::Member => profile_ids_or_empty(&self.profiles, &account_id).await,
+        };
         let claims =
             session.mint_access_token(now, self.policy.access_ttl, permissions, profile_ids)?;
         let access_token = self.minter.mint_access(&claims).await?;

@@ -36,6 +36,7 @@ impl SessionRepository for PgSessionRepository {
 
         // Pre-materialize owned values so the 'static closure does not borrow.
         let p_account = account_id.as_uuid();
+        let p_kind = session.kind().as_str();
         let p_issuer = session.subject().issuer().to_owned();
         let p_subject = session.subject().subject().to_owned();
         let p_generation = session.generation().value();
@@ -59,8 +60,9 @@ impl SessionRepository for PgSessionRepository {
                             INSERT INTO sessions (
                                 id, account_id, issuer, subject, generation, status,
                                 device_user_agent, device_ip, device_id,
-                                issued_at, expires_at, absolute_expiry, revoked_at, version
-                            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                                issued_at, expires_at, absolute_expiry, revoked_at, version,
+                                kind
+                            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
                             "#,
                         )
                         .bind(id_uuid)
@@ -77,6 +79,7 @@ impl SessionRepository for PgSessionRepository {
                         .bind(p_absolute)
                         .bind(p_revoked_at)
                         .bind(0i64)
+                        .bind(p_kind)
                         .execute(&mut **tx)
                         .await
                         .map(|_| ())

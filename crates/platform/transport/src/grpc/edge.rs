@@ -43,7 +43,9 @@ pub enum EdgeAccess {
     /// No token required. Reserved for the RPCs that *produce* a session (login,
     /// refresh); still rate-limited per method.
     Public,
-    /// A valid edge token is required; the verified principal is attached.
+    /// A valid **member** edge token is required; the verified principal is
+    /// attached. A guest token is refused (`PERMISSION_DENIED`): guests only
+    /// reach `Permission` rules (`read:public`).
     Authenticated,
     /// A valid edge token carrying this permission (an `auth` `perms` entry) is
     /// required.
@@ -125,6 +127,12 @@ impl EdgePrincipal {
     /// `true` when `profile_id` is one of the caller's profiles.
     pub fn owns_profile(&self, profile_id: &str) -> bool {
         self.profile_ids().any(|p| p == profile_id)
+    }
+
+    /// `true` for a guest token: an anonymous installation that may only read
+    /// public content (`read:public`), never act.
+    pub fn is_guest(&self) -> bool {
+        edge::is_guest(&self.0.raw_claims)
     }
 
     /// `true` when the token carries `permission`.
@@ -362,6 +370,26 @@ mod tests {
         assert!(!member.owns_profile("acct-1"));
         assert!(!Viewer::Internal.owns_profile("p-1"));
         assert!(!Viewer::Anonymous.owns_profile("p-1"));
+    }
+
+    #[test]
+    fn a_guest_principal_is_recognised_by_its_kind_claim() {
+        let member = principal_with(&["p-1"], &[]);
+        assert!(!member.is_guest());
+        let mut raw: OidcClaims = serde_json::from_value(
+            json!({ "sub": "guest:g-1", "exp": 4_102_444_800_i64, "kind": "guest" }),
+        )
+        .unwrap();
+        raw.extra.insert("pids".into(), json!([]));
+        let guest = EdgePrincipal::new(Arc::new(CurrentPrincipal {
+            user_id: PrincipalId::new("guest:g-1"),
+            tenant_id: None,
+            permissions: vec![Permission::new("read:public")],
+            raw_claims: raw,
+        }));
+        assert!(guest.is_guest());
+        // A guest owns no profile, so it can never act as one.
+        assert!(!guest.owns_profile("g-1"));
     }
 
     #[test]
