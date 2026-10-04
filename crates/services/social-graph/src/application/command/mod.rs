@@ -3,6 +3,7 @@ pub mod follow_profile;
 pub mod follow_requests;
 pub mod mutes;
 pub mod record_profile_audience;
+pub mod restrictions;
 pub mod set_list_privacy;
 pub mod unblock_profile;
 pub mod unfollow_profile;
@@ -14,6 +15,9 @@ pub use follow_requests::{
     WithdrawFollowRequestHandler,
 };
 pub use mutes::{MuteProfileCommand, MuteProfileHandler, UnmuteProfileCommand, UnmuteProfileHandler};
+pub use restrictions::{
+    RestrictProfileCommand, RestrictProfileHandler, UnrestrictProfileCommand, UnrestrictProfileHandler,
+};
 pub use record_profile_audience::{
     AudienceFact, RecordProfileAudienceCommand, RecordProfileAudienceHandler,
 };

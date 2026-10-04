@@ -8,6 +8,7 @@ pub mod list_followers;
 pub mod list_gate;
 pub mod list_following;
 pub mod mutes;
+pub mod restrictions;
 
 pub use check_access::{CheckAccessHandler, CheckAccessQuery};
 pub use check_interaction::{CheckInteractionHandler, CheckInteractionQuery};
@@ -18,6 +19,7 @@ pub use list_follow_requests::{ListFollowRequestsHandler, ListFollowRequestsQuer
 pub use list_followers::{ListFollowersQuery, ListFollowersHandler};
 pub use list_following::{ListFollowingQuery, ListFollowingHandler};
 pub use mutes::{ListMutesHandler, ListMutesQuery, MutedProfilesHandler, MutedProfilesQuery};
+pub use restrictions::{ListRestrictedHandler, ListRestrictedQuery, RestrictedAmongHandler, RestrictedAmongQuery};
 
 use crate::domain::entity::FollowEdge;
 

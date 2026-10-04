@@ -1,5 +1,6 @@
 //! The comment read gate over gRPC: post `GetPost` (the post's own state) then
-//! social-graph's mesh-only `CheckAccess` (the authors' audience).
+//! social-graph's mesh-only `CheckAccess` (the authors' audience) and
+//! `ListRestrictedAmong` (commenters the post's owner restricted).
 
 use std::collections::HashSet;
 
@@ -7,7 +8,9 @@ use async_trait::async_trait;
 use post_api::post_service_client::PostServiceClient;
 use post_api::{GetPostRequest, ModerationRestriction, PostStatus};
 use social_graph_api::social_graph_service_client::SocialGraphServiceClient;
-use social_graph_api::{CheckAccessRequest, CheckInteractionRequest, ContentAccess, InteractionKind};
+use social_graph_api::{
+    CheckAccessRequest, CheckInteractionRequest, ContentAccess, InteractionKind, ListRestrictedAmongRequest,
+};
 use tonic::transport::Channel;
 use tonic::Code;
 
@@ -90,6 +93,29 @@ fn combine(targets: &[String], responses: &[Vec<(String, i32)>]) -> Vec<(String,
             let combined = if answered { combined } else { ContentAccess::Hidden };
             (target.clone(), combined as i32)
         })
+        .collect()
+}
+
+/// `ListRestrictedAmong` cap: candidates per call.
+const MAX_RESTRICTION_CANDIDATES: usize = 100;
+
+/// The commenters whose restriction by the post's owner must be checked for
+/// this reader: none when the reader owns the post (the owner sees every
+/// comment); otherwise every commenter not already hidden and not one of the
+/// reader's own profiles (a restricted profile still sees its own comments).
+fn restriction_candidates(
+    viewers: &[ProfileId],
+    post_author: &str,
+    comment_authors: &[ProfileId],
+    hidden: &HashSet<ProfileId>,
+) -> Vec<String> {
+    if viewers.iter().any(|v| v.as_str() == post_author) {
+        return Vec::new();
+    }
+    comment_authors
+        .iter()
+        .filter(|a| !hidden.contains(*a) && !viewers.contains(a) && a.as_str() != post_author)
+        .map(ProfileId::as_str)
         .collect()
 }
 
@@ -177,7 +203,27 @@ impl ReadGate for GrpcReadGate {
             responses.push(response.targets.into_iter().map(|t| (t.target_profile_id, t.access)).collect());
         }
         let answers = combine(&targets, &responses);
-        Ok(decide(&answers, viewers, &view.profile_id, comment_authors))
+        let Some(mut hidden) = decide(&answers, viewers, &view.profile_id, comment_authors) else {
+            return Ok(None);
+        };
+
+        // A commenter the post's owner restricted is seen by itself and the
+        // owner only (fail closed like the rest of the gate).
+        let candidates = restriction_candidates(viewers, &view.profile_id, comment_authors, &hidden);
+        for chunk in candidates.chunks(MAX_RESTRICTION_CANDIDATES) {
+            let response = self
+                .social_graph
+                .clone()
+                .list_restricted_among(ListRestrictedAmongRequest {
+                    owner_id:      view.profile_id.clone(),
+                    candidate_ids: chunk.to_vec(),
+                })
+                .await
+                .map_err(unavailable)?
+                .into_inner();
+            hidden.extend(response.restricted_ids.iter().filter_map(|id| ProfileId::try_from(id.as_str()).ok()));
+        }
+        Ok(Some(hidden))
     }
 
     async fn may_comment(&self, author: &ProfileId, post_id: &PostId) -> Result<CommentAdmission, CommentError> {
@@ -246,6 +292,25 @@ mod tests {
 
     fn answer(p: &ProfileId, a: ContentAccess) -> (String, i32) {
         (p.as_str(), a as i32)
+    }
+
+    #[test]
+    fn restrictions_are_checked_for_other_readers_only_and_never_hide_ones_own_comments() {
+        let (owner, reader, restricted, blocked) = (id(), id(), id(), id());
+        let authors = [owner.clone(), reader.clone(), restricted.clone(), blocked.clone()];
+        let hidden: HashSet<ProfileId> = [blocked].into();
+
+        // The post's owner sees every comment: nothing to check.
+        assert!(restriction_candidates(std::slice::from_ref(&owner), &owner.as_str(), &authors, &hidden).is_empty());
+
+        // Another reader: every commenter but itself, the owner and those
+        // already hidden.
+        let candidates = restriction_candidates(std::slice::from_ref(&reader), &owner.as_str(), &authors, &hidden);
+        assert_eq!(candidates, vec![restricted.as_str()]);
+
+        // The restricted profile reading: its own comments are not candidates.
+        let own = restriction_candidates(std::slice::from_ref(&restricted), &owner.as_str(), &authors, &hidden);
+        assert_eq!(own, vec![reader.as_str()]);
     }
 
     #[test]

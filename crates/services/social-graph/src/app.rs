@@ -20,23 +20,29 @@ use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 use crate::application::command::{
     ApproveFollowRequestCommand, ApproveFollowRequestHandler, BlockProfileCommand,
     BlockProfileHandler, FollowProfileCommand, FollowProfileHandler, MuteProfileCommand,
-    MuteProfileHandler, UnmuteProfileCommand, UnmuteProfileHandler, WithdrawFollowRequestCommand,
+    MuteProfileHandler, RestrictProfileCommand, RestrictProfileHandler, UnmuteProfileCommand,
+    UnmuteProfileHandler, UnrestrictProfileCommand, UnrestrictProfileHandler, WithdrawFollowRequestCommand,
     WithdrawFollowRequestHandler,
     RecordProfileAudienceCommand, RecordProfileAudienceHandler, SetListPrivacyCommand,
     SetListPrivacyHandler, UnblockProfileCommand,
     UnblockProfileHandler, UnfollowProfileCommand, UnfollowProfileHandler,
 };
-use crate::application::port::{EventPublisher, MuteRepository, SocialGraphCache, SocialGraphRepository};
+use crate::application::port::{
+    EventPublisher, MuteRepository, RestrictionRepository, SocialGraphCache, SocialGraphRepository,
+};
 use crate::application::query::{
     CheckAccessHandler, CheckAccessQuery, CheckInteractionHandler, CheckInteractionQuery, GetListPrivacyHandler,
     GetListPrivacyQuery, GetRelationStatusHandler, GetRelationStatusQuery,
     ListBlocksHandler, ListBlocksQuery, ListFollowRequestsHandler, ListFollowRequestsQuery,
     ListFollowersHandler, ListFollowersQuery, ListFollowingHandler, ListFollowingQuery,
-    ListMutesHandler, ListMutesQuery, MutedProfilesHandler, MutedProfilesQuery,
+    ListMutesHandler, ListMutesQuery, ListRestrictedHandler, ListRestrictedQuery, MutedProfilesHandler,
+    MutedProfilesQuery, RestrictedAmongHandler, RestrictedAmongQuery,
 };
 use crate::domain::value_object::TierThresholds;
 use crate::infrastructure::cache::RedisSocialGraphCache;
-use crate::infrastructure::persistence::{ScyllaMuteRepository, ScyllaSocialGraphRepository};
+use crate::infrastructure::persistence::{
+    ScyllaMuteRepository, ScyllaRestrictionRepository, ScyllaSocialGraphRepository,
+};
 
 /// Storage endpoints the graph is wired against.
 pub struct Backends {
@@ -77,6 +83,8 @@ impl App {
             Arc::new(RedisSocialGraphCache::new(Arc::clone(&redis_client)));
         let mutes: Arc<dyn MuteRepository> =
             Arc::new(ScyllaMuteRepository::new(Arc::clone(&scylla_client)));
+        let restrictions: Arc<dyn RestrictionRepository> =
+            Arc::new(ScyllaRestrictionRepository::new(Arc::clone(&scylla_client)));
 
         let command_bus = Arc::new(
             CommandBusBuilder::new()
@@ -117,6 +125,8 @@ impl App {
                 ))?
                 .register::<MuteProfileCommand, _>(MuteProfileHandler::new(Arc::clone(&mutes)))?
                 .register::<UnmuteProfileCommand, _>(UnmuteProfileHandler::new(Arc::clone(&mutes)))?
+                .register::<RestrictProfileCommand, _>(RestrictProfileHandler::new(Arc::clone(&restrictions)))?
+                .register::<UnrestrictProfileCommand, _>(UnrestrictProfileHandler::new(Arc::clone(&restrictions)))?
                 .build(),
         );
 
@@ -126,9 +136,12 @@ impl App {
                     Arc::clone(&repo),
                     Arc::clone(&cache),
                     Arc::clone(&mutes),
+                    Arc::clone(&restrictions),
                 ))?
                 .register::<ListMutesQuery, _>(ListMutesHandler::new(Arc::clone(&mutes)))?
                 .register::<MutedProfilesQuery, _>(MutedProfilesHandler::new(Arc::clone(&mutes)))?
+                .register::<ListRestrictedQuery, _>(ListRestrictedHandler::new(Arc::clone(&restrictions)))?
+                .register::<RestrictedAmongQuery, _>(RestrictedAmongHandler::new(Arc::clone(&restrictions)))?
                 .register::<ListFollowersQuery, _>(ListFollowersHandler::new(Arc::clone(&repo)))?
                 .register::<ListFollowingQuery, _>(ListFollowingHandler::new(Arc::clone(&repo)))?
                 .register::<ListBlocksQuery, _>(ListBlocksHandler::new(Arc::clone(&repo)))?

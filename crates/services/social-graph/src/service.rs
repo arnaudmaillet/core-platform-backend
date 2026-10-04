@@ -89,6 +89,10 @@ impl Service for SocialGraphService {
         authenticated("/social_graph.v1.SocialGraphService/Mute"),
         authenticated("/social_graph.v1.SocialGraphService/Unmute"),
         authenticated("/social_graph.v1.SocialGraphService/ListMutes"),
+        // Restrictions: the owner's own (bound to actor_id / profile_id).
+        authenticated("/social_graph.v1.SocialGraphService/Restrict"),
+        authenticated("/social_graph.v1.SocialGraphService/Unrestrict"),
+        authenticated("/social_graph.v1.SocialGraphService/ListRestricted"),
         // Follow requests to private profiles: the owner's inbox and answers
         // (bound to owner_id), the requester's cancel (bound to actor_id).
         authenticated("/social_graph.v1.SocialGraphService/ListFollowRequests"),
