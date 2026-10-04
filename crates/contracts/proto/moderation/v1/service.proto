@@ -34,6 +34,14 @@ service ModerationService {
     // publication). ALLOW means "no known-bad match", not "approved".
     rpc Screen(ScreenRequest) returns (ScreenResponse);
 
+    // ── Client reports ────────────────────────────────────────────────────────
+
+    // Report content (DSA Art. 16: anyone may report, guests included). The
+    // reporter is the caller's token, never a request field; the account behind
+    // the content is resolved server-side. Rate-limited per reporter. Feeds the
+    // subject's review case like any other report.
+    rpc SubmitReport(SubmitReportRequest) returns (SubmitReportResponse);
+
     // ── Case / queue lifecycle (ops console) ──────────────────────────────────
 
     // Open (or idempotently return) a review case for a subject.

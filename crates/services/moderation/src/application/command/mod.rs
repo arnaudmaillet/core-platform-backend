@@ -8,6 +8,7 @@ pub mod appeal;
 pub mod decide_case;
 pub mod ingest;
 pub mod screen;
+pub mod submit_report;
 
 pub use appeal::{
     FileAppealCommand, FileAppealHandler, ResolveAppealCommand, ResolveAppealHandler,
@@ -19,7 +20,9 @@ pub use decide_case::{
 };
 pub use ingest::{
     IngestReportCommand, IngestReportHandler, IngestSignalCommand, IngestSignalHandler,
+    ReportOrigin,
 };
+pub use submit_report::{Reporter, SubmitReportCommand, SubmitReportHandler};
 pub use screen::{ScreenCommand, ScreenHandler, ScreenOutcome, ScreenVerdict};
 
 use uuid::Uuid;

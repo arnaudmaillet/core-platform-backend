@@ -17,6 +17,15 @@ pub struct ModerationConfig {
     pub account_rpc_timeout: std::time::Duration,
     /// Connect deadline when dialing the `account` channel.
     pub account_connect_timeout: std::time::Duration,
+    /// Report subject resolution: `post`, `comment`, `profile` mesh endpoints.
+    pub post_endpoint: String,
+    pub comment_endpoint: String,
+    pub profile_endpoint: String,
+    pub content_rpc_timeout: std::time::Duration,
+    pub content_connect_timeout: std::time::Duration,
+    /// Client report quotas per reporter (member or guest).
+    pub reports_per_hour: u32,
+    pub reports_per_day: u32,
 }
 
 impl ModerationConfig {
@@ -46,6 +55,17 @@ impl ModerationConfig {
             account_connect_timeout: std::time::Duration::from_millis(
                 env_secs("MODERATION_ACCOUNT_CONNECT_TIMEOUT_MS", 2_000) as u64,
             ),
+            post_endpoint: env_or("MODERATION_POST_GRPC_ENDPOINT", "http://localhost:50056"),
+            comment_endpoint: env_or("MODERATION_COMMENT_GRPC_ENDPOINT", "http://localhost:50057"),
+            profile_endpoint: env_or("MODERATION_PROFILE_GRPC_ENDPOINT", "http://localhost:50052"),
+            content_rpc_timeout: std::time::Duration::from_millis(
+                env_secs("MODERATION_CONTENT_RPC_TIMEOUT_MS", 1_000) as u64,
+            ),
+            content_connect_timeout: std::time::Duration::from_millis(
+                env_secs("MODERATION_CONTENT_CONNECT_TIMEOUT_MS", 1_000) as u64,
+            ),
+            reports_per_hour: env_secs("MODERATION_REPORTS_PER_HOUR", 20) as u32,
+            reports_per_day: env_secs("MODERATION_REPORTS_PER_DAY", 100) as u32,
         })
     }
 }

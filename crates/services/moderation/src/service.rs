@@ -13,7 +13,7 @@ use postgres_storage::PostgresConfig;
 use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 use service_runtime::{HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::authenticated;
+use service_runtime::edge::{authenticated, member_or_guest};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -58,6 +58,8 @@ impl Service for ModerationService {
     // callee (media).
     const EDGE_POLICY: EdgePolicy = &[
         authenticated("/moderation.v1.ModerationService/FileAppeal"),
+        // DSA Art. 16: anyone may report, guests included (reporter = the token).
+        member_or_guest("/moderation.v1.ModerationService/SubmitReport"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

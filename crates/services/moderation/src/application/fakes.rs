@@ -428,6 +428,51 @@ impl EventPublisher for RecordingEventPublisher {
 /// Bundles concrete fakes and builds handlers wired to them. Handlers receive the
 /// fakes as `Arc<dyn Port>`; tests keep the concrete `Arc`s to assert on recorded
 /// state (published events, projection flags, stored aggregates).
+/// Content id → responsible account; unknown ids are "not found".
+#[derive(Default)]
+pub struct StubSubjectResolver {
+    pub owners: Mutex<HashMap<String, ActorId>>,
+}
+
+impl StubSubjectResolver {
+    pub fn own(&self, entity_id: &str, account: ActorId) {
+        self.owners.lock().unwrap().insert(entity_id.to_owned(), account);
+    }
+}
+
+#[async_trait]
+impl super::port::SubjectResolver for StubSubjectResolver {
+    async fn responsible_account(
+        &self,
+        _entity_type: crate::domain::value_object::EntityType,
+        entity_id: &str,
+    ) -> Result<Option<ActorId>, ModerationError> {
+        Ok(self.owners.lock().unwrap().get(entity_id).copied())
+    }
+}
+
+/// Admits up to `limit` reports per reporter key.
+pub struct CountingReportQuota {
+    limit: u32,
+    counts: Mutex<HashMap<String, u32>>,
+}
+
+impl CountingReportQuota {
+    pub fn with_limit(limit: u32) -> Self {
+        Self { limit, counts: Mutex::new(HashMap::new()) }
+    }
+}
+
+#[async_trait]
+impl super::port::ReportRateLimiter for CountingReportQuota {
+    async fn admit(&self, reporter_key: &str) -> Result<bool, ModerationError> {
+        let mut counts = self.counts.lock().unwrap();
+        let n = counts.entry(reporter_key.to_owned()).or_insert(0);
+        *n += 1;
+        Ok(*n <= self.limit)
+    }
+}
+
 pub struct Fixture {
     pub cases: Arc<InMemoryCaseRepository>,
     pub decisions: Arc<InMemoryDecisionRepository>,
@@ -439,6 +484,8 @@ pub struct Fixture {
     pub classifiers: Arc<StubClassifierGateway>,
     pub accounts: Arc<StubAccountDirectory>,
     pub publisher: Arc<RecordingEventPublisher>,
+    pub subjects: Arc<StubSubjectResolver>,
+    pub report_quota: Arc<CountingReportQuota>,
     pub policy: ModerationPolicy,
 }
 
@@ -455,6 +502,8 @@ impl Fixture {
             classifiers: Arc::new(StubClassifierGateway::new()),
             accounts: Arc::new(StubAccountDirectory::new()),
             publisher: Arc::new(RecordingEventPublisher::new()),
+            subjects: Arc::new(StubSubjectResolver::default()),
+            report_quota: Arc::new(CountingReportQuota::with_limit(20)),
             policy: ModerationPolicy::test_default(),
         }
     }

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 55c33a90935a2fa596a3f296627c935ffc3070110703895cae1ab43853826a26
-  translated_at: 2026-07-03
+  source_sha256: 0086d641ff44a8867fa2fedb04037a84dde049727cea25b73af43ca855306426
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -129,6 +129,9 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS là où 
 // Plan C — la porte de pré-publication étroite et fail-closed (media/post uniquement).
 rpc Screen (ScreenRequest) returns (ScreenResponse);
 
+// Signalements clients (edge member_or_guest — DSA art. 16, invités compris).
+rpc SubmitReport (..) returns (..);
+
 // Console d'opérations — cycle de vie dossier / file / appel.
 rpc OpenCase   (..) returns (..);   rpc AssignCase (..) returns (..);
 rpc DecideCase (..) returns (..);   rpc ListQueue  (..) returns (..);
@@ -142,6 +145,17 @@ rpc GetEnforcementState   (..) returns (..);   // interne ; DÉCONSEILLÉ sur le
 > **Règle de contrat / wire :** la surface n'expose que des types d'intégrité normalisés — `SubjectRef` (entity_type + entity_id + actor_id + surface), catégorie de politique, type d'action, identifiants de dossier/appel — jamais de champs spécifiques aux classifieurs ou internes au contenu.
 >
 > **Règle du chemin chaud :** la flotte lit l'application via le **Plan B** (événements + projection Redis), **pas** `GetEnforcementState`. La RPC n'existe que pour le back-office/lectures froides.
+>
+> **Signalements clients (`SubmitReport`).** Tout le monde peut signaler (DSA art. 16) : la RPC est ouverte à toute
+> session client, membre **ou invité** (edge `member_or_guest`). L'**auteur du signalement** est le jeton vérifié (le
+> compte d'un membre, ou `guest:<id>`), jamais un champ de requête ; un appel mesh n'a pas d'auteur et est refusé
+> (`MOD-6007`). Le client n'envoie que le contenu (`POST` / `COMMENT` / `PROFILE` + id) : le **compte** qu'une
+> décision sanctionnerait est résolu côté serveur (post / commentaire → profil auteur → compte propriétaire, via le
+> mesh), de sorte qu'un auteur de signalement ne peut jamais diriger une sanction vers quelqu'un d'autre. Quota par
+> auteur : `MODERATION_REPORTS_PER_HOUR` / `_PER_DAY` (20 / 100) dans Redis, **fail-open** si Redis est indisponible
+> (signaler est un droit ; la file l'absorbe). Le signalement alimente ensuite le dossier du sujet comme un
+> signalement du pipeline ; celui d'un invité est un signal plus faible (`guest_report`, 0,3 contre 0,5). `OpenCase`
+> reste mesh uniquement (c'est celui de la console de modération).
 >
 > **Autorisation (exigence de déploiement) :** les RPC d'opérations mutatives (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) sont **privilégiées** — elles bannissent/suspendent/suppriment. Le service n'autorise pas lui-même l'appelant ; les RPC mutatives **doivent** être restreintes à des principaux modérateurs authentifiés en périphérie (autorisation gateway / contrôle de permission `auth-context`, ex. `moderation:decide`) avant exposition. `Screen` et `FileAppeal` sont orientées appelant ; le reste est réservé aux modérateurs.
 
@@ -240,6 +254,9 @@ async fn main() -> anyhow::Result<()> {
 |---|---|---|---|
 | `MODERATION_GRPC_ADDR` | Non | `0.0.0.0:50061` | adresse de bind gRPC |
 | `MODERATION_ACCOUNT_GRPC_ENDPOINT` | Non | `http://localhost:50059` | endpoint du service `account` (exécution des suspensions) |
+| `MODERATION_POST_GRPC_ENDPOINT` · `MODERATION_COMMENT_GRPC_ENDPOINT` · `MODERATION_PROFILE_GRPC_ENDPOINT` | **Oui** (prod) | `:50056` · `:50057` · `:50052` sur localhost | résolution du sujet d'un signalement (à qui appartient le contenu signalé) |
+| `MODERATION_CONTENT_RPC_TIMEOUT_MS` · `MODERATION_CONTENT_CONNECT_TIMEOUT_MS` | Non | `1000` · `1000` | délais de ces appels |
+| `MODERATION_REPORTS_PER_HOUR` · `MODERATION_REPORTS_PER_DAY` | Non | `20` · `100` | quota de signalements client par auteur (membre ou invité) |
 | `MODERATION_ACCOUNT_RPC_TIMEOUT_MS` | Non | `2000` | deadline par requête des RPC `account` (tonic n'a pas de timeout par défaut) |
 | `MODERATION_ACCOUNT_CONNECT_TIMEOUT_MS` | Non | `2000` | deadline de connexion à l'ouverture du canal `account` |
 | `MODERATION_SCREEN_TIMEOUT_MS` | Non | `200` | timeout strict de la porte Plan C ; à l'expiration la porte retourne `MOD-7002` et l'appelant échoue fermé pour les catégories catastrophiques |
