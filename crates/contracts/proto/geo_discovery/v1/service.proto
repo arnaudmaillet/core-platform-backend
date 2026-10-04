@@ -16,4 +16,13 @@ service GeoDiscoveryService {
     // Redis, falls back to ScyllaDB on cache miss — the cold path the Radar pan
     // path avoids.
     rpc GetGeoTimeline (GetGeoTimelineRequest) returns (GetGeoTimelineResponse);
+
+    // Country access from location: the device sends the country it derived
+    // from its location (an ISO code, never a coordinate); the server grants it
+    // only when the request's network (GeoIP) is in that country or a
+    // neighbouring one. A guest session's map (QueryTile, GetGeoTimeline) shows
+    // only its granted country, and nothing without one. Call it at launch and
+    // at each foreground; an empty current_country (location off) closes it.
+    // Members are not limited by it in v1.
+    rpc GetCountryAccess (GetCountryAccessRequest) returns (GetCountryAccessResponse);
 }

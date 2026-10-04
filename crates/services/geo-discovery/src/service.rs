@@ -41,6 +41,8 @@ impl Service for GeoDiscoveryService {
     const EDGE_POLICY: EdgePolicy = &[
         public_read("/geo_discovery.v1.GeoDiscoveryService/QueryTile"),
         public_read("/geo_discovery.v1.GeoDiscoveryService/GetGeoTimeline"),
+        // Members and guests; the principal is the token's.
+        public_read("/geo_discovery.v1.GeoDiscoveryService/GetCountryAccess"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -50,6 +52,7 @@ impl Service for GeoDiscoveryService {
             redis:  RedisConfig::from_env(),
             kafka:  Some(KafkaClientConfig::from_env()),
             audience: audience_gate_from_env()?,
+            geo_ip:   geo_ip_from_env(),
         };
 
         let app = App::build(cfg, backends)
@@ -67,7 +70,11 @@ impl Service for GeoDiscoveryService {
     }
 
     fn register(self, routes: &mut RoutesBuilder) -> anyhow::Result<()> {
-        let handler = GeoDiscoveryHandler::new(Arc::clone(&self.app.query_bus));
+        let handler = GeoDiscoveryHandler::new(
+            Arc::clone(&self.app.query_bus),
+            Arc::clone(&self.app.country_access),
+            self.app.trusted_proxy_hops,
+        );
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
             .build_v1()?;
@@ -95,4 +102,15 @@ pub(crate) fn audience_gate_from_env() -> anyhow::Result<Arc<dyn crate::applicat
         .connect_timeout(ms("GEO_AUDIENCE_CONNECT_TIMEOUT_MS", 500))
         .connect_lazy();
     Ok(Arc::new(crate::infrastructure::client::GrpcAudienceGate::new(channel)))
+}
+
+/// GeoIP for country access: the MaxMind DB file at `GEO_GEOIP_MMDB_PATH`
+/// (none = nothing is granted), and what a private-network address resolves to
+/// (`GEO_GEOIP_PRIVATE_NETWORK_COUNTRY`: an ISO code, or `*` = the device's
+/// claim — local fleet only).
+pub(crate) fn geo_ip_from_env() -> Arc<dyn crate::application::port::GeoIp> {
+    use crate::infrastructure::geoip::{MmdbGeoIp, PrivateNetworkCountry};
+    let path = std::env::var("GEO_GEOIP_MMDB_PATH").ok();
+    let private = PrivateNetworkCountry::parse(std::env::var("GEO_GEOIP_PRIVATE_NETWORK_COUNTRY").ok().as_deref());
+    Arc::new(MmdbGeoIp::load(path.as_deref(), private))
 }

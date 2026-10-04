@@ -117,6 +117,8 @@ where
         request: Request<proto::GetDiscoveryFeedRequest>,
     ) -> Result<Response<proto::GetDiscoveryFeedResponse>, Status> {
         let (viewer, guest) = viewer_of(&request);
+        let guest_principal = guest.then(|| edge::principal(&request).map(|p| p.account_id().to_owned()))
+            .flatten();
         let req = request.into_inner();
 
         let ranking = match proto::DiscoveryRanking::try_from(req.ranking) {
@@ -135,6 +137,7 @@ where
         let query = GetDiscoveryFeedQuery {
             ranking,
             viewer,
+            guest: guest_principal,
             content_level,
             lat:        req.lat,
             lng:        req.lng,

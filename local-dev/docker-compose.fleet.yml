@@ -593,6 +593,9 @@ services:
       KAFKA_BROKERS: redpanda:9092
       # Per-reader audience filter (CheckAccess). Client map reads fail closed without it.
       GEO_SOCIAL_GRAPH_GRPC_ENDPOINT: http://social-graph-server:50053
+      # Country access (guest map): every caller is on the Docker network here, so a
+      # private address counts as the device's claim. Never set in a deployed env.
+      GEO_GEOIP_PRIVATE_NETWORK_COUNTRY: "*"
     ports:
       - "50054:50054"
     depends_on:

@@ -37,3 +37,16 @@ enum AuthorTier {
     AUTHOR_TIER_PREMIUM     = 2;
     AUTHOR_TIER_VIP         = 3;
 }
+
+// What became of a device's current country.
+enum CountryAccessOutcome {
+    COUNTRY_ACCESS_OUTCOME_UNSPECIFIED  = 0;
+    // The network is in that country, or a neighbouring one: open.
+    COUNTRY_ACCESS_OUTCOME_GRANTED      = 1;
+    // No current country was sent: nothing opens from location.
+    COUNTRY_ACCESS_OUTCOME_NOT_SENT     = 2;
+    // The network is in another, non-neighbouring country.
+    COUNTRY_ACCESS_OUTCOME_MISMATCH     = 3;
+    // The network's country is unknown: nothing could be verified.
+    COUNTRY_ACCESS_OUTCOME_UNVERIFIABLE = 4;
+}

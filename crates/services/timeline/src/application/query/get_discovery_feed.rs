@@ -25,6 +25,9 @@ const MAX_REFILLS: usize = 4;
 pub struct GetDiscoveryFeedQuery {
     pub ranking:       DiscoveryRanking,
     pub viewer:        Viewer,
+    /// The guest principal (token `sub`) when the reader is a guest session:
+    /// NEARBY then only reaches the country granted to it (geo-discovery).
+    pub guest:         Option<String>,
     pub content_level: ContentLevel,
     pub lat:           Option<f64>,
     pub lng:           Option<f64>,
@@ -243,7 +246,7 @@ impl<SG: SocialGraphClient> GetDiscoveryFeedHandler<SG> {
         let (Some(lat), Some(lng)) = (query.lat, query.lng) else {
             return Err(TimelineError::LocationRequired);
         };
-        let mut ids = self.nearby.around(lat, lng).await?;
+        let mut ids = self.nearby.around(lat, lng, query.guest.as_deref()).await?;
         ids.truncate(self.nearby_candidates);
         let meta = self.pool.meta(&ids).await?;
         let after = cursor.position(DiscoveryStream::Nearby);
@@ -406,7 +409,7 @@ mod tests {
 
     #[async_trait]
     impl NearbyPosts for Around {
-        async fn around(&self, _: f64, _: f64) -> Result<Vec<PostId>, TimelineError> { Ok(self.0.clone()) }
+        async fn around(&self, _: f64, _: f64, _: Option<&str>) -> Result<Vec<PostId>, TimelineError> { Ok(self.0.clone()) }
     }
 
     fn handler(pool: Arc<MemPool>, graph: Arc<Graph>, around: Vec<PostId>) -> GetDiscoveryFeedHandler<Graph> {
@@ -424,6 +427,7 @@ mod tests {
         Envelope::new(Uuid::now_v7(), GetDiscoveryFeedQuery {
             ranking,
             viewer: Viewer::Profiles(vec![]),
+            guest: None,
             content_level: ContentLevel::Restricted,
             lat: Some(48.85),
             lng: Some(2.35),

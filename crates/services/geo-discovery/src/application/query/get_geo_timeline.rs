@@ -3,9 +3,11 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 use uuid::Uuid;
 
-use crate::application::port::{visible_authors, AudienceGate, CardStore, TileRepository};
+use crate::application::country_access::country_limit;
+use crate::application::port::{visible_authors, AudienceGate, CardStore, CountryGrantStore, TileRepository};
+use crate::domain::country_atlas::CountryAtlas;
 use crate::domain::entity::MapPostCard;
-use crate::domain::value_object::{PostId, Viewer};
+use crate::domain::value_object::{MapScope, PostId, Viewer};
 use crate::error::GeoDiscoveryError;
 
 /// Focus path: hydrates a batch of focused pins into fully-rendered cards.
@@ -21,6 +23,8 @@ pub struct GetGeoTimelineQuery {
     pub post_ids: Vec<Uuid>,
     /// Who is looking: a client only gets cards of authors it may see.
     pub viewer:   Viewer,
+    /// Which part of the map: a guest only gets cards in its granted country.
+    pub scope:    MapScope,
 }
 
 pub struct GetGeoTimelineResult {
@@ -35,6 +39,8 @@ pub struct GetGeoTimelineHandler<CS, TR> {
     pub card_store:      Arc<CS>,
     pub tile_repository: Arc<TR>,
     pub audience:        Arc<dyn AudienceGate>,
+    pub grants:          Arc<dyn CountryGrantStore>,
+    pub atlas:           &'static CountryAtlas,
 }
 
 impl<CS, TR> QueryHandler<GetGeoTimelineQuery> for GetGeoTimelineHandler<CS, TR>
@@ -51,6 +57,10 @@ where
         let post_ids = &envelope.payload.post_ids;
 
         if post_ids.is_empty() {
+            return Ok(GetGeoTimelineResult { cards: vec![] });
+        }
+        let limit = country_limit(self.grants.as_ref(), &envelope.payload.scope).await?;
+        if limit == Some(None) {
             return Ok(GetGeoTimelineResult { cards: vec![] });
         }
 
@@ -81,6 +91,15 @@ where
             for maybe_card in miss_results.into_iter().flatten() {
                 cards.push(maybe_card);
             }
+        }
+
+        // ── Phase 2b: a guest's country. A card without a stored location
+        //   (indexed before it was kept) cannot be placed: left out.
+        if let Some(Some(country)) = limit {
+            cards.retain(|c| match (c.lat, c.lng) {
+                (Some(lat), Some(lng)) => self.atlas.contains(country, lat, lng),
+                _ => false,
+            });
         }
 
         // ── Phase 3: the reader's audience (one bulk CheckAccess; fail closed).

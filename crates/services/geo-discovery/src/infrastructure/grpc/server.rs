@@ -36,6 +36,7 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         redis:  RedisConfig::from_env(),
         kafka:  Some(KafkaClientConfig::from_env()),
         audience: crate::service::audience_gate_from_env().map_err(|e| e.to_string())?,
+        geo_ip:   crate::service::geo_ip_from_env(),
     };
 
     let app = App::build(cfg, backends).await?;
@@ -51,7 +52,11 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
-    let svc = GeoDiscoveryServiceServer::new(GeoDiscoveryHandler::new(Arc::clone(&app.query_bus)));
+    let svc = GeoDiscoveryServiceServer::new(GeoDiscoveryHandler::new(
+        Arc::clone(&app.query_bus),
+        Arc::clone(&app.country_access),
+        app.trusted_proxy_hops,
+    ));
 
     tracing::info!(addr = %addr, "geo-discovery gRPC server listening");
 

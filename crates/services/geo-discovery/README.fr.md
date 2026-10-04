@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: f302ac844b44863eb9e9d065e3cb30330d36afee65e9d740bb0f82ac2c67fc51
+  source_sha256: f650636be665dfe4935dbe2b1b4a5701adb4f63cf97c3fa28f151defb0543db0
   translated_at: 2026-10-04
   status: complete
 ---
@@ -138,13 +138,16 @@ souples que le SLO de latence de requête.
 service GeoDiscoveryService {
   rpc QueryTile      (QueryTileRequest)      returns (QueryTileResponse);      // Radar (panoramique) : pins légers
   rpc GetGeoTimeline (GetGeoTimelineRequest) returns (GetGeoTimelineResponse); // Focus (tap) : cartes complètes
+  rpc GetCountryAccess (GetCountryAccessRequest) returns (GetCountryAccessResponse); // country access from location
 }
-message QueryTileRequest  { Viewport viewport = 1; int32 zoom_level = 2; }     // zoom ∈ [0,15]
+message QueryTileRequest  { Viewport viewport = 1; int32 zoom_level = 2; string guest_principal = 3; } // zoom ∈ [0,15]; 3 = mesh only
 message QueryTileResponse { reserved 1; repeated RadarPin pins = 3; int32 tile_count = 2; } // le champ 1 était `cards`
 message RadarPin { string post_id=1; double lat=2; double lng=3; string thumbnail_url=4; }
 
 message GetGeoTimelineRequest  { repeated string post_ids = 1; }
 message GetGeoTimelineResponse { repeated MapPostCard cards = 1; }
+message GetCountryAccessRequest  { string current_country = 1; }                 // ISO alpha-2 from the device, or empty
+message GetCountryAccessResponse { string current_country = 1; CountryAccessOutcome outcome = 2; } // echoed only when GRANTED
 message MapPostCard { string post_id=1; string author_id=2; string author_handle=3;
   string author_avatar_url=4; string thumbnail_url=5; int64 h3_index_r7=6;
   float virality_score=7; int64 published_at_ms=8; AuthorTier author_tier=9; string caption=10; }
@@ -170,6 +173,20 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > groupé ; auteurs privés qu'il ne suit pas, blocages dans un sens ou l'autre et auteurs masqués sont
 > retirés ; ses propres posts restent toujours). Ce contrôle échoue **fermé** (`GEO-6001`, `UNAVAILABLE`).
 
+> **Accès par pays (mode invité, #680 B10).** `GetCountryAccess` (edge `public_read` : membres et
+> invités) reçoit le pays que l'appareil a déduit de sa position — un code ISO, jamais une coordonnée.
+> Il est **accordé** seulement si le pays réseau de la requête (GeoIP : l'adresse client que l'ALB a
+> ajoutée à `X-Forwarded-For`, cherchée dans une base au format MaxMind, `GEO_GEOIP_MMDB_PATH`) est ce
+> pays **ou un pays voisin** (une ville frontalière, un téléphone sur un réseau voisin) ; un réseau
+> inconnu n'accorde rien (`UNVERIFIABLE`), pas plus qu'une base absente. L'accord est stocké par
+> principal (`sub` du jeton, `sg:geo:cc:{sub}`, `GEO_COUNTRY_GRANT_TTL_SECS`) ; un nouvel accord remplace
+> le précédent (le pays quitté se reverrouille) et un `current_country` vide l'efface. **La carte d'une
+> session invitée** — `QueryTile`, `GetGeoTimeline`, et le flux NEARBY de timeline (`guest_principal`
+> côté mesh) — ne montre **que son pays accordé, et rien sans lui**. Les membres ne sont pas limités en
+> v1 (pas encore de déblocages côté serveur). Pays et voisins viennent de `data/countries.json`, les
+> frontières Natural Earth de l'app iOS, pour que le serveur et l'appareil placent un post dans le même
+> pays (un point à ~2 km d'une frontière ou d'une côte compte pour ce pays).
+>
 > **Contrat de sérialisation :** `AuthorTier` est basé sur 0 **avec** un défaut sûr `UNSPECIFIED=0`
 > (= Standard) ; `STANDARD=1, PREMIUM=2, VIP=3`. Rendu du badge : `author_tier` → badge statique ;
 > `is_friend`/`is_following` sont délibérément **absents** (résolus côté client depuis le graphe social de
@@ -183,6 +200,8 @@ pub trait SpatialIndex: Send + Sync { /* upsert (ZADD+cap), update_score (ZADD X
 pub trait PinStore:     Send + Sync { /* set, mget (Vec même longueur, None=miss), del — projection pin Radar */ }
 pub trait CardStore:    Send + Sync { /* set, mget (Vec même longueur, None=miss), del — projection carte Focus */ }
 pub trait TileRepository: Send + Sync { /* insert_tile_entry, upsert_card, update_card_score/tier, get_card, list_tile_post_ids */ }
+pub trait GeoIp: Send + Sync { /* IP → country (MaxMind DB file); None = unknown */ }
+pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country granted to a principal (Redis) */ }
 ```
 
 ### Contrat d'erreur (`GEO-xxxx`)
@@ -195,6 +214,7 @@ pub trait TileRepository: Send + Sync { /* insert_tile_entry, upsert_card, updat
 | GEO-5001/5002 | 500 | msgpack ser / deser failure |
 | GEO-9001..9003 | 422 | malformed UUIDs / domain violation |
 | GEO-6001 | 503 | audience check (social-graph `CheckAccess`) unavailable; client reads fail closed (`UNAVAILABLE`, retryable) |
+| GEO-9004/9005 | 422 | code pays ISO invalide / accès par pays sans principal client (mesh) |
 
 ---
 
@@ -282,6 +302,10 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Oui** (prod) | `http://localhost:50053` | endpoint social-graph du filtre d'audience par lecteur (`CheckAccess`) ; sans lui, les lectures clientes échouent fermé. |
 | `GEO_AUDIENCE_RPC_TIMEOUT_MS` / `GEO_AUDIENCE_CONNECT_TIMEOUT_MS` | Non | `500` / `500` | délais de cet appel. |
 | `GEO_VISIBILITY_GROUP_ID` | Non | `geo-discovery-visibility` | groupe Kafka du consumer de suppression de la carte. |
+| `GEO_GEOIP_MMDB_PATH` | **Oui** (prod) | — | Base IP→pays au format MaxMind (DB-IP Lite country, CC BY 4.0 — *IP Geolocation by DB-IP*, <https://db-ip.com> ; ou GeoLite2-Country). Absente → l'accès par pays n'accorde rien. |
+| `GEO_GEOIP_PRIVATE_NETWORK_COUNTRY` | Non | — | Ce que vaut une adresse client privée/loopback : un code ISO, ou `*` = la déclaration de l'appareil. **Flotte locale uniquement** — jamais dans un env déployé. |
+| `GEO_TRUSTED_PROXY_HOPS` | Non | `1` | Proxys qui ajoutent à `X-Forwarded-For` (l'ALB) ; l'adresse client est à autant d'entrées depuis la droite. |
+| `GEO_COUNTRY_GRANT_TTL_SECS` | Non | `43200` | Durée d'ouverture d'un pays accordé sans nouvelle confirmation (12 h). |
 
 > Aucun flag de feature de compilation. `build.rs` compile `proto/geo_discovery/v1/*.proto`. Profils
 > ScyllaDB : Strict (`LocalQuorum`) pour les mutations, Fast (`LocalOne` + spéculatif) pour les lectures.

@@ -28,7 +28,7 @@ use geo_discovery::domain::value_object::{GeoCoordinate, H3Index, H3Resolution};
 use geo_discovery::error::GeoDiscoveryError;
 use geo_discovery::infrastructure::persistence::ScyllaTileRepository;
 
-pub use geo_discovery::domain::value_object::{ContentAccess, VisibilityChange, Viewer};
+pub use geo_discovery::domain::value_object::{ContentAccess, MapScope, VisibilityChange, Viewer};
 
 pub use test_support::await_until;
 
@@ -77,6 +77,8 @@ pub struct TestHarness {
     pub command_bus: Arc<InMemoryCommandBus>,
     pub query_bus:   Arc<InMemoryQueryBus>,
     pub gate:        Arc<ScriptedGate>,
+    /// Country access from location (private addresses count as the claim).
+    pub country_access: Arc<geo_discovery::application::country_access::ResolveCountryAccess>,
     /// Direct handle on the durable card store, for row-level assertions.
     pub tiles:       ScyllaTileRepository,
 }
@@ -98,6 +100,10 @@ impl TestHarness {
             redis: RedisConfig { hosts: vec![redis_endpoint], ..RedisConfig::default() },
             kafka: None,
             audience: Arc::clone(&gate) as _,
+            geo_ip:   Arc::new(geo_discovery::infrastructure::geoip::MmdbGeoIp::load(
+                None,
+                geo_discovery::infrastructure::geoip::PrivateNetworkCountry::AsClaimed,
+            )),
         };
 
         let app = App::build(GeoDiscoveryConfig::from_env(), backends)
@@ -105,7 +111,13 @@ impl TestHarness {
             .expect("integration: build geo-discovery app");
 
         let tiles = ScyllaTileRepository::new(Arc::clone(&app.scylla));
-        Self { command_bus: app.command_bus, query_bus: app.query_bus, gate, tiles }
+        Self {
+            command_bus: app.command_bus,
+            query_bus: app.query_bus,
+            gate,
+            country_access: app.country_access,
+            tiles,
+        }
     }
 
     /// Indexes a post at `(lat, lng)` with the given virality, returning its uuid.
@@ -232,7 +244,7 @@ impl TestHarness {
         self.query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
-                GetGeoTimelineQuery { post_ids: post_ids.to_vec(), viewer },
+                GetGeoTimelineQuery { post_ids: post_ids.to_vec(), viewer, scope: MapScope::All },
             ))
             .await
     }
@@ -244,12 +256,39 @@ impl TestHarness {
                 Uuid::now_v7(),
                 QueryTileQuery {
                     sw_lat: lat - 0.01, sw_lng: lng - 0.01, ne_lat: lat + 0.01, ne_lng: lng + 0.01,
-                    zoom_level: ZOOM_R9, viewer,
+                    zoom_level: ZOOM_R9, viewer, scope: MapScope::All,
                 },
             ))
             .await
             .map(|r: QueryTileResult| r.pins.into_iter().map(|p| p.post_id).collect())
             .expect("query_tile")
+    }
+
+    /// The post ids a Radar query around `(lat, lng)` returns for `scope`.
+    pub async fn pins_near_in(&self, lat: f64, lng: f64, scope: MapScope) -> HashSet<Uuid> {
+        self.query_bus
+            .dispatch(Envelope::new(
+                Uuid::now_v7(),
+                QueryTileQuery {
+                    sw_lat: lat - 0.01, sw_lng: lng - 0.01, ne_lat: lat + 0.01, ne_lng: lng + 0.01,
+                    zoom_level: ZOOM_R9, viewer: Viewer::Profiles(vec![]), scope,
+                },
+            ))
+            .await
+            .map(|r: QueryTileResult| r.pins.into_iter().map(|p| p.post_id).collect())
+            .expect("query_tile")
+    }
+
+    /// The card ids the Focus path returns for `scope`.
+    pub async fn cards_in(&self, post_ids: &[Uuid], scope: MapScope) -> HashSet<Uuid> {
+        self.query_bus
+            .dispatch(Envelope::new(
+                Uuid::now_v7(),
+                GetGeoTimelineQuery { post_ids: post_ids.to_vec(), viewer: Viewer::Profiles(vec![]), scope },
+            ))
+            .await
+            .map(|r: GetGeoTimelineResult| r.cards.into_iter().map(|c| c.post_id).collect())
+            .expect("get_geo_timeline")
     }
 
     /// Queries a viewport box (`sw` < `ne`) at the given zoom.
@@ -264,7 +303,7 @@ impl TestHarness {
         self.query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
-                QueryTileQuery { sw_lat, sw_lng, ne_lat, ne_lng, zoom_level: zoom, viewer: Viewer::Internal },
+                QueryTileQuery { sw_lat, sw_lng, ne_lat, ne_lng, zoom_level: zoom, viewer: Viewer::Internal, scope: MapScope::All },
             ))
             .await
             .expect("query_tile")
