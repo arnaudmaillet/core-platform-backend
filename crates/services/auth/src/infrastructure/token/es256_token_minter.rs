@@ -68,6 +68,10 @@ struct EdgeClaims {
     /// absent on a member's, so member tokens are unchanged on the wire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     kind: Option<String>,
+    /// When the holder last proved a credential (`auth_context::edge::EDGE_AUTH_TIME_CLAIM`);
+    /// omitted on refreshed tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth_time: Option<i64>,
 }
 
 /// A guest token's `sub`: the guest id under a prefix no account id can take,
@@ -225,6 +229,7 @@ impl TokenMinter for Es256TokenMinter {
             pids: claims.profile_ids.iter().map(ProfileId::as_str).collect(),
             did: claims.device_id.clone(),
             kind,
+            auth_time: claims.auth_time.map(|t| t.timestamp()),
         };
         encode(&self.header, &edge, &self.encoding_key).map_err(|_| AuthError::TokenSigningFailed)
     }
@@ -257,6 +262,7 @@ impl TokenMinter for Es256TokenMinter {
         };
         let issued_at: DateTime<Utc> = to_utc(c.iat)?;
         let expires_at: DateTime<Utc> = to_utc(c.exp)?;
+        let auth_time = c.auth_time.map(to_utc).transpose()?;
         let permissions = c.perms.into_iter().map(Permission::new).collect();
         let profile_ids = c
             .pids
@@ -273,6 +279,7 @@ impl TokenMinter for Es256TokenMinter {
             profile_ids,
             device_id: c.did,
             kind,
+            auth_time,
             issued_at,
             expires_at,
         })
@@ -334,6 +341,7 @@ mod tests {
             profile_ids: vec![ProfileId::from_uuid(Uuid::now_v7())],
             device_id: Some("ios-install-1".into()),
             kind: SessionKind::Member,
+            auth_time: None,
             issued_at: now,
             expires_at: now + ttl,
         }

@@ -34,6 +34,12 @@ pub struct AccessTokenClaims {
     /// wire `sub` is `guest:<id>`, and `profile_ids` is empty).
     #[serde(default)]
     pub kind: SessionKind,
+    /// `auth_time` — when the holder last proved a credential. Set only on a
+    /// token minted right after that proof (`Login`, the `VerifyCredentials`
+    /// step-up); `None` on a refreshed token. Step-up-gated RPCs elsewhere read
+    /// it (`transport::grpc::edge::require_recent_auth`).
+    #[serde(default)]
+    pub auth_time: Option<DateTime<Utc>>,
     pub issued_at: DateTime<Utc>,
     /// Always ≤ the session's sliding and absolute expiry.
     pub expires_at: DateTime<Utc>,
@@ -60,6 +66,7 @@ impl AccessTokenClaims {
             profile_ids,
             device_id,
             kind,
+            auth_time: None,
             issued_at,
             expires_at,
         }

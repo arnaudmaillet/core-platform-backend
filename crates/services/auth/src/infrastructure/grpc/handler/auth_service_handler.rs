@@ -8,9 +8,10 @@ use uuid::Uuid;
 
 use transport::grpc::edge;
 use crate::application::command::{
-    IssuedSession, LoginCommand, LoginHandler, LogoutAllSessionsCommand, LogoutAllSessionsHandler,
-    LogoutCommand, LogoutHandler, RefreshCommand, RefreshHandler, StartGuestSessionCommand,
-    StartGuestSessionHandler,
+    ChangePasswordCommand, ChangePasswordHandler, IssuedSession, LoginCommand, LoginHandler,
+    LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutCommand, LogoutHandler,
+    RefreshCommand, RefreshHandler, StartGuestSessionCommand, StartGuestSessionHandler,
+    StepUpCredential, VerifyCredentialsCommand, VerifyCredentialsHandler,
 };
 use crate::application::port::AuthnGrant;
 use crate::application::query::{
@@ -38,9 +39,12 @@ pub struct AuthServiceHandler {
     introspect: Arc<IntrospectHandler>,
     list_sessions: Arc<ListSessionsHandler>,
     start_guest: Arc<StartGuestSessionHandler>,
+    change_password: Arc<ChangePasswordHandler>,
+    verify_credentials: Arc<VerifyCredentialsHandler>,
 }
 
 impl AuthServiceHandler {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         login: Arc<LoginHandler>,
         refresh: Arc<RefreshHandler>,
@@ -49,8 +53,68 @@ impl AuthServiceHandler {
         introspect: Arc<IntrospectHandler>,
         list_sessions: Arc<ListSessionsHandler>,
         start_guest: Arc<StartGuestSessionHandler>,
+        change_password: Arc<ChangePasswordHandler>,
+        verify_credentials: Arc<VerifyCredentialsHandler>,
     ) -> Self {
-        Self { login, refresh, logout, logout_all, introspect, list_sessions, start_guest }
+        Self {
+            login,
+            refresh,
+            logout,
+            logout_all,
+            introspect,
+            list_sessions,
+            start_guest,
+            change_password,
+            verify_credentials,
+        }
+    }
+
+    /// Edge `authenticated`: the account and session are the caller's (`sub`,
+    /// `sid`). A mesh call has no holder to prove a password for.
+    pub async fn change_password(
+        &self,
+        request: Request<proto::ChangePasswordRequest>,
+    ) -> Result<Response<proto::ChangePasswordResponse>, Status> {
+        let (account_id, session_id) = caller(&request)?;
+        let req = request.into_inner();
+        let cmd = ChangePasswordCommand {
+            account_id,
+            session_id,
+            current_password: req.current_password,
+            new_password: req.new_password,
+            sign_out_other_sessions: req.sign_out_other_sessions,
+        };
+        let out = self
+            .change_password
+            .handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::ChangePasswordResponse { sessions_revoked: out.sessions_revoked }))
+    }
+
+    /// Edge `authenticated` step-up: see `auth.v1.VerifyCredentials`.
+    pub async fn verify_credentials(
+        &self,
+        request: Request<proto::VerifyCredentialsRequest>,
+    ) -> Result<Response<proto::VerifyCredentialsResponse>, Status> {
+        use proto::verify_credentials_request::Credential;
+        let (account_id, session_id) = caller(&request)?;
+        let credential = match request.into_inner().credential {
+            Some(Credential::Password(p)) => StepUpCredential::Password(p),
+            Some(Credential::MfaCode(c)) => StepUpCredential::MfaCode(c),
+            None => return Err(Status::invalid_argument("a credential is required")),
+        };
+        let cmd = VerifyCredentialsCommand { account_id, session_id, credential };
+        let token = self
+            .verify_credentials
+            .handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::VerifyCredentialsResponse {
+            access_token: token.access_token,
+            expires_in: token.access_expires_in,
+            step_up_expires_in: token.step_up_expires_in,
+        }))
     }
 
     pub async fn start_guest_session(
@@ -222,6 +286,17 @@ fn edge_account<T>(request: &Request<T>, supplied: &str) -> Result<String, Statu
         }
         None => Ok(supplied.to_owned()),
     }
+}
+
+/// The verified caller's account and session, for the credential RPCs: they
+/// act on the holder behind a token, so a mesh call (no principal) is refused.
+fn caller<T>(request: &Request<T>) -> Result<(String, String), Status> {
+    let principal = edge::principal(request)
+        .ok_or_else(|| Status::unauthenticated("this call needs a signed-in holder"))?;
+    let session_id = principal
+        .session_id()
+        .ok_or_else(|| Status::unauthenticated("the token carries no session"))?;
+    Ok((principal.account_id().to_owned(), session_id.to_owned()))
 }
 
 fn grant_from_proto(

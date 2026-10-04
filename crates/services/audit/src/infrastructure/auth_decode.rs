@@ -102,11 +102,11 @@ pub fn map_session_issued(wire: &SessionIssuedWire) -> Result<AuditEvent, AuditE
 
 /// A session revocation → an `Authentication` record. The acting authority is
 /// derived from the reason: an administrative revocation is an admin action, a
-/// (global) logout is the user's, a refresh-reuse revocation is the system's.
+/// (global) logout or a password change is the user's, a refresh-reuse revocation is the system's.
 pub fn map_session_revoked(wire: &SessionRevokedWire) -> Result<AuditEvent, AuditError> {
     let (actor_type, actor_pseudonym) = match wire.reason.as_str() {
         "administrative" => (ActorType::Admin, SOURCE),
-        "logout" | "global_logout" => (ActorType::User, wire.account_id.as_str()),
+        "logout" | "global_logout" | "password_changed" => (ActorType::User, wire.account_id.as_str()),
         // refresh_reuse and anything else: an automated security revocation.
         _ => (ActorType::System, SOURCE),
     };
@@ -199,6 +199,8 @@ mod tests {
         assert_eq!(map_session_revoked(&revoked("logout")).unwrap().actor().actor_type, ActorType::User);
         assert_eq!(map_session_revoked(&revoked("administrative")).unwrap().actor().actor_type, ActorType::Admin);
         assert_eq!(map_session_revoked(&revoked("refresh_reuse")).unwrap().actor().actor_type, ActorType::System);
+        // Signing the other devices out on a password change is the holder's act.
+        assert_eq!(map_session_revoked(&revoked("password_changed")).unwrap().actor().actor_type, ActorType::User);
     }
 
     #[test]

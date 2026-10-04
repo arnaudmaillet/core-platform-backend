@@ -198,8 +198,11 @@ impl LoginHandler {
         let profile_ids = profile_ids_or_empty(&self.profiles, &account_id).await;
         // Every member may read public content (the edge's `read:public` routes).
         let permissions = Permission::with_read_public(permissions);
-        let claims =
+        let mut claims =
             session.mint_access_token(now, self.policy.access_ttl, permissions, profile_ids)?;
+        // The credential was proved just now: the token counts as a recent
+        // authentication for step-up-gated RPCs (until it is refreshed).
+        claims.auth_time = Some(now);
         let access_token = self.minter.mint_access(&claims).await?;
 
         Ok(IssuedSession {

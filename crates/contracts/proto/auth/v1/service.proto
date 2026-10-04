@@ -56,6 +56,24 @@ service AuthService {
     // minted edge token is rejected at the edge within one cache read.
     rpc LogoutAllSessions(LogoutAllSessionsRequest) returns (LogoutAllSessionsResponse);
 
+    // ── Credentials (the signed-in holder, client edge) ───────────────────────
+
+    // Change the password the holder signs in with: the current password is
+    // proved with the IdP, then the new one is set there (it never crosses into
+    // account or auth storage). Optionally signs every other session out; the
+    // caller's own stays. A weak or refused new password fails with
+    // FAILED_PRECONDITION: AUT-VAL-024/025/026 (length, unchanged) or AUT-5006
+    // (the IdP's password policy, its rule in the message). A wrong current
+    // password is UNAUTHENTICATED (AUT-5002).
+    rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+
+    // Step-up: re-prove a credential before a destructive action. Returns a
+    // fresh access token for the caller's session whose `auth_time` claim is
+    // now; step-up-gated RPCs (account deletion and deactivation, contact
+    // changes…) accept it for step_up_expires_in seconds and otherwise answer
+    // PERMISSION_DENIED "step_up_required…". The refresh token is unchanged.
+    rpc VerifyCredentials(VerifyCredentialsRequest) returns (VerifyCredentialsResponse);
+
     // ── Introspection & device management ─────────────────────────────────────
 
     // INTERNAL. Server-side token introspection returning the normalized

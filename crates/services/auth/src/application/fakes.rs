@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::policy::SessionPolicy;
 use super::port::{
-    AccountActivation, AccountDirectory, AccountSnapshot, AuthnGrant, EventPublisher,
+    AccountActivation, AccountDirectory, AccountSnapshot, AuthnGrant, CredentialAdmin, EventPublisher,
     GeneratedRefresh, IdentityProvider, NormalizedClaims, ProfileDirectory,
     RefreshTokenRepository, SessionCache, SessionRepository, SubjectLinkRepository, TokenMinter,
 };
@@ -33,6 +33,8 @@ pub fn t0() -> DateTime<Utc> {
 
 pub struct StubIdentityProvider {
     claims: Mutex<Option<NormalizedClaims>>,
+    /// When set, a password grant must present exactly this password.
+    password: Mutex<Option<String>>,
 }
 
 impl StubIdentityProvider {
@@ -42,17 +44,29 @@ impl StubIdentityProvider {
                 issuer: issuer.to_owned(),
                 subject: subject.to_owned(),
             })),
+            password: Mutex::new(None),
         }
     }
 
     pub fn failing() -> Self {
-        Self { claims: Mutex::new(None) }
+        Self { claims: Mutex::new(None), password: Mutex::new(None) }
+    }
+
+    /// Password grants succeed only with `password` from now on.
+    pub fn with_password(&self, password: &str) {
+        *self.password.lock().unwrap() = Some(password.to_owned());
     }
 }
 
 #[async_trait]
 impl IdentityProvider for StubIdentityProvider {
-    async fn authenticate(&self, _grant: AuthnGrant) -> Result<NormalizedClaims, AuthError> {
+    async fn authenticate(&self, grant: AuthnGrant) -> Result<NormalizedClaims, AuthError> {
+        if let (AuthnGrant::Password { password, .. }, Some(expected)) =
+            (&grant, self.password.lock().unwrap().as_ref())
+            && password != expected
+        {
+            return Err(AuthError::IdpAuthenticationFailed);
+        }
         self.claims
             .lock()
             .unwrap()
@@ -481,6 +495,43 @@ impl EventPublisher for RecordingEventPublisher {
     }
 }
 
+// ─── CredentialAdmin ─────────────────────────────────────────────────────────
+
+/// Knows every subject as `user`; records each password set, or refuses them
+/// all with a policy reason.
+#[derive(Default)]
+pub struct StubCredentialAdmin {
+    set: Mutex<Vec<(IdpSubject, String)>>,
+    refuse: Mutex<Option<String>>,
+}
+
+impl StubCredentialAdmin {
+    /// The passwords set so far, per subject.
+    pub fn passwords_set(&self) -> Vec<(IdpSubject, String)> {
+        self.set.lock().unwrap().clone()
+    }
+
+    /// Refuse every new password as the IdP policy would.
+    pub fn refuse_with(&self, reason: &str) {
+        *self.refuse.lock().unwrap() = Some(reason.to_owned());
+    }
+}
+
+#[async_trait]
+impl CredentialAdmin for StubCredentialAdmin {
+    async fn login_name(&self, _subject: &IdpSubject) -> Result<String, AuthError> {
+        Ok("user".to_owned())
+    }
+
+    async fn set_password(&self, subject: &IdpSubject, new_password: &str) -> Result<(), AuthError> {
+        if let Some(reason) = self.refuse.lock().unwrap().clone() {
+            return Err(AuthError::PasswordRejected { reason });
+        }
+        self.set.lock().unwrap().push((subject.clone(), new_password.to_owned()));
+        Ok(())
+    }
+}
+
 // ─── Fixture ─────────────────────────────────────────────────────────────────
 
 /// Bundles concrete fakes and builds handlers wired to them. Handlers receive
@@ -488,6 +539,7 @@ impl EventPublisher for RecordingEventPublisher {
 /// recorded state (published events, generation, stored sessions).
 pub struct Fixture {
     pub idp: Arc<StubIdentityProvider>,
+    pub credentials: Arc<StubCredentialAdmin>,
     pub directory: Arc<StubAccountDirectory>,
     pub profiles: Arc<StubProfileDirectory>,
     pub links: Arc<InMemorySubjectLinkRepository>,
@@ -511,6 +563,7 @@ impl Fixture {
     pub fn new() -> Self {
         Self {
             idp: Arc::new(StubIdentityProvider::returning("https://idp.test", "sub-123")),
+            credentials: Arc::new(StubCredentialAdmin::default()),
             directory: Arc::new(StubAccountDirectory::new()),
             profiles: Arc::new(StubProfileDirectory::new()),
             links: Arc::new(InMemorySubjectLinkRepository::new()),
@@ -593,5 +646,30 @@ impl Fixture {
 
     pub fn list_sessions_handler(&self) -> super::query::ListSessionsHandler {
         super::query::ListSessionsHandler::new(Arc::clone(&self.sessions) as _)
+    }
+
+    pub fn change_password_handler(&self) -> super::command::ChangePasswordHandler {
+        super::command::ChangePasswordHandler::new(
+            Arc::clone(&self.idp) as _,
+            Arc::clone(&self.credentials) as _,
+            Arc::clone(&self.sessions) as _,
+            Arc::clone(&self.refresh_tokens) as _,
+            Arc::clone(&self.cache) as _,
+            Arc::clone(&self.publisher) as _,
+            self.policy.clone(),
+        )
+    }
+
+    pub fn verify_credentials_handler(&self) -> super::command::VerifyCredentialsHandler {
+        super::command::VerifyCredentialsHandler::new(
+            Arc::clone(&self.idp) as _,
+            Arc::clone(&self.credentials) as _,
+            Arc::clone(&self.directory) as _,
+            Arc::clone(&self.profiles) as _,
+            Arc::clone(&self.sessions) as _,
+            Arc::clone(&self.cache) as _,
+            Arc::clone(&self.minter) as _,
+            self.policy.clone(),
+        )
     }
 }

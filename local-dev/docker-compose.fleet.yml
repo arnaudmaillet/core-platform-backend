@@ -473,6 +473,11 @@ services:
       AUTH_KEYCLOAK_TOKEN_ENDPOINT: http://keycloak:8080/realms/core-platform/protocol/openid-connect/token
       AUTH_KEYCLOAK_CLIENT_ID: core-platform-auth
       AUTH_KEYCLOAK_SCOPE: openid
+      # Credential management (ChangePassword / VerifyCredentials): the realm's
+      # confidential `core-platform-auth-admin` service account (view/manage-users).
+      AUTH_KEYCLOAK_ADMIN_URL: http://keycloak:8080/admin/realms/core-platform
+      AUTH_KEYCLOAK_ADMIN_CLIENT_ID: core-platform-auth-admin
+      AUTH_KEYCLOAK_ADMIN_CLIENT_SECRET: local-dev-auth-admin-secret
     ports:
       - "50060:50060"
       - "8081:8081"

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 640e34ada494f39743a3d45d535fc55048df3383578dc5df6f961cd967472c76
+  source_sha256: ec01ef19e36a08545b37d54824b8c10767a020f66dc82c14887fe0e146dce726
   translated_at: 2026-10-04
   status: complete
 ---
@@ -248,6 +248,7 @@ async fn main() -> anyhow::Result<()> {
 | `POSTGRES_*` (URL/pool/timeouts) | **Yes** | — | CockroachDB-compatible connection; see the `postgres-storage` crate. |
 | `KAFKA_BROKERS` | **Yes** | — | Kafka bootstrap brokers for `account.v1.events`. |
 | `ACCOUNT_GRPC_ADDR` | No | `0.0.0.0:50059` | gRPC bind address. |
+| `ACCOUNT_REQUIRE_STEP_UP` | No | `false` | `DeactivateAccount` et `RequestGdprDeletion` en périphérie exigent une preuve d'identifiant de moins de 5 min (l'`auth_time` du jeton, issu de `auth.v1.Login` / `VerifyCredentials`) ; sinon `PERMISSION_DENIED` `step_up_required…`. À activer une fois que les clients font le step-up. |
 
 > Le réglage complet connexion/timeout/pool vit dans les crates partagés `postgres-storage` et `transport`.
 

@@ -189,3 +189,35 @@ message ListSessionsRequest {
 message ListSessionsResponse {
     repeated SessionView  sessions  = 1;
 }
+
+// ── Credentials ───────────────────────────────────────────────────────────────
+
+message ChangePasswordRequest {
+    string  current_password         = 1;
+    // 8–128 characters, different from the current one; the IdP's password
+    // policy may ask for more.
+    string  new_password             = 2;
+    // Sign every other session of the account out (recommended).
+    bool    sign_out_other_sessions  = 3;
+}
+
+message ChangePasswordResponse {
+    // Other sessions signed out (0 unless asked).
+    int32   sessions_revoked  = 1;
+}
+
+message VerifyCredentialsRequest {
+    oneof credential {
+        string  password  = 1;
+        // A TOTP or backup code. Refused (AUT-5007) until MFA enrolment exists.
+        string  mfa_code  = 2;
+    }
+}
+
+message VerifyCredentialsResponse {
+    // Replaces the caller's access token; carries `auth_time` = now.
+    string  access_token        = 1;
+    int64   expires_in          = 2;
+    // How long step-up-gated RPCs accept this proof.
+    int64   step_up_expires_in  = 3;
+}

@@ -17,10 +17,12 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    LoginHandler, LogoutAllSessionsHandler, LogoutHandler, RefreshHandler, StartGuestSessionHandler,
+    ChangePasswordHandler, LoginHandler, LogoutAllSessionsHandler, LogoutHandler, RefreshHandler,
+    StartGuestSessionHandler, VerifyCredentialsHandler,
 };
 use crate::application::port::{
-    AccountDirectory, EventPublisher, GuestRegistry, IdentityProvider, ProfileDirectory,
+    AccountDirectory, CredentialAdmin, EventPublisher, GuestRegistry, IdentityProvider,
+    ProfileDirectory,
     RefreshTokenRepository,
     SessionCache, SessionRepository, SubjectLinkRepository, TokenMinter,
 };
@@ -33,7 +35,9 @@ use crate::infrastructure::event::outbox_relay::OutboxRelay;
 use crate::infrastructure::event::pg_outbox_publisher::PgOutboxPublisher;
 use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 use crate::infrastructure::grpc::handler::AuthServiceHandler;
-use crate::infrastructure::idp::KeycloakIdentityProvider;
+use crate::infrastructure::idp::{
+    KeycloakCredentialAdmin, KeycloakIdentityProvider, UnconfiguredCredentialAdmin,
+};
 use crate::infrastructure::persistence::{
     PgGuestRegistry, PgRefreshTokenRepository, PgSessionRepository, PgSubjectLinkRepository,
 };
@@ -42,6 +46,8 @@ use crate::infrastructure::token::Es256TokenMinter;
 /// The nine ports the application layer depends on, plus the token policy.
 pub struct AppDeps {
     pub idp: Arc<dyn IdentityProvider>,
+    /// The IdP's credential management (`ChangePassword`).
+    pub credentials: Arc<dyn CredentialAdmin>,
     pub directory: Arc<dyn AccountDirectory>,
     pub profiles: Arc<dyn ProfileDirectory>,
     pub links: Arc<dyn SubjectLinkRepository>,
@@ -123,6 +129,25 @@ impl App {
         let introspect =
             Arc::new(IntrospectHandler::new(Arc::clone(&deps.minter), Arc::clone(&deps.cache)));
         let list_sessions = Arc::new(ListSessionsHandler::new(Arc::clone(&deps.sessions)));
+        let change_password = Arc::new(ChangePasswordHandler::new(
+            Arc::clone(&deps.idp),
+            Arc::clone(&deps.credentials),
+            Arc::clone(&deps.sessions),
+            Arc::clone(&deps.refresh_tokens),
+            Arc::clone(&deps.cache),
+            Arc::clone(&deps.publisher),
+            deps.policy.clone(),
+        ));
+        let verify_credentials = Arc::new(VerifyCredentialsHandler::new(
+            Arc::clone(&deps.idp),
+            Arc::clone(&deps.credentials),
+            Arc::clone(&deps.directory),
+            Arc::clone(&deps.profiles),
+            Arc::clone(&deps.sessions),
+            Arc::clone(&deps.cache),
+            Arc::clone(&deps.minter),
+            deps.policy.clone(),
+        ));
         let start_guest = Arc::new(StartGuestSessionHandler::new(
             Arc::clone(&deps.sessions),
             Arc::clone(&deps.refresh_tokens),
@@ -141,6 +166,8 @@ impl App {
             introspect,
             list_sessions,
             start_guest,
+            change_password,
+            verify_credentials,
         )
     }
 
@@ -196,8 +223,19 @@ impl App {
         let minter = Es256TokenMinter::from_key_ring(config.signing, config.retiring_keys)?;
         let jwks_json = minter.jwks_json()?;
 
+        let credentials: Arc<dyn CredentialAdmin> = if config.keycloak_admin.is_configured() {
+            Arc::new(KeycloakCredentialAdmin::new(idp_client.clone(), config.keycloak_admin))
+        } else {
+            tracing::warn!(
+                "AUTH_KEYCLOAK_ADMIN_URL / _CLIENT_ID / _CLIENT_SECRET not set — \
+                 ChangePassword and VerifyCredentials answer UNAVAILABLE (AUT-5005)"
+            );
+            Arc::new(UnconfiguredCredentialAdmin)
+        };
+
         let deps = AppDeps {
             idp: Arc::new(KeycloakIdentityProvider::new(idp_client, config.keycloak)),
+            credentials,
             directory: Arc::new(GrpcAccountDirectory::new(channel)),
             profiles: Arc::new(GrpcProfileDirectory::new(profile_channel)),
             links: Arc::new(PgSubjectLinkRepository::new(tx.clone())),
@@ -227,6 +265,7 @@ mod tests {
     fn handler_from_fakes(fx: &Fixture) -> AuthServiceHandler {
         App::compose(AppDeps {
             idp: fx.idp.clone(),
+            credentials: fx.credentials.clone(),
             directory: fx.directory.clone(),
             profiles: fx.profiles.clone(),
             links: fx.links.clone(),

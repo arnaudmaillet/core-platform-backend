@@ -17,6 +17,18 @@
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": false,
       "fullScopeAllowed": true
+    },
+    {
+      "clientId": "core-platform-auth-admin",
+      "name": "core-platform auth credential management (Admin API)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "local-dev-auth-admin-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "fullScopeAllowed": true
     }
   ],
   "users": [
@@ -29,7 +41,11 @@
       "firstName": "Alice",
       "lastName": "Anderson",
       "credentials": [
-        { "type": "password", "value": "password", "temporary": false }
+        {
+          "type": "password",
+          "value": "password",
+          "temporary": false
+        }
       ]
     },
     {
@@ -41,7 +57,11 @@
       "firstName": "Bob",
       "lastName": "Brown",
       "credentials": [
-        { "type": "password", "value": "password", "temporary": false }
+        {
+          "type": "password",
+          "value": "password",
+          "temporary": false
+        }
       ]
     },
     {
@@ -53,8 +73,23 @@
       "firstName": "Carol",
       "lastName": "Clark",
       "credentials": [
-        { "type": "password", "value": "password", "temporary": false }
+        {
+          "type": "password",
+          "value": "password",
+          "temporary": false
+        }
       ]
+    },
+    {
+      "username": "service-account-core-platform-auth-admin",
+      "enabled": true,
+      "serviceAccountClientId": "core-platform-auth-admin",
+      "clientRoles": {
+        "realm-management": [
+          "view-users",
+          "manage-users"
+        ]
+      }
     }
   ]
 }

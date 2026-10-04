@@ -266,6 +266,38 @@ pub fn require_profile<T>(request: &tonic::Request<T>, profile_id: &str) -> Resu
     }
 }
 
+/// Requires the verified caller to have proved a credential within
+/// `max_age_secs` (the token's `auth_time`, see
+/// [`auth_context::edge::EDGE_AUTH_TIME_CLAIM`]) — the step-up gate for
+/// destructive account actions. Over the mesh (no principal) it is a no-op; an
+/// anonymous edge call is refused. A stale or missing proof is
+/// `PERMISSION_DENIED` with the message [`STEP_UP_REQUIRED`]: the client asks
+/// for the password (`auth.v1.VerifyCredentials`), then retries with the token
+/// it gets back.
+pub fn require_recent_auth<T>(request: &tonic::Request<T>, max_age_secs: i64) -> Result<(), Status> {
+    match principal(request) {
+        None if is_anonymous_edge(request) => Err(anonymous_actor()),
+        None => Ok(()),
+        Some(p) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or_default();
+            match edge::auth_time(&p.inner().raw_claims) {
+                // A minute of clock skew either way between auth and this service.
+                Some(at) if at <= now + 60 && now - at <= max_age_secs => Ok(()),
+                _ => Err(Status::permission_denied(STEP_UP_REQUIRED)),
+            }
+        }
+    }
+}
+
+pub use auth_context::edge::STEP_UP_MAX_AGE_SECS;
+
+/// The `PERMISSION_DENIED` message of [`require_recent_auth`]: a stable string
+/// the client matches to prompt for its password.
+pub const STEP_UP_REQUIRED: &str = "step_up_required: confirm your password (auth.v1.VerifyCredentials) and retry";
+
 /// Requires the verified caller to carry `permission`. Over the mesh (no
 /// principal) it is a no-op, like the actor helpers; an anonymous edge call is
 /// refused.
@@ -301,6 +333,39 @@ mod tests {
         let mut req = tonic::Request::new(());
         req.extensions_mut().insert(p);
         req
+    }
+
+    fn with_auth_time(at: Option<i64>) -> tonic::Request<()> {
+        let mut raw: OidcClaims =
+            serde_json::from_value(json!({ "sub": "acct-1", "exp": 4_102_444_800_i64 })).unwrap();
+        if let Some(at) = at {
+            raw.extra.insert("auth_time".into(), json!(at));
+        }
+        edge_request(EdgePrincipal::new(Arc::new(CurrentPrincipal {
+            user_id: PrincipalId::new("acct-1"),
+            tenant_id: None,
+            permissions: vec![],
+            raw_claims: raw,
+        })))
+    }
+
+    #[test]
+    fn step_up_needs_a_recent_credential_proof_on_the_edge_only() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(require_recent_auth(&with_auth_time(Some(now - 10)), 300).is_ok());
+        for stale in [None, Some(now - 301), Some(now + 3_600)] {
+            let err = require_recent_auth(&with_auth_time(stale), 300).unwrap_err();
+            assert_eq!(err.code(), tonic::Code::PermissionDenied, "{stale:?}");
+            assert_eq!(err.message(), STEP_UP_REQUIRED);
+        }
+        // The mesh is trusted; an anonymous edge call is not.
+        assert!(require_recent_auth(&tonic::Request::new(()), 300).is_ok());
+        let mut anonymous = tonic::Request::new(());
+        anonymous.extensions_mut().insert(EdgeAnonymous);
+        assert_eq!(require_recent_auth(&anonymous, 300).unwrap_err().code(), tonic::Code::Unauthenticated);
     }
 
     #[test]

@@ -49,6 +49,11 @@ where
 {
     command_bus: CB,
     query_bus: QB,
+    /// `ACCOUNT_REQUIRE_STEP_UP`: destructive self-service RPCs
+    /// (`DeactivateAccount`, `RequestGdprDeletion`) need a recent credential
+    /// proof on the edge (`auth.v1.VerifyCredentials`). Off by default until
+    /// clients step up.
+    require_step_up: bool,
 }
 
 impl<CB, QB> AccountServiceHandler<CB, QB>
@@ -57,7 +62,21 @@ where
     QB: QueryBus + Send + Sync + 'static,
 {
     pub fn new(command_bus: CB, query_bus: QB) -> Self {
-        Self { command_bus, query_bus }
+        Self { command_bus, query_bus, require_step_up: false }
+    }
+
+    /// Requires a recent credential proof on the destructive self-service RPCs.
+    pub fn with_step_up(mut self, required: bool) -> Self {
+        self.require_step_up = required;
+        self
+    }
+
+    /// The step-up gate (edge only; the mesh is trusted).
+    fn step_up<T>(&self, request: &Request<T>) -> Result<(), Status> {
+        if self.require_step_up {
+            edge::require_recent_auth(request, edge::STEP_UP_MAX_AGE_SECS)?;
+        }
+        Ok(())
     }
 }
 
@@ -229,6 +248,7 @@ where
         request: Request<proto::DeactivateAccountRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
         edge::require_account(&request, &request.get_ref().account_id)?;
+        self.step_up(&request)?;
         let req = request.into_inner();
         let cmd = DeactivateAccountCommand { account_id: req.account_id.clone() };
         self.command_bus
@@ -286,6 +306,7 @@ where
         request: Request<proto::RequestGdprDeletionRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
         edge::require_account(&request, &request.get_ref().account_id)?;
+        self.step_up(&request)?;
         let req = request.into_inner();
         let cmd = RequestGdprDeletionCommand {
             account_id: req.account_id.clone(),
@@ -573,5 +594,75 @@ pub fn cqrs_error_to_status(err: cqrs::error::CqrsError) -> Status {
                 _ => Status::internal(msg),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use cqrs::command::CommandBusBuilder;
+    use cqrs::query::QueryBusBuilder;
+    use tonic::Code;
+
+    use super::*;
+
+    /// No command handler is registered: a call that passes the gates reaches
+    /// the bus and comes back UNIMPLEMENTED — a gate refusal never gets there.
+    fn handler(step_up: bool) -> AccountServiceHandler<impl CommandBus, impl QueryBus> {
+        AccountServiceHandler::new(
+            Arc::new(CommandBusBuilder::new().build()),
+            Arc::new(QueryBusBuilder::new().build()),
+        )
+        .with_step_up(step_up)
+    }
+
+    fn as_owner<T>(message: T, account_id: &str, auth_time: Option<i64>) -> Request<T> {
+        let mut claims = serde_json::json!({ "sub": account_id, "exp": 4_102_444_800_i64 });
+        if let Some(at) = auth_time {
+            claims["auth_time"] = serde_json::json!(at);
+        }
+        let raw: auth_context::OidcClaims = serde_json::from_value(claims).unwrap();
+        let mut request = Request::new(message);
+        request.extensions_mut().insert(edge::EdgePrincipal::new(Arc::new(
+            auth_context::CurrentPrincipal {
+                user_id: auth_context::PrincipalId::new(account_id),
+                tenant_id: None,
+                permissions: vec![],
+                raw_claims: raw,
+            },
+        )));
+        request
+    }
+
+    fn now() -> i64 {
+        Utc::now().timestamp()
+    }
+
+    #[tokio::test]
+    async fn deleting_or_deactivating_needs_a_recent_credential_proof_when_required() {
+        let me = Uuid::now_v7().to_string();
+        let delete = |at| as_owner(proto::RequestGdprDeletionRequest { account_id: me.clone() }, &me, at);
+        let deactivate = |at| as_owner(proto::DeactivateAccountRequest { account_id: me.clone() }, &me, at);
+
+        let gated = handler(true);
+        for stale in [None, Some(now() - 3_600)] {
+            let status = gated.request_gdpr_deletion(delete(stale)).await.unwrap_err();
+            assert_eq!(status.code(), Code::PermissionDenied);
+            assert_eq!(status.message(), edge::STEP_UP_REQUIRED);
+            let status = gated.deactivate_account(deactivate(stale)).await.unwrap_err();
+            assert_eq!(status.code(), Code::PermissionDenied);
+        }
+        // A fresh proof passes the gate (and reaches the empty bus).
+        let status = gated.request_gdpr_deletion(delete(Some(now()))).await.unwrap_err();
+        assert_eq!(status.code(), Code::Unimplemented);
+        // The mesh is trusted.
+        let mesh = Request::new(proto::DeactivateAccountRequest { account_id: me.clone() });
+        assert_eq!(gated.deactivate_account(mesh).await.unwrap_err().code(), Code::Unimplemented);
+
+        // Off (the default): no proof needed.
+        let open = handler(false);
+        let status = open.request_gdpr_deletion(delete(None)).await.unwrap_err();
+        assert_eq!(status.code(), Code::Unimplemented);
     }
 }

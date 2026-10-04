@@ -48,6 +48,9 @@ impl Service for AuthService {
         authenticated("/auth.v1.AuthService/Logout"),
         authenticated("/auth.v1.AuthService/LogoutAllSessions"),
         authenticated("/auth.v1.AuthService/ListSessions"),
+        // The signed-in holder's credentials (never a guest's: there is none).
+        authenticated("/auth.v1.AuthService/ChangePassword"),
+        authenticated("/auth.v1.AuthService/VerifyCredentials"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

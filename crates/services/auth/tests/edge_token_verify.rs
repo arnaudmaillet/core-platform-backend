@@ -107,6 +107,7 @@ async fn minted_edge_token_is_verified_by_auth_context() {
         profile_ids: Vec::new(),
         device_id: None,
         kind: SessionKind::Member,
+        auth_time: None,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
@@ -136,6 +137,7 @@ async fn auth_context_rejects_a_token_for_a_different_audience() {
         profile_ids: Vec::new(),
         device_id: None,
         kind: SessionKind::Member,
+        auth_time: None,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
@@ -157,6 +159,7 @@ async fn fleet_edge_decoder_sees_the_did_claim_realtime_requires() {
         profile_ids: Vec::new(),
         device_id: Some("ios-install-1".to_owned()),
         kind: SessionKind::Member,
+        auth_time: None,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
@@ -184,6 +187,46 @@ async fn fleet_edge_decoder_sees_the_did_claim_realtime_requires() {
     assert_eq!(did, Some("ios-install-1"));
 }
 
+/// The step-up gate reads `auth_time` off the **fleet** edge decoder
+/// (`auth_context::edge::auth_time`): a token minted after a credential proof
+/// carries it, a refreshed one does not.
+#[tokio::test]
+async fn fleet_edge_decoder_sees_auth_time_only_when_minted_after_a_credential_proof() {
+    let (private_pem, public_pem) = keypair();
+    let proved_at = Utc::now() - Duration::seconds(30);
+    let base = AccessTokenClaims {
+        account_id: AccountId::from_uuid(Uuid::now_v7()),
+        session_id: SessionId::new(),
+        generation: Generation::INITIAL,
+        permissions: vec![],
+        profile_ids: Vec::new(),
+        device_id: None,
+        kind: SessionKind::Member,
+        auth_time: Some(proved_at),
+        issued_at: Utc::now(),
+        expires_at: Utc::now() + Duration::minutes(10),
+    };
+    let minter = minter(&private_pem, &public_pem, AUDIENCE);
+
+    let cache = JwksCache::new();
+    let mut keys = HashMap::new();
+    keys.insert(KID.to_owned(), DecodingKey::from_ec_pem(&public_pem).unwrap());
+    cache.replace(keys).await;
+    let config = AuthContextConfig {
+        expected_issuer: Some(ISSUER.to_owned()),
+        expected_audience: Some(AUDIENCE.to_owned()),
+        ..AuthContextConfig::default()
+    };
+    let decoder = auth_context::edge::edge_decoder(&config, cache);
+
+    let stepped_up = decoder.decode(&minter.mint_access(&base).await.unwrap()).await.unwrap();
+    assert_eq!(auth_context::edge::auth_time(&stepped_up.raw_claims), Some(proved_at.timestamp()));
+
+    let refreshed = AccessTokenClaims { auth_time: None, ..base };
+    let plain = decoder.decode(&minter.mint_access(&refreshed).await.unwrap()).await.unwrap();
+    assert_eq!(auth_context::edge::auth_time(&plain.raw_claims), None);
+}
+
 /// A guest token as the fleet edge decoder sees it: `kind = "guest"`, a
 /// `guest:`-prefixed subject, `read:public` only, no profiles.
 #[tokio::test]
@@ -198,6 +241,7 @@ async fn fleet_edge_decoder_recognises_a_guest_token() {
         profile_ids: Vec::new(),
         device_id: Some("install-1".to_owned()),
         kind: SessionKind::Guest,
+        auth_time: None,
         issued_at: Utc::now(),
         expires_at: Utc::now() + Duration::minutes(10),
     };
@@ -218,4 +262,10 @@ async fn fleet_edge_decoder_recognises_a_guest_token() {
     assert_eq!(principal.user_id.0, format!("guest:{}", guest.as_str()));
     assert!(principal.has_permission("read:public"));
     assert_eq!(auth_context::edge::profile_ids(&principal.raw_claims).count(), 0);
+}
+
+/// The step-up window auth reports to clients is the one verifiers enforce.
+#[test]
+fn the_step_up_window_auth_reports_is_the_one_verifiers_enforce() {
+    assert_eq!(auth::application::command::STEP_UP_WINDOW_SECS, auth_context::edge::STEP_UP_MAX_AGE_SECS);
 }
