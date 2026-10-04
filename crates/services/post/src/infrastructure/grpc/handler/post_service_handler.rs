@@ -8,6 +8,7 @@ use crate::application::command::{
     create_post::CreatePostCommand,
     delete_post::DeletePostCommand,
     publish_post::PublishPostCommand,
+    restore_post::RestorePostCommand,
     update_post::UpdatePostCommand,
 };
 use crate::application::command::create_post::AttachmentInput;
@@ -15,6 +16,7 @@ use crate::application::port::PostSummary;
 use crate::application::query::{
     get_post::GetPostQuery,
     list_posts_by_profile::ListPostsByProfileQuery,
+    list_recently_deleted::ListRecentlyDeletedQuery,
 };
 use crate::domain::aggregate::Post;
 use crate::domain::entity::MediaAttachment;
@@ -137,6 +139,42 @@ where
             .await
             .map(|_| Response::new(proto::CommandResponse { success: true, message: String::new() }))
             .map_err(cqrs_to_status)
+    }
+
+    pub async fn restore_post(
+        &self,
+        request: Request<proto::RestorePostRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let cmd = RestorePostCommand { post_id: req.post_id, profile_id: req.profile_id };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Response::new(proto::CommandResponse { success: true, message: String::new() }))
+            .map_err(cqrs_to_status)
+    }
+
+    pub async fn list_recently_deleted(
+        &self,
+        request: Request<proto::ListRecentlyDeletedRequest>,
+    ) -> Result<Response<proto::ListRecentlyDeletedResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let query = ListRecentlyDeletedQuery {
+            profile_id: req.profile_id,
+            limit:      req.limit,
+            page_token: Some(req.page_token).filter(|s| !s.is_empty()),
+        };
+        let (posts, next): (Vec<Post>, Option<String>) = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListRecentlyDeletedResponse {
+            posts:      posts.into_iter().map(post_to_proto).collect(),
+            next_token: next.unwrap_or_default(),
+        }))
     }
 }
 

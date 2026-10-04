@@ -26,6 +26,14 @@ pub enum PostError {
     #[error("caller {caller_id} is not the author of post {post_id}")]
     AuthorMismatch { post_id: String, caller_id: String },
 
+    /// Only a deleted post can be restored.
+    #[error("post {post_id} is not deleted")]
+    PostNotDeleted { post_id: String },
+
+    /// A deleted post can be restored for 30 days.
+    #[error("post {post_id} was deleted more than 30 days ago")]
+    RestoreWindowExpired { post_id: String },
+
     #[error("carousel requires at least 2 items")]
     CarouselTooFewItems,
 
@@ -78,6 +86,8 @@ impl AppError for PostError {
             Self::PostAlreadyDeleted { .. }   => "PST-1003",
             Self::NotDraft { .. }             => "PST-1004",
             Self::AuthorMismatch { .. }       => "PST-1005",
+            Self::PostNotDeleted { .. }       => "PST-1006",
+            Self::RestoreWindowExpired { .. } => "PST-1007",
             Self::CarouselTooFewItems         => "PST-2001",
             Self::CarouselTooManyItems { .. } => "PST-2002",
             Self::CarouselVideoTooLong { .. } => "PST-2003",
@@ -100,7 +110,9 @@ impl AppError for PostError {
             Self::Validation(e) => e.http_status(),
             Self::PostNotFound { .. }         => StatusCode::NOT_FOUND,
             Self::PostAlreadyPublished { .. }
-            | Self::PostAlreadyDeleted { .. } => StatusCode::CONFLICT,
+            | Self::PostAlreadyDeleted { .. }
+            | Self::PostNotDeleted { .. }      => StatusCode::CONFLICT,
+            Self::RestoreWindowExpired { .. }  => StatusCode::GONE,
             Self::AuthorMismatch { .. }       => StatusCode::FORBIDDEN,
             Self::NotDraft { .. }
             | Self::CarouselTooFewItems
@@ -147,6 +159,8 @@ impl AppError for PostError {
             Self::PostNotFound { .. }           => "not_found",
             Self::PostAlreadyPublished { .. }
             | Self::PostAlreadyDeleted { .. }
+            | Self::PostNotDeleted { .. }
+            | Self::RestoreWindowExpired { .. }
             | Self::NotDraft { .. }             => "lifecycle",
             Self::CarouselTooFewItems
             | Self::CarouselTooManyItems { .. }
@@ -169,6 +183,8 @@ impl AppError for PostError {
             Self::PostAlreadyPublished { .. }    => "This post has already been published.",
             Self::PostAlreadyDeleted { .. }      => "This post has already been deleted.",
             Self::NotDraft { .. }               => "Only draft posts can be published.",
+            Self::PostNotDeleted { .. }         => "This post is not in Recently deleted.",
+            Self::RestoreWindowExpired { .. }   => "This post was deleted more than 30 days ago and can no longer be restored.",
             Self::AuthorMismatch { .. }         => "You are not authorised to modify this post.",
             Self::CarouselTooFewItems           => "A carousel must contain at least 2 items.",
             Self::CarouselTooManyItems { .. }   => "A carousel can contain at most 10 items.",

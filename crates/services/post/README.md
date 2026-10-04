@@ -106,12 +106,20 @@ service PostService {
   rpc PublishPost (PublishPostRequest) returns (CommandResponse);           // Draft→Published; emits post.published
   rpc UpdatePost (UpdatePostRequest) returns (CommandResponse);             // emits post.updated
   rpc DeletePost (DeletePostRequest) returns (CommandResponse);             // soft-delete; emits post.deleted
+  rpc RestorePost (RestorePostRequest) returns (CommandResponse);           // #663 within 30 days: published again (re-emits post.published at its original time) or a draft
+  rpc ListRecentlyDeleted (ListRecentlyDeletedRequest) returns (ListRecentlyDeletedResponse); // #663 the author's restorable posts, newest deletion first
   rpc GetPost (GetPostRequest) returns (PostView);                          // point lookup; viewer-aware
   rpc ListPostsByProfile (ListPostsByProfileRequest) returns (ListPostsByProfileResponse); // cursor-paginated; viewer-aware
 }
 // CreatePostRequest / PostView carry an optional GeoPoint location:
 message GeoPoint { double lat = 1; double lng = 2; }  // WGS-84; absent → post is not geo-indexed
 ```
+
+**Recently deleted (#663).** A delete is a tombstone: the post is indexed in `post.deleted_by_profile`
+(rows expire after 30 days) and `ListRecentlyDeleted` shows the author their restorable posts.
+`RestorePost` brings one back within 30 days as it was — published (re-announced on `post.published` at its
+original publication time, so feeds, the map and search take it back) or a draft — and removes it from the
+list. Both are edge `authenticated`, bound to `profile_id`.
 
 **Viewer-aware reads.** The reader comes from the transport (`edge::viewer`), never from a request
 field. A draft, a deleted post, or a post moderation **removed** is visible to its author (any
@@ -139,6 +147,8 @@ the read rather than show the point.
 | PST-1002/1003 | `PostAlreadyPublished` / `PostAlreadyDeleted` | 409 |
 | PST-1004 | `NotDraft` | 422 |
 | PST-1005 | `AuthorMismatch` | 403 |
+| PST-1006 | `PostNotDeleted` (restore of a post that is not deleted) | 409 |
+| PST-1007 | `RestoreWindowExpired` (deleted more than 30 days ago) | 410 |
 | PST-2001..2003 | carousel cardinality / video length | 422 |
 | PST-3001..3004 | thumbnail / MIME / CDN URL / dimensions | 422 |
 | PST-9001/9002 | invalid post/profile ID | 422 |

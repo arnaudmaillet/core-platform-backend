@@ -100,6 +100,27 @@ message DeletePostRequest {
     string profile_id = 2;
 }
 
+// Bring a deleted post back within 30 days of its deletion (its author):
+// published again or a draft again. PST-1006 if not deleted, PST-1007 after
+// 30 days.
+message RestorePostRequest {
+    string post_id    = 1;
+    string profile_id = 2;
+}
+
+// The author's deleted posts still restorable (30 days after deleted_at_ms),
+// newest deletion first.
+message ListRecentlyDeletedRequest {
+    string profile_id = 1;
+    int32  limit      = 2;
+    string page_token = 3;
+}
+
+message ListRecentlyDeletedResponse {
+    repeated PostView posts      = 1;
+    string            next_token = 2;
+}
+
 message GetPostRequest {
     string post_id = 1;
 }

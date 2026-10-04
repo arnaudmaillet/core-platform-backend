@@ -12,6 +12,8 @@ use crate::{
 };
 
 const MAX_CAROUSEL_ITEMS: usize = 10;
+/// How long a deleted post stays in "Recently deleted" and can be restored.
+pub const RESTORE_WINDOW: chrono::Duration = chrono::Duration::days(30);
 const MAX_CAROUSEL_VIDEO_SECS: f32 = 15.0;
 
 pub struct Post {
@@ -125,11 +127,42 @@ impl Post {
         self.published_at = Some(now);
         self.updated_at = now;
 
-        self.pending_events.push(DomainEvent::PostPublished(PostPublishedEvent {
+        let event = self.published_event(now);
+        self.pending_events.push(event);
+
+        Ok(now)
+    }
+
+    /// A deleted post comes back within [`RESTORE_WINDOW`] of its deletion, as
+    /// it was: published (announced again, at its original publication time)
+    /// or a draft.
+    pub fn restore(&mut self, now: DateTime<Utc>) -> Result<(), PostError> {
+        let Some(deleted_at) = self.deleted_at.filter(|_| self.status == PostStatus::Deleted) else {
+            return Err(PostError::PostNotDeleted { post_id: self.id.as_str() });
+        };
+        if now - deleted_at > RESTORE_WINDOW {
+            return Err(PostError::RestoreWindowExpired { post_id: self.id.as_str() });
+        }
+        self.deleted_at = None;
+        self.updated_at = now;
+        match self.published_at {
+            Some(published_at) => {
+                self.status = PostStatus::Published;
+                let event = self.published_event(published_at);
+                self.pending_events.push(event);
+            }
+            None => self.status = PostStatus::Draft,
+        }
+        Ok(())
+    }
+
+    /// The `PostPublished` event for this post, published at `published_at`.
+    fn published_event(&self, published_at: DateTime<Utc>) -> DomainEvent {
+        DomainEvent::PostPublished(PostPublishedEvent {
             post_id:         self.id.as_str(),
             profile_id:      self.profile_id.as_str(),
             kind:            self.kind.to_string(),
-            published_at_ms: now.timestamp_millis(),
+            published_at_ms: published_at.timestamp_millis(),
             // Placeholder; the publish handler stamps the author's current tier from
             // the projection (the aggregate owns no denormalized profile state).
             author_tier:     0,
@@ -144,9 +177,7 @@ impl Post {
                                  .map(|u| u.as_str().to_owned()),
             lat:             self.location.map(|g| g.lat()),
             lng:             self.location.map(|g| g.lng()),
-        }));
-
-        Ok(now)
+        })
     }
 
     pub fn update(
@@ -288,4 +319,66 @@ fn validate_attachments(kind: PostKind, attachments: &[MediaAttachment]) -> Resu
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod restore_tests {
+    use chrono::Duration;
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn post() -> Post {
+        Post::create(
+            PostId::from_uuid(Uuid::now_v7()),
+            ProfileId::try_from(Uuid::now_v7().to_string().as_str()).unwrap(),
+            PostKind::TextOnly,
+            Caption::new("hello").unwrap(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_deleted_published_post_comes_back_published_and_announced_at_its_publication_time() {
+        let mut p = post();
+        let published_at = p.publish().unwrap();
+        p.delete().unwrap();
+        p.take_events();
+
+        p.restore(Utc::now()).unwrap();
+        assert_eq!(p.status(), PostStatus::Published);
+        assert_eq!(p.deleted_at(), None);
+        let events = p.take_events();
+        assert!(matches!(events.as_slice(),
+            [DomainEvent::PostPublished(e)] if e.published_at_ms == published_at.timestamp_millis()));
+    }
+
+    #[test]
+    fn a_deleted_draft_comes_back_a_draft_silently() {
+        let mut p = post();
+        p.delete().unwrap();
+        p.take_events();
+        p.restore(Utc::now()).unwrap();
+        assert_eq!(p.status(), PostStatus::Draft);
+        assert!(p.take_events().is_empty());
+    }
+
+    #[test]
+    fn only_a_post_deleted_within_30_days_can_be_restored() {
+        let mut live = post();
+        assert!(matches!(live.restore(Utc::now()), Err(PostError::PostNotDeleted { .. })));
+
+        let mut p = post();
+        let deleted_at = p.delete().unwrap();
+        assert!(matches!(
+            p.restore(deleted_at + RESTORE_WINDOW + Duration::seconds(1)),
+            Err(PostError::RestoreWindowExpired { .. })
+        ));
+        assert!(p.restore(deleted_at + RESTORE_WINDOW).is_ok(), "the 30th day still counts");
+    }
 }
