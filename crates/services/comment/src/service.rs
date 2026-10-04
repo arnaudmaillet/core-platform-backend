@@ -9,7 +9,7 @@ use cqrs::command::InMemoryCommandBus;
 use cqrs::query::InMemoryQueryBus;
 use scylla_storage::ScyllaConfig;
 use service_runtime::{HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::authenticated;
+use service_runtime::edge::{authenticated, public_read};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -44,9 +44,9 @@ impl Service for CommentService {
     const EDGE_POLICY: EdgePolicy = &[
         authenticated("/comment.v1.CommentService/CreateComment"),
         authenticated("/comment.v1.CommentService/DeleteComment"),
-        authenticated("/comment.v1.CommentService/GetComment"),
-        authenticated("/comment.v1.CommentService/ListTopLevel"),
-        authenticated("/comment.v1.CommentService/ListReplies"),
+        public_read("/comment.v1.CommentService/GetComment"),
+        public_read("/comment.v1.CommentService/ListTopLevel"),
+        public_read("/comment.v1.CommentService/ListReplies"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

@@ -147,6 +147,10 @@ overlay; its WSS gateway (`:8443`) always verifies the token.
 - ✅ Edge mode (2026-10-04): login on the auth edge; the token carries `did` and
   `pids`; no or bad token → `UNAUTHENTICATED`; mesh-only RPC → `UNIMPLEMENTED`;
   `CreatePost` as an owned profile passes, as another profile → `PERMISSION_DENIED`.
+- ✅ Guest mode over the edge (2026-10-04): `StartGuestSession` → token `kind=guest`,
+  `read:public`, no `pids`; the guest reads a profile (no `account_id`), a profile's posts and
+  followers; `CreatePost` / `Follow` → `PERMISSION_DENIED`; refresh keeps it a guest; members
+  carry `read:public` and still read. (`AUTH_GUEST_SESSIONS_ENABLED` is on in this fleet.)
 
 ## Known caveats / follow-ups
 

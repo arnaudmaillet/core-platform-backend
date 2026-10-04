@@ -19,7 +19,7 @@ use infra_config::InfraRegistry;
 use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 use service_runtime::{HealthProbe, Service};
-use service_runtime::edge::authenticated;
+use service_runtime::edge::{authenticated, public_read};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -74,8 +74,8 @@ impl Service for ProfileService {
         authenticated("/profile.v1.ProfileService/UpdateBanner"),
         authenticated("/profile.v1.ProfileService/SetVisibility"),
         authenticated("/profile.v1.ProfileService/DeleteProfile"),
-        authenticated("/profile.v1.ProfileService/GetProfileById"),
-        authenticated("/profile.v1.ProfileService/GetProfileByHandle"),
+        public_read("/profile.v1.ProfileService/GetProfileById"),
+        public_read("/profile.v1.ProfileService/GetProfileByHandle"),
         authenticated("/profile.v1.ProfileService/ListProfilesByAccount"),
     ];
 

@@ -13,7 +13,7 @@ use cqrs::query::InMemoryQueryBus;
 use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 use service_runtime::{HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::authenticated;
+use service_runtime::edge::{authenticated, public_read};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -77,8 +77,8 @@ impl Service for SocialGraphService {
         authenticated("/social_graph.v1.SocialGraphService/Block"),
         authenticated("/social_graph.v1.SocialGraphService/Unblock"),
         authenticated("/social_graph.v1.SocialGraphService/GetRelationStatus"),
-        authenticated("/social_graph.v1.SocialGraphService/ListFollowers"),
-        authenticated("/social_graph.v1.SocialGraphService/ListFollowing"),
+        public_read("/social_graph.v1.SocialGraphService/ListFollowers"),
+        public_read("/social_graph.v1.SocialGraphService/ListFollowing"),
         authenticated("/social_graph.v1.SocialGraphService/ListBlocks"),
     ];
 

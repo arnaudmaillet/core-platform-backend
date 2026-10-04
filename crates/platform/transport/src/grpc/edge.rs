@@ -80,6 +80,18 @@ pub const fn permission(method: &'static str, permission: &'static str) -> EdgeR
     EdgeRule { method, access: EdgeAccess::Permission(permission) }
 }
 
+/// The permission that opens a read of public content: held by every member and
+/// by guests (`auth` mints it), so public reads require it rather than an
+/// account.
+pub const READ_PUBLIC: &str = "read:public";
+
+/// A public read: `permission(method, READ_PUBLIC)`. Guests and members both
+/// pass; the handler must still be viewer-aware (`viewer`), since the reader
+/// may be anonymous.
+pub const fn public_read(method: &'static str) -> EdgeRule {
+    permission(method, READ_PUBLIC)
+}
+
 /// Validates an [`EdgePolicy`]: every method is a `/<service>/<method>` path and
 /// no method is declared twice. Run at boot so a typo fails the pod, not a client.
 pub fn validate_policy(policy: &[EdgeRule]) -> Result<(), String> {
@@ -281,6 +293,12 @@ mod tests {
         let mut req = tonic::Request::new(());
         req.extensions_mut().insert(p);
         req
+    }
+
+    #[test]
+    fn a_public_read_requires_read_public() {
+        let rule = public_read("/post.v1.PostService/GetPost");
+        assert_eq!(rule.access, EdgeAccess::Permission("read:public"));
     }
 
     #[test]

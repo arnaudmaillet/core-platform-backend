@@ -10,7 +10,7 @@ use cqrs::command::InMemoryCommandBus;
 use cqrs::query::InMemoryQueryBus;
 use scylla_storage::ScyllaConfig;
 use service_runtime::{HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::authenticated;
+use service_runtime::edge::{authenticated, public_read};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -60,8 +60,8 @@ impl Service for PostService {
         authenticated("/post.v1.PostService/PublishPost"),
         authenticated("/post.v1.PostService/UpdatePost"),
         authenticated("/post.v1.PostService/DeletePost"),
-        authenticated("/post.v1.PostService/GetPost"),
-        authenticated("/post.v1.PostService/ListPostsByProfile"),
+        public_read("/post.v1.PostService/GetPost"),
+        public_read("/post.v1.PostService/ListPostsByProfile"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

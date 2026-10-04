@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use fred::interfaces::LuaInterface;
 use redis_storage::RedisClient;
 use service_runtime::{FnProbe, HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::authenticated;
+use service_runtime::edge::public_read;
 use service_runtime::EdgePolicy;
 use tokio::sync::Mutex;
 use tonic::service::RoutesBuilder;
@@ -82,8 +82,8 @@ impl Service for CounterReadService {
     /// else on this service is mesh-only. See `transport::grpc::edge`.
     // GetTimeSeries is an analytics surface and stays mesh-only.
     const EDGE_POLICY: EdgePolicy = &[
-        authenticated("/counter.v1.CounterService/BatchGetCounters"),
-        authenticated("/counter.v1.CounterService/GetTrending"),
+        public_read("/counter.v1.CounterService/BatchGetCounters"),
+        public_read("/counter.v1.CounterService/GetTrending"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

@@ -17,7 +17,7 @@ use cqrs::query::InMemoryQueryBus;
 use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 use service_runtime::{HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::authenticated;
+use service_runtime::edge::{authenticated, public_read};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -52,7 +52,7 @@ impl Service for TimelineService {
     /// else on this service is mesh-only. See `transport::grpc::edge`.
     const EDGE_POLICY: EdgePolicy = &[
         authenticated("/timeline.v1.TimelineService/GetFollowingFeed"),
-        authenticated("/timeline.v1.TimelineService/GetAudioFeed"),
+        public_read("/timeline.v1.TimelineService/GetAudioFeed"),
     ];
 
     async fn build(infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
