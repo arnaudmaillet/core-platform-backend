@@ -129,6 +129,13 @@ where
         self.request_gdpr_deletion(request).await
     }
 
+    async fn cancel_gdpr_deletion(
+        &self,
+        request: Request<proto::CancelGdprDeletionRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.cancel_gdpr_deletion(request).await
+    }
+
     async fn anonymize_account(
         &self,
         request: Request<proto::AnonymizeAccountRequest>,

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: a995904f257de7fc9840b0a5d907240516ee59a6efacfd7b6ebac97f4e97aa46
+  source_sha256: 6afbb7254950fc0347b965a00dbf286070a29055e716587cf70d5222744c6ab4
   translated_at: 2026-10-04
   status: complete
 ---
@@ -75,7 +75,8 @@ réelle ; tous les autres détiennent des références dérivées, non faisant-a
 created --> activated --(suspend)--> suspended --(reactivate)--> activated
    │            │                                                   │
    │            └--(deactivate)--> deactivated --(le titulaire se reconnecte : Login auth)--> activated
-   └────────────────────────── gdpr_deletion_requested ──> deleted (PII erased)
+   └── gdpr_deletion_requested ──> (actif : deactivated) ──30 jours, janitor──> deleted (anonymisé)
+                                   └──(le titulaire se reconnecte / CancelGdprDeletion)──> suppression retirée
 ```
 
 > **Transitions légales uniquement.** Les changements d'email/téléphone sont des événements, pas des
@@ -121,10 +122,14 @@ présentation de profil, et ne stocke la projection d'aucun autre service.
 `Account`, persiste vers Postgres, et publie la variante `account.v1.events` correspondante **après**
 la sauvegarde (le port EventPublisher → Kafka).
 
-**Effacement RGPD (Art. 17).** `gdpr_deletion_requested` → account marque l'enregistrement supprimé
-et émet l'événement ; `audit` le consomme et **crypto-shred le DEK par-sujet**, rendant toute la PII
-scellée de ce sujet à travers la flotte définitivement illisible alors que la chaîne se vérifie
-toujours — fermant la boucle d'effacement de bout en bout.
+**Effacement RGPD (Art. 17).** `RequestGdprDeletion` programme l'effacement à 30 jours
+(`deletion_scheduled_at`) et désactive un compte actif (profils masqués, sessions terminées). Pendant
+le délai de grâce, se reconnecter ou `CancelGdprDeletion` le retire (`gdpr_deletion_cancelled`). Une
+fois l'échéance passée, le **janitor** d'account-server (`ACCOUNT_GDPR_JANITOR_INTERVAL_SECS`)
+anonymise le compte — PII effacée, e-mail remplacé par une pierre tombale unique, statut `deleted` —
+et émet `account_deleted` ; `audit` le consomme et **crypto-shred le DEK par-sujet**, rendant toute
+la PII scellée de ce sujet à travers la flotte définitivement illisible alors que la chaîne se
+vérifie toujours — fermant la boucle d'effacement de bout en bout.
 
 **Export RGPD (Art. 15/20).** `gdpr_data_export_requested` → émis pour exécution en aval.
 
@@ -152,7 +157,7 @@ toujours — fermant la boucle d'effacement de bout en bout.
 | `password_changed` / `mfa_enrolled` / `mfa_revoked` | faits de sécurité (sans PII) | changement d'identifiant | `audit` (Authentication) |
 | `activated`/`deactivated`/`suspended`/`deleted`, `kyc_status_changed` | cycle de vie de l'identité | transition de cycle de vie | `audit` (Identity), `profile` |
 | `role_assigned` / `role_revoked` | changement d'autorisation | octroi/révocation de rôle | `audit` (Authorization) |
-| `gdpr_deletion_requested` / `gdpr_data_export_requested` | un droit licite sur les données a été invoqué | demande utilisateur/DPO | `audit` (`gdpr_deletion` → crypto-shred du sujet) |
+| `gdpr_deletion_requested` / `gdpr_deletion_cancelled` / `gdpr_data_export_requested` | un droit licite sur les données a été invoqué / retiré | demande utilisateur/DPO | `audit` (preuve ; le crypto-shred suit `deleted`) |
 
 ---
 

@@ -1,7 +1,9 @@
 pub(crate) mod helpers;
 
 pub mod anonymize_account;
+pub mod anonymize_due_accounts;
 pub mod assign_role;
+pub mod cancel_gdpr_deletion;
 pub mod change_password;
 pub mod create_account;
 pub mod deactivate_account;
@@ -21,7 +23,9 @@ pub mod verify_email;
 pub mod verify_phone;
 
 pub use anonymize_account::{AnonymizeAccountCommand, AnonymizeAccountHandler};
+pub use anonymize_due_accounts::{AnonymizeDueAccounts, JanitorPass};
 pub use assign_role::{AssignRoleCommand, AssignRoleHandler};
+pub use cancel_gdpr_deletion::{CancelGdprDeletionCommand, CancelGdprDeletionHandler};
 pub use change_password::{ChangePasswordCommand, ChangePasswordHandler};
 pub use create_account::{CreateAccountCommand, CreateAccountHandler};
 pub use deactivate_account::{DeactivateAccountCommand, DeactivateAccountHandler};

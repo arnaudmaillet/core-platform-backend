@@ -20,6 +20,8 @@ use thiserror::Error;
 /// | ACC-6001 | InvalidKycTransition       | 422  | Medium   | No        |
 /// | ACC-7001 | GdprDeletionAlreadyReq.    | 409  | Low      | No        |
 /// | ACC-7002 | AccountAlreadyAnonymized   | 422  | Low      | No        |
+/// | ACC-7003 | NoPendingGdprDeletion      | 422  | Low      | No        |
+/// | ACC-7004 | GdprGracePeriodOver        | 422  | Low      | No        |
 /// | ACC-8001 | RoleAlreadyAssigned        | 409  | Low      | No        |
 /// | ACC-8002 | RoleNotAssigned            | 422  | Low      | No        |
 /// | ACC-9001 | DomainViolation            | 422  | Medium   | No        |
@@ -92,6 +94,14 @@ pub enum AccountError {
     #[error("this account has already been anonymized")]
     AccountAlreadyAnonymized,
 
+    #[error("no deletion is pending for this account")]
+    NoPendingGdprDeletion,
+
+    /// The erasure's grace period has ended: it can no longer be cancelled
+    /// (the janitor anonymizes the account).
+    #[error("the deletion grace period is over")]
+    GdprGracePeriodOver,
+
     // ── Roles (ACC-8xxx) ──────────────────────────────────────────────────────
 
     #[error("role '{0}' is already assigned to this account")]
@@ -156,6 +166,8 @@ impl AppError for AccountError {
 
             AccountError::GdprDeletionAlreadyRequested     => "ACC-7001",
             AccountError::AccountAlreadyAnonymized         => "ACC-7002",
+            AccountError::NoPendingGdprDeletion            => "ACC-7003",
+            AccountError::GdprGracePeriodOver              => "ACC-7004",
 
             AccountError::RoleAlreadyAssigned(_)           => "ACC-8001",
             AccountError::RoleNotAssigned(_)               => "ACC-8002",
@@ -243,6 +255,8 @@ impl AppError for AccountError {
             AccountError::InvalidKycTransition { .. }      => "This KYC status transition is not permitted.",
             AccountError::GdprDeletionAlreadyRequested     => "A deletion request has already been submitted.",
             AccountError::AccountAlreadyAnonymized         => "This account has already been anonymized.",
+            AccountError::NoPendingGdprDeletion            => "No deletion is pending for this account.",
+            AccountError::GdprGracePeriodOver              => "This account's deletion can no longer be cancelled.",
             AccountError::RoleAlreadyAssigned(_)           => "This role is already assigned to the account.",
             AccountError::RoleNotAssigned(_)               => "This role is not assigned to the account.",
             _                                              => "A domain constraint was violated.",

@@ -5,8 +5,8 @@ use uuid::Uuid;
 use crate::domain::entity::{GdprRecord, MfaState};
 use crate::domain::event::{
     AccountActivated, AccountCreated, AccountDeactivated, AccountDeleted, AccountSuspended,
-    ConsentChange, ConsentsUpdated, DomainEvent, EmailChanged, EmailVerified, GdprDataExportRequested, GdprDeletionRequested,
-    KycStatusChanged, MfaEnrolled, MfaRevoked, PasswordChanged, PhoneChanged, RoleAssigned,
+    ConsentChange, ConsentsUpdated, DomainEvent, EmailChanged, EmailVerified,
+    GdprDataExportRequested, GdprDeletionCancelled, GdprDeletionRequested, KycStatusChanged, MfaEnrolled, MfaRevoked, PasswordChanged, PhoneChanged, RoleAssigned,
     RoleRevoked,
 };
 use crate::domain::value_object::{
@@ -477,7 +477,15 @@ impl Account {
         match self.status {
             AccountStatus::Active => Ok(false),
             AccountStatus::Deactivated => {
+                let version = self.version;
+                // Signing back in also withdraws a pending erasure — unless its
+                // grace period is over, then the account is no longer the
+                // holder's to resume.
+                if self.gdpr.has_pending_deletion() {
+                    self.cancel_gdpr_deletion(correlation_id)?;
+                }
                 self.activate(correlation_id)?;
+                self.one_write_since(version);
                 Ok(true)
             }
             other => Err(AccountError::InvalidStatusTransition {
@@ -541,9 +549,13 @@ impl Account {
         retention_days: u32,
         correlation_id: Uuid,
     ) -> Result<(), AccountError> {
+        if self.gdpr.is_anonymized() {
+            return Err(AccountError::AccountAlreadyAnonymized);
+        }
         if self.gdpr.has_pending_deletion() {
             return Err(AccountError::GdprDeletionAlreadyRequested);
         }
+        let version = self.version;
         self.gdpr.request_deletion(retention_days);
         let scheduled = self.gdpr.deletion_scheduled_at.expect("just set");
         let now = self.touch_now();
@@ -554,7 +566,45 @@ impl Account {
             occurred_at: now,
             correlation_id,
         }));
+        // During the grace period an active account is deactivated: its
+        // profiles are hidden and its sessions end at their next refresh;
+        // signing back in cancels the deletion (`resume_after_deactivation`).
+        // A suspended or unverified account just waits for its date.
+        if self.status == AccountStatus::Active {
+            self.deactivate(correlation_id)?;
+        }
+        self.one_write_since(version);
         Ok(())
+    }
+
+    /// Withdraws a pending erasure while its grace period runs. Emits
+    /// [`GdprDeletionCancelled`]; the account's status is left as it is.
+    pub fn cancel_gdpr_deletion(&mut self, correlation_id: Uuid) -> Result<(), AccountError> {
+        if !self.gdpr.has_pending_deletion() {
+            return Err(AccountError::NoPendingGdprDeletion);
+        }
+        let scheduled = self.gdpr.deletion_scheduled_at.expect("set with the request");
+        let now = Utc::now();
+        if now >= scheduled {
+            return Err(AccountError::GdprGracePeriodOver);
+        }
+        self.gdpr.deletion_requested_at = None;
+        self.gdpr.deletion_scheduled_at = None;
+        self.touch(now);
+        self.pending_events.push(DomainEvent::GdprDeletionCancelled(GdprDeletionCancelled {
+            account_id: self.id,
+            was_scheduled_at: scheduled,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(())
+    }
+
+    /// `true` once a requested erasure's grace period has ended and the account
+    /// is still to be anonymized (the janitor's selection, in-domain).
+    pub fn is_due_for_anonymization(&self, now: DateTime<Utc>) -> bool {
+        self.gdpr.has_pending_deletion()
+            && self.gdpr.deletion_scheduled_at.is_some_and(|at| at <= now)
     }
 
     /// Records a GDPR Art. 20 data portability export request.
@@ -621,6 +671,12 @@ impl Account {
         }
         let now = Utc::now();
         self.gdpr.anonymized_at = Some(now);
+        // The address must stop identifying anyone yet stay unique (NOT NULL,
+        // unique index): a per-account tombstone on a reserved TLD (RFC 2606).
+        self.email = EmailAddress::new(format!("anonymized-{}@anonymized.invalid", self.id))?;
+        self.email_verified = false;
+        self.email_verified_at = None;
+        self.gdpr.consent_ip = None;
         self.phone = None;
         self.phone_verified = false;
         self.phone_verified_at = None;
@@ -786,6 +842,13 @@ impl Account {
     fn touch(&mut self, now: DateTime<Utc>) {
         self.version += 1;
         self.updated_at = now;
+    }
+
+    /// A command that composes several mutations is still ONE write: the
+    /// repository's optimistic CAS expects the in-memory version exactly one
+    /// above the stored row's.
+    fn one_write_since(&mut self, version_before: i64) {
+        self.version = version_before + 1;
     }
 
     fn touch_now(&mut self) -> DateTime<Utc> {
@@ -1046,5 +1109,90 @@ mod tests {
             .update_consents(&[(ConsentPurpose::Analytics, true)], None, Uuid::now_v7())
             .unwrap_err();
         assert!(matches!(err, AccountError::AccountAlreadyAnonymized));
+    }
+
+    fn deletion_events(account: &mut Account) -> Vec<&'static str> {
+        account.drain_events().iter().map(|e| e.event_type()).collect()
+    }
+
+    /// A deletion request deactivates an active account for its grace period
+    /// (profiles hidden, sessions end); signing back in withdraws it.
+    #[test]
+    fn a_deletion_request_deactivates_and_signing_back_in_cancels_it() {
+        let mut account = account_in(AccountStatus::Active, None);
+        let version = account.version();
+
+        account.request_gdpr_deletion(30, Uuid::now_v7()).unwrap();
+        // Request + deactivation is one write (the repository CAS needs +1).
+        assert_eq!(account.version(), version + 1);
+        assert_eq!(account.status(), AccountStatus::Deactivated);
+        assert!(account.gdpr().has_pending_deletion());
+        assert_eq!(
+            deletion_events(&mut account),
+            vec!["account.gdpr_deletion_requested", "account.deactivated"]
+        );
+        assert!(!account.is_due_for_anonymization(Utc::now()));
+        assert!(account.is_due_for_anonymization(Utc::now() + Duration::days(31)));
+
+        assert!(account.resume_after_deactivation(Uuid::now_v7()).unwrap());
+        assert_eq!(account.version(), version + 2);
+        assert_eq!(account.status(), AccountStatus::Active);
+        assert!(!account.gdpr().has_pending_deletion());
+        assert_eq!(
+            deletion_events(&mut account),
+            vec!["account.gdpr_deletion_cancelled", "account.activated"]
+        );
+    }
+
+    /// A suspended account cannot sign in to cancel: it just waits for its date
+    /// (or a CancelGdprDeletion from support).
+    #[test]
+    fn a_suspended_account_keeps_its_status_and_can_be_cancelled_explicitly() {
+        let mut account = account_in(AccountStatus::Suspended, Some("spam".into()));
+        account.request_gdpr_deletion(30, Uuid::now_v7()).unwrap();
+        assert_eq!(account.status(), AccountStatus::Suspended);
+
+        account.cancel_gdpr_deletion(Uuid::now_v7()).unwrap();
+        assert!(!account.gdpr().has_pending_deletion());
+        assert!(matches!(
+            account.cancel_gdpr_deletion(Uuid::now_v7()).unwrap_err(),
+            AccountError::NoPendingGdprDeletion
+        ));
+    }
+
+    /// Once the grace period is over the deletion is no longer the holder's to
+    /// undo — not by cancelling, not by signing in.
+    #[test]
+    fn after_the_grace_period_neither_a_cancel_nor_a_sign_in_undoes_it() {
+        let mut account = account_in(AccountStatus::Active, None);
+        account.request_gdpr_deletion(0, Uuid::now_v7()).unwrap();
+        let _ = account.drain_events();
+
+        assert!(matches!(
+            account.cancel_gdpr_deletion(Uuid::now_v7()).unwrap_err(),
+            AccountError::GdprGracePeriodOver
+        ));
+        assert!(matches!(
+            account.resume_after_deactivation(Uuid::now_v7()).unwrap_err(),
+            AccountError::GdprGracePeriodOver
+        ));
+        assert_eq!(account.status(), AccountStatus::Deactivated);
+        assert!(account.is_due_for_anonymization(Utc::now()));
+    }
+
+    #[test]
+    fn anonymizing_replaces_the_email_with_a_unique_tombstone() {
+        let mut account = account_in(AccountStatus::Active, None);
+        account.request_gdpr_deletion(0, Uuid::now_v7()).unwrap();
+        account.anonymize(Uuid::now_v7()).unwrap();
+
+        assert_eq!(account.status(), AccountStatus::Deleted);
+        assert_eq!(account.email().as_str(), format!("anonymized-{}@anonymized.invalid", account.id()));
+        assert!(!account.email_verified());
+        assert!(!account.is_due_for_anonymization(Utc::now()));
+        assert!(matches!(
+            account.request_gdpr_deletion(30, Uuid::now_v7()).unwrap_err(),
+            AccountError::AccountAlreadyAnonymized
+        ));
     }
 }

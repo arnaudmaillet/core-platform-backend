@@ -51,8 +51,8 @@ pub mod system_clock;
 pub use account_decode::{
     AccountEventWire, TOPIC_ACCOUNT_EVENTS, map_account_activated, map_account_created,
     map_account_deactivated, map_account_deleted, map_account_suspended, map_email_changed,
-    map_email_verified, map_gdpr_data_export_requested, map_gdpr_deletion_requested,
-    map_kyc_status_changed, map_mfa_enrolled, map_mfa_revoked, map_password_changed,
+    map_consents_updated, map_email_verified, map_gdpr_data_export_requested,
+    map_gdpr_deletion_cancelled, map_gdpr_deletion_requested, map_kyc_status_changed, map_mfa_enrolled, map_mfa_revoked, map_password_changed,
     map_phone_changed, map_role_assigned, map_role_revoked,
 };
 pub use auth_decode::{

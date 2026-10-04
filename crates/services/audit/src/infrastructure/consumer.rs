@@ -22,8 +22,9 @@ use crate::domain::{SubjectKeyRef, SubjectPseudonym};
 use crate::error::AuditError;
 use crate::infrastructure::account_decode::{
     AccountEventWire, map_account_activated, map_account_created, map_account_deactivated,
-    map_account_deleted, map_account_suspended, map_email_changed, map_email_verified,
-    map_gdpr_data_export_requested, map_gdpr_deletion_requested, map_kyc_status_changed,
+    map_account_deleted, map_account_suspended, map_consents_updated, map_email_changed,
+    map_email_verified, map_gdpr_data_export_requested, map_gdpr_deletion_cancelled,
+    map_gdpr_deletion_requested, map_kyc_status_changed,
     map_mfa_enrolled, map_mfa_revoked, map_password_changed, map_phone_changed, map_role_assigned,
     map_role_revoked,
 };
@@ -106,13 +107,17 @@ pub async fn run_account_ingest_consumer(
                         handler.ingest(map_email_changed(&changed, pii)?).await?;
                     }
                     AccountEventWire::GdprDeletionRequested(deletion) => {
-                        let subject = SubjectPseudonym::new(deletion.account_id.clone())?;
-                        // 1. Chain the erasure-request record (evidence the request happened).
+                        // Evidence the request happened. Nothing is shredded yet:
+                        // the request has a 30-day grace period and may be
+                        // cancelled — the shred follows the erasure itself
+                        // (`account_deleted`, emitted when account anonymizes).
                         handler.ingest(map_gdpr_deletion_requested(&deletion)?).await?;
-                        // 2. Crypto-shred: destroy the subject's DEK → all their sealed
-                        //    PII is permanently unreadable; the chain stays verifiable.
-                        let key_ref = SubjectKeyRef::new(format!("dek:{}", subject.as_str()))?;
-                        shred.shred(&subject, &key_ref, &[]).await?;
+                    }
+                    AccountEventWire::GdprDeletionCancelled(cancelled) => {
+                        handler.ingest(map_gdpr_deletion_cancelled(&cancelled)?).await?;
+                    }
+                    AccountEventWire::ConsentsUpdated(consents) => {
+                        handler.ingest(map_consents_updated(&consents)?).await?;
                     }
                     AccountEventWire::GdprDataExportRequested(export) => {
                         handler.ingest(map_gdpr_data_export_requested(&export)?).await?;
@@ -156,7 +161,16 @@ pub async fn run_account_ingest_consumer(
                         handler.ingest(map_account_suspended(&e)?).await?;
                     }
                     AccountEventWire::AccountDeleted(e) => {
+                        let subject = SubjectPseudonym::new(e.account_id.clone())?;
+                        // 1. Chain the deletion record.
                         handler.ingest(map_account_deleted(&e)?).await?;
+                        // 2. Crypto-shred (GDPR Art. 17): destroy the subject's DEK →
+                        //    all their sealed PII is permanently unreadable; the
+                        //    chain stays verifiable. Covers both erasure paths: the
+                        //    janitor's anonymization after the grace period and an
+                        //    administrative delete.
+                        let key_ref = SubjectKeyRef::new(format!("dek:{}", subject.as_str()))?;
+                        shred.shred(&subject, &key_ref, &[]).await?;
                     }
                     AccountEventWire::KycStatusChanged(e) => {
                         handler.ingest(map_kyc_status_changed(&e)?).await?;

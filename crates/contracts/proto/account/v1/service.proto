@@ -77,8 +77,17 @@ service AccountService {
 
     // ── GDPR / compliance ─────────────────────────────────────────────────────
 
-    // Initiate an Art. 17 GDPR right-to-erasure request.
+    // Initiate an Art. 17 GDPR right-to-erasure request. The account is erased
+    // (anonymized, its audit PII crypto-shredded) 30 days later by the janitor;
+    // meanwhile an active account is deactivated (profiles hidden, sessions end
+    // at their next refresh) and signing back in cancels the request.
     rpc RequestGdprDeletion(RequestGdprDeletionRequest) returns (CommandResponse);
+
+    // Withdraw a pending erasure within its grace period (before
+    // deletion_scheduled_at): ACC-7003 if none is pending, ACC-7004 once the
+    // period is over. Signing back in also cancels it (it resumes the account
+    // the request deactivated). On the client edge, the caller's own only.
+    rpc CancelGdprDeletion(CancelGdprDeletionRequest) returns (CommandResponse);
 
     // Anonymise all PII fields after the retention period has elapsed.
     rpc AnonymizeAccount(AnonymizeAccountRequest) returns (CommandResponse);

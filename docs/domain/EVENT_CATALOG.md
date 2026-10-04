@@ -84,11 +84,12 @@ producer's `DOMAIN.md §8`.
 |---|---|---|---|
 | `account_created` / `email_changed` / `email_verified` / `phone_changed` | a PII-bearing account lifecycle fact occurred | the matching command commits | `audit` (PII sealed in crypto-shred envelope), `profile` (persona) |
 | `password_changed` / `mfa_enrolled` / `mfa_revoked` | a security/credential fact (no PII) | credential change | `audit` (Authentication category) |
-| `activated` / `deactivated` / `suspended` / `deleted` / `kyc_status_changed` | an identity-lifecycle transition | lifecycle change | `audit` (Identity), `profile` |
+| `activated` / `deactivated` / `suspended` / `deleted` / `kyc_status_changed` | an identity-lifecycle transition (`deleted`: anonymized by the GDPR janitor, or an admin delete) | lifecycle change | `audit` (Identity; `deleted` → **crypto-shreds the subject**, closing the Art. 17 loop), `profile` |
 | `role_assigned` / `role_revoked` | an authorization grant changed | role grant/revoke | `audit` (Authorization) |
-| `gdpr_deletion_requested` | the right to erasure (Art. 17) was invoked | user/DPO request | `audit` → **crypto-shreds the subject** (closes the Art. 17 loop) |
+| `gdpr_deletion_requested` | the right to erasure (Art. 17) was invoked; erasure scheduled 30 days out (an active account is deactivated meanwhile) | user/DPO request | `audit` (DataErasure evidence) |
+| `gdpr_deletion_cancelled` | a pending erasure was withdrawn within its grace period | the holder signs back in / `CancelGdprDeletion` | `audit` (DataErasure evidence) |
 | `gdpr_data_export_requested` | the right to access/portability was invoked | user/DPO request | export fulfilment (downstream) |
-| `consents_updated` | the holder gave or withdrew consents (Art. 7), effective changes only, with the policy version | `UpdateConsents` changes something | none yet (the timestamped `account_consent_history` is the evidence) |
+| `consents_updated` | the holder gave or withdrew consents (Art. 7), effective changes only, with the policy version | `UpdateConsents` changes something | `audit` (Consent — the tamper-evident copy of `account_consent_history`) |
 
 ## Authentication — `auth.v1.events` (producer: `auth`)
 

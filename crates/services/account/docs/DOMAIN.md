@@ -64,7 +64,8 @@ references.
 created --> activated --(suspend)--> suspended --(reactivate)--> activated
    │            │                                                   │
    │            └--(deactivate)--> deactivated --(holder signs in: auth Login)--> activated
-   └────────────────────────── gdpr_deletion_requested ──> deleted (PII erased)
+   └── gdpr_deletion_requested ──> (active: deactivated) ──30 days, janitor──> deleted (anonymized)
+                                   └──(holder signs in / CancelGdprDeletion)──> deletion withdrawn
 ```
 
 > **Legal transitions only.** Email/phone changes are events, not silent mutations; a GDPR deletion
@@ -108,10 +109,14 @@ and never stores another service's projection.
 aggregate, persists to Postgres, and publishes the corresponding `account.v1.events` variant
 **after** the save (the EventPublisher port → Kafka).
 
-**GDPR erasure (Art. 17).** `gdpr_deletion_requested` → account marks the record deleted and emits
-the event; `audit` consumes it and **crypto-shreds the subject's per-subject DEK**, rendering all
-that subject's sealed PII across the fleet permanently unreadable while the chain still verifies —
-closing the erasure loop end to end.
+**GDPR erasure (Art. 17).** `RequestGdprDeletion` schedules the erasure 30 days out
+(`deletion_scheduled_at`) and deactivates an active account (profiles hidden, sessions end). During
+the grace period, signing back in or `CancelGdprDeletion` withdraws it (`gdpr_deletion_cancelled`).
+Once due, the **janitor** in account-server (`ACCOUNT_GDPR_JANITOR_INTERVAL_SECS`) anonymizes the
+account — PII cleared, email replaced by a unique tombstone, status `deleted` — and emits
+`account_deleted`; `audit` consumes that and **crypto-shreds the subject's per-subject DEK**,
+rendering all that subject's sealed PII across the fleet permanently unreadable while the chain
+still verifies — closing the erasure loop end to end.
 
 **GDPR export (Art. 15/20).** `gdpr_data_export_requested` → emitted for downstream fulfilment.
 
@@ -138,7 +143,7 @@ closing the erasure loop end to end.
 | `password_changed` / `mfa_enrolled` / `mfa_revoked` | security facts (no PII) | credential change | `audit` (Authentication) |
 | `activated`/`deactivated`/`suspended`/`deleted`, `kyc_status_changed` | identity lifecycle | lifecycle transition | `audit` (Identity), `profile` |
 | `role_assigned` / `role_revoked` | authorization change | role grant/revoke | `audit` (Authorization) |
-| `gdpr_deletion_requested` / `gdpr_data_export_requested` | a lawful data right was invoked | user/DPO request | `audit` (`gdpr_deletion` → crypto-shred subject) |
+| `gdpr_deletion_requested` / `gdpr_deletion_cancelled` / `gdpr_data_export_requested` | a lawful data right was invoked / withdrawn | user/DPO request | `audit` (evidence; the crypto-shred follows `deleted`) |
 
 ---
 
