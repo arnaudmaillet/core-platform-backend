@@ -11,9 +11,10 @@ use std::sync::Arc;
 use tonic::transport::Channel;
 
 use crate::application::command::ProjectionHandler;
-use crate::application::port::SearchIndex;
+use crate::application::port::{AudienceGate, SearchIndex};
 use crate::application::query::{SearchHandler, SuggestHandler};
 use crate::config::SearchConfig;
+use crate::infrastructure::audience::GrpcAudienceGate;
 use crate::infrastructure::grpc::SearchServiceHandler;
 use crate::infrastructure::hydrate::{GrpcSourceHydrator, SourceHydrator};
 use crate::infrastructure::index::OpenSearchIndex;
@@ -31,10 +32,10 @@ pub struct App {
 impl App {
     /// Pure composition: build the two query handlers from the index port and wrap
     /// them in the gRPC handler. Drives the unit/integration graph.
-    pub fn compose(index: Arc<dyn SearchIndex>) -> SearchServiceHandler {
+    pub fn compose(index: Arc<dyn SearchIndex>, audience: Arc<dyn AudienceGate>) -> SearchServiceHandler {
         let search = Arc::new(SearchHandler::new(Arc::clone(&index)));
         let suggest = Arc::new(SuggestHandler::new(Arc::clone(&index)));
-        SearchServiceHandler::new(search, suggest)
+        SearchServiceHandler::new(search, suggest, audience)
     }
 
     /// Builds the concrete adapter graph from config + backend connections.
@@ -70,7 +71,15 @@ impl App {
             .connect_lazy();
         let hydrator: Arc<dyn SourceHydrator> = Arc::new(GrpcSourceHydrator::new(post, profile));
 
-        let handler = App::compose(index_port);
+        // The audience check on the query path (social-graph CheckAccess). Its
+        // own, short deadlines: it runs inside a user's search request.
+        let social_graph = Channel::from_shared(config.social_graph_endpoint)?
+            .timeout(config.audience_rpc_timeout)
+            .connect_timeout(config.audience_connect_timeout)
+            .connect_lazy();
+        let audience: Arc<dyn AudienceGate> = Arc::new(GrpcAudienceGate::new(social_graph));
+
+        let handler = App::compose(index_port, audience);
         Ok(App {
             handler,
             projection,
@@ -87,7 +96,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::application::fakes::{Fixture, post_event};
+    use crate::application::fakes::{Fixture, ScriptedAudience, post_event};
     use crate::domain::SourceEvent;
     use crate::infrastructure::grpc::proto;
 
@@ -105,7 +114,7 @@ mod tests {
         index_post(&fx, "post-1", "acct-1", "learning rust").await;
         index_post(&fx, "post-2", "acct-2", "cooking dinner").await;
 
-        let handler = App::compose(fx.index.clone());
+        let handler = App::compose(fx.index.clone(), Arc::new(ScriptedAudience::default()));
         let request = Request::new(proto::SearchRequest {
             query: "rust".into(),
             entity_types: vec![],
@@ -121,9 +130,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_client_search_drops_posts_by_authors_it_may_not_see() {
+        let fx = Fixture::new();
+        index_post(&fx, "post-1", "open", "rust one").await;
+        index_post(&fx, "post-2", "blocked", "rust two").await;
+        let audience = Arc::new(ScriptedAudience::default());
+        audience.access.lock().unwrap().insert("blocked".into(), crate::domain::ContentAccess::Hidden);
+        let handler = App::compose(fx.index.clone(), audience);
+
+        let search = || proto::SearchRequest {
+            query: "rust".into(),
+            entity_types: vec![],
+            sort: 0,
+            page_size: 10,
+            page_token: String::new(),
+            exclude_author_ids: vec![],
+        };
+        // An anonymous edge client is filtered…
+        let mut request = Request::new(search());
+        request.extensions_mut().insert(transport::grpc::edge::EdgeAnonymous);
+        let resp = handler.search(request).await.unwrap().into_inner();
+        assert_eq!(resp.hits.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), vec!["post-1"]);
+        // …the mesh is not.
+        let resp = handler.search(Request::new(search())).await.unwrap().into_inner();
+        assert_eq!(resp.hits.len(), 2);
+    }
+
+    #[tokio::test]
     async fn search_rpc_rejects_empty_query() {
         let fx = Fixture::new();
-        let handler = App::compose(fx.index.clone());
+        let handler = App::compose(fx.index.clone(), Arc::new(ScriptedAudience::default()));
         let request = Request::new(proto::SearchRequest {
             query: "   ".into(),
             entity_types: vec![],
@@ -142,7 +178,7 @@ mod tests {
         index_post(&fx, "post-1", "acct-1", "rust lang").await;
         index_post(&fx, "post-2", "acct-2", "pasta recipe").await;
 
-        let handler = App::compose(fx.index.clone());
+        let handler = App::compose(fx.index.clone(), Arc::new(ScriptedAudience::default()));
         let one = |q: &str| proto::SearchRequest {
             query: q.into(),
             entity_types: vec![],

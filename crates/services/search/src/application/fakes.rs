@@ -408,3 +408,24 @@ impl Fixture {
         SuggestHandler::new(self.index.clone())
     }
 }
+
+/// A scripted audience check: authors are `Visible` unless set otherwise.
+#[derive(Default)]
+pub struct ScriptedAudience {
+    pub access: Mutex<HashMap<String, crate::domain::ContentAccess>>,
+}
+
+#[async_trait]
+impl super::port::AudienceGate for ScriptedAudience {
+    async fn access(
+        &self,
+        _viewers: &[String],
+        targets: &[String],
+    ) -> Result<HashMap<String, crate::domain::ContentAccess>, SearchError> {
+        let access = self.access.lock().unwrap();
+        Ok(targets
+            .iter()
+            .map(|t| (t.clone(), access.get(t).copied().unwrap_or(crate::domain::ContentAccess::Visible)))
+            .collect())
+    }
+}

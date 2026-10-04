@@ -6,6 +6,7 @@
 //! I/O-free `SourceEvent → IndexMutation` function. Everything here is deterministic
 //! and unit-testable without containers.
 
+pub mod audience;
 pub mod document;
 pub mod event;
 pub mod mutation;
@@ -13,6 +14,7 @@ pub mod projector;
 pub mod query;
 pub mod value_object;
 
+pub use audience::{ContentAccess, Viewer};
 pub use document::{HashtagDoc, IndexDocument, PostDoc, ProfileDoc};
 pub use event::{
     ComplianceEvent, EntityDeletion, HashtagEvent, HashtagSnapshot, ModerationEvent, PostEvent,

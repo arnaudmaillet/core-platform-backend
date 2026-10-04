@@ -17,6 +17,12 @@ pub struct SearchConfig {
     pub hydrate_rpc_timeout: std::time::Duration,
     /// Connect deadline when dialing the `post` / `profile` channels.
     pub hydrate_connect_timeout: std::time::Duration,
+    /// gRPC endpoint of `social-graph` — the query path's audience check
+    /// (`CheckAccess`) on the authors of a page of hits.
+    pub social_graph_endpoint: String,
+    /// Deadlines on that call; it runs inside a user's search request, so short.
+    pub audience_rpc_timeout: std::time::Duration,
+    pub audience_connect_timeout: std::time::Duration,
 }
 
 impl SearchConfig {
@@ -42,6 +48,9 @@ impl SearchConfig {
             profile_endpoint: env_or("SEARCH_PROFILE_GRPC_ENDPOINT", "http://localhost:50052"),
             hydrate_rpc_timeout: env_ms("SEARCH_HYDRATE_RPC_TIMEOUT_MS", 5_000),
             hydrate_connect_timeout: env_ms("SEARCH_HYDRATE_CONNECT_TIMEOUT_MS", 2_000),
+            social_graph_endpoint: env_or("SEARCH_SOCIAL_GRAPH_GRPC_ENDPOINT", "http://localhost:50053"),
+            audience_rpc_timeout: env_ms("SEARCH_AUDIENCE_RPC_TIMEOUT_MS", 500),
+            audience_connect_timeout: env_ms("SEARCH_AUDIENCE_CONNECT_TIMEOUT_MS", 500),
         }
     }
 }

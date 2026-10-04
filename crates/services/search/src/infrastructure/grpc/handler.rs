@@ -10,11 +10,15 @@ use error::AppError;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use crate::application::query::{RunSearch, RunSuggest, SearchHandler, SuggestHandler};
+use crate::application::port::AudienceGate;
+use crate::application::query::{
+    filter_results, filter_suggestions, RunSearch, RunSuggest, SearchHandler, SuggestHandler,
+};
 use crate::domain::{
     AuthorId, EntityKind, HitDisplay, SearchHit, SearchQuery, SearchResults, SortStrategy,
-    SuggestQuery, Suggestions,
+    SuggestQuery, Suggestions, Viewer,
 };
+use transport::grpc::edge;
 use crate::error::SearchError;
 
 pub use search_api as proto;
@@ -25,18 +29,25 @@ pub use search_api as proto;
 pub struct SearchServiceHandler {
     search: Arc<SearchHandler>,
     suggest: Arc<SuggestHandler>,
+    /// social-graph's access check: hits a client may not see are dropped.
+    audience: Arc<dyn AudienceGate>,
 }
 
 impl SearchServiceHandler {
-    pub fn new(search: Arc<SearchHandler>, suggest: Arc<SuggestHandler>) -> Self {
-        Self { search, suggest }
+    pub fn new(
+        search: Arc<SearchHandler>,
+        suggest: Arc<SuggestHandler>,
+        audience: Arc<dyn AudienceGate>,
+    ) -> Self {
+        Self { search, suggest, audience }
     }
 
     pub async fn search(
         &self,
         request: Request<proto::SearchRequest>,
     ) -> Result<Response<proto::SearchResponse>, Status> {
-        let results = self.run_search(request.into_inner()).await?;
+        let viewer = viewer_of(&request);
+        let results = self.run_search(&viewer, request.into_inner()).await?;
         Ok(Response::new(results))
     }
 
@@ -44,6 +55,7 @@ impl SearchServiceHandler {
         &self,
         request: Request<proto::SuggestRequest>,
     ) -> Result<Response<proto::SuggestResponse>, Status> {
+        let viewer = viewer_of(&request);
         let req = request.into_inner();
         let query = SuggestQuery::new(req.prefix, entity_kinds(&req.entity_types), req.limit.max(0) as u32)
             .map_err(to_status)?;
@@ -52,6 +64,7 @@ impl SearchServiceHandler {
             .handle(Envelope::new(Uuid::now_v7(), RunSuggest { query }))
             .await
             .map_err(to_status)?;
+        let suggestions = filter_suggestions(self.audience.as_ref(), &viewer, suggestions).await;
         Ok(Response::new(suggestions_to_proto(suggestions)))
     }
 
@@ -59,15 +72,17 @@ impl SearchServiceHandler {
         &self,
         request: Request<proto::MultiSearchRequest>,
     ) -> Result<Response<proto::MultiSearchResponse>, Status> {
+        let viewer = viewer_of(&request);
         let mut responses = Vec::with_capacity(request.get_ref().searches.len());
         for search in request.into_inner().searches {
-            responses.push(self.run_search(search).await?);
+            responses.push(self.run_search(&viewer, search).await?);
         }
         Ok(Response::new(proto::MultiSearchResponse { responses }))
     }
 
     async fn run_search(
         &self,
+        viewer: &Viewer,
         req: proto::SearchRequest,
     ) -> Result<proto::SearchResponse, Status> {
         let query = SearchQuery::new(
@@ -87,7 +102,18 @@ impl SearchServiceHandler {
             .handle(Envelope::new(Uuid::now_v7(), RunSearch { query }))
             .await
             .map_err(to_status)?;
+        let results = filter_results(self.audience.as_ref(), viewer, results).await;
         Ok(results_to_proto(results))
+    }
+}
+
+/// The reader, from how the request arrived: the mesh is unfiltered; an
+/// anonymous client has no profiles.
+fn viewer_of<T>(request: &Request<T>) -> Viewer {
+    match edge::viewer(request) {
+        edge::Viewer::Internal => Viewer::Internal,
+        edge::Viewer::Anonymous => Viewer::Profiles(Vec::new()),
+        edge::Viewer::Member { profile_ids, .. } => Viewer::Profiles(profile_ids),
     }
 }
 

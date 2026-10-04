@@ -180,7 +180,7 @@ async fn main() -> anyhow::Result<()> {
 
 > **Build status:** complete through Phase 7 (8 phases: scaffold → proto → domain → application+ports → OpenSearch adapter+decode → server+consumers → live IT → hardening). The live integration suite is gated behind `integration-search`. Post, **profile**, and moderation ingestion are all wired (post + profile content is hydrated via `GetPost` / `GetProfileById`).
 >
-> **Authorization (deployment requirement):** `search` self-authorizes nothing. `Search`/`Suggest` are caller-facing; the **edge** must resolve the viewer's `social-graph` block/mute set and pass it as `SearchRequest.exclude_author_ids` (personal exclusions are never indexed). Gate access at the gateway/`auth-context` before exposure.
+> **Viewer-aware results.** For any caller but the mesh, a page of hits is filtered with social-graph's `CheckAccess` on its authors (one bulk call, split to the RPC's caps): a **post** hit stays only if its author is `VISIBLE` to the reader (not a private author they don't follow, no block either way, not hidden); a **profile** hit stays unless `HIDDEN` (a private profile stays findable by its header); hashtags always stay. Suggestions follow the profile rule; post suggestions are dropped for clients (they name no author). If the check fails, search stays up (fail-open) but shows nothing unchecked: profile and post hits are dropped, hashtags kept, `degraded = true`. A page can come back short; the cursor is unchanged. `exclude_author_ids` remains an extra, caller-supplied exclusion (personal exclusions are never indexed).
 
 ---
 
@@ -198,6 +198,8 @@ async fn main() -> anyhow::Result<()> {
 | `SEARCH_POST_GRPC_ENDPOINT` | No | `http://localhost:50056` | `post` endpoint for the ingestion content hydrator |
 | `SEARCH_HYDRATE_RPC_TIMEOUT_MS` | No | `5000` | per-request deadline on hydration RPCs — a hung call would otherwise stall the consumer's partition |
 | `SEARCH_HYDRATE_CONNECT_TIMEOUT_MS` | No | `2000` | connect deadline when dialing the `post` / `profile` channels |
+| `SEARCH_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Yes** (prod) | `http://localhost:50053` | `social-graph` endpoint for the query-path audience filter (`CheckAccess`); unreachable → client results degrade to hashtags only |
+| `SEARCH_AUDIENCE_RPC_TIMEOUT_MS` / `SEARCH_AUDIENCE_CONNECT_TIMEOUT_MS` | No | `500` / `500` | deadlines on that call (it runs inside the user's request) |
 
 ### Inherited infrastructure variables
 

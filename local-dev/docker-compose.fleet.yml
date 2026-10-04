@@ -771,6 +771,8 @@ services:
       KAFKA_BROKERS: redpanda:9092
       SEARCH_POST_GRPC_ENDPOINT: http://post-server:50056
       SEARCH_PROFILE_GRPC_ENDPOINT: http://profile-server:50052
+      # Query-path audience filter (CheckAccess); without it client hits degrade to hashtags only.
+      SEARCH_SOCIAL_GRAPH_GRPC_ENDPOINT: http://social-graph-server:50053
     ports:
       - "50062:50062"
     depends_on:

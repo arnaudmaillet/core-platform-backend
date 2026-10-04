@@ -48,6 +48,7 @@ tonic            = { workspace = true }
 tonic-reflection = { workspace = true }
 prost-types      = { workspace = true }
 post-api         = { workspace = true }
+social-graph-api = { workspace = true }   # CheckAccess client (query-path audience filter)
 profile-api      = { workspace = true }
 tokio            = { workspace = true }
 uuid             = { workspace = true }
