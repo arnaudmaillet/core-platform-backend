@@ -69,20 +69,7 @@ impl GrpcSourceHydrator {
             }
         };
 
-        let snapshot = PostSnapshot {
-            post_id: view.post_id,
-            // The post's author is its profile; `author_handle` is a display field
-            // left to a future secondary profile lookup.
-            author_id: view.profile_id,
-            author_handle: String::new(),
-            hashtags: extract_hashtags(&view.caption),
-            caption: view.caption,
-            // Thumbnail derivation from `attachments` is deferred (display-only).
-            thumbnail_key: String::new(),
-            created_at: ms_to_dt(view.created_at_ms),
-            revision: content_ref.revision,
-        };
-        Ok(SourceEvent::Post(PostEvent::Published(snapshot)))
+        Ok(post_event(view, content_ref.revision))
     }
 
     async fn hydrate_profile(&self, content_ref: ContentRef) -> Result<SourceEvent, SearchError> {
@@ -137,6 +124,31 @@ impl SourceHydrator for GrpcSourceHydrator {
             }),
         }
     }
+}
+
+/// The search event for a hydrated post. Only a **published** post is indexed: a
+/// draft (a `PostUpdated` fires for drafts too) or a soft-deleted post converges
+/// to "absent", so a stale or out-of-order event can never index one. The status
+/// is read at hydration time, so whatever order events arrive in, the document
+/// follows the post's current state.
+fn post_event(view: post_api::PostView, revision: u64) -> SourceEvent {
+    if view.status != post_api::PostStatus::Published as i32 {
+        return deleted(EntityKind::Post, view.post_id);
+    }
+    let snapshot = PostSnapshot {
+        post_id: view.post_id,
+        // The post's author is its profile; `author_handle` is a display field
+        // left to a future secondary profile lookup.
+        author_id: view.profile_id,
+        author_handle: String::new(),
+        hashtags: extract_hashtags(&view.caption),
+        caption: view.caption,
+        // Thumbnail derivation from `attachments` is deferred (display-only).
+        thumbnail_key: String::new(),
+        created_at: ms_to_dt(view.created_at_ms),
+        revision,
+    };
+    SourceEvent::Post(PostEvent::Published(snapshot))
 }
 
 fn deleted(kind: EntityKind, id: String) -> SourceEvent {
@@ -194,5 +206,38 @@ mod tests {
     #[test]
     fn no_hashtags_is_empty() {
         assert!(extract_hashtags("just a plain caption").is_empty());
+    }
+
+    fn view(status: post_api::PostStatus) -> post_api::PostView {
+        post_api::PostView {
+            post_id: "post-1".into(),
+            profile_id: "author-1".into(),
+            caption: "hello #world".into(),
+            status: status as i32,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_published_post_is_indexed() {
+        match post_event(view(post_api::PostStatus::Published), 7) {
+            SourceEvent::Post(PostEvent::Published(snap)) => {
+                assert_eq!(snap.post_id, "post-1");
+                assert_eq!(snap.hashtags, vec!["world".to_owned()]);
+                assert_eq!(snap.revision, 7);
+            }
+            other => panic!("expected an upsert, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn drafts_and_deleted_posts_converge_to_absent() {
+        for status in [post_api::PostStatus::Draft, post_api::PostStatus::Deleted] {
+            assert_eq!(
+                post_event(view(status), 7),
+                SourceEvent::Post(PostEvent::Deleted(EntityDeletion { id: "post-1".into() })),
+                "{status:?}"
+            );
+        }
     }
 }

@@ -107,19 +107,20 @@ pub fn map_moderation(event: ModerationWireEvent) -> Decoded {
     }
 }
 
-/// Map moderation's `EntityType` variant name to a search index kind. Entities that
-/// have no search index (Comment, ChatMessage, Media, Account) map to `None` — the
-/// projector then skips the visibility change.
+/// Map moderation's `EntityType` (serialized snake_case on the wire) to a search
+/// index kind. Entities that have no search index (comment, chat_message, media,
+/// account) map to `None` — the projector then skips the visibility change.
 fn map_entity(entity_type: &str) -> Option<EntityKind> {
     match entity_type {
-        "Post" => Some(EntityKind::Post),
-        "Profile" => Some(EntityKind::Profile),
+        "post" => Some(EntityKind::Post),
+        "profile" => Some(EntityKind::Profile),
         _ => None,
     }
 }
 
+/// The content-visibility actions, as moderation's `ActionType` serializes them.
 fn is_content_action(action: Option<&str>) -> bool {
-    matches!(action, Some("RemoveContent") | Some("VisibilityLimit"))
+    matches!(action, Some("remove_content") | Some("visibility_limit"))
 }
 
 /// Decode a `profile.v1.events` message body. Used by the unit tests; the live
@@ -236,7 +237,7 @@ mod tests {
 
     #[test]
     fn remove_content_on_a_post_revokes_visibility() {
-        let json = br#"{"type":"enforcement_applied","subject":{"entity_type":"Post","entity_id":"post-1","actor_id":"acct-9","surface":"feed"},"actor_id":"acct-9","action":"RemoveContent","version":3,"applied_at":"2026-06-26T12:00:00Z","occurred_at":"2026-06-26T12:00:00Z","correlation_id":"00000000-0000-0000-0000-000000000000"}"#;
+        let json = br#"{"type":"enforcement_applied","subject":{"entity_type":"post","entity_id":"post-1","actor_id":"acct-9","surface":"feed"},"actor_id":"acct-9","action":"remove_content","version":3,"applied_at":"2026-06-26T12:00:00Z","occurred_at":"2026-06-26T12:00:00Z","correlation_id":"00000000-0000-0000-0000-000000000000"}"#;
         let decoded = decode_moderation(json).unwrap();
         match decoded {
             Decoded::Ready(SourceEvent::Moderation(ModerationEvent::VisibilityRevoked(v))) => {
@@ -249,13 +250,13 @@ mod tests {
 
     #[test]
     fn actor_level_action_is_ignored() {
-        let json = br#"{"type":"enforcement_applied","subject":{"entity_type":"Account","entity_id":"acct-9","actor_id":"acct-9","surface":""},"actor_id":"acct-9","action":"Suspend","version":1,"applied_at":"2026-06-26T12:00:00Z","occurred_at":"2026-06-26T12:00:00Z","correlation_id":"00000000-0000-0000-0000-000000000000"}"#;
+        let json = br#"{"type":"enforcement_applied","subject":{"entity_type":"account","entity_id":"acct-9","actor_id":"acct-9","surface":""},"actor_id":"acct-9","action":"suspend","version":1,"applied_at":"2026-06-26T12:00:00Z","occurred_at":"2026-06-26T12:00:00Z","correlation_id":"00000000-0000-0000-0000-000000000000"}"#;
         assert_eq!(decode_moderation(json).unwrap(), Decoded::Ignore);
     }
 
     #[test]
     fn content_action_on_unmapped_entity_skips_via_none_kind() {
-        let json = br#"{"type":"enforcement_applied","subject":{"entity_type":"Comment","entity_id":"c-1","actor_id":"acct-9","surface":""},"actor_id":"acct-9","action":"RemoveContent","version":1,"applied_at":"2026-06-26T12:00:00Z","occurred_at":"2026-06-26T12:00:00Z","correlation_id":"00000000-0000-0000-0000-000000000000"}"#;
+        let json = br#"{"type":"enforcement_applied","subject":{"entity_type":"comment","entity_id":"c-1","actor_id":"acct-9","surface":""},"actor_id":"acct-9","action":"remove_content","version":1,"applied_at":"2026-06-26T12:00:00Z","occurred_at":"2026-06-26T12:00:00Z","correlation_id":"00000000-0000-0000-0000-000000000000"}"#;
         match decode_moderation(json).unwrap() {
             Decoded::Ready(SourceEvent::Moderation(ModerationEvent::VisibilityRevoked(v))) => {
                 assert_eq!(v.kind, None);
@@ -266,7 +267,7 @@ mod tests {
 
     #[test]
     fn reversal_restores_visibility() {
-        let json = br#"{"type":"enforcement_reversed","subject":{"entity_type":"Profile","entity_id":"prof-1","actor_id":"acct-9","surface":""},"actor_id":"acct-9","version":4,"occurred_at":"2026-06-26T12:00:00Z","correlation_id":"00000000-0000-0000-0000-000000000000"}"#;
+        let json = br#"{"type":"enforcement_reversed","subject":{"entity_type":"profile","entity_id":"prof-1","actor_id":"acct-9","surface":""},"actor_id":"acct-9","version":4,"occurred_at":"2026-06-26T12:00:00Z","correlation_id":"00000000-0000-0000-0000-000000000000"}"#;
         match decode_moderation(json).unwrap() {
             Decoded::Ready(SourceEvent::Moderation(ModerationEvent::VisibilityRestored(v))) => {
                 assert_eq!(v.kind, Some(EntityKind::Profile));
@@ -277,7 +278,7 @@ mod tests {
 
     #[test]
     fn other_moderation_events_are_ignored() {
-        let json = br#"{"type":"case_opened","subject":{"entity_type":"Post","entity_id":"post-1","actor_id":"acct-9","surface":"feed"}}"#;
+        let json = br#"{"type":"case_opened","subject":{"entity_type":"post","entity_id":"post-1","actor_id":"acct-9","surface":"feed"}}"#;
         assert_eq!(decode_moderation(json).unwrap(), Decoded::Ignore);
     }
 
