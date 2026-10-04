@@ -130,7 +130,7 @@ impl IngestReportHandler {
 
         // A report on an already-resolved case is a no-op here (it would reopen via
         // a separate re-review path); fold it into success so the consumer commits.
-        if case.add_signal(signal).is_ok() {
+        if matches!(case.add_signal(signal), Ok(true)) {
             self.cases.save(&case).await?;
             for event in &case.drain_events() {
                 self.publisher.publish(event).await?;
@@ -171,7 +171,7 @@ impl IngestSignalHandler {
         let cmd = envelope.payload;
         let mut case = open_or_load(&self.cases, &cmd.subject, cmd.category, now, envelope.correlation_id).await?;
         let signal = Signal::new(cmd.source, cmd.category, cmd.confidence, now)?;
-        if case.add_signal(signal).is_ok() {
+        if matches!(case.add_signal(signal), Ok(true)) {
             self.cases.save(&case).await?;
             for event in &case.drain_events() {
                 self.publisher.publish(event).await?;

@@ -5,6 +5,7 @@ use traffic::{Scope, TrafficDecision, TrafficProfileSpec};
 fn spec(rps: u32, burst: u32) -> TrafficProfileSpec {
     TrafficProfileSpec {
         rps,
+        per_secs: None,
         burst,
         scope: Scope::PerMethod,
         mode: traffic::Mode::Local,
@@ -61,4 +62,22 @@ fn non_quota_reload_preserves_buckets() {
 
     assert_eq!(profile.scope(), Scope::PerCaller);
     assert!(matches!(profile.check("k"), TrafficDecision::Throttle { .. }));
+}
+
+#[test]
+fn a_window_longer_than_a_second_expresses_slow_rates() {
+    // 2 an hour, burst 2: two admitted, the third must wait ~30 minutes.
+    let mut slow = spec(2, 2);
+    slow.per_secs = Some(3600);
+    slow.scope = Scope::PerIp;
+    let profile = slow.resolve();
+    assert_eq!(profile.scope(), Scope::PerIp);
+    assert_eq!(profile.config().per_secs, 3600);
+    assert_eq!(profile.check("ip-1"), TrafficDecision::Allow);
+    assert_eq!(profile.check("ip-1"), TrafficDecision::Allow);
+    match profile.check("ip-1") {
+        TrafficDecision::Throttle { retry_after } => assert!(retry_after.as_secs() > 1_700, "{retry_after:?}"),
+        TrafficDecision::Allow => panic!("expected throttle"),
+    }
+    assert_eq!(profile.check("ip-2"), TrafficDecision::Allow, "another address has its own bucket");
 }

@@ -95,6 +95,10 @@ const DEFAULT_MAX_CONNECTION_AGE_SECS: u64 = 300;
 /// Environment variable enabling forced close of streams that outlive the age
 /// deadline (seconds; unset/`0` = never sever in-flight streams).
 const MAX_CONNECTION_AGE_GRACE_ENV: &str = "GRPC_MAX_CONNECTION_AGE_GRACE_SECS";
+/// Proxies appending to `X-Forwarded-For` before the listeners (the ALB: 1, the default).
+/// Read for `per_ip` rate-limit keying. Bump it when a CDN/WAF proxy sits in front.
+const TRUSTED_PROXY_HOPS_ENV: &str = "GRPC_TRUSTED_PROXY_HOPS";
+
 /// Environment variable binding the **client edge** listener (e.g. `0.0.0.0:9443`).
 /// Unset ⇒ no edge listener: the service is mesh-only (local dev, workers, TIER-0
 /// planes that are not client-facing).
@@ -219,6 +223,9 @@ pub async fn serve<S: Service>(addr: SocketAddr) -> anyhow::Result<()> {
     }
     if let Some(grace) = max_connection_age_grace_from_env() {
         grpc_config = grpc_config.with_max_connection_age_grace(grace);
+    }
+    if let Some(hops) = std::env::var(TRUSTED_PROXY_HOPS_ENV).ok().and_then(|v| v.parse().ok()) {
+        grpc_config = grpc_config.with_trusted_proxy_hops(hops);
     }
     let traffic = infra.traffic();
     let routes = routes.routes();

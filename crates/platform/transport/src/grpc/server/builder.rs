@@ -86,7 +86,9 @@ impl GrpcServerBuilder {
     pub fn build(self) -> Result<TracedGrpcServer, TransportError> {
         let traffic_layer = match self.traffic {
             Some(registry) => {
-                let layer = TrafficLayer::new(registry, self.config.identity_header.clone());
+                let layer = TrafficLayer::new(registry, self.config.identity_header.clone())
+                    .for_edge(self.edge.is_some())
+                    .with_trusted_proxy_hops(self.config.trusted_proxy_hops);
                 match self.traffic_backend {
                     Some(backend) => layer.with_backend(backend),
                     None => layer,

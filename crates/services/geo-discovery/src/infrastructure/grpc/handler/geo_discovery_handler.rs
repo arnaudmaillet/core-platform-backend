@@ -196,27 +196,9 @@ fn scope_of<T>(request: &Request<T>) -> MapScope {
     }
 }
 
-/// The client's address: `trusted_hops` entries from the right of
-/// `X-Forwarded-For` (each trusted proxy appends the address it saw; entries
-/// further left are the client's own word), else the peer address.
+/// The client's address behind the trusted proxies (see `transport::grpc::client_ip`).
 fn client_ip<T>(request: &Request<T>, trusted_hops: usize) -> Option<IpAddr> {
-    let forwarded = request
-        .metadata()
-        .get_all("x-forwarded-for")
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .collect::<Vec<_>>();
-    if trusted_hops > 0 && !forwarded.is_empty() {
-        return forwarded
-            .len()
-            .checked_sub(trusted_hops)
-            .and_then(|i| forwarded.get(i))
-            .and_then(|v| v.parse().ok());
-    }
-    request.remote_addr().map(|addr| addr.ip())
+    transport::grpc::client_ip::request_client_ip(request, trusted_hops)
 }
 
 fn app_to_status(err: crate::error::GeoDiscoveryError) -> Status {

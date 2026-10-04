@@ -29,7 +29,20 @@
 //! absent (an unauthenticated method, or — wrongly — a request that bypassed the mesh) the
 //! layer **degrades to method-level keying** rather than collapsing all callers into one
 //! bucket: it still limits, just not per-identity. This is logged at debug.
+//!
+//! # `per_ip`
+//!
+//! `per_ip` keys on the client address (see [`crate::grpc::client_ip`]: the entry the
+//! trusted proxy appended to `X-Forwarded-For`, else the peer address) — for anonymous
+//! methods with no principal. An unknown address degrades to method-level keying.
+//!
+//! # Mesh vs client edge
+//!
+//! On the client edge listener the profile comes from the `[traffic]` edge resolution
+//! ([`TrafficRegistry::resolve_edge`]); on the mesh listener from the mesh one. A client
+//! profile (`per_caller`) on the mesh would have no principal to key on.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -43,6 +56,7 @@ use tonic::{body::Body, Status};
 use tower::{Layer, Service};
 use traffic::{BackendError, QuotaBackend, Scope, TrafficDecision, TrafficProfile};
 
+use crate::grpc::client_ip::{client_ip, DEFAULT_TRUSTED_PROXY_HOPS};
 use crate::grpc::server::config::DEFAULT_IDENTITY_HEADER;
 
 /// Instrument name. The Prometheus exporter appends `_total` for monotonic sums, so this
@@ -78,6 +92,10 @@ pub struct TrafficLayer {
     /// Distributed-mode coordination backend (`traffic-redis`). `None` → `distributed`
     /// profiles degrade to the local limiter (logged); `local` profiles never use it.
     backend: Option<Arc<dyn QuotaBackend>>,
+    /// Whether this layer guards the client edge listener (edge profile resolution).
+    edge: bool,
+    /// Proxies appending to `X-Forwarded-For` before this listener (`per_ip` keying).
+    trusted_proxy_hops: usize,
 }
 
 impl TrafficLayer {
@@ -88,6 +106,8 @@ impl TrafficLayer {
             counter: throttle_counter(),
             identity_header: HeaderName::from_static(DEFAULT_IDENTITY_HEADER),
             backend: None,
+            edge: false,
+            trusted_proxy_hops: DEFAULT_TRUSTED_PROXY_HOPS,
         }
     }
 
@@ -99,7 +119,22 @@ impl TrafficLayer {
             counter: throttle_counter(),
             identity_header,
             backend: None,
+            edge: false,
+            trusted_proxy_hops: DEFAULT_TRUSTED_PROXY_HOPS,
         }
+    }
+
+    /// Marks this layer as the client edge listener's: profiles resolve through the
+    /// `[traffic]` edge bindings.
+    pub fn for_edge(mut self, edge: bool) -> Self {
+        self.edge = edge;
+        self
+    }
+
+    /// Sets how many proxies append to `X-Forwarded-For` before this listener.
+    pub fn with_trusted_proxy_hops(mut self, hops: usize) -> Self {
+        self.trusted_proxy_hops = hops;
+        self
     }
 
     /// Attaches the distributed-mode coordination backend (e.g. `traffic-redis`). Required
@@ -121,6 +156,8 @@ impl<S> Layer<S> for TrafficLayer {
             counter: self.counter.clone(),
             identity_header: self.identity_header.clone(),
             backend: self.backend.clone(),
+            edge: self.edge,
+            trusted_proxy_hops: self.trusted_proxy_hops,
         }
     }
 }
@@ -133,6 +170,8 @@ pub struct TrafficService<S> {
     counter: Counter<u64>,
     identity_header: HeaderName,
     backend: Option<Arc<dyn QuotaBackend>>,
+    edge: bool,
+    trusted_proxy_hops: usize,
 }
 
 impl<S> Service<http::Request<Body>> for TrafficService<S>
@@ -156,8 +195,20 @@ where
         };
 
         let method = req.uri().path();
-        let (profile_name, bound, profile) = registry.resolve(method);
-        let key = extract_key(profile.scope(), method, req.headers(), &self.identity_header);
+        let (profile_name, bound, profile) =
+            if self.edge { registry.resolve_edge(method) } else { registry.resolve(method) };
+        let peer = req
+            .extensions()
+            .get::<tonic::transport::server::TcpConnectInfo>()
+            .and_then(|info| info.remote_addr());
+        let key = extract_key(
+            profile.scope(),
+            method,
+            req.headers(),
+            &self.identity_header,
+            peer,
+            self.trusted_proxy_hops,
+        );
         let route = if bound { method } else { UNBOUND_ROUTE };
 
         // Distributed profiles consult the (async) backend, so their decision is made inside
@@ -269,8 +320,17 @@ fn extract_key(
     method: &str,
     headers: &HeaderMap,
     identity_header: &HeaderName,
+    peer: Option<SocketAddr>,
+    trusted_proxy_hops: usize,
 ) -> String {
     match scope {
+        Scope::PerIp => match client_ip(headers, peer, trusted_proxy_hops) {
+            Some(ip) => format!("{method}|ip:{ip}"),
+            None => {
+                tracing::debug!(rpc.method = %method, "traffic: per_ip profile but no client address — keying per-method");
+                method.to_owned()
+            }
+        },
         Scope::PerMethod => method.to_owned(),
         Scope::PerCaller => {
             match headers
@@ -318,6 +378,24 @@ mod tests {
         assert!(has(&attrs, "profile", "write-tight"));
         assert!(has(&attrs, "route", "/post.PostService/CreatePost"));
         assert!(has(&attrs, "status", "enforced"));
+    }
+
+    #[test]
+    fn keys_follow_the_scope() {
+        let header = HeaderName::from_static(DEFAULT_IDENTITY_HEADER);
+        let mut headers = HeaderMap::new();
+        headers.insert(DEFAULT_IDENTITY_HEADER, "guest:42".parse().unwrap());
+        headers.insert("x-forwarded-for", "6.6.6.6, 203.0.113.9".parse().unwrap());
+        let peer: SocketAddr = "10.0.0.5:4000".parse().unwrap();
+        let m = "/auth.v1.AuthService/StartGuestSession";
+
+        assert_eq!(extract_key(Scope::PerMethod, m, &headers, &header, Some(peer), 1), m);
+        assert_eq!(extract_key(Scope::PerCaller, m, &headers, &header, Some(peer), 1), format!("{m}|guest:42"));
+        assert_eq!(extract_key(Scope::PerIp, m, &headers, &header, Some(peer), 1), format!("{m}|ip:203.0.113.9"));
+        // No forwarded header: the peer address.
+        assert_eq!(extract_key(Scope::PerIp, m, &HeaderMap::new(), &header, Some(peer), 1), format!("{m}|ip:10.0.0.5"));
+        // Nothing known: method-level.
+        assert_eq!(extract_key(Scope::PerIp, m, &HeaderMap::new(), &header, None, 1), m);
     }
 
     #[test]

@@ -79,6 +79,8 @@ ttl_secs = 86_400
 # ══════════════════════════════════════════════════════════════════════════════
 [traffic]
 default_profile = "standard"
+# The client edge listener's default (see "The client edge" below).
+edge_default_profile = "client"
 
 # ── Standard: general read traffic, fleet-coarse, per-replica ─────────────────
 [traffic.profiles.standard]
@@ -113,3 +115,28 @@ on_backend_error = "fail_open"
 [traffic.bindings]
 "/post.PostService/CreatePost"      = "write-tight"
 "/timeline.TimelineService/GetFeed" = "standard"
+
+# ── The client edge (optional) ────────────────────────────────────────────────
+# `bindings` / `default_profile` govern the MESH listener (in-cluster callers, no
+# principal). The client edge listener resolves `edge_bindings`, then
+# `edge_default_profile` (when set, mesh bindings do not apply on the edge).
+# Without either, the edge resolves like the mesh. (`edge_default_profile` sits
+# under [traffic] above.)
+
+# Every client (member or guest session: the token `sub`) gets its own bucket.
+[traffic.profiles.client]
+rps   = 50
+burst = 100
+scope = "per_caller"
+
+# Anonymous methods have no principal: key on the client address the ALB appended
+# to X-Forwarded-For (GRPC_TRUSTED_PROXY_HOPS). Mobile CGNAT shares addresses, so
+# keep these generous. `per_secs` sets the window: 30 an hour here.
+[traffic.profiles.guest-start]
+rps      = 30
+per_secs = 3600
+burst    = 10
+scope    = "per_ip"
+
+[traffic.edge_bindings]
+"/auth.v1.AuthService/StartGuestSession" = "guest-start"

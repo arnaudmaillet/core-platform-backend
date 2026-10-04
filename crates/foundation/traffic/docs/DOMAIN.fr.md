@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: 62dd4ecd4802678cf6d86fdd90ef5f98c924b455111ad382d99f6b3acff66417
-  translated_at: 2026-06-28
+  source_sha256: 67f9c8b6ba6b97017e3d06dc5ea48b1917bdace090b821b38749a4ef999c254a
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -55,7 +55,8 @@ le même mécanisme serve tout futur transport sans changement.
 | Profile | Un limiteur nommé de classe-de-service résolu depuis la config | `TrafficProfile`, `TrafficProfileSpec` |
 | Decision | Le verdict du chemin chaud pour une clé | `TrafficDecision::{Allow, Throttle}` |
 | Mode | La localité d'état du limiteur | `Mode::{Local, Distributed}` |
-| Scope | La dimension de clé (par méthode / par caller) | `Scope` |
+| Scope | La dimension de clé (par méthode / par caller / par IP) | `Scope` |
+| Window | La période sur laquelle `rps` est compté (`per_secs`, 1 s par défaut) : `rps = 30, per_secs = 3600` vaut 30 par heure | `TrafficConfig::per_secs` |
 | Quota / backend | Le seam « louer N jetons » pour le mode distribué | `Quota`, `QuotaBackend`, `QuotaError` |
 | Enforce vs shadow | Si un `Throttle` rejette vraiment ou ne fait que compter | `TrafficProfile::enforce` |
 

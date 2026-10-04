@@ -43,7 +43,8 @@ so the same mechanism serves any future transport unchanged.
 | Profile | A named class-of-service limiter resolved from config | `TrafficProfile`, `TrafficProfileSpec` |
 | Decision | The hot-path verdict for one key | `TrafficDecision::{Allow, Throttle}` |
 | Mode | State locality of the limiter | `Mode::{Local, Distributed}` |
-| Scope | The keying dimension (per-method / per-caller) | `Scope` |
+| Scope | The keying dimension (per-method / per-caller / per-IP) | `Scope` |
+| Window | The period `rps` is counted over (`per_secs`, default 1 s): `rps = 30, per_secs = 3600` is 30 an hour | `TrafficConfig::per_secs` |
 | Quota / backend | The "lease N tokens" seam for distributed mode | `Quota`, `QuotaBackend`, `QuotaError` |
 | Enforce vs shadow | Whether a `Throttle` actually rejects or only counts | `TrafficProfile::enforce` |
 
