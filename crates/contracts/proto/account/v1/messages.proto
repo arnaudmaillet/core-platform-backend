@@ -140,6 +140,10 @@ message RequestGdprDeletionRequest {
     string account_id = 1;
 }
 
+message CancelGdprDeletionRequest {
+    string account_id = 1;
+}
+
 message AnonymizeAccountRequest {
     string account_id = 1;
 }

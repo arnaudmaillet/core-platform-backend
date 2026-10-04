@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: cdee49c5e7467ffa26557fadf119f7cdb93c07ec678c597a56437901becd5d9e
+  source_sha256: e491b5143d72695790d89b342db59a1046c4786724fe8df6aedcf237a86e0151
   translated_at: 2026-10-04
   status: complete
 ---
@@ -133,6 +133,7 @@ service AccountService {
   rpc RecordLogin (RecordLoginRequest) returns (CommandResponse);
   rpc RecordFailedLogin (RecordFailedLoginRequest) returns (CommandResponse);
   rpc RequestGdprDeletion (RequestGdprDeletionRequest) returns (CommandResponse);
+  rpc CancelGdprDeletion (CancelGdprDeletionRequest) returns (CommandResponse);  // pendant le délai de grâce ; se reconnecter annule aussi
   rpc AnonymizeAccount (AnonymizeAccountRequest) returns (CommandResponse);
   rpc RequestDataExport (RequestDataExportRequest) returns (CommandResponse);
   rpc AssignRole (AssignRoleRequest) returns (CommandResponse);
@@ -187,7 +188,7 @@ Les codes stables vont de `ACC-1xxx` (lifecycle) à `ACC-9xxx` (identifiers), vi
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `ConsentsUpdated` | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `ConsentsUpdated` | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
 
 **Consomme :** rien — `account` est un producteur d'événements pur.
 
@@ -250,6 +251,7 @@ async fn main() -> anyhow::Result<()> {
 | `KAFKA_BROKERS` | **Yes** | — | Kafka bootstrap brokers for `account.v1.events`. |
 | `ACCOUNT_GRPC_ADDR` | No | `0.0.0.0:50059` | gRPC bind address. |
 | `ACCOUNT_REQUIRE_STEP_UP` | No | `false` | `DeactivateAccount` et `RequestGdprDeletion` en périphérie exigent une preuve d'identifiant de moins de 5 min (l'`auth_time` du jeton, issu de `auth.v1.Login` / `VerifyCredentials`) ; sinon `PERMISSION_DENIED` `step_up_required…`. À activer une fois que les clients font le step-up. |
+| `ACCOUNT_GDPR_JANITOR_INTERVAL_SECS` | No | `3600` | Fréquence à laquelle account-server anonymise les comptes dont le délai de grâce d'effacement (30 jours) est écoulé ; `0` désactive le janitor. Sûr sur chaque réplique (CAS optimiste). |
 
 > Le réglage complet connexion/timeout/pool vit dans les crates partagés `postgres-storage` et `transport`.
 

@@ -19,6 +19,7 @@ use sqlx::PgPool;
 
 use crate::application::command::{
     AnonymizeAccountCommand, AnonymizeAccountHandler, AssignRoleCommand, AssignRoleHandler,
+    CancelGdprDeletionCommand, CancelGdprDeletionHandler,
     ChangePasswordCommand, ChangePasswordHandler, CreateAccountCommand, CreateAccountHandler,
     DeactivateAccountCommand, DeactivateAccountHandler, EnrollMfaCommand, EnrollMfaHandler,
     ReactivateAccountCommand, ReactivateAccountHandler, RecordFailedLoginCommand,
@@ -78,6 +79,7 @@ impl App {
                 .register::<AnonymizeAccountCommand, _>(AnonymizeAccountHandler::new(Arc::clone(&repository)))?
                 .register::<RequestDataExportCommand, _>(RequestDataExportHandler::new(Arc::clone(&repository)))?
                 .register::<UpdateConsentsCommand, _>(UpdateConsentsHandler::new(Arc::clone(&repository)))?
+                .register::<CancelGdprDeletionCommand, _>(CancelGdprDeletionHandler::new(Arc::clone(&repository)))?
                 .register::<AssignRoleCommand, _>(AssignRoleHandler::new(Arc::clone(&repository)))?
                 .register::<RevokeRoleCommand, _>(RevokeRoleHandler::new(Arc::clone(&repository)))?
                 .build(),

@@ -1,13 +1,16 @@
 //! Live account→audit path over real Postgres + MinIO: account PII is sealed and
-//! chained, and a GDPR deletion request crypto-shreds the subject — closing the
-//! Art. 17 loop end to end (the rationale/PII becomes unreadable, the chain still
+//! chained, a GDPR deletion request is recorded (nothing shredded during its
+//! 30-day grace period), and the erasure itself (`account_deleted`, when account
+//! anonymizes) crypto-shreds the subject — closing the Art. 17 loop end to end (the rationale/PII becomes unreadable, the chain still
 //! verifies). Audit's suite boots no Kafka, so we drive seal → map → ingest (and
 //! the shred) directly, as the consumer would.
 
 use audit::application::IntegrityStatus;
 use audit::domain::{EventCategory, PartitionKey, SubjectKeyRef, SubjectPseudonym};
-use audit::infrastructure::account_decode::{AccountCreatedWire, GdprDeletionRequestedWire};
-use audit::infrastructure::{map_account_created, map_gdpr_deletion_requested};
+use audit::infrastructure::account_decode::{
+    AccountCreatedWire, AccountDeletedWire, GdprDeletionRequestedWire,
+};
+use audit::infrastructure::{map_account_created, map_account_deleted, map_gdpr_deletion_requested};
 use uuid::Uuid;
 
 use crate::audit_it::harness::{Harness, at};
@@ -35,7 +38,8 @@ async fn account_pii_is_sealed_and_gdpr_deletion_shreds_the_subject() {
     // The subject's DEK now exists (the PII is recoverable by an authorized reader).
     assert!(h.key_vault.key_exists(&key).await.unwrap());
 
-    // 2. account.gdpr_deletion_requested — chain the erasure record, then shred.
+    // 2. account.gdpr_deletion_requested — chain the erasure request only: it
+    //    may still be cancelled, so the PII stays readable.
     let deletion = GdprDeletionRequestedWire {
         account_id: account.clone(),
         retention_days: 30,
@@ -44,6 +48,16 @@ async fn account_pii_is_sealed_and_gdpr_deletion_shreds_the_subject() {
         correlation_id: Uuid::now_v7().to_string(),
     };
     h.ingest().ingest(map_gdpr_deletion_requested(&deletion).unwrap()).await.unwrap();
+    assert!(h.key_vault.key_exists(&key).await.unwrap(), "no shred during the grace period");
+
+    // 3. account.account_deleted — the janitor anonymized it: chain, then shred.
+    let deleted = AccountDeletedWire {
+        account_id: account.clone(),
+        deleted_by: None,
+        occurred_at: at(1_752_592_000_001),
+        correlation_id: Uuid::now_v7().to_string(),
+    };
+    h.ingest().ingest(map_account_deleted(&deleted).unwrap()).await.unwrap();
     h.shred().shred(&subject, &key, &[]).await.unwrap();
 
     // The DEK is gone → all of the subject's sealed PII is permanently unreadable.

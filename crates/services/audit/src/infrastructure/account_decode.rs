@@ -55,6 +55,8 @@ pub enum AccountEventWire {
     KycStatusChanged(KycStatusChangedWire),
     GdprDeletionRequested(GdprDeletionRequestedWire),
     GdprDataExportRequested(GdprDataExportRequestedWire),
+    GdprDeletionCancelled(GdprDeletionCancelledWire),
+    ConsentsUpdated(ConsentsUpdatedWire),
     #[serde(other)]
     Other,
 }
@@ -169,6 +171,33 @@ pub struct GdprDeletionRequestedWire {
     #[serde(default)]
     pub retention_days: u32,
     pub scheduled_deletion_at: DateTime<Utc>,
+    pub occurred_at: DateTime<Utc>,
+    #[serde(default)]
+    pub correlation_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GdprDeletionCancelledWire {
+    pub account_id: String,
+    pub was_scheduled_at: DateTime<Utc>,
+    pub occurred_at: DateTime<Utc>,
+    #[serde(default)]
+    pub correlation_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConsentChangeWire {
+    pub purpose: String,
+    pub granted: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConsentsUpdatedWire {
+    pub account_id: String,
+    #[serde(default)]
+    pub changes: Vec<ConsentChangeWire>,
+    #[serde(default)]
+    pub policy_version: Option<String>,
     pub occurred_at: DateTime<Utc>,
     #[serde(default)]
     pub correlation_id: String,
@@ -345,6 +374,55 @@ pub fn map_gdpr_deletion_requested(
         wire.occurred_at,
         &wire.correlation_id,
         LawfulBasis::LegalObligation,
+        None,
+        attributes,
+    )
+}
+
+/// A withdrawn erasure request: evidence that nothing was erased.
+pub fn map_gdpr_deletion_cancelled(
+    wire: &GdprDeletionCancelledWire,
+) -> Result<AuditEvent, AuditError> {
+    let mut attributes = BTreeMap::new();
+    attributes.insert("was_scheduled_at".to_owned(), wire.was_scheduled_at.to_rfc3339());
+    account_event(
+        "account.gdpr_deletion_cancelled",
+        EventCategory::DataErasure,
+        ActorType::User,
+        &wire.account_id,
+        &wire.account_id,
+        wire.occurred_at,
+        &wire.correlation_id,
+        LawfulBasis::LegalObligation,
+        None,
+        attributes,
+    )
+}
+
+/// Consents given or withdrawn — the tamper-evident copy of the evidence
+/// GDPR Art. 7(1) asks the controller to keep (account holds the history).
+/// `changes` reads e.g. `analytics=withdrawn,marketing=granted`.
+pub fn map_consents_updated(wire: &ConsentsUpdatedWire) -> Result<AuditEvent, AuditError> {
+    let mut changes: Vec<String> = wire
+        .changes
+        .iter()
+        .map(|c| format!("{}={}", c.purpose, if c.granted { "granted" } else { "withdrawn" }))
+        .collect();
+    changes.sort();
+    let mut attributes = BTreeMap::new();
+    attributes.insert("changes".to_owned(), changes.join(","));
+    if let Some(version) = &wire.policy_version {
+        attributes.insert("policy_version".to_owned(), version.clone());
+    }
+    account_event(
+        "account.consents_updated",
+        EventCategory::Consent,
+        ActorType::User,
+        &wire.account_id,
+        &wire.account_id,
+        wire.occurred_at,
+        &wire.correlation_id,
+        LawfulBasis::Consent,
         None,
         attributes,
     )
@@ -619,5 +697,52 @@ mod tests {
             map_password_changed(&a).unwrap().event_id(),
             map_password_changed(&b).unwrap().event_id()
         );
+    }
+
+    #[test]
+    fn a_cancelled_deletion_is_erasure_evidence_and_consents_are_consent_evidence() {
+        let cancelled = map_gdpr_deletion_cancelled(&GdprDeletionCancelledWire {
+            account_id: "acc-1".into(),
+            was_scheduled_at: ts(),
+            occurred_at: ts(),
+            correlation_id: String::new(),
+        })
+        .unwrap();
+        assert_eq!(cancelled.action(), "account.gdpr_deletion_cancelled");
+        assert_eq!(cancelled.category(), EventCategory::DataErasure);
+
+        let consents = map_consents_updated(&ConsentsUpdatedWire {
+            account_id: "acc-1".into(),
+            changes: vec![
+                ConsentChangeWire { purpose: "marketing".into(), granted: true },
+                ConsentChangeWire { purpose: "analytics".into(), granted: false },
+            ],
+            policy_version: Some("PP-1".into()),
+            occurred_at: ts(),
+            correlation_id: String::new(),
+        })
+        .unwrap();
+        assert_eq!(consents.category(), EventCategory::Consent);
+        assert_eq!(consents.attributes().get("changes").unwrap(), "analytics=withdrawn,marketing=granted");
+        assert_eq!(consents.attributes().get("policy_version").unwrap(), "PP-1");
+    }
+
+    /// The wire tags account publishes (`#[serde(tag = "type")]`, snake_case).
+    #[test]
+    fn decodes_the_new_account_event_types() {
+        let cancelled: AccountEventWire = serde_json::from_value(serde_json::json!({
+            "type": "gdpr_deletion_cancelled", "account_id": "acc-1",
+            "was_scheduled_at": "2026-11-03T12:00:00Z", "occurred_at": "2026-10-04T12:00:00Z",
+            "correlation_id": "c"
+        }))
+        .unwrap();
+        assert!(matches!(cancelled, AccountEventWire::GdprDeletionCancelled(_)));
+        let consents: AccountEventWire = serde_json::from_value(serde_json::json!({
+            "type": "consents_updated", "account_id": "acc-1",
+            "changes": [{ "purpose": "marketing", "granted": true }],
+            "policy_version": null, "occurred_at": "2026-10-04T12:00:00Z", "correlation_id": "c"
+        }))
+        .unwrap();
+        assert!(matches!(consents, AccountEventWire::ConsentsUpdated(c) if c.changes.len() == 1));
     }
 }

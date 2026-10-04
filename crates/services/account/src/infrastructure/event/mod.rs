@@ -37,5 +37,6 @@ pub(crate) fn event_key(event: &DomainEvent) -> AccountId {
         DomainEvent::GdprDeletionRequested(e) => e.account_id,
         DomainEvent::GdprDataExportRequested(e) => e.account_id,
         DomainEvent::ConsentsUpdated(e) => e.account_id,
+        DomainEvent::GdprDeletionCancelled(e) => e.account_id,
     }
 }

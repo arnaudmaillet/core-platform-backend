@@ -119,6 +119,7 @@ service AccountService {
   rpc RecordLogin (RecordLoginRequest) returns (CommandResponse);
   rpc RecordFailedLogin (RecordFailedLoginRequest) returns (CommandResponse);
   rpc RequestGdprDeletion (RequestGdprDeletionRequest) returns (CommandResponse);
+  rpc CancelGdprDeletion (CancelGdprDeletionRequest) returns (CommandResponse);  // within the grace period; signing in cancels too
   rpc AnonymizeAccount (AnonymizeAccountRequest) returns (CommandResponse);
   rpc RequestDataExport (RequestDataExportRequest) returns (CommandResponse);
   rpc AssignRole (AssignRoleRequest) returns (CommandResponse);
@@ -172,7 +173,7 @@ Stable codes are `ACC-1xxx` (lifecycle) … `ACC-9xxx` (identifiers), via the sh
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `ConsentsUpdated` | `account_id` | `profile` (suspend/deactivate/delete → mask; activate → restore) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `ConsentsUpdated` | `account_id` | `profile` (suspend/deactivate/delete → mask; activate → restore) |
 
 **Consumes:** none — `account` is a pure event producer.
 
@@ -234,6 +235,7 @@ async fn main() -> anyhow::Result<()> {
 | `KAFKA_BROKERS` | **Yes** | — | Kafka bootstrap brokers for `account.v1.events`. |
 | `ACCOUNT_GRPC_ADDR` | No | `0.0.0.0:50059` | gRPC bind address. |
 | `ACCOUNT_REQUIRE_STEP_UP` | No | `false` | `DeactivateAccount` and `RequestGdprDeletion` on the edge need a credential proof under 5 min old (the token's `auth_time`, from `auth.v1.Login` / `VerifyCredentials`); otherwise `PERMISSION_DENIED` `step_up_required…`. Turn on once clients step up. |
+| `ACCOUNT_GDPR_JANITOR_INTERVAL_SECS` | No | `3600` | How often account-server anonymizes the accounts whose erasure grace period (30 days) has ended; `0` turns the janitor off. Safe on every replica (optimistic CAS). |
 
 > Full connection/timeout/pool tuning lives in the shared `postgres-storage` and `transport` crates.
 

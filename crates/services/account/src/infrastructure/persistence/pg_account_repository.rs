@@ -458,4 +458,28 @@ impl AccountRepository for PgAccountRepository {
 
         Ok(count)
     }
+
+    async fn list_due_for_anonymization(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        limit: i64,
+    ) -> Result<Vec<AccountId>, AccountError> {
+        // Served by the partial index `accounts_gdpr_deletion_scheduled_idx`.
+        let ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT id FROM accounts
+            WHERE gdpr_deletion_scheduled_at IS NOT NULL
+              AND gdpr_deletion_scheduled_at <= $1
+              AND gdpr_anonymized_at IS NULL
+            ORDER BY gdpr_deletion_scheduled_at
+            LIMIT $2
+            "#,
+        )
+        .bind(now)
+        .bind(limit)
+        .fetch_all(self.tx_manager.pool())
+        .await
+        .map_err(|e| AccountError::Storage(StorageError::from(e)))?;
+        Ok(ids.into_iter().map(AccountId::from_uuid).collect())
+    }
 }

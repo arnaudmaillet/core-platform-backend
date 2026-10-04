@@ -8,6 +8,7 @@ use transport::grpc::edge;
 use crate::application::command::{
     anonymize_account::AnonymizeAccountCommand,
     assign_role::AssignRoleCommand,
+    cancel_gdpr_deletion::CancelGdprDeletionCommand,
     change_password::ChangePasswordCommand,
     create_account::CreateAccountCommand,
     deactivate_account::DeactivateAccountCommand,
@@ -313,6 +314,20 @@ where
             account_id: req.account_id.clone(),
             retention_days: 30, // default legal retention; can be made configurable
         };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_command(&req.account_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    pub async fn cancel_gdpr_deletion(
+        &self,
+        request: Request<proto::CancelGdprDeletionRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let cmd = CancelGdprDeletionCommand { account_id: req.account_id.clone() };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 8dadda7ad8ce5531161c77e21bde9c193f4a46560dd343de960301954871f151
+  source_sha256: a3e6ed42c882bf7aa7545d48c6a30b4098ddf10c1aa5437103c0ac8058ce73c9
   translated_at: 2026-10-04
   status: complete
 ---
@@ -97,11 +97,12 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 |---|---|---|---|
 | `account_created` / `email_changed` / `email_verified` / `phone_changed` | un fait de cycle de vie de compte porteur de PII s'est produit | la commande correspondante commite | `audit` (PII scellée en enveloppe crypto-shred), `profile` (persona) |
 | `password_changed` / `mfa_enrolled` / `mfa_revoked` | un fait sécurité/identifiant (sans PII) | changement d'identifiant | `audit` (catégorie Authentication) |
-| `activated` / `deactivated` / `suspended` / `deleted` / `kyc_status_changed` | une transition du cycle de vie de l'identité | changement de cycle de vie | `audit` (Identity), `profile` |
+| `activated` / `deactivated` / `suspended` / `deleted` / `kyc_status_changed` | une transition du cycle de vie de l'identité (`deleted` : anonymisé par le janitor RGPD, ou suppression admin) | changement de cycle de vie | `audit` (Identity ; `deleted` → **crypto-shred du sujet**, ferme la boucle Art. 17), `profile` |
 | `role_assigned` / `role_revoked` | un octroi d'autorisation a changé | octroi/révocation de rôle | `audit` (Authorization) |
-| `gdpr_deletion_requested` | le droit à l'effacement (Art. 17) a été invoqué | demande utilisateur/DPO | `audit` → **crypto-shred du sujet** (ferme la boucle Art. 17) |
+| `gdpr_deletion_requested` | le droit à l'effacement (Art. 17) a été invoqué ; effacement programmé à 30 jours (un compte actif est désactivé entre-temps) | demande utilisateur/DPO | `audit` (preuve DataErasure) |
+| `gdpr_deletion_cancelled` | un effacement en attente a été retiré pendant son délai de grâce | le titulaire se reconnecte / `CancelGdprDeletion` | `audit` (preuve DataErasure) |
 | `gdpr_data_export_requested` | le droit d'accès/portabilité a été invoqué | demande utilisateur/DPO | exécution de l'export (en aval) |
-| `consents_updated` | le titulaire a donné ou retiré des consentements (art. 7), changements effectifs seulement, avec la version de la politique | `UpdateConsents` change quelque chose | aucun pour l'instant (l'historique horodaté `account_consent_history` fait preuve) |
+| `consents_updated` | le titulaire a donné ou retiré des consentements (art. 7), changements effectifs seulement, avec la version de la politique | `UpdateConsents` change quelque chose | `audit` (Consent — la copie inviolable de `account_consent_history`) |
 
 ## Authentification — `auth.v1.events` (producteur : `auth`)
 

@@ -5,3 +5,4 @@ mod persistence_roundtrip;
 mod uniqueness_race;
 mod mutation_roundtrip;
 mod consents;
+mod gdpr_deletion;

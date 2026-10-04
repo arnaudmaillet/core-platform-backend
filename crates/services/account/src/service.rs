@@ -16,6 +16,8 @@ use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
 
 use crate::app::App;
+use crate::application::command::AnonymizeDueAccounts;
+use crate::infrastructure::worker::gdpr_janitor::run_gdpr_janitor;
 use crate::application::port::EventPublisher;
 use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 use crate::infrastructure::grpc::handler::account_service_handler::AccountServiceServer;
@@ -53,6 +55,7 @@ impl Service for AccountService {
         authenticated("/account.v1.AccountService/RevokeMfa"),
         authenticated("/account.v1.AccountService/DeactivateAccount"),
         authenticated("/account.v1.AccountService/RequestGdprDeletion"),
+        authenticated("/account.v1.AccountService/CancelGdprDeletion"),
         authenticated("/account.v1.AccountService/RequestDataExport"),
         // The holder's own GDPR record and consents (GDPR Art. 7, 15).
         authenticated("/account.v1.AccountService/GetGdprRecord"),
@@ -74,6 +77,17 @@ impl Service for AccountService {
         let app = App::build(pool.clone(), publisher)
             .await
             .map_err(|e| anyhow::anyhow!("account app build: {e}"))?;
+
+        // The GDPR janitor: anonymizes accounts whose erasure grace period has
+        // ended (ACCOUNT_GDPR_JANITOR_INTERVAL_SECS, default hourly; 0 = off).
+        let interval_secs = std::env::var("ACCOUNT_GDPR_JANITOR_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(3_600);
+        if interval_secs > 0 {
+            let janitor = Arc::new(AnonymizeDueAccounts::new(Arc::clone(&app.repository)));
+            tokio::spawn(run_gdpr_janitor(janitor, std::time::Duration::from_secs(interval_secs)));
+        }
 
         Ok(Self { app, pool })
     }
