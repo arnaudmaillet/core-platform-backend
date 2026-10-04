@@ -50,8 +50,10 @@ where
         let not_found = || CommentError::CommentNotFound { comment_id: comment_id.as_str() };
         let comment = self.repository.find_by_id(comment_id).await?.filter(Comment::held).ok_or_else(not_found)?;
         let post_owner = self.gate.post_author(comment.post_id()).await?;
+        // Not found for anyone but the post's owner, so a held comment's
+        // existence does not leak.
         if post_owner.as_ref().map(ProfileId::as_uuid) != Some(owner.as_uuid()) {
-            return Err(CommentError::AuthorMismatch { comment_id: comment_id.as_str(), caller_id: owner.as_str() });
+            return Err(not_found());
         }
         Ok(comment)
     }
