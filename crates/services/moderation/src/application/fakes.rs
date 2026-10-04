@@ -17,13 +17,13 @@ use super::policy::ModerationPolicy;
 use super::port::{
     AccountDirectory, AppealRepository, CaseRepository, ClassifierGateway, ContentHash,
     CorpusMatch, DecisionRepository, EnforcementProjection, EnforcementRepository, EventPublisher,
-    PenaltyRepository, ScreenCorpus,
+    FiledReport, PenaltyRepository, ReportCursor, ReportRepository, ScreenCorpus,
 };
-use crate::domain::aggregate::{Appeal, Case, Decision, EnforcementAction, PenaltyLedger};
+use crate::domain::aggregate::{Appeal, Case, Decision, EnforcementAction, PenaltyLedger, Report};
 use crate::domain::event::DomainEvent;
 use crate::domain::value_object::{
     ActorId, AppealId, CaseId, CaseStatus, DecisionId, EnforcementId, EnforcementStatus,
-    EnforcementVersion, PolicyCategory, SubjectRef,
+    EnforcementVersion, PolicyCategory, ReportId, ReporterKind, SubjectRef,
 };
 use crate::error::ModerationError;
 
@@ -104,6 +104,63 @@ impl DecisionRepository for InMemoryDecisionRepository {
 
     async fn find_by_id(&self, id: &DecisionId) -> Result<Option<Decision>, ModerationError> {
         Ok(self.decisions.lock().unwrap().get(id).cloned())
+    }
+}
+
+// ─── ReportRepository ──────────────────────────────────────────────────────────
+
+/// Joins each report to its case in `cases`, like the SQL adapter's LEFT JOIN.
+pub struct InMemoryReportRepository {
+    reports: Mutex<HashMap<ReportId, Report>>,
+    cases: Arc<InMemoryCaseRepository>,
+}
+
+impl InMemoryReportRepository {
+    pub fn new(cases: Arc<InMemoryCaseRepository>) -> Self {
+        Self { reports: Mutex::new(HashMap::new()), cases }
+    }
+
+    pub fn count(&self) -> usize {
+        self.reports.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl ReportRepository for InMemoryReportRepository {
+    async fn record(&self, report: &Report) -> Result<(), ModerationError> {
+        self.reports.lock().unwrap().entry(report.id()).or_insert_with(|| report.clone());
+        Ok(())
+    }
+
+    async fn list_for_reporter(
+        &self,
+        kind: ReporterKind,
+        reporter_id: &ActorId,
+        after: Option<ReportCursor>,
+        limit: usize,
+    ) -> Result<Vec<FiledReport>, ModerationError> {
+        let key = |r: &Report| (r.reported_at(), r.id().as_uuid());
+        let mut mine: Vec<Report> = self
+            .reports
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|r| r.reporter_kind() == kind && r.reporter_id() == *reporter_id)
+            .filter(|r| after.is_none_or(|c| key(r) < (c.reported_at, c.id.as_uuid())))
+            .cloned()
+            .collect();
+        mine.sort_by_key(|r| std::cmp::Reverse(key(r)));
+        mine.truncate(limit);
+        let mut filed = Vec::with_capacity(mine.len());
+        for report in mine {
+            let case_status = self
+                .cases
+                .find_by_id(&CaseId::for_subject(report.subject()))
+                .await?
+                .map(|c| c.status());
+            filed.push(FiledReport { report, case_status });
+        }
+        Ok(filed)
     }
 }
 
@@ -475,6 +532,7 @@ impl super::port::ReportRateLimiter for CountingReportQuota {
 
 pub struct Fixture {
     pub cases: Arc<InMemoryCaseRepository>,
+    pub reports: Arc<InMemoryReportRepository>,
     pub decisions: Arc<InMemoryDecisionRepository>,
     pub enforcements: Arc<InMemoryEnforcementRepository>,
     pub penalties: Arc<InMemoryPenaltyRepository>,
@@ -491,8 +549,10 @@ pub struct Fixture {
 
 impl Fixture {
     pub fn new() -> Self {
+        let cases = Arc::new(InMemoryCaseRepository::new());
         Self {
-            cases: Arc::new(InMemoryCaseRepository::new()),
+            reports: Arc::new(InMemoryReportRepository::new(Arc::clone(&cases))),
+            cases,
             decisions: Arc::new(InMemoryDecisionRepository::new()),
             enforcements: Arc::new(InMemoryEnforcementRepository::new()),
             penalties: Arc::new(InMemoryPenaltyRepository::new()),
@@ -546,6 +606,7 @@ impl Fixture {
 
     pub fn ingest_report_handler(&self) -> super::command::IngestReportHandler {
         super::command::IngestReportHandler::new(
+            Arc::clone(&self.reports) as _,
             Arc::clone(&self.cases) as _,
             Arc::clone(&self.publisher) as _,
             Arc::clone(&self.classifiers) as _,
@@ -591,5 +652,17 @@ impl Fixture {
 
     pub fn statement_of_reasons_handler(&self) -> super::query::GetStatementOfReasonsHandler {
         super::query::GetStatementOfReasonsHandler::new(Arc::clone(&self.decisions) as _)
+    }
+
+    pub fn submit_report_handler(&self) -> super::command::SubmitReportHandler {
+        super::command::SubmitReportHandler::new(
+            Arc::clone(&self.subjects) as _,
+            Arc::clone(&self.report_quota) as _,
+            Arc::new(self.ingest_report_handler()),
+        )
+    }
+
+    pub fn list_my_reports_handler(&self) -> super::query::ListMyReportsHandler {
+        super::query::ListMyReportsHandler::new(Arc::clone(&self.reports) as _)
     }
 }

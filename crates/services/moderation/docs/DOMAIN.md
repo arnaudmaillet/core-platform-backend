@@ -80,7 +80,7 @@ signals/report --(threshold)--> Case opened --(review/decide)--> Decision record
 ## 4. Data Ownership & Boundaries
 
 **This context is the source of truth for:**
-- Cases, decisions (WORM), appeals, penalty ledger, policy versions — **Postgres** db `moderation`. The decision ledger is append-only.
+- Cases, decisions (WORM), appeals, penalty ledger, policy versions, and each reporter's record of their reports (`reports`) — **Postgres** db `moderation`. The decision ledger is append-only.
 - Signal / evidence history — **ScyllaDB** keyspace `moderation` (TWCS).
 - The enforcement projection + Screen hash corpus — **Redis** (derived/rebuildable).
 

@@ -119,7 +119,8 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS where it
 rpc Screen (ScreenRequest) returns (ScreenResponse);
 
 // Client reports (edge member_or_guest — DSA Art. 16, guests included).
-rpc SubmitReport (..) returns (..);
+rpc SubmitReport  (..) returns (..);
+rpc ListMyReports (..) returns (..);   // the caller's reports + outcome (DSA Art. 16(5))
 
 // Ops console — case / queue / appeal lifecycle.
 rpc OpenCase   (..) returns (..);   rpc AssignCase (..) returns (..);
@@ -127,13 +128,19 @@ rpc DecideCase (..) returns (..);   rpc ListQueue  (..) returns (..);
 rpc FileAppeal (..) returns (..);   rpc ResolveAppeal (..) returns (..);
 
 // Compliance / back-office.
-rpc GetStatementOfReasons (..) returns (..);   // DSA SoR export
-rpc GetEnforcementState   (..) returns (..);   // internal; DISCOURAGED on hot path
+rpc GetStatementOfReasons (..) returns (..);   // DSA SoR; edge: the sanctioned account only
+rpc GetEnforcementState   (..) returns (..);   // edge: own state only; DISCOURAGED on hot path
 ```
 
 > **Wire / contract rule:** the surface exposes only normalized integrity types — `SubjectRef` (entity_type + entity_id + actor_id + surface), policy category, action type, case/appeal ids — never classifier-vendor or content-internal fields.
 >
-> **Hot-path rule:** the fleet reads enforcement via **Plane B** (events + Redis projection), **not** `GetEnforcementState`. The RPC exists for back-office/cold reads only.
+> **Hot-path rule:** the fleet reads enforcement via **Plane B** (events + Redis projection), **not** `GetEnforcementState`. The RPC exists for back-office/cold reads and for the account's own settings screen.
+>
+> **The sanctioned account (DSA Art. 17, 20).** On the edge (`authenticated`), `GetEnforcementState` binds `actor_id` to
+> the token (`require_account`); each `EnforcementView` carries its `decision_id`, the key for
+> `GetStatementOfReasons` and `FileAppeal`. Both answer `NOT_FOUND` for a decision about another account — on the edge
+> for the statement, everywhere for an appeal (only the sanctioned account appeals). Mesh reads of a statement stay
+> unfiltered (back-office).
 >
 > **Client reports (`SubmitReport`).** Anyone may report (DSA Art. 16), so the RPC is open to every client
 > session, member **or guest** (edge `member_or_guest`). The **reporter** is the verified token (a member's account,
@@ -145,7 +152,14 @@ rpc GetEnforcementState   (..) returns (..);   // internal; DISCOURAGED on hot p
 > case like a pipeline report; a guest's is a weaker signal (`guest_report`, 0.3 vs 0.5). `OpenCase` stays
 > mesh-only (it is the reviewer console's).
 >
-> **Authorization (deployment requirement):** the mutating ops RPCs (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) are **privileged** — they ban/suspend/remove. The service does not self-authorize the caller; mutating RPCs **must** be restricted to authenticated reviewer principals at the edge (gateway authz / `auth-context` permission gate, e.g. `moderation:decide`) before exposure. `Screen` and `FileAppeal` are caller-facing; the rest are reviewer-only.
+> **The reporter's view (`ListMyReports`, DSA Art. 16(5)).** Each report is also recorded for its reporter (`reports`
+> table, one row per reporter × subject, keyed by the id `SubmitReport` returns). `ListMyReports` (edge
+> `member_or_guest`, reporter = the token, keyset-paged newest first) joins each report to its case: open / triaged ⇒
+> `UNDER_REVIEW`, actioned / appealed ⇒ `ACTION_TAKEN`, dismissed (incl. overturned on appeal) ⇒ `NO_VIOLATION`.
+> Coarse on purpose: a reporter never learns which sanction hit the reported account. Member and guest ids are
+> kept apart (`reporter_kind`).
+>
+> **Authorization (deployment requirement):** the mutating ops RPCs (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) are **privileged** — they ban/suspend/remove. The service does not self-authorize the caller; mutating RPCs **must** be restricted to authenticated reviewer principals at the edge (gateway authz / `auth-context` permission gate, e.g. `moderation:decide`) before exposure. `Screen`, `SubmitReport`, `ListMyReports`, `FileAppeal`, `GetStatementOfReasons` and `GetEnforcementState` are caller-facing; the rest are reviewer-only.
 
 ### Rust ports (hexagonal contract) *(Phase 3)*
 

@@ -11,12 +11,14 @@ pub mod pg_case_repository;
 pub mod pg_decision_repository;
 pub mod pg_enforcement_repository;
 pub mod pg_penalty_repository;
+pub mod pg_report_repository;
 
 pub use pg_appeal_repository::PgAppealRepository;
 pub use pg_case_repository::PgCaseRepository;
 pub use pg_decision_repository::PgDecisionRepository;
 pub use pg_enforcement_repository::PgEnforcementRepository;
 pub use pg_penalty_repository::PgPenaltyRepository;
+pub use pg_report_repository::PgReportRepository;
 
 use postgres_storage::StorageError;
 

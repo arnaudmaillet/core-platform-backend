@@ -8,10 +8,10 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use cqrs::Envelope;
 
-use crate::application::port::{CaseRepository, ClassifierGateway, EventPublisher};
+use crate::application::port::{CaseRepository, ClassifierGateway, EventPublisher, ReportRepository};
 use crate::domain::aggregate::{Case, CaseOpenParams, Report};
 use crate::domain::value_object::{
-    ActorId, CaseId, Confidence, PolicyCategory, Signal, SubjectRef,
+    ActorId, CaseId, Confidence, PolicyCategory, ReporterKind, Signal, SubjectRef,
 };
 use crate::error::ModerationError;
 
@@ -56,6 +56,15 @@ impl ReportOrigin {
             Self::Guest => ("guest_report", 0.3),
         }
     }
+
+    /// Who the reporter is: pipeline reports carry an account id, like a
+    /// member's.
+    pub fn reporter_kind(self) -> ReporterKind {
+        match self {
+            Self::Pipeline | Self::Member => ReporterKind::Member,
+            Self::Guest => ReporterKind::Guest,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +76,7 @@ pub struct IngestReportCommand {
 }
 
 pub struct IngestReportHandler {
+    reports: Arc<dyn ReportRepository>,
     cases: Arc<dyn CaseRepository>,
     publisher: Arc<dyn EventPublisher>,
     classifiers: Arc<dyn ClassifierGateway>,
@@ -74,11 +84,12 @@ pub struct IngestReportHandler {
 
 impl IngestReportHandler {
     pub fn new(
+        reports: Arc<dyn ReportRepository>,
         cases: Arc<dyn CaseRepository>,
         publisher: Arc<dyn EventPublisher>,
         classifiers: Arc<dyn ClassifierGateway>,
     ) -> Self {
-        Self { cases, publisher, classifiers }
+        Self { reports, cases, publisher, classifiers }
     }
 
     /// Returns the (deterministic) id of the case the report fed into.
@@ -101,7 +112,17 @@ impl IngestReportHandler {
         let cmd = envelope.payload;
 
         // The Report aggregate enforces the self-report invariant and dedup id.
-        let _report = Report::file(cmd.reporter_id, cmd.subject.clone(), cmd.category, cmd.reason, now)?;
+        // It is recorded first, for the reporter (ListMyReports): idempotent, and
+        // until the case is saved it simply reads as under review.
+        let report = Report::file(
+            cmd.reporter_id,
+            origin.reporter_kind(),
+            cmd.subject.clone(),
+            cmd.category,
+            cmd.reason,
+            now,
+        )?;
+        self.reports.record(&report).await?;
 
         let mut case = open_or_load(&self.cases, &cmd.subject, cmd.category, now, envelope.correlation_id).await?;
         let (source, confidence) = origin.signal();

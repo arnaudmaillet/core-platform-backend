@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 0086d641ff44a8867fa2fedb04037a84dde049727cea25b73af43ca855306426
+  source_sha256: 6a1ce97fdd8aef4468a90a49cb1ed87741204e699a0bc2ef7ec3afe3b2d7d7fc
   translated_at: 2026-10-04
   status: complete
 ---
@@ -130,7 +130,8 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS là où 
 rpc Screen (ScreenRequest) returns (ScreenResponse);
 
 // Signalements clients (edge member_or_guest — DSA art. 16, invités compris).
-rpc SubmitReport (..) returns (..);
+rpc SubmitReport  (..) returns (..);
+rpc ListMyReports (..) returns (..);   // les signalements de l'appelant + leur issue (DSA art. 16(5))
 
 // Console d'opérations — cycle de vie dossier / file / appel.
 rpc OpenCase   (..) returns (..);   rpc AssignCase (..) returns (..);
@@ -138,13 +139,19 @@ rpc DecideCase (..) returns (..);   rpc ListQueue  (..) returns (..);
 rpc FileAppeal (..) returns (..);   rpc ResolveAppeal (..) returns (..);
 
 // Conformité / back-office.
-rpc GetStatementOfReasons (..) returns (..);   // export DSA SoR
-rpc GetEnforcementState   (..) returns (..);   // interne ; DÉCONSEILLÉ sur le chemin chaud
+rpc GetStatementOfReasons (..) returns (..);   // DSA SoR ; edge : le compte sanctionné uniquement
+rpc GetEnforcementState   (..) returns (..);   // edge : son propre état uniquement ; DÉCONSEILLÉ sur le chemin chaud
 ```
 
 > **Règle de contrat / wire :** la surface n'expose que des types d'intégrité normalisés — `SubjectRef` (entity_type + entity_id + actor_id + surface), catégorie de politique, type d'action, identifiants de dossier/appel — jamais de champs spécifiques aux classifieurs ou internes au contenu.
 >
-> **Règle du chemin chaud :** la flotte lit l'application via le **Plan B** (événements + projection Redis), **pas** `GetEnforcementState`. La RPC n'existe que pour le back-office/lectures froides.
+> **Règle du chemin chaud :** la flotte lit l'application via le **Plan B** (événements + projection Redis), **pas** `GetEnforcementState`. La RPC n'existe que pour le back-office/lectures froides et pour l'écran de réglages du compte lui-même.
+>
+> **Le compte sanctionné (DSA art. 17, 20).** En périphérie (`authenticated`), `GetEnforcementState` lie `actor_id` au
+> jeton (`require_account`) ; chaque `EnforcementView` porte son `decision_id`, la clé de `GetStatementOfReasons` et
+> de `FileAppeal`. Les deux répondent `NOT_FOUND` pour une décision visant un autre compte — en périphérie pour
+> l'exposé des motifs, partout pour un recours (seul le compte sanctionné fait recours). Les lectures mesh d'un exposé
+> des motifs restent non filtrées (back-office).
 >
 > **Signalements clients (`SubmitReport`).** Tout le monde peut signaler (DSA art. 16) : la RPC est ouverte à toute
 > session client, membre **ou invité** (edge `member_or_guest`). L'**auteur du signalement** est le jeton vérifié (le
@@ -157,7 +164,14 @@ rpc GetEnforcementState   (..) returns (..);   // interne ; DÉCONSEILLÉ sur le
 > signalement du pipeline ; celui d'un invité est un signal plus faible (`guest_report`, 0,3 contre 0,5). `OpenCase`
 > reste mesh uniquement (c'est celui de la console de modération).
 >
-> **Autorisation (exigence de déploiement) :** les RPC d'opérations mutatives (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) sont **privilégiées** — elles bannissent/suspendent/suppriment. Le service n'autorise pas lui-même l'appelant ; les RPC mutatives **doivent** être restreintes à des principaux modérateurs authentifiés en périphérie (autorisation gateway / contrôle de permission `auth-context`, ex. `moderation:decide`) avant exposition. `Screen` et `FileAppeal` sont orientées appelant ; le reste est réservé aux modérateurs.
+> **La vue de l'auteur du signalement (`ListMyReports`, DSA art. 16(5)).** Chaque signalement est aussi enregistré
+> pour son auteur (table `reports`, une ligne par auteur × sujet, clé = l'id renvoyé par `SubmitReport`).
+> `ListMyReports` (edge `member_or_guest`, auteur = le jeton, pagination keyset du plus récent au plus ancien) joint
+> chaque signalement à son dossier : open / triaged ⇒ `UNDER_REVIEW`, actioned / appealed ⇒ `ACTION_TAKEN`, dismissed
+> (y compris annulé en recours) ⇒ `NO_VIOLATION`. Volontairement grossier : l'auteur n'apprend jamais quelle sanction
+> a frappé le compte signalé. Les ids membre et invité restent distincts (`reporter_kind`).
+>
+> **Autorisation (exigence de déploiement) :** les RPC d'opérations mutatives (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) sont **privilégiées** — elles bannissent/suspendent/suppriment. Le service n'autorise pas lui-même l'appelant ; les RPC mutatives **doivent** être restreintes à des principaux modérateurs authentifiés en périphérie (autorisation gateway / contrôle de permission `auth-context`, ex. `moderation:decide`) avant exposition. `Screen`, `SubmitReport`, `ListMyReports`, `FileAppeal`, `GetStatementOfReasons` et `GetEnforcementState` sont orientées appelant ; le reste est réservé aux modérateurs.
 
 ### Ports Rust (contrat hexagonal) *(Phase 3)*
 

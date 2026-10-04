@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::value_object::{ActorId, PolicyCategory, ReportId, SubjectRef};
+use crate::domain::value_object::{ActorId, PolicyCategory, ReportId, ReporterKind, SubjectRef};
 use crate::error::ModerationError;
 
 /// The **Report** aggregate — a user-submitted abuse report. It is an *input* to
@@ -13,6 +13,7 @@ use crate::error::ModerationError;
 pub struct Report {
     id: ReportId,
     reporter_id: ActorId,
+    reporter_kind: ReporterKind,
     subject: SubjectRef,
     category: PolicyCategory,
     reason: String,
@@ -24,6 +25,7 @@ impl Report {
     /// content (the actor behind the subject is the reporter).
     pub fn file(
         reporter_id: ActorId,
+        reporter_kind: ReporterKind,
         subject: SubjectRef,
         category: PolicyCategory,
         reason: impl Into<String>,
@@ -36,6 +38,7 @@ impl Report {
         Ok(Self {
             id,
             reporter_id,
+            reporter_kind,
             subject,
             category,
             reason: reason.into(),
@@ -47,12 +50,13 @@ impl Report {
     pub fn reconstitute(
         id: ReportId,
         reporter_id: ActorId,
+        reporter_kind: ReporterKind,
         subject: SubjectRef,
         category: PolicyCategory,
         reason: String,
         reported_at: DateTime<Utc>,
     ) -> Self {
-        Self { id, reporter_id, subject, category, reason, reported_at }
+        Self { id, reporter_id, reporter_kind, subject, category, reason, reported_at }
     }
 
     pub fn id(&self) -> ReportId {
@@ -61,6 +65,10 @@ impl Report {
 
     pub fn reporter_id(&self) -> ActorId {
         self.reporter_id
+    }
+
+    pub fn reporter_kind(&self) -> ReporterKind {
+        self.reporter_kind
     }
 
     pub fn subject(&self) -> &SubjectRef {
@@ -99,7 +107,7 @@ mod tests {
         let me = ActorId::from_uuid(Uuid::from_u128(5));
         let my_content = subject_by(5);
         assert!(matches!(
-            Report::file(me, my_content, PolicyCategory::Spam, "x", t0()).unwrap_err(),
+            Report::file(me, ReporterKind::Member, my_content, PolicyCategory::Spam, "x", t0()).unwrap_err(),
             ModerationError::SelfReportRejected
         ));
     }
@@ -108,8 +116,8 @@ mod tests {
     fn dedups_same_reporter_and_subject() {
         let reporter = ActorId::from_uuid(Uuid::from_u128(9));
         let target = subject_by(1);
-        let r1 = Report::file(reporter, target.clone(), PolicyCategory::Hate, "a", t0()).unwrap();
-        let r2 = Report::file(reporter, target, PolicyCategory::Hate, "different reason", t0()).unwrap();
+        let r1 = Report::file(reporter, ReporterKind::Member, target.clone(), PolicyCategory::Hate, "a", t0()).unwrap();
+        let r2 = Report::file(reporter, ReporterKind::Member, target, PolicyCategory::Hate, "different reason", t0()).unwrap();
         assert_eq!(r1.id(), r2.id(), "id is content-addressed for dedup");
     }
 }

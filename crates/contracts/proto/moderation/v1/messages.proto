@@ -83,6 +83,9 @@ message EnforcementView {
     google.protobuf.Timestamp   applied_at     = 6;
     // Unset for permanent actions (BAN); set for time-boxed restrictions.
     google.protobuf.Timestamp   expires_at     = 7;
+    // The decision that imposed it: the key for GetStatementOfReasons and
+    // FileAppeal.
+    string                      decision_id    = 8;
 }
 
 // An appeal against a decision.
@@ -219,7 +222,7 @@ message GetStatementOfReasonsResponse {
     StatementOfReasons  statement = 1;
 }
 
-// ── Enforcement state (INTERNAL — discouraged on the hot path) ────────────────
+// ── Enforcement state (discouraged on the hot path) ───────────────────────────
 
 message GetEnforcementStateRequest {
     string  actor_id = 1;
@@ -249,4 +252,30 @@ message SubmitReportResponse {
     // Deterministic per reporter and subject: reporting the same content twice
     // returns the same id.
     string  report_id   = 1;
+}
+
+message ListMyReportsRequest {
+    // Default 20, capped at 50.
+    int32   page_size   = 1;
+    // Opaque cursor from a previous response; empty for the first page.
+    string  page_token  = 2;
+}
+
+// One of the caller's own reports and what became of it.
+message ReportView {
+    string                      report_id   = 1;
+    EntityType                  entity_type = 2;
+    string                      entity_id   = 3;
+    PolicyCategory              category    = 4;
+    // The reporter's own free text.
+    string                      reason      = 5;
+    ReportStatus                status      = 6;
+    google.protobuf.Timestamp   reported_at = 7;
+}
+
+message ListMyReportsResponse {
+    // Newest first.
+    repeated ReportView reports         = 1;
+    // Empty on the last page.
+    string              next_page_token = 2;
 }

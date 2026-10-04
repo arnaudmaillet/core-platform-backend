@@ -42,6 +42,10 @@ service ModerationService {
     // subject's review case like any other report.
     rpc SubmitReport(SubmitReportRequest) returns (SubmitReportResponse);
 
+    // The caller's own reports, newest first, each with what became of it
+    // (DSA Art. 16(5)). The reporter is the caller's token (member or guest).
+    rpc ListMyReports(ListMyReportsRequest) returns (ListMyReportsResponse);
+
     // ── Case / queue lifecycle (ops console) ──────────────────────────────────
 
     // Open (or idempotently return) a review case for a subject.
@@ -69,11 +73,14 @@ service ModerationService {
 
     // ── Compliance / back-office ──────────────────────────────────────────────
 
-    // Return the DSA machine-readable Statement of Reasons for a decision.
+    // Return the DSA machine-readable Statement of Reasons for a decision. On the
+    // client edge only the sanctioned account may read it (DSA Art. 17); any
+    // other caller gets NOT_FOUND.
     rpc GetStatementOfReasons(GetStatementOfReasonsRequest) returns (GetStatementOfReasonsResponse);
 
-    // INTERNAL, discouraged on the hot path. Coarse enforcement state for an
-    // actor, for back-office/cold reads only — the fleet reads enforcement via
-    // Plane B (events + Redis projection), not this RPC.
+    // Coarse enforcement state for an actor. Discouraged on the hot path — the
+    // fleet reads enforcement via Plane B (events + Redis projection), not this
+    // RPC. On the client edge an account reads its own state only (actor_id must
+    // be the caller); each enforcement carries its decision_id.
     rpc GetEnforcementState(GetEnforcementStateRequest) returns (GetEnforcementStateResponse);
 }

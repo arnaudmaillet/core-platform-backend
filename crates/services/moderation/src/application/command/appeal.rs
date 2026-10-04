@@ -46,6 +46,11 @@ impl FileAppealHandler {
             .find_by_id(&cmd.decision_id)
             .await?
             .ok_or(ModerationError::DecisionNotFound { id: cmd.decision_id.as_str() })?;
+        // Only the sanctioned account appeals its decision; anyone else learns
+        // nothing, not even that the decision exists.
+        if decision.subject().actor_id() != cmd.actor_id {
+            return Err(ModerationError::DecisionNotFound { id: cmd.decision_id.as_str() });
+        }
 
         // Some categories (legally-mandated CSAM removals) are not appealable.
         if !decision.category().is_appealable() {

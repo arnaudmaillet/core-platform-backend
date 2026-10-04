@@ -16,12 +16,13 @@ use crate::application::command::{
 use crate::application::port::ContentHash;
 use crate::application::query::{
     GetEnforcementStateHandler, GetEnforcementStateQuery, GetStatementOfReasonsHandler,
-    GetStatementOfReasonsQuery, ListQueueHandler, ListQueueQuery, StatementOfReasons,
+    GetStatementOfReasonsQuery, ListMyReportsHandler, ListMyReportsQuery, ListQueueHandler,
+    ListQueueQuery, MyReport, StatementOfReasons,
 };
 use crate::domain::aggregate::{Appeal, Case, Decision, EnforcementAction};
 use crate::domain::value_object::{
     ActionType, ActorId, AppealId, CaseId, CaseStatus, DecisionId, EnforcementStatus, EntityType,
-    PolicyCategory, Signal, SubjectRef,
+    PolicyCategory, ReportStatus, Signal, SubjectRef,
 };
 use crate::error::ModerationError;
 
@@ -44,6 +45,7 @@ pub struct ModerationServiceHandler {
     statement_of_reasons: Arc<GetStatementOfReasonsHandler>,
     enforcement_state: Arc<GetEnforcementStateHandler>,
     submit_report: Arc<SubmitReportHandler>,
+    list_my_reports: Arc<ListMyReportsHandler>,
 }
 
 impl ModerationServiceHandler {
@@ -59,6 +61,7 @@ impl ModerationServiceHandler {
         statement_of_reasons: Arc<GetStatementOfReasonsHandler>,
         enforcement_state: Arc<GetEnforcementStateHandler>,
         submit_report: Arc<SubmitReportHandler>,
+        list_my_reports: Arc<ListMyReportsHandler>,
     ) -> Self {
         Self {
             screen,
@@ -71,6 +74,7 @@ impl ModerationServiceHandler {
             statement_of_reasons,
             enforcement_state,
             submit_report,
+            list_my_reports,
         }
     }
 
@@ -132,6 +136,27 @@ impl ModerationServiceHandler {
             .await
             .map_err(status)?;
         Ok(Response::new(proto::SubmitReportResponse { report_id: report_id.as_str() }))
+    }
+
+    /// The caller's own reports (edge `member_or_guest`), each with what became
+    /// of it. Like `SubmitReport`, the reporter is the verified token; a mesh
+    /// call has no reporter and is refused.
+    pub async fn list_my_reports(
+        &self,
+        request: Request<proto::ListMyReportsRequest>,
+    ) -> Result<Response<proto::ListMyReportsResponse>, Status> {
+        let reporter = reporter_of(&request).map_err(status)?;
+        let req = request.into_inner();
+        let query = ListMyReportsQuery {
+            reporter,
+            page_token: (!req.page_token.is_empty()).then_some(req.page_token),
+            page_size: usize::try_from(req.page_size).unwrap_or(0),
+        };
+        let page = self.list_my_reports.handle(Self::envelope(query)).await.map_err(status)?;
+        Ok(Response::new(proto::ListMyReportsResponse {
+            reports: page.reports.iter().map(report_view).collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+        }))
     }
 
     pub async fn open_case(
@@ -249,11 +274,17 @@ impl ModerationServiceHandler {
         &self,
         request: Request<proto::GetStatementOfReasonsRequest>,
     ) -> Result<Response<proto::GetStatementOfReasonsResponse>, Status> {
-        let req = request.into_inner();
         let query = GetStatementOfReasonsQuery {
-            decision_id: DecisionId::try_from(req.decision_id.as_str()).map_err(status)?,
+            decision_id: DecisionId::try_from(request.get_ref().decision_id.as_str()).map_err(status)?,
         };
         let sor = self.statement_of_reasons.handle(Self::envelope(query)).await.map_err(status)?;
+        // On the edge only the sanctioned account reads its statement (DSA Art.
+        // 17); anyone else learns nothing, not even that the decision exists.
+        if let Some(principal) = edge::principal(&request)
+            && principal.account_id() != sor.subject.actor_id().as_str()
+        {
+            return Err(status(ModerationError::DecisionNotFound { id: sor.decision_id.as_str() }));
+        }
         Ok(Response::new(proto::GetStatementOfReasonsResponse {
             statement: Some(statement_to_proto(&sor)),
         }))
@@ -263,6 +294,8 @@ impl ModerationServiceHandler {
         &self,
         request: Request<proto::GetEnforcementStateRequest>,
     ) -> Result<Response<proto::GetEnforcementStateResponse>, Status> {
+        // On the edge an account reads its own state only.
+        edge::require_account(&request, &request.get_ref().actor_id)?;
         let req = request.into_inner();
         let query = GetEnforcementStateQuery {
             actor_id: ActorId::try_from(req.actor_id.as_str()).map_err(status)?,
@@ -367,7 +400,29 @@ fn enforcement_view(e: &EnforcementAction) -> proto::EnforcementView {
         version: e.version().value(),
         applied_at: Some(to_ts(e.applied_at())),
         expires_at: e.expires_at().map(to_ts),
+        decision_id: e.decision_id().as_str(),
     }
+}
+
+fn report_view(r: &MyReport) -> proto::ReportView {
+    let report = &r.filed.report;
+    proto::ReportView {
+        report_id: report.id().as_str(),
+        entity_type: entity_type_to_proto(report.subject().entity_type()),
+        entity_id: report.subject().entity_id().to_owned(),
+        category: category_to_proto(report.category()),
+        reason: report.reason().to_owned(),
+        status: report_status_to_proto(r.status),
+        reported_at: Some(to_ts(report.reported_at())),
+    }
+}
+
+fn report_status_to_proto(s: ReportStatus) -> i32 {
+    (match s {
+        ReportStatus::UnderReview => proto::ReportStatus::UnderReview,
+        ReportStatus::ActionTaken => proto::ReportStatus::ActionTaken,
+        ReportStatus::NoViolation => proto::ReportStatus::NoViolation,
+    }) as i32
 }
 
 fn appeal_view(a: &Appeal) -> proto::AppealView {

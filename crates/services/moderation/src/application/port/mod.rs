@@ -18,7 +18,8 @@ pub use classifier_gateway::ClassifierGateway;
 pub use enforcement_projection::EnforcementProjection;
 pub use event_publisher::EventPublisher;
 pub use repositories::{
-    AppealRepository, CaseRepository, DecisionRepository, EnforcementRepository, PenaltyRepository,
+    AppealRepository, CaseRepository, DecisionRepository, EnforcementRepository, FiledReport,
+    PenaltyRepository, ReportCursor, ReportRepository,
 };
 pub use report_rate_limiter::ReportRateLimiter;
 pub use screen_corpus::{ContentHash, CorpusMatch, ScreenCorpus};
