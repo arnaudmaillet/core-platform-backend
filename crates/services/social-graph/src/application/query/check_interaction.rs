@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::application::port::SocialGraphRepository;
-use crate::domain::interaction::{may_interact, InteractionKind};
+use crate::domain::interaction::{interaction_verdict, InteractionKind, InteractionVerdict};
 use crate::domain::value_object::ProfileId;
 use crate::error::SocialGraphError;
 
@@ -18,7 +18,7 @@ pub struct CheckInteractionQuery {
 }
 
 impl Query for CheckInteractionQuery {
-    type Response = bool;
+    type Response = InteractionVerdict;
 }
 
 pub struct CheckInteractionHandler {
@@ -34,17 +34,17 @@ impl CheckInteractionHandler {
 impl QueryHandler<CheckInteractionQuery> for CheckInteractionHandler {
     type Error = SocialGraphError;
 
-    async fn handle(&self, envelope: Envelope<CheckInteractionQuery>) -> Result<bool, Self::Error> {
+    async fn handle(&self, envelope: Envelope<CheckInteractionQuery>) -> Result<InteractionVerdict, Self::Error> {
         let q = &envelope.payload;
         let actor = ProfileId::try_from(q.actor_id.as_str())?;
         let target = ProfileId::try_from(q.target_id.as_str())?;
         if actor == target {
-            return Ok(true);
+            return Ok(InteractionVerdict::Allowed);
         }
         let (relation, policy) = tokio::join!(
             self.repo.load_relation(&actor, &target),
             self.repo.load_interaction_policy(&target),
         );
-        Ok(may_interact(&relation?, &policy?, q.kind))
+        Ok(interaction_verdict(&relation?, &policy?, q.kind, chrono::Utc::now()))
     }
 }

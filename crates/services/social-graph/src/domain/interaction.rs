@@ -52,13 +52,54 @@ impl InteractionAudience {
     }
 }
 
-/// A profile's interaction policy; absent ⇒ everyone for everything.
+/// Whom a temporary interaction limit holds back (#669).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitAudience {
+    /// Profiles that do not follow the target.
+    NonFollowers,
+    /// Non-followers and profiles that followed less than [`RECENT_FOLLOW`] ago.
+    RecentFollowers,
+}
+
+impl LimitAudience {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "non_followers" => Some(Self::NonFollowers),
+            "recent_followers" => Some(Self::RecentFollowers),
+            _ => None,
+        }
+    }
+}
+
+/// How recent a follow is still "recent" for [`LimitAudience::RecentFollowers`].
+pub const RECENT_FOLLOW: chrono::Duration = chrono::Duration::days(7);
+
+/// A temporary interaction limit (#669): until `until_ms`, comments and
+/// messages from `audience` are held for the target's review instead of shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InteractionLimit {
+    pub audience: LimitAudience,
+    pub until_ms: i64,
+}
+
+/// A profile's interaction policy; absent ⇒ everyone for everything, no limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InteractionPolicy {
     pub comments: InteractionAudience,
     pub mentions: InteractionAudience,
     pub messages: InteractionAudience,
+    pub limit:    Option<InteractionLimit>,
+}
+
+/// The answer to "may the actor do this?".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InteractionVerdict {
+    Allowed,
+    /// Accepted, but held for the target's review (a limit is on, #669).
+    Held,
+    Refused,
 }
 
 impl InteractionPolicy {
@@ -77,6 +118,31 @@ impl InteractionPolicy {
     pub fn from_json(json: Option<&str>) -> Self {
         json.and_then(|j| serde_json::from_str(j).ok()).unwrap_or_default()
     }
+}
+
+/// [`may_interact`], then the target's temporary limit: while it is on (at
+/// `now`), a comment or message from its audience is held, not refused.
+pub fn interaction_verdict(
+    relation: &Relation,
+    policy: &InteractionPolicy,
+    kind: InteractionKind,
+    now: chrono::DateTime<chrono::Utc>,
+) -> InteractionVerdict {
+    if !may_interact(relation, policy, kind) {
+        return InteractionVerdict::Refused;
+    }
+    let Some(limit) = policy.limit.filter(|l| now.timestamp_millis() < l.until_ms) else {
+        return InteractionVerdict::Allowed;
+    };
+    if !matches!(kind, InteractionKind::Comment | InteractionKind::Message) {
+        return InteractionVerdict::Allowed;
+    }
+    let held = match (limit.audience, relation.actor_follows_target_since()) {
+        (_, None) => true,
+        (LimitAudience::NonFollowers, Some(_)) => false,
+        (LimitAudience::RecentFollowers, Some(since)) => now - since < RECENT_FOLLOW,
+    };
+    if held { InteractionVerdict::Held } else { InteractionVerdict::Allowed }
 }
 
 /// May the relation's actor do `kind` to its target, whose policy is `policy`?
@@ -135,6 +201,46 @@ mod tests {
         assert!(!may_interact(&mutual, &only(InteractionAudience::NoOne), c));
         // Other kinds keep their own (default) audience.
         assert!(may_interact(&stranger, &followers, InteractionKind::Message));
+    }
+
+    #[test]
+    fn a_limit_holds_its_audiences_comments_and_messages_until_it_ends() {
+        let now = Utc::now();
+        let follower_since = |days: i64| {
+            Relation::from_context(
+                ProfileId::from_uuid(Uuid::now_v7()),
+                ProfileId::from_uuid(Uuid::now_v7()),
+                RelationContext {
+                    actor_follows_target_since: Some(now - chrono::Duration::days(days)),
+                    target_follows_actor_since: None,
+                    actor_blocks_target: false,
+                    target_blocks_actor: false,
+                    actor_requested_target_at: None,
+                    target_requested_actor_at: None,
+                },
+            )
+        };
+        let stranger = relation(false, false, false);
+        let limited = |audience| InteractionPolicy {
+            limit: Some(InteractionLimit { audience, until_ms: (now + chrono::Duration::days(1)).timestamp_millis() }),
+            ..InteractionPolicy::default()
+        };
+        let c = InteractionKind::Comment;
+
+        let non_followers = limited(LimitAudience::NonFollowers);
+        assert_eq!(interaction_verdict(&stranger, &non_followers, c, now), InteractionVerdict::Held);
+        assert_eq!(interaction_verdict(&follower_since(1), &non_followers, c, now), InteractionVerdict::Allowed);
+        assert_eq!(interaction_verdict(&stranger, &non_followers, InteractionKind::Message, now), InteractionVerdict::Held);
+        assert_eq!(interaction_verdict(&stranger, &non_followers, InteractionKind::Mention, now), InteractionVerdict::Allowed);
+
+        let recent = limited(LimitAudience::RecentFollowers);
+        assert_eq!(interaction_verdict(&follower_since(1), &recent, c, now), InteractionVerdict::Held);
+        assert_eq!(interaction_verdict(&follower_since(30), &recent, c, now), InteractionVerdict::Allowed);
+
+        // Expired: allowed again. A block still refuses.
+        let later = now + chrono::Duration::days(2);
+        assert_eq!(interaction_verdict(&stranger, &non_followers, c, later), InteractionVerdict::Allowed);
+        assert_eq!(interaction_verdict(&relation(false, false, true), &non_followers, c, now), InteractionVerdict::Refused);
     }
 
     #[test]

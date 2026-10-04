@@ -45,6 +45,50 @@ impl TryFrom<&str> for InteractionAudience {
     }
 }
 
+/// Whom a temporary interaction limit holds back (#669).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitAudience {
+    /// Profiles that do not follow this one.
+    NonFollowers,
+    /// Non-followers and profiles that followed in the last week.
+    RecentFollowers,
+}
+
+impl LimitAudience {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NonFollowers => "non_followers",
+            Self::RecentFollowers => "recent_followers",
+        }
+    }
+}
+
+/// The longest temporary limit (Instagram's "Limits": up to four weeks).
+pub const MAX_LIMIT: chrono::Duration = chrono::Duration::weeks(4);
+
+/// A temporary interaction limit (#669): until `until`, comments and messages
+/// from `audience` are held for the holder's review instead of shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InteractionLimit {
+    pub audience: LimitAudience,
+    pub until:    chrono::DateTime<chrono::Utc>,
+}
+
+impl InteractionLimit {
+    /// `until` must be in the future, at most [`MAX_LIMIT`] ahead (a minute of
+    /// slack for the client's clock).
+    pub fn new(audience: LimitAudience, until: chrono::DateTime<chrono::Utc>, now: chrono::DateTime<chrono::Utc>) -> Result<Self, ProfileError> {
+        if until <= now || until > now + MAX_LIMIT + chrono::Duration::minutes(1) {
+            return Err(ProfileError::DomainViolation {
+                field:   "limit.until".into(),
+                message: "a limit ends in the future, at most four weeks ahead".into(),
+            });
+        }
+        Ok(Self { audience, until })
+    }
+}
+
 /// A profile's interaction settings. Stored as one JSON column; a profile
 /// without one has the defaults (everyone, downloads on, like counts shown).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +110,8 @@ pub struct InteractionSettings {
     /// Whether others may reuse the original sound of this profile's posts
     /// (#669; a post may override it). post enforces it.
     pub allow_sound_reuse: bool,
+    /// A temporary interaction limit, if one is on (#669).
+    pub limit: Option<InteractionLimit>,
 }
 
 impl Default for InteractionSettings {
@@ -78,6 +124,7 @@ impl Default for InteractionSettings {
             show_like_counts: true,
             allow_remix: true,
             allow_sound_reuse: true,
+            limit: None,
         }
     }
 }
@@ -96,6 +143,7 @@ impl InteractionSettings {
             show_like_counts: true,
             allow_remix: false,
             allow_sound_reuse: false,
+            limit: None,
         }
     }
 

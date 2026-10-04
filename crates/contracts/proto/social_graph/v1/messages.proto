@@ -184,6 +184,9 @@ message CheckInteractionResponse {
     // false: a block either way, or the target's audience for `kind` excludes
     // the actor (followers / mutuals / no one).
     bool allowed = 1;
+    // With allowed: accept the comment / message but hold it for the target's
+    // review — the target's temporary interaction limit covers the actor (#669).
+    bool held    = 2;
 }
 
 // ── List privacy (#659) ───────────────────────────────────────────────────────

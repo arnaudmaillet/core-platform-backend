@@ -22,6 +22,8 @@ pub struct CommentSummary {
     pub gif_width:  Option<u32>,
     pub gif_height: Option<u32>,
     pub created_at: DateTime<Utc>,
+    /// Held for the post owner's review (#669).
+    pub held:       bool,
 }
 
 #[async_trait]
@@ -33,6 +35,9 @@ pub trait CommentRepository: Send + Sync + 'static {
 
     /// Point-reads a comment by its ID from `comment.comments`.
     async fn find_by_id(&self, id: &CommentId) -> Result<Option<Comment>, CommentError>;
+
+    /// Sets the comment's held flag in both tables (#669).
+    async fn set_held(&self, comment: &Comment, held: bool) -> Result<(), CommentError>;
 
     /// Returns `true` if `comment.comments_by_post` contains at least one
     /// published row where `parent_id = comment_id`. Used to choose between

@@ -76,6 +76,10 @@ pub enum ProfileEventWire {
         /// Remix / original-sound reuse defaults (#669); `post` applies them.
         allow_remix: bool,
         allow_sound_reuse: bool,
+        /// The temporary limit (#669): `non_followers` | `recent_followers`,
+        /// until (ms); both absent when none. `social-graph` applies it.
+        limit_audience: Option<String>,
+        limit_until_ms: Option<i64>,
         occurred_at_ms: i64,
     },
     /// Ghost mode and location precision (`precise` | `city`).
@@ -220,6 +224,8 @@ impl From<&DomainEvent> for ProfileEventWire {
                     show_like_counts: e.settings.show_like_counts,
                     allow_remix: e.settings.allow_remix,
                     allow_sound_reuse: e.settings.allow_sound_reuse,
+                    limit_audience: e.settings.limit.map(|l| l.audience.as_str().to_owned()),
+                    limit_until_ms: e.settings.limit.map(|l| l.until.timestamp_millis()),
                     occurred_at_ms: e.occurred_at.timestamp_millis(),
                 }
             }

@@ -10,7 +10,7 @@ use transport::kafka::consumer::{run_consumer, KafkaConsumerHandle, ProcessOutco
 use transport::kafka::producer::KafkaProducerHandle;
 
 use crate::application::command::{AudienceFact, RecordProfileAudienceCommand};
-use crate::domain::interaction::{InteractionAudience, InteractionPolicy};
+use crate::domain::interaction::{InteractionAudience, InteractionLimit, InteractionPolicy, LimitAudience};
 
 /// Lenient read DTO for `profile.v1.events` (internally tagged on `type`,
 /// PascalCase — profile's `ProfileEventWire`). Only the audience facts are
@@ -31,6 +31,11 @@ struct ProfileV1Event {
     mentions: Option<String>,
     #[serde(default)]
     messages: Option<String>,
+    /// The temporary limit (#669): `non_followers` | `recent_followers`, until.
+    #[serde(default)]
+    limit_audience: Option<String>,
+    #[serde(default)]
+    limit_until_ms: Option<i64>,
 }
 
 /// What an event means for the audience projection, if anything.
@@ -54,6 +59,14 @@ fn fact(event: &ProfileV1Event) -> Result<Option<AudienceFact>, String> {
                 comments: audience(&event.comments, "comments")?,
                 mentions: audience(&event.mentions, "mentions")?,
                 messages: audience(&event.messages, "messages")?,
+                limit: match (event.limit_audience.as_deref(), event.limit_until_ms) {
+                    (Some(a), Some(until_ms)) => Some(InteractionLimit {
+                        audience: LimitAudience::parse(a)
+                            .ok_or_else(|| format!("ProfileInteractionSettingsChanged with limit {a:?}"))?,
+                        until_ms,
+                    }),
+                    _ => None,
+                },
             })
         }
         _ => return Ok(None),
@@ -145,6 +158,8 @@ mod tests {
             show_like_counts: true,
             allow_remix: true,
             allow_sound_reuse: true,
+            limit_audience: Some("recent_followers".into()),
+            limit_until_ms: Some(99),
             occurred_at_ms: 1,
         };
         assert_eq!(
@@ -153,6 +168,7 @@ mod tests {
                 comments: InteractionAudience::Followers,
                 mentions: InteractionAudience::Mutuals,
                 messages: InteractionAudience::NoOne,
+                limit:    Some(InteractionLimit { audience: LimitAudience::RecentFollowers, until_ms: 99 }),
             })))
         );
     }

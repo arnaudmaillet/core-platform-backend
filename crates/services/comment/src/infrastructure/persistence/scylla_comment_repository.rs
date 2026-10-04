@@ -84,7 +84,7 @@ fn row_to_comment(row: CommentRow) -> Result<Comment, CommentError> {
         created_at,
         updated_at,
         deleted_at,
-    ))
+    ).with_held(row.held.unwrap_or(false)))
 }
 
 fn feed_row_to_summary(row: CommentFeedRow) -> Result<CommentSummary, CommentError> {
@@ -99,6 +99,7 @@ fn feed_row_to_summary(row: CommentFeedRow) -> Result<CommentSummary, CommentErr
         gif_width:  row.gif_width.map(|w| w as u32),
         gif_height: row.gif_height.map(|h| h as u32),
         created_at,
+        held:       row.held.unwrap_or(false),
     })
 }
 
@@ -253,6 +254,10 @@ impl CommentRepository for ScyllaCommentRepository {
             .await
             .map_err(scylla_err)?;
 
+        if comment.held() {
+            self.set_held(comment, true).await?;
+        }
+
         Ok(())
     }
 
@@ -261,7 +266,7 @@ impl CommentRepository for ScyllaCommentRepository {
     async fn find_by_id(&self, id: &CommentId) -> Result<Option<Comment>, CommentError> {
         let stmt = self.fast_stmt(
             "SELECT comment_id, post_id, author_id, parent_id, status, body, \
-             gif_id, gif_url, gif_width, gif_height, created_at, updated_at, deleted_at \
+             gif_id, gif_url, gif_width, gif_height, created_at, updated_at, deleted_at, held \
              FROM comment.comments WHERE comment_id = ?",
         );
         let result = self
@@ -358,6 +363,31 @@ impl CommentRepository for ScyllaCommentRepository {
         Ok(())
     }
 
+    // ── set_held ──────────────────────────────────────────────────────────────
+
+    async fn set_held(&self, comment: &Comment, held: bool) -> Result<(), CommentError> {
+        let parent_uuid = comment.parent_id().map(CommentId::as_uuid).unwrap_or(NIL_UUID);
+        let stmt_main = self.strict_stmt("UPDATE comment.comments SET held = ? WHERE comment_id = ?");
+        self.client
+            .session
+            .execute_unpaged(stmt_main, (held, comment.id().as_uuid()))
+            .await
+            .map_err(scylla_err)?;
+        let stmt_feed = self.strict_stmt(
+            "UPDATE comment.comments_by_post SET held = ? \
+             WHERE post_id = ? AND parent_id = ? AND created_at = ? AND comment_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(
+                stmt_feed,
+                (held, comment.post_id().as_uuid(), parent_uuid, dt_ms(comment.created_at()), comment.id().as_uuid()),
+            )
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
+    }
+
     // ── purge ─────────────────────────────────────────────────────────────────
 
     async fn purge(&self, comment: &Comment) -> Result<(), CommentError> {
@@ -413,7 +443,7 @@ impl CommentRepository for ScyllaCommentRepository {
 
         let rows: Vec<CommentFeedRow> = if let Some(ref tok) = token {
             let stmt = self.fast_stmt(
-                "SELECT created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height \
+                "SELECT created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height, held \
                  FROM comment.comments_by_post \
                  WHERE post_id = ? AND parent_id = ? AND created_at < ? \
                  LIMIT ?",
@@ -434,7 +464,7 @@ impl CommentRepository for ScyllaCommentRepository {
                 .map_err(|e| row_err("list_top_level:deser", e))?
         } else {
             let stmt = self.fast_stmt(
-                "SELECT created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height \
+                "SELECT created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height, held \
                  FROM comment.comments_by_post \
                  WHERE post_id = ? AND parent_id = ? \
                  LIMIT ?",
@@ -471,7 +501,7 @@ impl CommentRepository for ScyllaCommentRepository {
 
         let rows: Vec<CommentFeedRow> = if let Some(ref tok) = token {
             let stmt = self.fast_stmt(
-                "SELECT created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height \
+                "SELECT created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height, held \
                  FROM comment.comments_by_post \
                  WHERE post_id = ? AND parent_id = ? AND created_at < ? \
                  LIMIT ?",
@@ -492,7 +522,7 @@ impl CommentRepository for ScyllaCommentRepository {
                 .map_err(|e| row_err("list_replies:deser", e))?
         } else {
             let stmt = self.fast_stmt(
-                "SELECT created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height \
+                "SELECT created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height, held \
                  FROM comment.comments_by_post \
                  WHERE post_id = ? AND parent_id = ? \
                  LIMIT ?",

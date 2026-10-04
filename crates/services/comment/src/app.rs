@@ -18,6 +18,7 @@ use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 
 use crate::application::command::create_comment::{CreateCommentCommand, CreateCommentHandler};
 use crate::application::command::delete_comment::{DeleteCommentCommand, DeleteCommentHandler};
+use crate::application::command::review_held::{ReviewHeldCommentCommand, ReviewHeldCommentHandler};
 use crate::application::port::{CommentEventPublisher, CommentFilterStore, OwnerFilters, ReadGate};
 use crate::application::query::get_comment::{GetCommentHandler, GetCommentQuery};
 use crate::application::query::list_replies::{ListRepliesHandler, ListRepliesQuery};
@@ -71,6 +72,11 @@ impl App {
                 .register::<DeleteCommentCommand, _>(DeleteCommentHandler {
                     repository: Arc::clone(&repository),
                     publisher:  Arc::clone(&publisher),
+                })?
+                .register::<ReviewHeldCommentCommand, _>(ReviewHeldCommentHandler {
+                    repository: Arc::clone(&repository),
+                    publisher:  Arc::clone(&publisher),
+                    gate:       Arc::clone(&gate),
                 })?
                 .build(),
         );

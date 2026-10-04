@@ -47,6 +47,9 @@ pub trait ReadGate: Send + Sync + 'static {
     /// either way refuses). Errors are `AccessCheckUnavailable`; the write
     /// fails closed.
     async fn may_comment(&self, author: &ProfileId, post_id: &PostId) -> Result<CommentAdmission, CommentError>;
+
+    /// The post's author (mesh read), `None` when the post does not exist.
+    async fn post_author(&self, post_id: &PostId) -> Result<Option<ProfileId>, CommentError>;
 }
 
 /// The answer to [`ReadGate::may_comment`].
@@ -57,6 +60,9 @@ pub enum CommentAdmission {
     PostUnavailable,
     /// The post's author does not take comments from this profile.
     Restricted,
+    /// Accepted, but held for the post author's review: their temporary
+    /// interaction limit covers this profile (#669).
+    Held,
 }
 
 /// The post owners' comment filters (#660): their hidden words, and the
@@ -78,7 +84,8 @@ impl OwnerFilters {
     }
 
     /// May `viewer` see a comment by `author` with `body`, under the decision
-    /// and the owner's filter? A commenter always sees their own comment.
+    /// and the owner's filter? A commenter always sees their own comment; a
+    /// held one (#669) only its author and the post's owner see.
     pub fn shows(
         &self,
         viewer: &Viewer,
@@ -86,11 +93,16 @@ impl OwnerFilters {
         filter: Option<&CommentFilter>,
         author: &ProfileId,
         body: Option<&str>,
+        held: bool,
     ) -> bool {
         if decision.hidden_authors.contains(author) {
             return false;
         }
         let own = matches!(viewer, Viewer::Profiles(ids) if ids.contains(author));
+        let owns_post = matches!((viewer, &decision.post_author), (Viewer::Profiles(ids), Some(owner)) if ids.contains(owner));
+        if held && !own && !owns_post {
+            return false;
+        }
         own || !matches!((filter, body), (Some(f), Some(b)) if f.hides(b, &self.offensive))
     }
 }
@@ -118,7 +130,7 @@ pub async fn filter_page(
         None => Ok((Vec::new(), None)),
         Some(decision) => {
             let filter = filters.of(decision.post_author.as_ref()).await?;
-            page.retain(|c| filters.shows(viewer, &decision, filter.as_ref(), &c.author_id, c.body.as_deref()));
+            page.retain(|c| filters.shows(viewer, &decision, filter.as_ref(), &c.author_id, c.body.as_deref(), c.held));
             Ok((page, next))
         }
     }

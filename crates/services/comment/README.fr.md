@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3148587f273b3dd94632d27acdcf07613aca1e6c57d7fda21500d14151bc135d
+  source_sha256: 1820a56f74b1916a081a1a32f0d994830b2113ca11d578099ff393276eace190
   translated_at: 2026-10-05
   status: complete
 ---
@@ -157,6 +157,12 @@ la page) :
 Le gate échoue fermé : une panne renvoie `CMT-5001` (`UNAVAILABLE`), jamais les commentaires.
 
 **Les écritures sont aussi contrôlées** (#656) : `CreateComment` exige un post que le commentateur peut lire (sinon `CMT-1004`, `NOT_FOUND`) et dont l'auteur accepte ses commentaires — `CheckInteraction(COMMENT)` de social-graph sur les réglages d'interaction de l'auteur (tout le monde / abonnés / mutuels / personne) et les blocages (sinon `CMT-1005`, `PERMISSION_DENIED`). Commenter son propre post est toujours permis ; une panne refuse l'écriture (`CMT-5001`).
+
+**Commentaires en attente (#669).** Tant que la limite d'interaction temporaire du propriétaire du post couvre
+le commentateur (`CheckInteraction` répond `held`), le commentaire est stocké mais **en attente** : non
+annoncé, vu seulement de son auteur et du propriétaire du post (`CommentView.held`). Le propriétaire
+l'examine avec `ReviewHeldComment` (edge, lié à `owner_id`) : l'approuver — il s'affiche et `CommentCreated`
+part alors — ou le refuser — il disparaît, sans bruit.
 
 ### Contrat d'erreur (`CMT-xxxx`)
 

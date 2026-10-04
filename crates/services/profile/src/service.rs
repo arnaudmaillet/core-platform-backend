@@ -75,6 +75,8 @@ impl Service for ProfileService {
         authenticated("/profile.v1.ProfileService/SetVisibility"),
         authenticated("/profile.v1.ProfileService/SetInteractionSettings"),
         authenticated("/profile.v1.ProfileService/SetLocationSettings"),
+        authenticated("/profile.v1.ProfileService/SetInteractionLimit"),
+        authenticated("/profile.v1.ProfileService/ClearInteractionLimit"),
         authenticated("/profile.v1.ProfileService/SetDiscoverySettings"),
         authenticated("/profile.v1.ProfileService/SetCommentFilters"),
         authenticated("/profile.v1.ProfileService/SetTabSettings"),

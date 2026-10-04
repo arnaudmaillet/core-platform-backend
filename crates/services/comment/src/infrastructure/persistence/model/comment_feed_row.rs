@@ -6,7 +6,7 @@ use uuid::Uuid;
 ///
 /// SELECT must emit columns in exactly this order:
 /// created_at, comment_id, author_id, status, body,
-/// gif_url, gif_width, gif_height
+/// gif_url, gif_width, gif_height, held
 ///
 /// `parent_id` and `post_id` are partition/clustering keys consumed as
 /// query parameters — they are not included in the SELECT column list.
@@ -21,4 +21,6 @@ pub struct CommentFeedRow {
     pub gif_url:    Option<String>,
     pub gif_width:  Option<i32>,
     pub gif_height: Option<i32>,
+    /// NULL ⇒ not held (#669).
+    pub held:       Option<bool>,
 }

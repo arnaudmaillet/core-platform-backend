@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a01a83d8fc033f7f02e24a869b2e1fa06f22c20d2cede5e541bd1a7392209a8f
+  source_sha256: 9baf271fcc14a26140099ccdb74d17c7306749cfe3efcba0ef95fb8a7a8ca332
   translated_at: 2026-10-05
   status: complete
 ---
@@ -128,6 +128,8 @@ service ProfileService {
   rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);
   rpc UpdateBanner(UpdateBannerRequest) returns (CommandResponse);
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
+  rpc SetInteractionLimit(SetInteractionLimitRequest) returns (CommandResponse); // #669 mettre en attente les commentaires / messages des non-abonnés ou abonnés récents jusqu'à une date (≤ 4 semaines)
+  rpc ClearInteractionLimit(ClearInteractionLimitRequest) returns (CommandResponse);
   rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // qui peut commenter / mentionner / écrire, téléchargements, compteurs de likes, remix et réutilisation du son original (#669 ; absent d'une requête ⇒ inchangé) ; les ados démarrent abonnés uniquement, sans téléchargement / remix / réutilisation du son
   rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse); // mode fantôme + précis / niveau ville (réservé au propriétaire sur la vue) ; les ados démarrent fantômes ; geo-discovery l'applique
   rpc SetFeedSettings(SetFeedSettingsRequest) returns (CommandResponse); // #662 contenu sensible moins (par défaut) / standard, synchronisé entre appareils ; le client l'envoie comme content_level de timeline ; réservé au propriétaire sur la vue

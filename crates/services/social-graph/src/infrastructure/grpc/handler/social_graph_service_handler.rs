@@ -16,7 +16,7 @@ use crate::application::query::{
     ListRestrictedQuery, MutedProfilesQuery, RestrictedAmongQuery,
 };
 use crate::domain::access::{ContentAccess, Viewer};
-use crate::domain::interaction::{InteractionAudience, InteractionKind};
+use crate::domain::interaction::{InteractionAudience, InteractionKind, InteractionVerdict};
 use crate::domain::list_privacy::ListPrivacy;
 use crate::domain::mute::{Mute, MuteScope, MuteScopes};
 use crate::domain::value_object::ProfileId;
@@ -123,12 +123,15 @@ where
             target_id: req.target_profile_id,
             kind:      interaction_kind_from_proto(req.kind)?,
         };
-        let allowed: bool = self
+        let verdict: InteractionVerdict = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
-        Ok(Response::new(proto::CheckInteractionResponse { allowed }))
+        Ok(Response::new(proto::CheckInteractionResponse {
+            allowed: verdict != InteractionVerdict::Refused,
+            held:    verdict == InteractionVerdict::Held,
+        }))
     }
 
     /// Mesh-only (absent from the edge policy): timeline asks with the reader

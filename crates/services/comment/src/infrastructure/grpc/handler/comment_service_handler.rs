@@ -100,6 +100,22 @@ where
             .map(|_| ok_response())
             .map_err(cqrs_to_status)
     }
+
+    /// The post owner reviews a held comment (edge: bound to owner_id).
+    pub async fn review_held_comment(
+        &self,
+        request: Request<proto::ReviewHeldCommentRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        use crate::application::command::review_held::ReviewHeldCommentCommand;
+        edge::require_profile(&request, &request.get_ref().owner_id)?;
+        let req = request.into_inner();
+        let cmd = ReviewHeldCommentCommand { comment_id: req.comment_id, owner_id: req.owner_id, approve: req.approve };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| ok_response())
+            .map_err(cqrs_to_status)
+    }
 }
 
 // ── Query RPC helpers ─────────────────────────────────────────────────────────
@@ -201,6 +217,13 @@ where
         self.delete_comment(request).await
     }
 
+    async fn review_held_comment(
+        &self,
+        request: Request<proto::ReviewHeldCommentRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.review_held_comment(request).await
+    }
+
     async fn get_comment(
         &self,
         request: Request<proto::GetCommentRequest>,
@@ -265,6 +288,7 @@ fn comment_to_proto(c: Comment) -> proto::CommentView {
         gif,
         created_at_ms: c.created_at().timestamp_millis(),
         updated_at_ms: c.updated_at().timestamp_millis(),
+        held:          c.held(),
     }
 }
 
@@ -279,6 +303,7 @@ fn summary_to_proto(s: CommentSummary) -> proto::CommentView {
         gif:           build_gif_proto(s.gif_url, s.gif_width, s.gif_height),
         created_at_ms: s.created_at.timestamp_millis(),
         updated_at_ms: 0,
+        held:          s.held,
     }
 }
 

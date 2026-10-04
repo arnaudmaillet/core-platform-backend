@@ -141,6 +141,12 @@ The gate fails closed: an outage is `CMT-5001` (`UNAVAILABLE`), never the commen
 
 **Writes are gated too** (#656): `CreateComment` needs a post the commenter may read (else `CMT-1004`, `NOT_FOUND`) whose author takes their comments — social-graph `CheckInteraction(COMMENT)` over the author's interaction settings (everyone / followers / mutuals / no one) and blocks (else `CMT-1005`, `PERMISSION_DENIED`). Commenting on your own post is always allowed; an outage refuses the write (`CMT-5001`).
 
+**Held comments (#669).** While the post owner's temporary interaction limit covers the commenter
+(`CheckInteraction` answers `held`), the comment is stored but **held**: not announced, seen only by its
+author and the post's owner (`CommentView.held`). The owner reviews it with `ReviewHeldComment` (edge,
+bound to `owner_id`): approve — it shows and `CommentCreated` goes out then — or decline — it goes,
+silently.
+
 ### Error contract (`CMT-xxxx`)
 
 | Code | Error | HTTP |
