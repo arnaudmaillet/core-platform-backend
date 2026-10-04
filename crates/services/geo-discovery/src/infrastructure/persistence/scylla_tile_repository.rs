@@ -145,14 +145,37 @@ impl TileRepository for ScyllaTileRepository {
         post_id: &PostId,
         score:   f32,
     ) -> Result<(), GeoDiscoveryError> {
+        // The score cell must expire with the card: a cell without a TTL would
+        // outlive the row's other cells and keep a score-only row alive forever.
+        // TTL(author_handle) is the card's remaining life; NULL means no card
+        // (none, expired, or a tombstone), where an UPDATE would create one.
+        let read = self.fast_stmt(
+            "SELECT TTL(author_handle) AS ttl_secs \
+             FROM geo_discovery.map_post_cards \
+             WHERE post_id = ?",
+        );
+        let ttl_secs = self.client
+            .session
+            .execute_unpaged(read, (post_id.as_uuid(),))
+            .await
+            .map_err(scylla_err)?
+            .into_rows_result()
+            .map_err(|e| row_err("update_card_score:rows", e))?
+            .maybe_first_row::<(Option<i32>,)>()
+            .map_err(|e| row_err("update_card_score:deser", e))?
+            .and_then(|(ttl,)| ttl);
+        let Some(remaining) = ttl_secs.filter(|s| *s > 0) else {
+            return Ok(());
+        };
+
         let stmt = self.strict_stmt(
-            "UPDATE geo_discovery.map_post_cards \
+            "UPDATE geo_discovery.map_post_cards USING TTL ? \
              SET virality_score = ? \
              WHERE post_id = ?",
         );
         self.client
             .session
-            .execute_unpaged(stmt, (score, post_id.as_uuid()))
+            .execute_unpaged(stmt, (remaining, score, post_id.as_uuid()))
             .await
             .map_err(scylla_err)?;
         Ok(())
