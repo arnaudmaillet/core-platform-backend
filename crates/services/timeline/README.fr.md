@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 64a2ddbce137a16bdfdeb804740958be458f7b1202ad569bddb331b6a44effe3
+  source_sha256: 2d805fc217035b67bd2eb35a41b25c0a28d2d2be4045f9ec08f918134ed0be69
   translated_at: 2026-10-04
   status: complete
 ---
@@ -112,6 +112,7 @@ BFF identifie l'auteur sans lookup secondaire.
 | Kafka | ingestion du fan-out | le feed cesse de se mettre à jour | **Souple** — feed existant servi |
 | `social-graph` (gRPC) | reconstruction du following-set | la reconstruction sur miss Redis échoue | **Souple** — boote en lazy ; `TML-3001` réessayable |
 | `social-graph` (gRPC) | `CheckAccess` pour le fil de découverte | les lectures de découverte échouent | **Dur** pour la découverte (échec fermé, `TML-8002`) |
+| `social-graph` (gRPC) | `ListMutedProfiles` (portée posts) pour les deux fils | les mises en sourdine ne s'appliquent pas à cette requête | **Souple** (échec ouvert : une mise en sourdine est une préférence, pas une règle de sécurité) |
 | `geo-discovery` (gRPC) | candidats NEARBY (`QueryTile`) | NEARBY échoue | **Souple** — les autres classements ne sont pas touchés ; `TML-8003` |
 
 **Amont (rayon d'impact) :**
@@ -174,6 +175,10 @@ Un fil non personnalisé qui n'a besoin d'aucun graphe de suivi : le For You des
   côté serveur pour l'instant). Le lecteur vient du jeton (`edge::viewer`) : les auteurs qu'il ne peut pas
   voir (`CheckAccess` ≠ `VISIBLE`) sont exclus, et la lecture **échoue fermée** (`TML-8002`, UNAVAILABLE)
   quand social-graph ne peut pas répondre. Les appelants mesh ne sont pas filtrés par audience.
+- **Mises en sourdine (#659).** Les posts des auteurs qu'un des profils du lecteur a mis en sourdine (portée
+  posts) sont exclus du fil de découverte, et ceux des auteurs mis en sourdine par le profil du fil sont
+  exclus du **fil des abonnements** (un VIP en sourdine n'est même pas lu ; le curseur passe les posts
+  écartés). Un appel `ListMutedProfiles` par requête, en échec ouvert.
 - **Pagination.** Le curseur porte une position par flux et est lié à son classement. Une page peut être
   courte (voire vide) avec un jeton non vide quand ses candidats ont été filtrés ; un post qui passe de
   frais à hot peut revenir sur une page suivante — les clients dédupliquent par `post_id`.

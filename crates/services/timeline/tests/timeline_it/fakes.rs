@@ -29,6 +29,8 @@ pub struct FakeSocialGraph {
     /// Authors whose content no reader may see (a private profile the reader
     /// does not follow, say); every other author is visible.
     private:         Mutex<HashSet<AuthorId>>,
+    /// Authors every reader muted (scope posts).
+    muted:           Mutex<HashSet<AuthorId>>,
 }
 
 impl FakeSocialGraph {
@@ -40,6 +42,11 @@ impl FakeSocialGraph {
     pub fn add_follow(&self, follower: ProfileId, author: AuthorId) {
         self.followers.lock().unwrap().entry(author).or_default().push(follower);
         self.following.lock().unwrap().entry(follower).or_default().push(author);
+    }
+
+    /// Mutes `author`'s posts for every reader.
+    pub fn mute(&self, author: AuthorId) {
+        self.muted.lock().unwrap().insert(author);
     }
 
     /// Makes `author`'s content invisible to every reader (`HEADER_ONLY`).
@@ -88,6 +95,10 @@ impl SocialGraphClient for FakeSocialGraph {
             .iter()
             .map(|a| (*a, if private.contains(a) { ContentAccess::HeaderOnly } else { ContentAccess::Visible }))
             .collect())
+    }
+
+    async fn muted_authors(&self, _viewers: &[String]) -> Result<HashSet<AuthorId>, TimelineError> {
+        Ok(self.muted.lock().unwrap().clone())
     }
 }
 

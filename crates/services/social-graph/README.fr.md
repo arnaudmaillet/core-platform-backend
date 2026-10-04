@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 9f5401d3d2b49b3b471fa9a44e1b6b36d9adc6700b8d84304b06ab7675e37b09
+  source_sha256: df8a9cbb8e1b444fbd9e0c1e79070a0a0f083f971bf1e0159326096357bca7e2
   translated_at: 2026-10-04
   status: complete
 ---
@@ -135,14 +135,18 @@ service SocialGraphService {
   rpc SetListPrivacy(SetListPrivacyRequest) returns (ListPrivacy);   // propriétaire : qui voit les listes d'abonnés / d'abonnements
   rpc Block(BlockRequest) returns (CommandResponse);
   rpc Unblock(UnblockRequest) returns (CommandResponse);
+  rpc Mute(MuteRequest) returns (CommandResponse);   // acteur : posts / stories / messages
+  rpc Unmute(UnmuteRequest) returns (CommandResponse);
   // Queries
   rpc GetRelationStatus(GetRelationStatusRequest) returns (RelationStatusView);
   rpc ListFollowers(ListFollowersRequest) returns (ListFollowersResponse);
   rpc ListFollowing(ListFollowingRequest) returns (ListFollowingResponse);
   rpc GetListPrivacy(GetListPrivacyRequest) returns (ListPrivacy);   // propriétaire
   rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
+  rpc ListMutes(ListMutesRequest) returns (ListMutesResponse);   // propriétaire
   rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY
   rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);   // MESH-ONLY : l'acteur peut-il commenter / mentionner / écrire à la cible (ses réglages d'interaction profile, blocages)
+  rpc ListMutedProfiles(ListMutedProfilesRequest) returns (ListMutedProfilesResponse);   // MESH-ONLY : les mises en sourdine d'un lecteur pour une portée (timeline)
 }
 ```
 
@@ -169,6 +173,15 @@ aux autres colonnes de cette projection). Un lecteur à plusieurs profils est ju
 placé. **`RemoveFollower`** défait l'abonnement d'un abonné exactement comme son propre `Unfollow`
 (compteurs, `social-graph.unfollowed`, élagage de la timeline) ; l'abonné n'est pas notifié et, sur
 un profil privé, doit redemander.
+
+**Mises en sourdine (#659).** `Mute` enregistre, par portée (posts, stories, messages), ce que l'acteur
+cesse de voir de la cible ; remettre en sourdine remplace les portées, `Unmute` la lève, `ListMutes` pagine
+celles du propriétaire et `RelationStatusView.muted` indique à l'acteur comment il met une cible en
+sourdine. La cible n'est pas prévenue et rien n'est rompu. Table `social_graph.mutes` (partitionnée par
+auteur de la mise en sourdine). Appliqué aujourd'hui aux **posts** : timeline exclut un auteur en sourdine
+des fils des abonnements et de découverte du lecteur via `ListMutedProfiles` (mesh uniquement, ≤ 10 profils
+lecteurs, ≤ 5 000 mises en sourdine chacun). Stories et messages sont stockés pour le client : il n'existe
+encore ni surface de stories ni notification de message.
 
 > **Contrat de sérialisation :** `RelationStatus` (du point de vue de l'acteur) : `NONE`, `FOLLOWING`,
 > `FOLLOWED_BY`, `MUTUAL` (amitié implicite), `BLOCKING`, `BLOCKED_BY`.

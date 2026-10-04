@@ -8,3 +8,4 @@ mod access_check;
 mod follow_requests;
 mod interaction_check;
 mod list_privacy;
+mod mutes;

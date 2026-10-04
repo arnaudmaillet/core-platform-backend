@@ -66,6 +66,13 @@ service SocialGraphService {
     // Does not restore severed follows.
     rpc Unblock(UnblockRequest) returns (CommandResponse);
 
+    // Mute target's posts / stories / messages for actor (re-muting replaces
+    // the scopes). The target is not told. Rejected if actor == target.
+    rpc Mute(MuteRequest) returns (CommandResponse);
+
+    // Lift actor's mute of target (no-op when none).
+    rpc Unmute(UnmuteRequest) returns (CommandResponse);
+
     // ── Queries ───────────────────────────────────────────────────────────────
 
     // Returns the full bidirectional relationship context between actor and target,
@@ -80,6 +87,9 @@ service SocialGraphService {
 
     // The owner's list privacy (defaults: everyone).
     rpc GetListPrivacy(GetListPrivacyRequest) returns (ListPrivacy);
+
+    // The profile's mutes, in profile-id order (its owner).
+    rpc ListMutes(ListMutesRequest) returns (ListMutesResponse);
 
     // Paginated list of profiles blocked by the given profile.
     rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
@@ -96,4 +106,8 @@ service SocialGraphService {
     // owns the interaction asks before writing it, with the actor taken from
     // the edge token.
     rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);
+
+    // The profiles a reader mutes for a scope. MESH-ONLY: timeline drops
+    // their posts from the reader's feeds.
+    rpc ListMutedProfiles(ListMutedProfilesRequest) returns (ListMutedProfilesResponse);
 }

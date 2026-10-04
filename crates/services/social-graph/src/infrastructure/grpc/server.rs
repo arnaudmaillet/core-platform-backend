@@ -25,6 +25,34 @@ where
         self.follow(request).await
     }
 
+    async fn mute(
+        &self,
+        request: Request<proto::MuteRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.mute(request).await
+    }
+
+    async fn unmute(
+        &self,
+        request: Request<proto::UnmuteRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.unmute(request).await
+    }
+
+    async fn list_mutes(
+        &self,
+        request: Request<proto::ListMutesRequest>,
+    ) -> Result<Response<proto::ListMutesResponse>, Status> {
+        self.list_mutes(request).await
+    }
+
+    async fn list_muted_profiles(
+        &self,
+        request: Request<proto::ListMutedProfilesRequest>,
+    ) -> Result<Response<proto::ListMutedProfilesResponse>, Status> {
+        self.list_muted_profiles(request).await
+    }
+
     async fn check_interaction(
         &self,
         request: Request<proto::CheckInteractionRequest>,

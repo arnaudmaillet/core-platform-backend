@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 
@@ -47,4 +47,9 @@ pub trait SocialGraphClient: Send + Sync + 'static {
         viewers: &[String],
         authors: &[AuthorId],
     ) -> Result<HashMap<AuthorId, ContentAccess>, TimelineError>;
+
+    /// The authors whose posts any of `viewers` (a reader's profile ids) muted
+    /// (`ListMutedProfiles`, scope posts). Callers fail open on an error: a
+    /// mute is a preference, not a safety rule.
+    async fn muted_authors(&self, viewers: &[String]) -> Result<HashSet<AuthorId>, TimelineError>;
 }

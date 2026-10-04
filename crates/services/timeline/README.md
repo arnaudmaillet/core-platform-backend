@@ -97,6 +97,7 @@ secondary lookup.
 | Kafka | fan-out ingest | feed stops updating | **Soft** — existing feed served |
 | `social-graph` (gRPC) | following-set rebuild | rebuild on Redis miss fails | **Soft** — boots lazily; `TML-3001` retryable |
 | `social-graph` (gRPC) | `CheckAccess` for the discovery feed | discovery reads fail | **Hard** for discovery (fail closed, `TML-8002`) |
+| `social-graph` (gRPC) | `ListMutedProfiles` (scope posts) for both feeds | mutes are not applied for that request | **Soft** (fail open: a mute is a preference, not a safety rule) |
 | `geo-discovery` (gRPC) | NEARBY candidates (`QueryTile`) | NEARBY fails | **Soft** — other rankings unaffected; `TML-8003` |
 
 **Upstream (blast radius):**
@@ -154,6 +155,9 @@ A non-personalised feed that needs no follow graph: For You for guests and membe
   `RESTRICTED` by default (no date of birth is known server-side yet). The reader comes from the token
   (`edge::viewer`): authors it may not see (`CheckAccess` ≠ `VISIBLE`) are left out, and the read **fails
   closed** (`TML-8002`, UNAVAILABLE) when social-graph cannot answer. Mesh callers are unfiltered by audience.
+- **Mutes (#659).** Posts by authors any of the reader's profiles muted (scope posts) are left out of the
+  discovery feed, and posts by authors the feed's profile muted out of the **following feed** (a muted VIP is
+  not even read; the cursor moves past skipped posts). One `ListMutedProfiles` call per request, failing open.
 - **Paging.** The cursor carries one position per stream and is bound to its ranking. A page can be short
   (even empty) with a non-empty token when its candidates were filtered out; a post moving from fresh to hot
   can come back on a later page — clients de-duplicate by `post_id`.
