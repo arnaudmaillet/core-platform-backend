@@ -160,3 +160,61 @@ async fn feed_settings_round_trip_owner_only() {
     let other = Viewer::Account(harness::random_account_id());
     assert_eq!(h.get_by_handle_as(&handle, other).await.unwrap().feed_settings, None, "owner-only");
 }
+
+#[tokio::test]
+async fn account_type_and_a_verification_request_through_review() {
+    use cqrs::QueryBus;
+    use profile::application::command::{DecideVerificationCommand, RequestVerificationCommand, SetAccountTypeCommand};
+    use profile::application::query::{GetVerificationRequestQuery, ListPendingVerificationsQuery};
+    use profile::domain::entity::{VerificationRequest, VerificationStatus};
+    use profile::domain::value_object::{BusinessInfo, ProfileId, ProfileKind, VerificationKind, Viewer};
+
+    let h = TestHarness::start().await;
+    let (account, handle) = (harness::random_account_id(), harness::random_handle());
+    h.create(&account, &handle, "Alice").await;
+    let profile = h.get_by_handle(&handle).await.expect("created");
+
+    // A brand with a public contact card, seen by everyone.
+    let card = BusinessInfo::new("Bakery".into(), Some("hello@bakery.fr".into()), None).unwrap();
+    let cmd = SetAccountTypeCommand { profile_id: profile.id.clone(), kind: ProfileKind::Brand, business: Some(card.clone()) };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("account type");
+    let seen = h.get_by_handle_as(&handle, Viewer::Account(harness::random_account_id())).await.unwrap();
+    assert_eq!(seen.profile_kind, "brand");
+    assert_eq!(seen.business_info, Some(card));
+
+    // Ask, get queued, be rejected with a reason, ask again, be approved.
+    let ask = || RequestVerificationCommand {
+        profile_id: profile.id.clone(),
+        category:   VerificationKind::Business,
+        documents:  vec!["media/kbis.pdf".into()],
+    };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), ask())).await.expect("request");
+    assert!(h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), ask())).await.is_err(), "already pending");
+
+    let pending: (Vec<(ProfileId, VerificationRequest)>, Option<String>) = h
+        .query_bus
+        .dispatch(Envelope::new(Uuid::now_v7(), ListPendingVerificationsQuery { limit: 100, page_token: None }))
+        .await
+        .unwrap();
+    assert!(pending.0.iter().any(|(id, _)| id.to_string() == profile.id));
+
+    let decide = |approve: bool, reason: Option<&str>| DecideVerificationCommand {
+        profile_id: profile.id.clone(),
+        approve,
+        reason: reason.map(str::to_owned),
+    };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), decide(false, Some("Blurry document")))).await.expect("reject");
+    let status: Option<VerificationRequest> = h
+        .query_bus
+        .dispatch(Envelope::new(Uuid::now_v7(), GetVerificationRequestQuery { profile_id: profile.id.clone() }))
+        .await
+        .unwrap();
+    let status = status.expect("a request");
+    assert_eq!(status.status, VerificationStatus::Rejected);
+    assert_eq!(status.reason.as_deref(), Some("Blurry document"));
+
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), ask())).await.expect("ask again");
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), decide(true, None))).await.expect("approve");
+    assert!(h.get_by_id(&profile.id).await.unwrap().verified, "the outcome reaches the profile");
+    assert!(h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), ask())).await.is_err(), "already verified");
+}

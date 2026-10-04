@@ -32,12 +32,15 @@ use crate::application::command::{
     SetLocationSettingsHandler, SetVisibilityCommand, SetVisibilityHandler, UpdateAvatarCommand, UpdateAvatarHandler,
     UpdateBannerCommand, UpdateBannerHandler, UpdateProfileCommand, UpdateProfileHandler,
     VerifyProfileCommand, VerifyProfileHandler,
+    DecideVerificationCommand, DecideVerificationHandler, RequestVerificationCommand,
+    RequestVerificationHandler, SetAccountTypeCommand, SetAccountTypeHandler,
 };
-use crate::application::port::{EventPublisher, ProfileCache, ProfileRepository};
+use crate::application::port::{EventPublisher, ProfileCache, ProfileRepository, VerificationStore};
 use crate::application::query::{
     CheckHandleAvailabilityHandler, CheckHandleAvailabilityQuery, GetProfileByHandleHandler,
     GetProfileByHandleQuery, GetProfileByIdHandler, GetProfileByIdQuery,
-    ListProfilesByAccountHandler, ListProfilesByAccountQuery,
+    ListProfilesByAccountHandler, ListProfilesByAccountQuery, GetVerificationRequestHandler,
+    GetVerificationRequestQuery, ListPendingVerificationsHandler, ListPendingVerificationsQuery,
 };
 use crate::infrastructure::cache::{
     RedisProfileCache, HANDLE_CACHE_NAMESPACE, PROFILE_CACHE_NAMESPACE,
@@ -92,10 +95,28 @@ impl App {
             cache_registry.profile_for(PROFILE_CACHE_NAMESPACE),
             cache_registry.profile_for(HANDLE_CACHE_NAMESPACE),
         ));
+        let verifications: Arc<dyn VerificationStore> = Arc::new(
+            crate::infrastructure::persistence::ScyllaVerificationStore::new(Arc::clone(&scylla_client)),
+        );
 
         // ── Command bus ──────────────────────────────────────────────────────
         let command_bus = Arc::new(
             CommandBusBuilder::new()
+                .register::<SetAccountTypeCommand, _>(SetAccountTypeHandler {
+                    repo:      Arc::clone(&repository),
+                    cache:     Arc::clone(&cache),
+                    publisher: Arc::clone(&publisher),
+                })?
+                .register::<RequestVerificationCommand, _>(RequestVerificationHandler {
+                    repo:          Arc::clone(&repository),
+                    verifications: Arc::clone(&verifications),
+                })?
+                .register::<DecideVerificationCommand, _>(DecideVerificationHandler {
+                    repo:          Arc::clone(&repository),
+                    cache:         Arc::clone(&cache),
+                    publisher:     Arc::clone(&publisher),
+                    verifications: Arc::clone(&verifications),
+                })?
                 .register::<CreateProfileCommand, _>(CreateProfileHandler::new(
                     Arc::clone(&repository),
                     Arc::clone(&cache),
@@ -210,6 +231,12 @@ impl App {
                 .register::<ListProfilesByAccountQuery, _>(ListProfilesByAccountHandler::new(
                     Arc::clone(&repository),
                 ))?
+                .register::<GetVerificationRequestQuery, _>(GetVerificationRequestHandler {
+                    verifications: Arc::clone(&verifications),
+                })?
+                .register::<ListPendingVerificationsQuery, _>(ListPendingVerificationsHandler {
+                    verifications: Arc::clone(&verifications),
+                })?
                 .build(),
         );
 

@@ -1,3 +1,4 @@
+pub mod account_type;
 pub mod change_handle;
 pub mod create_profile;
 pub mod delete_profile;
@@ -37,3 +38,7 @@ pub use update_avatar::{UpdateAvatarCommand, UpdateAvatarHandler};
 pub use update_banner::{UpdateBannerCommand, UpdateBannerHandler};
 pub use update_profile::{UpdateProfileCommand, UpdateProfileHandler};
 pub use verify_profile::{VerifyProfileCommand, VerifyProfileHandler};
+pub use account_type::{
+    DecideVerificationCommand, DecideVerificationHandler, RequestVerificationCommand, RequestVerificationHandler,
+    SetAccountTypeCommand, SetAccountTypeHandler,
+};

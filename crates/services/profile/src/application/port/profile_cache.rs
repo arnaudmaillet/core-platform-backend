@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::value_object::{
-    CommentFilters, DiscoverySettings, FeedSettings, InteractionSettings, LocationSettings, TabSettings,
+    BusinessInfo, CommentFilters, DiscoverySettings, FeedSettings, InteractionSettings, LocationSettings, TabSettings,
 };
 use crate::domain::aggregate::Profile;
 use crate::domain::entity::ProfileLink;
@@ -71,6 +71,9 @@ pub struct ProfileView {
     /// Owner-only (cleared for others): feed controls.
     #[serde(default)]
     pub feed_settings: Option<FeedSettings>,
+    /// A brand's public contact card (#668), shown to everyone.
+    #[serde(default)]
+    pub business_info: Option<BusinessInfo>,
 }
 
 impl From<&Profile> for ProfileView {
@@ -103,6 +106,7 @@ impl From<&Profile> for ProfileView {
             comment_filters: Some(p.comment_filters().clone()),
             tab_settings: Some(p.tab_settings()),
             feed_settings: Some(p.feed_settings()),
+            business_info: p.business_info().cloned(),
         }
     }
 }
@@ -201,6 +205,7 @@ mod viewer_tests {
             comment_filters: None,
             tab_settings: None,
             feed_settings: None,
+            business_info: None,
         }
     }
 

@@ -79,6 +79,11 @@ impl Service for ProfileService {
         authenticated("/profile.v1.ProfileService/SetCommentFilters"),
         authenticated("/profile.v1.ProfileService/SetTabSettings"),
         authenticated("/profile.v1.ProfileService/SetFeedSettings"),
+        // #668: the owner's account type and verification request (staff's
+        // ListPending… / Decide… stay mesh-only).
+        authenticated("/profile.v1.ProfileService/SetAccountType"),
+        authenticated("/profile.v1.ProfileService/RequestVerification"),
+        authenticated("/profile.v1.ProfileService/GetVerificationRequest"),
         authenticated("/profile.v1.ProfileService/DeleteProfile"),
         public_read("/profile.v1.ProfileService/GetProfileById"),
         public_read("/profile.v1.ProfileService/GetProfileByHandle"),

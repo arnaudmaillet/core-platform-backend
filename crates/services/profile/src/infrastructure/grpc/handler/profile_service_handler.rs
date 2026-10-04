@@ -338,6 +338,121 @@ where
             .map_err(cqrs_error_to_status)
     }
 
+    /// The owner's account type (edge: one of the caller's profiles).
+    pub async fn set_account_type(
+        &self,
+        request: Request<proto::SetAccountTypeRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        use crate::application::command::SetAccountTypeCommand;
+        use crate::domain::value_object::{BusinessInfo, ProfileKind};
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        // Creator and business accounts are 18+: a teen's profile stays
+        // personal (and never publishes a business contact card).
+        let minor = edge::principal(&request).is_some_and(|p| p.is_minor());
+        let req = request.into_inner();
+        let kind = profile_kind_i32_to_str(req.kind)
+            .and_then(|k| ProfileKind::try_from(k).ok())
+            .ok_or_else(|| Status::invalid_argument("unknown kind"))?;
+        if !account_type_allowed(kind, minor) {
+            return Err(Status::failed_precondition("creator and business accounts are for holders 18 and over"));
+        }
+        let business = match req.business {
+            Some(b) if kind == ProfileKind::Brand => Some(
+                BusinessInfo::new(b.category, Some(b.contact_email), Some(b.contact_phone))
+                    .map_err(|e| Status::invalid_argument(e.to_string()))?,
+            ),
+            _ => None,
+        };
+        let cmd = SetAccountTypeCommand { profile_id: req.profile_id.clone(), kind, business };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_cmd(&req.profile_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    /// The owner asks for a verification badge (edge: one of the caller's profiles).
+    pub async fn request_verification(
+        &self,
+        request: Request<proto::RequestVerificationRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        use crate::application::command::RequestVerificationCommand;
+        use crate::domain::value_object::VerificationKind;
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let category = verification_kind_i32_to_str(req.category)
+            .and_then(|k| VerificationKind::try_from(k).ok())
+            .ok_or_else(|| Status::invalid_argument("unknown category"))?;
+        let cmd = RequestVerificationCommand { profile_id: req.profile_id.clone(), category, documents: req.documents };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_cmd(&req.profile_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    /// The owner follows its request (edge: one of the caller's profiles).
+    pub async fn get_verification_request(
+        &self,
+        request: Request<proto::GetVerificationRequestRequest>,
+    ) -> Result<Response<proto::GetVerificationRequestResponse>, Status> {
+        use crate::application::query::GetVerificationRequestQuery;
+        use crate::domain::entity::VerificationRequest;
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let profile_id = request.into_inner().profile_id;
+        let found: Option<VerificationRequest> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), GetVerificationRequestQuery { profile_id: profile_id.clone() }))
+            .await
+            .map_err(cqrs_error_to_status)?;
+        Ok(Response::new(proto::GetVerificationRequestResponse {
+            request: found.map(|r| verification_to_proto(&profile_id, r)),
+        }))
+    }
+
+    /// Staff queue (mesh-only, absent from the edge policy).
+    pub async fn list_pending_verification_requests(
+        &self,
+        request: Request<proto::ListPendingVerificationRequestsRequest>,
+    ) -> Result<Response<proto::ListPendingVerificationRequestsResponse>, Status> {
+        use crate::application::query::ListPendingVerificationsQuery;
+        use crate::domain::entity::VerificationRequest;
+        use crate::domain::value_object::ProfileId;
+        let req = request.into_inner();
+        let query = ListPendingVerificationsQuery {
+            limit:      req.limit,
+            page_token: Some(req.page_token).filter(|t| !t.is_empty()),
+        };
+        let (requests, next): (Vec<(ProfileId, VerificationRequest)>, Option<String>) = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_error_to_status)?;
+        Ok(Response::new(proto::ListPendingVerificationRequestsResponse {
+            requests: requests.into_iter().map(|(id, r)| verification_to_proto(&id.to_string(), r)).collect(),
+            next_page_token: next.unwrap_or_default(),
+        }))
+    }
+
+    /// Staff decision (mesh-only, absent from the edge policy).
+    pub async fn decide_verification_request(
+        &self,
+        request: Request<proto::DecideVerificationRequestRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        use crate::application::command::DecideVerificationCommand;
+        let req = request.into_inner();
+        let cmd = DecideVerificationCommand {
+            profile_id: req.profile_id.clone(),
+            approve:    req.approve,
+            reason:     Some(req.reason).filter(|r| !r.is_empty()),
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_cmd(&req.profile_id))
+            .map_err(cqrs_error_to_status)
+    }
+
     pub async fn verify_profile(
         &self,
         request: Request<proto::VerifyProfileRequest>,
@@ -559,6 +674,11 @@ fn profile_view_to_proto(v: ProfileView) -> proto::ProfileView {
                 LocationPrecision::City => proto::LocationPrecision::City,
             }) as i32,
         }),
+        business_info: v.business_info.map(|b| proto::BusinessInfo {
+            category:      b.category,
+            contact_email: b.contact_email.unwrap_or_default(),
+            contact_phone: b.contact_phone.unwrap_or_default(),
+        }),
         feed_settings: v.feed_settings.map(|f| proto::FeedSettings {
             sensitive_content: (match f.sensitive_content {
                 crate::domain::value_object::SensitiveContent::Less => proto::SensitiveContent::Less,
@@ -682,6 +802,30 @@ fn profile_status_str_to_i32(s: &str) -> i32 {
     }
 }
 
+/// Creator (professional) and business (brand) accounts are for holders 18
+/// and over; a 13–17 holder keeps a personal profile.
+fn account_type_allowed(kind: crate::domain::value_object::ProfileKind, minor: bool) -> bool {
+    use crate::domain::value_object::ProfileKind;
+    !minor || kind == ProfileKind::Personal
+}
+
+fn verification_to_proto(profile_id: &str, r: crate::domain::entity::VerificationRequest) -> proto::VerificationRequestView {
+    use crate::domain::entity::VerificationStatus;
+    proto::VerificationRequestView {
+        profile_id:      profile_id.to_owned(),
+        category:        verification_kind_str_to_i32(r.category.as_str()),
+        documents:       r.documents,
+        status:          (match r.status {
+            VerificationStatus::Pending => proto::VerificationRequestStatus::Pending,
+            VerificationStatus::Approved => proto::VerificationRequestStatus::Approved,
+            VerificationStatus::Rejected => proto::VerificationRequestStatus::Rejected,
+        }) as i32,
+        reason:          r.reason.unwrap_or_default(),
+        submitted_at_ms: r.submitted_at.timestamp_millis(),
+        decided_at_ms:   r.decided_at.map(|t| t.timestamp_millis()).unwrap_or_default(),
+    }
+}
+
 fn verification_kind_str_to_i32(s: &str) -> i32 {
     match s {
         "official" => 1,
@@ -733,5 +877,20 @@ pub fn cqrs_error_to_status(err: cqrs::error::CqrsError) -> Status {
                 _ => Status::internal(msg),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod account_type_tests {
+    use super::*;
+    use crate::domain::value_object::ProfileKind;
+
+    #[test]
+    fn creator_and_business_accounts_are_18_plus() {
+        assert!(account_type_allowed(ProfileKind::Brand, false));
+        assert!(account_type_allowed(ProfileKind::Professional, false));
+        assert!(!account_type_allowed(ProfileKind::Brand, true));
+        assert!(!account_type_allowed(ProfileKind::Professional, true));
+        assert!(account_type_allowed(ProfileKind::Personal, true));
     }
 }

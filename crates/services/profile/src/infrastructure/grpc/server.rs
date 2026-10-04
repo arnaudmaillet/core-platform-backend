@@ -52,6 +52,41 @@ where
         self.update_banner(request).await
     }
 
+    async fn set_account_type(
+        &self,
+        request: Request<proto::SetAccountTypeRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.set_account_type(request).await
+    }
+
+    async fn request_verification(
+        &self,
+        request: Request<proto::RequestVerificationRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.request_verification(request).await
+    }
+
+    async fn get_verification_request(
+        &self,
+        request: Request<proto::GetVerificationRequestRequest>,
+    ) -> Result<Response<proto::GetVerificationRequestResponse>, Status> {
+        self.get_verification_request(request).await
+    }
+
+    async fn list_pending_verification_requests(
+        &self,
+        request: Request<proto::ListPendingVerificationRequestsRequest>,
+    ) -> Result<Response<proto::ListPendingVerificationRequestsResponse>, Status> {
+        self.list_pending_verification_requests(request).await
+    }
+
+    async fn decide_verification_request(
+        &self,
+        request: Request<proto::DecideVerificationRequestRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.decide_verification_request(request).await
+    }
+
     async fn set_feed_settings(
         &self,
         request: Request<proto::SetFeedSettingsRequest>,

@@ -15,6 +15,8 @@ use thiserror::Error;
 /// | PRF-2002 | InvalidStatusTransition  | 422  | Medium   | No        |
 /// | PRF-4001 | ConcurrentModification   | 409  | High     | **Yes**   |
 /// | PRF-5001 | ProfileAlreadyVerified   | 409  | Low      | No        |
+/// | PRF-5002 | VerificationPending      | 409  | Low      | No        |
+/// | PRF-5003 | NoPendingVerification    | 409  | Low      | No        |
 /// | PRF-9001 | DomainViolation          | 422  | Medium   | No        |
 /// | PRF-9002 | InvalidProfileId         | 422  | Low      | No        |
 /// | PRF-9003 | InvalidHandle            | 422  | Low      | No        |
@@ -71,6 +73,12 @@ pub enum ProfileError {
     #[error("this profile is already verified")]
     ProfileAlreadyVerified,
 
+    #[error("a verification request is already pending for this profile")]
+    VerificationPending,
+
+    #[error("no verification request is pending for this profile")]
+    NoPendingVerification,
+
     // ── Domain invariants & parse errors (PRF-9xxx) ───────────────────────────
 
     #[error("domain invariant violated on '{field}': {message}")]
@@ -121,6 +129,8 @@ impl AppError for ProfileError {
             ProfileError::ConcurrentModification => "PRF-4001",
 
             ProfileError::ProfileAlreadyVerified => "PRF-5001",
+            ProfileError::VerificationPending    => "PRF-5002",
+            ProfileError::NoPendingVerification  => "PRF-5003",
 
             ProfileError::DomainViolation { .. }  => "PRF-9001",
             ProfileError::InvalidProfileId(_)     => "PRF-9002",
@@ -146,7 +156,9 @@ impl AppError for ProfileError {
             ProfileError::HandleAlreadyTaken { .. }
             | ProfileError::HandleReserved { .. }
             | ProfileError::ConcurrentModification
-            | ProfileError::ProfileAlreadyVerified => StatusCode::CONFLICT,
+            | ProfileError::ProfileAlreadyVerified
+            | ProfileError::VerificationPending
+            | ProfileError::NoPendingVerification => StatusCode::CONFLICT,
 
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         }
@@ -199,6 +211,8 @@ impl AppError for ProfileError {
             ProfileError::InvalidStatusTransition { .. } => "This status transition is not permitted.",
             ProfileError::ConcurrentModification        => "The profile was modified concurrently. Please retry.",
             ProfileError::ProfileAlreadyVerified        => "This profile is already verified.",
+            ProfileError::VerificationPending           => "A verification request is already under review.",
+            ProfileError::NoPendingVerification         => "There is no verification request under review.",
             ProfileError::TooManyCustomLinks { .. }     => "You may have at most 5 custom links.",
             _                                           => "A domain constraint was violated.",
         }
