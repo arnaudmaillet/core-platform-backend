@@ -4,6 +4,7 @@
 
 mod cache_invalidation;
 mod event_emission;
+mod handle_availability;
 mod handle_claim_race;
 mod list_by_account;
 mod viewer_and_account_masking;

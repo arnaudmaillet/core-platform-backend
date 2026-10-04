@@ -188,6 +188,10 @@ message GetAccountByIdentityIdRequest {
     string identity_id = 1;
 }
 
+message GetAccountByEmailRequest {
+    string email = 1;
+}
+
 message GetAccountStatusRequest {
     string account_id = 1;
 }

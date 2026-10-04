@@ -35,6 +35,9 @@ pub trait AccountRepository: Send + Sync + 'static {
         identity_id: &IdentityId,
     ) -> Result<Option<Account>, AccountError>;
 
+    /// Looks up the account holding `email` (stored lower-cased).
+    async fn find_by_email(&self, email: &EmailAddress) -> Result<Option<Account>, AccountError>;
+
     /// Returns a paginated slice of accounts with `status`.
     async fn list_by_status(
         &self,

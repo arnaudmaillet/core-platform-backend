@@ -293,6 +293,37 @@ where
             .ok_or_else(|| Status::not_found("profile not found"))
     }
 
+    pub async fn check_handle_availability(
+        &self,
+        request: Request<proto::CheckHandleAvailabilityRequest>,
+    ) -> Result<Response<proto::CheckHandleAvailabilityResponse>, Status> {
+        use crate::application::query::{CheckHandleAvailabilityQuery, HandleAvailability};
+        let query = CheckHandleAvailabilityQuery { handle: request.into_inner().handle };
+        let answer: HandleAvailability = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_error_to_status)?;
+        let response = match answer {
+            HandleAvailability::Available(handle) => proto::CheckHandleAvailabilityResponse {
+                availability: proto::HandleAvailability::Available as i32,
+                handle,
+                invalid_reason: String::new(),
+            },
+            HandleAvailability::Taken(handle) => proto::CheckHandleAvailabilityResponse {
+                availability: proto::HandleAvailability::Taken as i32,
+                handle,
+                invalid_reason: String::new(),
+            },
+            HandleAvailability::Invalid(reason) => proto::CheckHandleAvailabilityResponse {
+                availability: proto::HandleAvailability::Invalid as i32,
+                handle: String::new(),
+                invalid_reason: reason,
+            },
+        };
+        Ok(Response::new(response))
+    }
+
     pub async fn list_profiles_by_account(
         &self,
         request: Request<proto::ListProfilesByAccountRequest>,

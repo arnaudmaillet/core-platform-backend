@@ -413,6 +413,18 @@ impl AccountRepository for PgAccountRepository {
     }
 
     #[instrument(name = "account.repo.exists_by_email", skip(self), fields(email = %email))]
+    async fn find_by_email(&self, email: &EmailAddress) -> Result<Option<Account>, AccountError> {
+        let pool = self.tx_manager.pool();
+
+        let row = sqlx::query_as::<_, AccountRow>("SELECT * FROM accounts WHERE email = $1")
+            .bind(email.as_str())
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| AccountError::Storage(StorageError::from(e)))?;
+
+        row.map(Account::try_from).transpose()
+    }
+
     async fn exists_by_email(&self, email: &EmailAddress) -> Result<bool, AccountError> {
         let pool = self.tx_manager.pool();
 

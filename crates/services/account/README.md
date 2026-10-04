@@ -127,6 +127,7 @@ service AccountService {
   // Queries
   rpc GetAccountById (GetAccountByIdRequest) returns (AccountView);
   rpc GetAccountByIdentityId (GetAccountByIdentityIdRequest) returns (AccountView);
+  rpc GetAccountByEmail      (GetAccountByEmailRequest)      returns (AccountView);   // mesh only (auth sign-up): never on the edge
   rpc GetAccountStatus (GetAccountStatusRequest) returns (AccountStatusView); // auth hot path
   rpc SetDateOfBirth (SetDateOfBirthRequest) returns (AccountView);          // once, when none is on file; min age 13 (16 in AU)
   rpc GetGdprRecord (GetGdprRecordRequest) returns (GdprRecordView);          // the holder's own on the edge
