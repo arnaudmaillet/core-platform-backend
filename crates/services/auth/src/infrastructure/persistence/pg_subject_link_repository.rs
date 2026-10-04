@@ -4,7 +4,7 @@ use tracing::instrument;
 
 use crate::application::port::SubjectLinkRepository;
 use crate::domain::aggregate::SubjectLink;
-use crate::domain::value_object::IdpSubject;
+use crate::domain::value_object::{AccountId, IdpSubject};
 use crate::error::AuthError;
 
 use super::model::SubjectLinkRow;
@@ -43,6 +43,18 @@ impl SubjectLinkRepository for PgSubjectLinkRepository {
         .await
         .map_err(storage)?;
         row.map(SubjectLink::try_from).transpose()
+    }
+
+    #[instrument(name = "auth.subject_link.find_by_account", skip(self), fields(account.id = %account_id.as_str()))]
+    async fn find_by_account(&self, account_id: &AccountId) -> Result<Vec<SubjectLink>, AuthError> {
+        let rows = sqlx::query_as::<_, SubjectLinkRow>(
+            "SELECT * FROM subject_links WHERE account_id = $1 ORDER BY linked_at",
+        )
+        .bind(account_id.as_uuid())
+        .fetch_all(self.tx.pool())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(SubjectLink::try_from).collect()
     }
 
     #[instrument(name = "auth.subject_link.save", skip(self, link), fields(subject = %link.subject()))]

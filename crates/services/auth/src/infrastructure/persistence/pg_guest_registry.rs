@@ -2,7 +2,10 @@ use async_trait::async_trait;
 use postgres_storage::{StorageError, TransactionManager};
 use tracing::instrument;
 
+use chrono::{DateTime, Utc};
+
 use crate::application::port::{GuestRecord, GuestRegistry};
+use crate::domain::value_object::AccountId;
 use crate::error::AuthError;
 
 /// `guest_principals`, sharded like sessions on the guest id.
@@ -45,6 +48,37 @@ impl GuestRegistry for PgGuestRegistry {
                     .bind(g.region_hint)
                     .bind(g.current_country)
                     .bind(g.first_seen_at)
+                    .execute(&mut **tx)
+                    .await
+                    .map(|_| ())
+                    .map_err(storage)
+                })
+            })
+            .await
+    }
+
+    #[instrument(name = "auth.guest.mark_upgraded", skip(self), fields(guest.id = %guest_id.as_str()))]
+    async fn mark_upgraded(
+        &self,
+        guest_id: &AccountId,
+        account_id: &AccountId,
+        at: DateTime<Utc>,
+    ) -> Result<(), AuthError> {
+        let guest = guest_id.as_uuid();
+        let account = account_id.as_uuid();
+        self.tx
+            .run_on_shard(guest_id, move |tx| {
+                Box::pin(async move {
+                    sqlx::query(
+                        r#"
+                        UPDATE guest_principals
+                           SET upgraded_to_account_id = $2, upgraded_at = $3
+                         WHERE guest_id = $1 AND upgraded_to_account_id IS NULL
+                        "#,
+                    )
+                    .bind(guest)
+                    .bind(account)
+                    .bind(at)
                     .execute(&mut **tx)
                     .await
                     .map(|_| ())

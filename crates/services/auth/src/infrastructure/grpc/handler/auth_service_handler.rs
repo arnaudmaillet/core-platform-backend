@@ -10,14 +10,15 @@ use transport::grpc::edge;
 use crate::application::command::{
     ChangePasswordCommand, ChangePasswordHandler, IssuedSession, LoginCommand, LoginHandler,
     LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutCommand, LogoutHandler,
-    RefreshCommand, RefreshHandler, StartGuestSessionCommand, StartGuestSessionHandler,
+    RefreshCommand, RefreshHandler, SignUpCommand, SignUpHandler, SignUpOutcome,
+    StartGuestSessionCommand, StartGuestSessionHandler,
     StepUpCredential, VerifyCredentialsCommand, VerifyCredentialsHandler,
 };
-use crate::application::port::AuthnGrant;
+use crate::application::port::{AuthnGrant, SignUpConsent};
 use crate::application::query::{
     IntrospectHandler, IntrospectQuery, ListSessionsHandler, ListSessionsQuery, SessionSummary,
 };
-use crate::domain::value_object::{DeviceFingerprint, SessionStatus};
+use crate::domain::value_object::{DeviceFingerprint, FederatedProvider, SessionStatus, SignInMethod};
 use crate::error::AuthError;
 
 // ── Proto inclusion ───────────────────────────────────────────────────────────
@@ -41,6 +42,7 @@ pub struct AuthServiceHandler {
     start_guest: Arc<StartGuestSessionHandler>,
     change_password: Arc<ChangePasswordHandler>,
     verify_credentials: Arc<VerifyCredentialsHandler>,
+    sign_up: Option<Arc<SignUpHandler>>,
 }
 
 impl AuthServiceHandler {
@@ -66,7 +68,64 @@ impl AuthServiceHandler {
             start_guest,
             change_password,
             verify_credentials,
+            sign_up: None,
         }
+    }
+
+    /// Enables SignUp (native Sign in with Apple / Google).
+    pub fn with_sign_up(mut self, sign_up: Arc<SignUpHandler>) -> Self {
+        self.sign_up = Some(sign_up);
+        self
+    }
+
+    /// Edge `public`: creates an account from a provider id_token (see `SignUpHandler`).
+    pub async fn sign_up(
+        &self,
+        request: Request<proto::SignUpRequest>,
+    ) -> Result<Response<proto::SignUpResponse>, Status> {
+        let handler = self.sign_up.as_ref().ok_or_else(|| Status::unimplemented("sign-up is not enabled"))?;
+        let req = request.into_inner();
+        let grant = req.id_token.ok_or_else(|| Status::invalid_argument("sign-up requires an id_token"))?;
+        let consent = req.consent.unwrap_or_default();
+        let cmd = SignUpCommand {
+            provider: provider_from_proto(grant.provider)?,
+            id_token: grant.id_token,
+            nonce: grant.nonce,
+            date_of_birth: req.date_of_birth,
+            consent: SignUpConsent {
+                policy_version: consent.policy_version,
+                data_processing: consent.data_processing,
+                marketing: consent.marketing,
+                analytics: consent.analytics,
+            },
+            home_country: Some(req.home_country).filter(|c| !c.is_empty()),
+            device: device_from_proto(req.device),
+            guest_refresh_token: Some(req.guest_refresh_token).filter(|t| !t.is_empty()),
+        };
+        let outcome = handler
+            .handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        let outcome = match outcome {
+            SignUpOutcome::SignedUp { account_id, session_id, access_token, refresh_token, access_expires_in } => {
+                proto::sign_up_response::Outcome::SignedUp(proto::SignedUp {
+                    account_id: account_id.as_str(),
+                    tokens: Some(proto::TokenPair {
+                        access_token,
+                        refresh_token,
+                        token_type: "Bearer".to_owned(),
+                        expires_in: access_expires_in,
+                        session_id: session_id.as_str(),
+                    }),
+                })
+            }
+            SignUpOutcome::ExistingAccount { method } => {
+                proto::sign_up_response::Outcome::ExistingAccount(proto::ExistingAccount {
+                    method: method_to_proto(method) as i32,
+                })
+            }
+        };
+        Ok(Response::new(proto::SignUpResponse { outcome: Some(outcome) }))
     }
 
     /// Edge `authenticated`: the account and session are the caller's (`sub`,
@@ -149,7 +208,11 @@ impl AuthServiceHandler {
     ) -> Result<Response<proto::LoginResponse>, Status> {
         let req = request.into_inner();
         let grant = grant_from_proto(req.credential)?;
-        let cmd = LoginCommand { grant, device: device_from_proto(req.device) };
+        let cmd = LoginCommand {
+            grant,
+            device: device_from_proto(req.device),
+            guest_refresh_token: Some(req.guest_refresh_token).filter(|t| !t.is_empty()),
+        };
 
         let issued = self
             .login
@@ -313,7 +376,28 @@ fn grant_from_proto(
         Some(proto::login_request::Credential::Password(g)) => {
             Ok(AuthnGrant::Password { username: g.username, password: g.password })
         }
+        Some(proto::login_request::Credential::IdToken(g)) => Ok(AuthnGrant::IdToken {
+            provider: provider_from_proto(g.provider)?,
+            id_token: g.id_token,
+            nonce: g.nonce,
+        }),
         None => Err(Status::invalid_argument("login requires a credential")),
+    }
+}
+
+fn provider_from_proto(provider: i32) -> Result<FederatedProvider, Status> {
+    match proto::FederatedProvider::try_from(provider) {
+        Ok(proto::FederatedProvider::Apple) => Ok(FederatedProvider::Apple),
+        Ok(proto::FederatedProvider::Google) => Ok(FederatedProvider::Google),
+        _ => Err(Status::invalid_argument("provider must be APPLE or GOOGLE")),
+    }
+}
+
+fn method_to_proto(method: SignInMethod) -> proto::SignInMethod {
+    match method {
+        SignInMethod::Apple => proto::SignInMethod::Apple,
+        SignInMethod::Google => proto::SignInMethod::Google,
+        SignInMethod::Password => proto::SignInMethod::Password,
     }
 }
 

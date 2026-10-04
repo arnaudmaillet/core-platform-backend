@@ -17,6 +17,14 @@ pub enum AuthnGrant {
     /// Resource-owner password grant (first-party trusted clients only). The
     /// password is forwarded to the IdP and never stored.
     Password { username: String, password: String },
+    /// A native Sign in with Apple / Google id_token. Verified by auth itself
+    /// ([`FederatedTokenVerifier`](super::FederatedTokenVerifier)), never sent
+    /// to the IdP broker.
+    IdToken {
+        provider: crate::domain::value_object::FederatedProvider,
+        id_token: String,
+        nonce: String,
+    },
 }
 
 /// The normalized identity an IdP returns after authenticating a grant.

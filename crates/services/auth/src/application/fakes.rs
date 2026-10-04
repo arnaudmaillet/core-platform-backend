@@ -86,6 +86,10 @@ pub struct StubAccountDirectory {
     resumed: Mutex<Vec<AccountId>>,
     /// When set, resuming fails as if the account was suspended meanwhile.
     refuse_resume: std::sync::atomic::AtomicBool,
+    /// email → holder (lower-cased).
+    emails: Mutex<HashMap<String, super::port::EmailHolder>>,
+    /// Every account provisioned, in order.
+    provisioned: Mutex<Vec<super::port::NewAccount>>,
 }
 
 impl Default for StubAccountDirectory {
@@ -102,7 +106,24 @@ impl StubAccountDirectory {
             looked_up: Mutex::new(Vec::new()),
             resumed: Mutex::new(Vec::new()),
             refuse_resume: std::sync::atomic::AtomicBool::new(false),
+            emails: Mutex::new(HashMap::new()),
+            provisioned: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The accounts provisioned so far.
+    pub fn provisioned(&self) -> Vec<super::port::NewAccount> {
+        self.provisioned.lock().unwrap().clone()
+    }
+
+    /// Registers `email` as held by an account bound to `subject` (created with
+    /// another method).
+    pub fn with_email(&self, email: &str, subject: &IdpSubject, account_id: AccountId) {
+        self.subjects.lock().unwrap().insert(subject.clone(), account_id);
+        self.emails.lock().unwrap().insert(
+            email.to_lowercase(),
+            super::port::EmailHolder { account_id, identity_id: subject.to_string() },
+        );
     }
 
     /// The deactivated accounts resumed so far.
@@ -177,6 +198,43 @@ impl AccountDirectory for StubAccountDirectory {
             permissions: Vec::new(),
             age_bracket: None,
         }))
+    }
+
+    async fn provision(&self, account: &super::port::NewAccount) -> Result<AccountId, AuthError> {
+        // The minimum age, as `account` enforces it (13).
+        let dob = chrono::NaiveDate::parse_from_str(&account.date_of_birth, "%Y-%m-%d")
+            .map_err(|_| AuthError::DomainViolation { field: "date_of_birth".into(), message: "bad date".into() })?;
+        let today = Utc::now().date_naive();
+        let age = today.years_since(dob).unwrap_or(0);
+        if age < 13 {
+            return Err(AuthError::AgeBelowMinimum);
+        }
+        if let Some(holder) = self.emails.lock().unwrap().get(&account.email.to_lowercase())
+            && holder.identity_id != account.subject.to_string()
+        {
+            return Err(AuthError::EmailAlreadyRegistered);
+        }
+        let mut subjects = self.subjects.lock().unwrap();
+        let id = *subjects.entry(account.subject.clone()).or_insert_with(|| AccountId::from_uuid(Uuid::now_v7()));
+        let activation = if account.email_verified {
+            AccountActivation::Active
+        } else {
+            AccountActivation::Inactive { reason: "pending_verification".into() }
+        };
+        self.snapshots
+            .lock()
+            .unwrap()
+            .insert(id, AccountSnapshot { activation, permissions: Vec::new(), age_bracket: None });
+        self.emails.lock().unwrap().insert(
+            account.email.to_lowercase(),
+            super::port::EmailHolder { account_id: id, identity_id: account.subject.to_string() },
+        );
+        self.provisioned.lock().unwrap().push(account.clone());
+        Ok(id)
+    }
+
+    async fn find_by_email(&self, email: &str) -> Result<Option<super::port::EmailHolder>, AuthError> {
+        Ok(self.emails.lock().unwrap().get(&email.to_lowercase()).cloned())
     }
 
     async fn resume_deactivated(&self, account_id: &AccountId) -> Result<(), AuthError> {
@@ -255,6 +313,10 @@ impl SubjectLinkRepository for InMemorySubjectLinkRepository {
         subject: &IdpSubject,
     ) -> Result<Option<SubjectLink>, AuthError> {
         Ok(self.links.lock().unwrap().get(subject).cloned())
+    }
+
+    async fn find_by_account(&self, account_id: &AccountId) -> Result<Vec<SubjectLink>, AuthError> {
+        Ok(self.links.lock().unwrap().values().filter(|l| l.account_id() == *account_id).cloned().collect())
     }
 
     async fn save(&self, link: &SubjectLink) -> Result<(), AuthError> {
@@ -460,6 +522,8 @@ impl TokenMinter for StubTokenMinter {
 #[derive(Default)]
 pub struct InMemoryGuestRegistry {
     pub records: Mutex<Vec<super::port::GuestRecord>>,
+    /// (guest, account) upgrades recorded.
+    pub upgrades: Mutex<Vec<(AccountId, AccountId)>>,
 }
 
 #[async_trait]
@@ -469,6 +533,16 @@ impl super::port::GuestRegistry for InMemoryGuestRegistry {
         if !records.iter().any(|r| r.guest_id == guest.guest_id) {
             records.push(guest.clone());
         }
+        Ok(())
+    }
+
+    async fn mark_upgraded(
+        &self,
+        guest_id: &AccountId,
+        account_id: &AccountId,
+        _at: DateTime<Utc>,
+    ) -> Result<(), AuthError> {
+        self.upgrades.lock().unwrap().push((*guest_id, *account_id));
         Ok(())
     }
 }

@@ -62,6 +62,7 @@ impl IdentityProvider for StubIdp {
         let subject = match grant {
             AuthnGrant::Password { username, .. } => username,
             AuthnGrant::AuthorizationCode { code, .. } => code,
+            AuthnGrant::IdToken { .. } => return Err(AuthError::IdpAuthenticationFailed),
         };
         Ok(NormalizedClaims { issuer: "https://idp.test".to_owned(), subject })
     }
@@ -111,6 +112,14 @@ impl AccountDirectory for StubDirectory {
 
     async fn resume_deactivated(&self, _account_id: &AccountId) -> Result<(), AuthError> {
         Ok(())
+    }
+
+    async fn provision(&self, account: &auth::application::port::NewAccount) -> Result<AccountId, AuthError> {
+        self.resolve_or_provision(&account.subject).await
+    }
+
+    async fn find_by_email(&self, _email: &str) -> Result<Option<auth::application::port::EmailHolder>, AuthError> {
+        Ok(None)
     }
 }
 
@@ -185,6 +194,7 @@ impl Harness {
             publisher: Arc::new(LogEventPublisher) as Arc<dyn EventPublisher>,
             guests: Arc::new(PgGuestRegistry::new(tx.clone())),
             guest_sessions_enabled: true,
+            federated: std::sync::Arc::new(auth::infrastructure::idp::JwksFederatedTokenVerifier::new()),
             policy: SessionPolicy::new(
                 ChronoDuration::minutes(10),
                 ChronoDuration::minutes(30),
@@ -206,6 +216,7 @@ impl Harness {
                 username: username.to_owned(),
                 password: "pw".to_owned(),
             })),
+            guest_refresh_token: String::new(),
         });
         self.handler.login(request).await.map(|r| r.into_inner())
     }

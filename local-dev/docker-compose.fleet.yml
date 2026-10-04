@@ -465,6 +465,10 @@ services:
       AUTH_TOKEN_AUDIENCE: core-platform
       # Guest mode (StartGuestSession): off by default until the abuse controls land.
       AUTH_GUEST_SESSIONS_ENABLED: "true"
+      # Native Sign in with Apple / Google (SignUp, id_token Login): the app's client
+      # ids. Unset = that provider is off locally.
+      # AUTH_APPLE_AUDIENCES: <bundle id>
+      # AUTH_GOOGLE_AUDIENCES: <iOS OAuth client id>
       AUTH_SIGNING_KID: local-es256-1
       AUTH_JWKS_HTTP_ADDR: 0.0.0.0:8081
       AUTH_ACCOUNT_GRPC_ENDPOINT: http://account-server:50059

@@ -28,4 +28,23 @@ enum GrantType {
     // password transits TLS to the IdP broker and is NEVER stored by this service
     // (credentials are owned by the IdP under the federated model).
     PASSWORD               = 2;
+    // A native Sign in with Apple / Google id_token, verified by this service
+    // against the provider's keys (no IdP round-trip).
+    ID_TOKEN               = 3;
+}
+
+// A third-party identity provider whose id_tokens this service verifies.
+enum FederatedProvider {
+    FEDERATED_PROVIDER_UNSPECIFIED = 0;
+    FEDERATED_PROVIDER_APPLE       = 1;
+    FEDERATED_PROVIDER_GOOGLE      = 2;
+}
+
+// How an existing account signs in (SignUp's "you already have an account").
+enum SignInMethod {
+    SIGN_IN_METHOD_UNSPECIFIED = 0;
+    SIGN_IN_METHOD_APPLE       = 1;
+    SIGN_IN_METHOD_GOOGLE      = 2;
+    // Email / username + password (the IdP's own credential).
+    SIGN_IN_METHOD_PASSWORD    = 3;
 }

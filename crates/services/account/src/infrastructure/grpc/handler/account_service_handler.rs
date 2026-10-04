@@ -671,6 +671,9 @@ fn account_role_i32_to_str(v: i32) -> Option<&'static str> {
 
 // ── Error mapping ─────────────────────────────────────────────────────────────
 
+/// Status metadata key carrying the account error code (`ACC-xxxx`).
+pub const ERROR_CODE_METADATA: &str = "x-error-code";
+
 pub fn cqrs_error_to_status(err: cqrs::error::CqrsError) -> Status {
     use cqrs::error::CqrsError;
     match err {
@@ -685,14 +688,20 @@ pub fn cqrs_error_to_status(err: cqrs::error::CqrsError) -> Status {
             use error::AppError as _;
             let msg = boxed.to_string();
             let retryable = boxed.is_retryable();
-            match boxed.http_status().as_u16() {
+            let mut status = match boxed.http_status().as_u16() {
                 404 => Status::not_found(msg),
                 409 if retryable => Status::aborted(msg),
                 409 => Status::already_exists(msg),
                 400 | 422 => Status::failed_precondition(msg),
                 503 | 502 => Status::unavailable(msg),
                 _ => Status::internal(msg),
+            };
+            // The stable error code (e.g. `ACC-2004`), so a mesh caller can tell
+            // failures sharing a gRPC code apart without parsing the message.
+            if let Ok(code) = boxed.error_code().parse() {
+                status.metadata_mut().insert(ERROR_CODE_METADATA, code);
             }
+            status
         }
     }
 }
@@ -764,5 +773,12 @@ mod tests {
         let open = handler(false);
         let status = open.request_gdpr_deletion(delete(None)).await.unwrap_err();
         assert_eq!(status.code(), Code::Unimplemented);
+    }
+
+    #[test]
+    fn a_status_carries_the_account_error_code() {
+        let status = cqrs_error_to_status(cqrs::CqrsError::from_handler(crate::error::AccountError::AgeBelowMinimum { minimum: 13 }));
+        assert_eq!(status.code(), Code::FailedPrecondition);
+        assert_eq!(status.metadata().get(ERROR_CODE_METADATA).and_then(|v| v.to_str().ok()), Some("ACC-2004"));
     }
 }

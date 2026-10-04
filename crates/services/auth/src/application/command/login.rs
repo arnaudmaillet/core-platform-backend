@@ -4,24 +4,26 @@ use chrono::{DateTime, Utc};
 use cqrs::Envelope;
 use validate_core::{FieldViolation, Validate};
 
+use crate::application::command::member_session::MemberSessions;
 use crate::application::ensure_valid;
 use crate::application::policy::SessionPolicy;
 use crate::application::port::{
-    profile_ids_or_empty, AccountActivation, AccountDirectory, AuthnGrant, EventPublisher, IdentityProvider,
-    ProfileDirectory, RefreshTokenRepository, SessionCache, SessionRepository,
+    AccountActivation, AccountDirectory, AuthnGrant, EventPublisher, FederatedTokenVerifier, GuestRegistry,
+    IdentityProvider, ProfileDirectory, RefreshTokenRepository, SessionCache, SessionRepository,
     SubjectLinkRepository, TokenMinter,
 };
-use crate::domain::aggregate::{
-    RefreshToken, RefreshTokenIssueParams, Session, SessionIssueParams, SubjectLink,
-};
-use crate::domain::value_object::{AccountId, DeviceFingerprint, IdpSubject, Permission, SessionKind};
+use crate::domain::aggregate::SubjectLink;
+use crate::domain::value_object::{AccountId, DeviceFingerprint, IdpSubject};
 use crate::error::AuthError;
 
-/// Establish a session by brokering a credential to the IdP.
+/// Establish a session by brokering a credential to the IdP, or by verifying a
+/// native Sign in with Apple / Google id_token.
 #[derive(Debug, Clone)]
 pub struct LoginCommand {
     pub grant: AuthnGrant,
     pub device: DeviceFingerprint,
+    /// The guest session this device was using: it ends on success.
+    pub guest_refresh_token: Option<String>,
 }
 
 impl Validate for LoginCommand {
@@ -56,6 +58,14 @@ impl Validate for LoginCommand {
                     ));
                 }
             }
+            AuthnGrant::IdToken { id_token, nonce, .. } => {
+                if id_token.trim().is_empty() {
+                    v.push(FieldViolation::new("id_token", "AUT-VAL-030", "id_token must not be empty"));
+                }
+                if nonce.trim().is_empty() {
+                    v.push(FieldViolation::new("nonce", "AUT-VAL-031", "nonce must not be empty"));
+                }
+            }
         }
         if v.is_empty() { Ok(()) } else { Err(v) }
     }
@@ -81,14 +91,13 @@ pub struct IssuedSession {
 pub struct LoginHandler {
     idp: Arc<dyn IdentityProvider>,
     directory: Arc<dyn AccountDirectory>,
-    profiles: Arc<dyn ProfileDirectory>,
     links: Arc<dyn SubjectLinkRepository>,
-    sessions: Arc<dyn SessionRepository>,
-    refresh_tokens: Arc<dyn RefreshTokenRepository>,
-    cache: Arc<dyn SessionCache>,
-    minter: Arc<dyn TokenMinter>,
     publisher: Arc<dyn EventPublisher>,
-    policy: SessionPolicy,
+    members: MemberSessions,
+    /// Native Sign in with Apple / Google; `None` refuses id_token grants.
+    federated: Option<Arc<dyn FederatedTokenVerifier>>,
+    /// Where a retired guest session's upgrade is recorded.
+    guests: Option<Arc<dyn GuestRegistry>>,
 }
 
 impl LoginHandler {
@@ -108,15 +117,24 @@ impl LoginHandler {
         Self {
             idp,
             directory,
-            profiles,
             links,
-            sessions,
-            refresh_tokens,
-            cache,
-            minter,
-            publisher,
-            policy,
+            publisher: Arc::clone(&publisher),
+            members: MemberSessions { profiles, sessions, refresh_tokens, cache, minter, publisher, policy },
+            federated: None,
+            guests: None,
         }
+    }
+
+    /// Enables id_token grants (native Sign in with Apple / Google) and the
+    /// guest-session hand-over.
+    pub fn with_federated(
+        mut self,
+        verifier: Arc<dyn FederatedTokenVerifier>,
+        guests: Arc<dyn GuestRegistry>,
+    ) -> Self {
+        self.federated = Some(verifier);
+        self.guests = Some(guests);
+        self
     }
 
     pub async fn handle(
@@ -128,16 +146,33 @@ impl LoginHandler {
         let cmd = envelope.payload;
         let correlation_id = envelope.correlation_id;
 
-        // 1. Broker the credential to the IdP and normalize the identity.
-        let claims = self.idp.authenticate(cmd.grant).await?;
-        let subject = IdpSubject::new(claims.issuer, claims.subject)?;
-
-        // 2. Resolve the account for this subject (provision on first sight). The
-        //    link itself is only established *after* the active gate, so an
-        //    inactive account never produces a spurious SubjectLinked event.
-        let (account_id, needs_link) = match self.links.find_by_subject(&subject).await? {
-            Some(link) => (link.account_id(), false),
-            None => (self.directory.resolve_or_provision(&subject).await?, true),
+        // 1–2. Who is signing in, and their account.
+        let (subject, account_id, needs_link) = match cmd.grant {
+            // A native id_token: verified here. Its account was linked at
+            // SignUp; an identity with none is told to sign up.
+            AuthnGrant::IdToken { provider, id_token, nonce } => {
+                let verifier = self.federated.as_ref().ok_or_else(|| AuthError::FederatedProviderNotConfigured {
+                    provider: provider.as_str().to_owned(),
+                })?;
+                let identity = verifier.verify(provider, &id_token, &nonce).await?;
+                let subject = IdpSubject::new(identity.issuer, identity.subject)?;
+                let link = self.links.find_by_subject(&subject).await?.ok_or(AuthError::NoAccountForIdentity)?;
+                (subject, link.account_id(), false)
+            }
+            // Broker the credential to the IdP and normalize the identity. The
+            // link itself is only established *after* the active gate, so an
+            // inactive account never produces a spurious SubjectLinked event.
+            grant => {
+                let claims = self.idp.authenticate(grant).await?;
+                let subject = IdpSubject::new(claims.issuer, claims.subject)?;
+                match self.links.find_by_subject(&subject).await? {
+                    Some(link) => (subject, link.account_id(), false),
+                    None => {
+                        let account_id = self.directory.resolve_or_provision(&subject).await?;
+                        (subject, account_id, true)
+                    }
+                }
+            }
         };
 
         // 3. Gate issuance on the account being active; read authoritative perms.
@@ -162,70 +197,32 @@ impl LoginHandler {
         if needs_link {
             let mut link = SubjectLink::establish(subject.clone(), account_id, now, correlation_id);
             self.links.save(&link).await?;
-            self.publish_all(link.drain_events()).await?;
+            for event in &link.drain_events() {
+                self.publisher.publish(event).await?;
+            }
             first_link = true;
         }
 
-        // 5. Issue the session under the account's current generation.
-        let generation = self.cache.current_generation(&account_id).await?;
-        let mut session = Session::issue(SessionIssueParams {
-            kind: SessionKind::Member,
-            account_id,
-            subject,
-            generation,
-            device: cmd.device,
-            issued_at: now,
-            expires_at: now + self.policy.session_ttl,
-            absolute_expiry: now + self.policy.absolute_ttl,
-            correlation_id,
-        })?;
-        self.sessions.save(&session).await?;
-        self.publish_all(session.drain_events()).await?;
+        // 5. Issue the session, its refresh token and the edge access token.
+        let issued = self
+            .members
+            .issue(account_id, subject, cmd.device, permissions, age_bracket, now, correlation_id)
+            .await?;
 
-        // 5. Mint the refresh token and the edge access token.
-        let generated = self.minter.generate_refresh()?;
-        let refresh = RefreshToken::issue(RefreshTokenIssueParams {
-            session_id: session.id(),
-            account_id,
-            token_hash: generated.hash,
-            issued_at: now,
-            expires_at: now + self.policy.refresh_ttl,
-        })?;
-        self.refresh_tokens.save(&refresh).await?;
-
-        // The profiles the account owns ride in the token (`pids`) so client-facing
-        // services can bind profile-keyed actors to the caller. Fail-safe: an
-        // outage mints a token with no profile grants, never a failed login.
-        let profile_ids = profile_ids_or_empty(&self.profiles, &account_id).await;
-        // Every member may read public content (the edge's `read:public` routes).
-        let permissions = Permission::with_read_public(permissions);
-        let mut claims =
-            session.mint_access_token(now, self.policy.access_ttl, permissions, profile_ids)?;
-        // The credential was proved just now: the token counts as a recent
-        // authentication for step-up-gated RPCs (until it is refreshed).
-        claims.auth_time = Some(now);
-        claims.age_bracket = age_bracket;
-        let access_token = self.minter.mint_access(&claims).await?;
+        // 6. The guest this device was is now this member.
+        if let (Some(token), Some(guests)) = (cmd.guest_refresh_token.as_deref(), &self.guests) {
+            self.members.retire_guest(guests.as_ref(), token, account_id, now, correlation_id).await;
+        }
 
         Ok(IssuedSession {
             account_id,
-            session_id: session.id(),
-            access_token,
-            refresh_token: generated.plaintext,
-            access_expires_in: claims.expires_in_secs(now),
+            session_id: issued.session_id,
+            access_token: issued.access_token,
+            refresh_token: issued.refresh_token,
+            access_expires_in: issued.access_expires_in,
             first_link,
             reactivated,
         })
-    }
-
-    async fn publish_all(
-        &self,
-        events: Vec<crate::domain::event::DomainEvent>,
-    ) -> Result<(), AuthError> {
-        for event in &events {
-            self.publisher.publish(event).await?;
-        }
-        Ok(())
     }
 }
 
@@ -245,6 +242,7 @@ mod tests {
                     password: "secret".into(),
                 },
                 device: DeviceFingerprint::default(),
+                guest_refresh_token: None,
             },
         )
     }
@@ -352,6 +350,7 @@ mod tests {
                     code_verifier: "v".into(),
                 },
                 device: DeviceFingerprint::default(),
+                guest_refresh_token: None,
             },
         );
         let err = fx.login_handler().handle(env, t0()).await.unwrap_err();

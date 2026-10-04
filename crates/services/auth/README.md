@@ -66,6 +66,25 @@ is not published to the outbox (the audit plane records accounts). App Attest ve
 per-IP / per-device limits on `StartGuestSession` are the abuse-control slice (B5); until then the
 RPC is **off by default** (`AUTH_GUEST_SESSIONS_ENABLED`; the local fleet turns it on).
 
+### Sign-up with Apple / Google (guest mode)
+
+`SignUp` (edge **public**) creates an account from a native **Sign in with Apple / Google**
+id_token. auth verifies the token itself against the provider's JWKS (signature, issuer, audience =
+the app's client ids `AUTH_APPLE_AUDIENCES` / `AUTH_GOOGLE_AUDIENCES`, expiry, nonce — the raw nonce
+or its SHA-256 hex); a provider with no client id is off (`AUT-5009`). The request also carries the
+**date of birth** (under the minimum age → `AUT-6005`, nothing created), the **consent** (policy
+version, data processing required, marketing, analytics) and the **home country**. The account is
+created through `account` (`CreateAccount` → `VerifyEmail` when the provider vouches for the
+address → `UpdateConsents`; each step idempotent, so a retried sign-up finishes an interrupted one),
+the identity is linked (`subject_links`, `auth.subject_linked`) and a member session opens. **One
+person, one account:** if the identity, or its provider-verified email, already has an account, the
+answer is `existing_account{method}` (APPLE / GOOGLE / PASSWORD) instead — only the email inside a
+verified token is ever looked up, and Apple private-relay addresses never match. The profile comes
+next (`profile.CreateProfile`, then `Refresh` so `pids` carry it). `Login` accepts the same
+id_token (`IdTokenGrant`) for returning users; an identity with no account gets `AUT-6004`
+(`NOT_FOUND`) and the app goes on with `SignUp`. Both accept the device's **guest refresh token**:
+that guest session ends (`guest_upgraded`) and `guest_principals` records the account it became.
+
 ### Credentials and step-up
 
 The password lives at the IdP only. `ChangePassword` (edge **authenticated**, members) proves the
@@ -172,6 +191,8 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | `AUTH_ACCOUNT_RPC_TIMEOUT_MS` · `AUTH_ACCOUNT_CONNECT_TIMEOUT_MS` | Per-request / connect deadlines on the `account` channel (login hot path — fail fast, never hang) | `2000` · `2000` |
 | `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Request / connect deadlines on Keycloak HTTP calls (token exchange) | `5000` · `2000` |
 | `AUTH_GUEST_SESSIONS_ENABLED` | `StartGuestSession` kill switch. **Off by default**: it writes a session per call with no credential, so keep it off wherever the abuse controls (per-IP / per-device limits, App Attest) are not in front of it. Off → `AUT-1005` (`PERMISSION_DENIED`). | `false` |
+| `AUTH_APPLE_AUDIENCES` · `AUTH_GOOGLE_AUDIENCES` | Comma-separated client ids an Apple / Google id_token must be minted for (`aud`: the app's bundle / services ids; Google OAuth client ids). Empty = that provider's sign-in is off (`AUT-5009`). | — |
+| `AUTH_FEDERATED_JWKS_TIMEOUT_MS` | Deadline on fetching a provider's JWKS. | `3000` |
 | Postgres / Redis / Kafka | via the shared storage crates' own `from_env()` | — |
 
 ## 🧪 Local Development

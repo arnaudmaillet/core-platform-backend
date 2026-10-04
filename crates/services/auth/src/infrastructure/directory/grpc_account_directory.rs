@@ -1,14 +1,17 @@
 use account_api::account_service_client::AccountServiceClient;
 use account_api::{
-    AccountStatus, AgeBracket as ProtoAgeBracket, GetAccountByIdRequest, GetAccountByIdentityIdRequest,
-    ResumeDeactivatedAccountRequest,
+    AccountStatus, AgeBracket as ProtoAgeBracket, CreateAccountRequest, GetAccountByEmailRequest,
+    GetAccountByIdRequest, GetAccountByIdentityIdRequest, ResumeDeactivatedAccountRequest,
+    UpdateConsentsRequest, VerifyEmailRequest,
 };
 use async_trait::async_trait;
 use tonic::transport::Channel;
 use tonic::Code;
 use tracing::instrument;
 
-use crate::application::port::{AccountActivation, AccountDirectory, AccountSnapshot};
+use crate::application::port::{
+    AccountActivation, AccountDirectory, AccountSnapshot, EmailHolder, NewAccount,
+};
 use crate::domain::value_object::{AccountId, AgeBracket, IdpSubject, Permission};
 use crate::error::AuthError;
 
@@ -112,6 +115,110 @@ impl AccountDirectory for GrpcAccountDirectory {
                 }
                 _ => AuthError::AccountDirectoryUnavailable,
             })
+    }
+
+    /// `CreateAccount` (mesh) → its id → `VerifyEmail` when the IdP vouches for
+    /// the address (the account becomes active) → `UpdateConsents`. Each step is
+    /// idempotent, so a retried sign-up finishes what a failed one left: an
+    /// account already created for this subject is picked up, an already
+    /// verified email is fine, consents re-apply.
+    #[instrument(name = "auth.directory.provision", skip(self, account), fields(subject = %account.subject))]
+    async fn provision(&self, account: &NewAccount) -> Result<AccountId, AuthError> {
+        let identity = identity_id(&account.subject);
+        let mut client = self.client.clone();
+        let created = client
+            .create_account(CreateAccountRequest {
+                identity_id: identity.clone(),
+                email: account.email.clone(),
+                country_of_residence: account.country.clone().unwrap_or_default(),
+                date_of_birth: account.date_of_birth.clone(),
+                ..Default::default()
+            })
+            .await;
+        if let Err(status) = created {
+            match error_code(&status) {
+                Some("ACC-1002") => {} // this subject's account exists: finish it
+                Some("ACC-1003") => return Err(AuthError::EmailAlreadyRegistered),
+                Some("ACC-2004") => return Err(AuthError::AgeBelowMinimum),
+                _ if status.code() == Code::FailedPrecondition || status.code() == Code::InvalidArgument => {
+                    return Err(AuthError::DomainViolation {
+                        field: "account".into(),
+                        message: status.message().to_owned(),
+                    });
+                }
+                _ => return Err(AuthError::AccountDirectoryUnavailable),
+            }
+        }
+        // CreateAccount's response does not carry the generated id: read it back.
+        let id = self
+            .account_by_identity(&identity)
+            .await?
+            .ok_or(AuthError::AccountDirectoryUnavailable)?;
+        let account_id = AccountId::try_from(id.as_str())?;
+
+        if account.email_verified {
+            match client.verify_email(VerifyEmailRequest { account_id: id.clone() }).await {
+                Ok(_) => {}
+                Err(status) if error_code(&status) == Some("ACC-2003") => {} // already verified
+                Err(_) => return Err(AuthError::AccountDirectoryUnavailable),
+            }
+        }
+
+        let consent = &account.consent;
+        client
+            .update_consents(UpdateConsentsRequest {
+                account_id: id,
+                data_processing: Some(consent.data_processing),
+                marketing: Some(consent.marketing),
+                analytics: Some(consent.analytics),
+                policy_version: consent.policy_version.clone(),
+            })
+            .await
+            .map_err(|_| AuthError::AccountDirectoryUnavailable)?;
+
+        Ok(account_id)
+    }
+
+    #[instrument(name = "auth.directory.find_by_email", skip(self, email))]
+    async fn find_by_email(&self, email: &str) -> Result<Option<EmailHolder>, AuthError> {
+        match self
+            .client
+            .clone()
+            .get_account_by_email(GetAccountByEmailRequest { email: email.to_owned() })
+            .await
+        {
+            Ok(view) => {
+                let view = view.into_inner();
+                Ok(Some(EmailHolder {
+                    account_id: AccountId::try_from(view.id.as_str())?,
+                    identity_id: view.identity_id,
+                }))
+            }
+            Err(status) if status.code() == Code::NotFound => Ok(None),
+            // A malformed address holds no account.
+            Err(status) if status.code() == Code::FailedPrecondition => Ok(None),
+            Err(_) => Err(AuthError::AccountDirectoryUnavailable),
+        }
+    }
+}
+
+/// The `account` error code a status carries (`x-error-code`), if any.
+fn error_code(status: &tonic::Status) -> Option<&str> {
+    status.metadata().get("x-error-code").and_then(|v| v.to_str().ok())
+}
+
+impl GrpcAccountDirectory {
+    async fn account_by_identity(&self, identity_id: &str) -> Result<Option<String>, AuthError> {
+        match self
+            .client
+            .clone()
+            .get_account_by_identity_id(GetAccountByIdentityIdRequest { identity_id: identity_id.to_owned() })
+            .await
+        {
+            Ok(view) => Ok(Some(view.into_inner().id)),
+            Err(status) if status.code() == Code::NotFound => Ok(None),
+            Err(_) => Err(AuthError::AccountDirectoryUnavailable),
+        }
     }
 }
 

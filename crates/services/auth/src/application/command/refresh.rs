@@ -208,6 +208,7 @@ mod tests {
             LoginCommand {
                 grant: AuthnGrant::Password { username: "u".into(), password: "p".into() },
                 device: DeviceFingerprint::default(),
+                guest_refresh_token: None,
             },
         );
         login_handler(fx).handle(env, t0()).await.unwrap()

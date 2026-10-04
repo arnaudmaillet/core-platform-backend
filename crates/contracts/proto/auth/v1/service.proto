@@ -39,6 +39,12 @@ service AuthService {
     // entire session generation.
     rpc Refresh(RefreshRequest) returns (RefreshResponse);
 
+    // Creates an account from a native Sign in with Apple / Google id_token,
+    // with the date of birth, the consent and the home country, and opens a
+    // member session (edge: public). Returns `existing_account` instead when
+    // the identity, or its verified email, already has one.
+    rpc SignUp(SignUpRequest) returns (SignUpResponse);
+
     // Start an anonymous GUEST session for an app installation (guest mode:
     // browse before sign-up). No account is created. The edge token carries
     // sub = "guest:<guest_id>", kind = "guest", perms = ["read:public"], no

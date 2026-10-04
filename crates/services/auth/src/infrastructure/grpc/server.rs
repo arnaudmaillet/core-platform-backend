@@ -25,6 +25,13 @@ impl AuthService for AuthServiceHandler {
         self.refresh(request).await
     }
 
+    async fn sign_up(
+        &self,
+        request: Request<proto::SignUpRequest>,
+    ) -> Result<Response<proto::SignUpResponse>, Status> {
+        self.sign_up(request).await
+    }
+
     async fn logout(
         &self,
         request: Request<proto::LogoutRequest>,

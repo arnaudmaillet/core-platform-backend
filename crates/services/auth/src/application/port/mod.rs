@@ -7,6 +7,7 @@
 pub mod account_directory;
 pub mod credential_admin;
 pub mod event_publisher;
+pub mod federated_token_verifier;
 pub mod guest_registry;
 pub mod identity_provider;
 pub mod profile_directory;
@@ -16,9 +17,12 @@ pub mod session_repository;
 pub mod subject_link_repository;
 pub mod token_minter;
 
-pub use account_directory::{AccountActivation, AccountDirectory, AccountSnapshot};
+pub use account_directory::{
+    AccountActivation, AccountDirectory, AccountSnapshot, EmailHolder, NewAccount, SignUpConsent,
+};
 pub use credential_admin::CredentialAdmin;
 pub use event_publisher::EventPublisher;
+pub use federated_token_verifier::{FederatedIdentity, FederatedTokenVerifier};
 pub use guest_registry::{GuestRecord, GuestRegistry};
 pub use identity_provider::{AuthnGrant, IdentityProvider, NormalizedClaims};
 pub use profile_directory::{profile_ids_or_empty, ProfileDirectory};
