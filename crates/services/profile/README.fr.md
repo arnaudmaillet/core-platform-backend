@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a5d8efb289bd1051af3268eb9b263da754f643a64ca8f141ad7cf754c37f403d
+  source_sha256: 8329e79c050dba400360ffeb545c8de6f10afae92e6eb2290aba9c1dd3e1be2d
   translated_at: 2026-10-04
   status: complete
 ---
@@ -38,7 +38,7 @@ plusieurs agrégats `Profile` indépendants (personnel, professionnel, marque, b
 Le problème difficile qu'il résout est la **lecture sub-milliseconde à l'échelle hyperscale sans
 couplage inter-services** : une couche cache-aside Redis devant ScyllaDB sert les hits de cache en
 < 1 ms, et le cycle de vie du compte est ingéré **de façon réactive** via Kafka
-(`AccountSuspended/Deleted/Activated` → masquer/restaurer), de sorte qu'il n'y a aucune dépendance
+(`AccountSuspended/Deactivated/Deleted/Activated` → masquer/restaurer), de sorte qu'il n'y a aucune dépendance
 synchrone à `account` sur le chemin de lecture.
 
 **Objectifs fondamentaux :** P99 < 1 ms cache-hit, < 5 ms cache-miss ; @handles globalement uniques via
@@ -64,7 +64,7 @@ gRPC ─► ProfileServiceHandler ─► Command bus            Query bus ─►
 
    Redis cache-aside: profile:v1:{id} TTL 300s · handle:v1:{handle} TTL 600s · account:profiles:v1:{id} TTL 120s
 
-   Kafka account.v1.events ─► account_suspended / account_deleted → masquer chaque profil du compte · account_activated → restaurer ceux que la suspension a masqués
+   Kafka account.v1.events ─► account_suspended / account_deactivated / account_deleted → masquer chaque profil du compte · account_activated → restaurer ceux que la suspension ou la désactivation a masqués
 ```
 
 **Versionnement des clés de cache.** Toutes les clés portent un préfixe `v1:` — incrémenter le suffixe
@@ -101,7 +101,7 @@ empêchant le détournement rapide d'identité (`handle_is_available()` l'impose
 |---|---|---|---|
 | ScyllaDB (keyspace `profile`) | store durable | lectures + écritures échouent | **Dur** — `UNAVAILABLE` |
 | Redis | cache-aside | cache miss vers Scylla | **Souple** — toutes les lectures retombent ; la latence monte |
-| Kafka | masquage réactif + `profile.tier_changed` | le masquage suspend/delete stagne | **Souple** — lectures/écritures non affectées |
+| Kafka | masquage réactif + `profile.tier_changed` | le masquage suspend/deactivate/delete stagne | **Souple** — lectures/écritures non affectées |
 
 **Amont — qui dépend de `profile` (rayon d'impact si `profile` tombe) :**
 
@@ -186,7 +186,7 @@ réactivement).
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
-| `account.v1.events` | `profile-account-events` | le `DomainEvent` d'account (tagué sur `type`, snake_case) : `account_suspended` / `account_deleted` → masquer **chaque** profil du compte (`HideAccountProfiles`) ; `account_activated` → restaurer les profils masqués par la suspension (`RestoreAccountProfiles` ; un masquage pour violation de politique reste). Idempotent par profil : une redélivrance termine un parcours partiel. Autres types = commit no-op | DLQ `account.v1.events.dlq` |
+| `account.v1.events` | `profile-account-events` | le `DomainEvent` d'account (tagué sur `type`, snake_case) : `account_suspended` / `account_deactivated` / `account_deleted` → masquer **chaque** profil du compte (`HideAccountProfiles`, le type d'événement sert de raison de masquage) ; `account_activated` → restaurer les profils masqués par la suspension ou la désactivation (`RestoreAccountProfiles` ; un masquage pour violation de politique reste). Idempotent par profil : une redélivrance termine un parcours partiel. Autres types = commit no-op | DLQ `account.v1.events.dlq` |
 | `social-graph.author_tier_changed` | `profile-author-tier` | dénormalise le palier auteur sur le profil (`SetProfileTier`) → ré-émet sur `profile.v1.events` (`ProfileTierChanged`) ; idempotent si palier inchangé | DLQ `social-graph.author_tier_changed.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** le consommateur d'événements compte s'exécute sous

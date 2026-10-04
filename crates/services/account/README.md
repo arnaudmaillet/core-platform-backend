@@ -55,7 +55,8 @@ AND version = $n`. Zero rows affected ⇒ `ConcurrentModification` (retryable, m
 for topology-agnostic transaction routing.
 
 > **Invariants** (and where enforced): lifecycle transitions
-> (`PendingVerification→Active→Suspended→Active`, `→Deactivated`, `→Deleted`) and KYC transitions
+> (`PendingVerification→Active→Suspended→Active`, `Active→Deactivated→Active` — the holder signs
+> back in, `→Deleted`; a suspended account cannot deactivate) and KYC transitions
 > (`NotStarted→Submitted→InReview→Approved|Rejected`) are enforced in the `Account` aggregate —
 > illegal transitions return `FAILED_PRECONDITION`. Uniqueness on `(identity_id, email)` makes
 > `CreateAccount` idempotent.
@@ -90,7 +91,7 @@ gateway calls it on the request path, so its latency is multiplied across the wh
 | Caller | Uses | User-visible impact if `account` is down |
 |---|---|---|
 | `<TODO: auth gateway>` | `GetAccountStatus` | **logins/authz fail platform-wide** |
-| `profile` | consumes `account.v1.events` | profile masking on suspend/delete stops |
+| `profile` | consumes `account.v1.events` | profile masking on suspend/deactivate/delete stops |
 
 > **Critical path?** **Yes** — `GetAccountStatus` is in the synchronous auth path; an account outage
 > degrades every authenticated request across the fleet.
@@ -114,6 +115,7 @@ service AccountService {
   rpc SuspendAccount (SuspendAccountRequest) returns (CommandResponse);
   rpc ReactivateAccount (ReactivateAccountRequest) returns (CommandResponse);
   rpc DeactivateAccount (DeactivateAccountRequest) returns (CommandResponse);
+  rpc ResumeDeactivatedAccount (ResumeDeactivatedAccountRequest) returns (CommandResponse); // auth, on Login
   rpc RecordLogin (RecordLoginRequest) returns (CommandResponse);
   rpc RecordFailedLogin (RecordFailedLoginRequest) returns (CommandResponse);
   rpc RequestGdprDeletion (RequestGdprDeletionRequest) returns (CommandResponse);
@@ -169,7 +171,7 @@ Stable codes are `ACC-1xxx` (lifecycle) … `ACC-9xxx` (identifiers), via the sh
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested` | `account_id` | `profile` (suspend/delete → mask; activate → restore) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested` | `account_id` | `profile` (suspend/deactivate/delete → mask; activate → restore) |
 
 **Consumes:** none — `account` is a pure event producer.
 

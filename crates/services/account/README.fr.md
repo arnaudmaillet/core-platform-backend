@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: d2f518e96cfa9d80601bdab49c592fc5e9f5b94491a43f8f422144a1434fd553
-  translated_at: 2026-06-25
+  source_sha256: 640e34ada494f39743a3d45d535fc55048df3383578dc5df6f961cd967472c76
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -68,7 +68,8 @@ gRPC (tonic) ─► AccountServiceHandler ─► Command/Query bus ─► Accoun
 `run_on_shard(&account_id, …)` pour un routage transactionnel agnostique de la topologie.
 
 > **Invariants** (et où ils sont imposés, dans l'agrégat `Account`) : les transitions de cycle de vie
-> (`PendingVerification→Active→Suspended→Active`, `→Deactivated`, `→Deleted`) et les transitions KYC
+> (`PendingVerification→Active→Suspended→Active`, `Active→Deactivated→Active` — le titulaire se
+> reconnecte, `→Deleted` ; un compte suspendu ne peut pas se désactiver) et les transitions KYC
 > (`NotStarted→Submitted→InReview→Approved|Rejected`) sont imposées dans l'agrégat `Account` — une
 > transition illégale renvoie `FAILED_PRECONDITION`. L'unicité sur `(identity_id, email)` rend
 > `CreateAccount` idempotent.
@@ -104,7 +105,7 @@ multipliée sur toute la flotte.
 | Caller | Uses | Impact visible utilisateur si `account` est indisponible |
 |---|---|---|
 | `<TODO: passerelle d'auth>` | `GetAccountStatus` | **connexions/autorisations en échec sur toute la plateforme** |
-| `profile` | consomme `account.v1.events` | le masquage de profil à la suspension/suppression s'arrête |
+| `profile` | consomme `account.v1.events` | le masquage de profil à la suspension/désactivation/suppression s'arrête |
 
 > **Chemin critique ?** **Oui** — `GetAccountStatus` est sur le chemin d'authentification synchrone ;
 > une panne de `account` dégrade chaque requête authentifiée de toute la flotte.
@@ -128,6 +129,7 @@ service AccountService {
   rpc SuspendAccount (SuspendAccountRequest) returns (CommandResponse);
   rpc ReactivateAccount (ReactivateAccountRequest) returns (CommandResponse);
   rpc DeactivateAccount (DeactivateAccountRequest) returns (CommandResponse);
+  rpc ResumeDeactivatedAccount (ResumeDeactivatedAccountRequest) returns (CommandResponse); // auth, au Login
   rpc RecordLogin (RecordLoginRequest) returns (CommandResponse);
   rpc RecordFailedLogin (RecordFailedLoginRequest) returns (CommandResponse);
   rpc RequestGdprDeletion (RequestGdprDeletionRequest) returns (CommandResponse);
@@ -184,7 +186,7 @@ Les codes stables vont de `ACC-1xxx` (lifecycle) à `ACC-9xxx` (identifiers), vi
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested` | `account_id` | `profile` (suspend/delete → mask; activate → restore) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested` | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
 
 **Consomme :** rien — `account` est un producteur d'événements pur.
 

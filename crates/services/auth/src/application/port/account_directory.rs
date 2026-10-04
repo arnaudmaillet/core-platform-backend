@@ -7,7 +7,10 @@ use crate::error::AuthError;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountActivation {
     Active,
-    /// Suspended / deactivated / deleted — `reason` carries the SoR's status.
+    /// The holder deactivated the account themselves. A login (the holder
+    /// proving their credential again) resumes it; a refresh does not.
+    Deactivated,
+    /// Suspended / deleted / pending — `reason` carries the SoR's status.
     Inactive { reason: String },
 }
 
@@ -29,7 +32,8 @@ pub struct AccountSnapshot {
 
 /// Outbound port to the `account` service (gRPC adapter in Phase 4).
 ///
-/// Auth reads identity here; it never writes it. Provisioning of the account
+/// Auth reads identity here and writes one thing only: resuming an account its
+/// holder deactivated, when they sign back in. Provisioning of the account
 /// record on first federated login is the `account` service's idempotent
 /// responsibility — auth only asks for the resulting internal id.
 #[async_trait]
@@ -41,4 +45,9 @@ pub trait AccountDirectory: Send + Sync + 'static {
     /// Fetches the account's activation state and current permissions. Fails with
     /// [`AuthError::AccountDirectoryUnavailable`] if the SoR is unreachable.
     async fn lookup(&self, account_id: &AccountId) -> Result<AccountSnapshot, AuthError>;
+
+    /// Returns a self-deactivated account to Active (idempotent if it already
+    /// is). Fails with [`AuthError::AccountNotActive`] if the account is in any
+    /// other state by now — e.g. suspended in the meantime.
+    async fn resume_deactivated(&self, account_id: &AccountId) -> Result<(), AuthError>;
 }

@@ -7,7 +7,7 @@ use validate_core::{FieldViolation, Validate};
 use crate::application::ensure_valid;
 use crate::application::policy::SessionPolicy;
 use crate::application::port::{
-    profile_ids_or_empty, AccountDirectory, AuthnGrant, EventPublisher, IdentityProvider,
+    profile_ids_or_empty, AccountActivation, AccountDirectory, AuthnGrant, EventPublisher, IdentityProvider,
     ProfileDirectory, RefreshTokenRepository, SessionCache, SessionRepository,
     SubjectLinkRepository, TokenMinter,
 };
@@ -72,6 +72,8 @@ pub struct IssuedSession {
     pub access_expires_in: i64,
     /// True when this call established the IdP-subject → account link.
     pub first_link: bool,
+    /// True when this login resumed an account its holder had deactivated.
+    pub reactivated: bool,
 }
 
 /// Orchestrates login: authenticate → resolve/link account → gate active → issue
@@ -139,10 +141,17 @@ impl LoginHandler {
         };
 
         // 3. Gate issuance on the account being active; read authoritative perms.
+        //    Signing back in is how a holder undoes their own deactivation: the
+        //    credential was just proven, so the account resumes (a suspension
+        //    is never lifted here).
         let snapshot = self.directory.lookup(&account_id).await?;
-        let permissions = match snapshot.activation {
-            crate::application::port::AccountActivation::Active => snapshot.permissions,
-            crate::application::port::AccountActivation::Inactive { reason } => {
+        let (permissions, reactivated) = match snapshot.activation {
+            AccountActivation::Active => (snapshot.permissions, false),
+            AccountActivation::Deactivated => {
+                self.directory.resume_deactivated(&account_id).await?;
+                (snapshot.permissions, true)
+            }
+            AccountActivation::Inactive { reason } => {
                 return Err(AuthError::AccountNotActive { current: reason });
             }
         };
@@ -200,6 +209,7 @@ impl LoginHandler {
             refresh_token: generated.plaintext,
             access_expires_in: claims.expires_in_secs(now),
             first_link,
+            reactivated,
         })
     }
 
@@ -218,7 +228,6 @@ impl LoginHandler {
 mod tests {
     use super::*;
     use crate::application::fakes::{t0, Fixture};
-    use crate::application::port::AccountActivation;
     use crate::domain::value_object::Generation;
     use uuid::Uuid;
 
@@ -279,6 +288,41 @@ mod tests {
         let err = fx.login_handler().handle(password_login(), t0()).await.unwrap_err();
         assert!(matches!(err, AuthError::AccountNotActive { .. }));
         // No session, and crucially no SubjectLinked event for an inactive account.
+        assert_eq!(fx.sessions.count(), 0);
+        assert_eq!(fx.publisher.count(), 0);
+        assert!(fx.directory.resumed().is_empty(), "a suspension is never lifted by login");
+    }
+
+    #[tokio::test]
+    async fn login_resumes_a_self_deactivated_account() {
+        let fx = Fixture::new();
+        let subject = IdpSubject::new("https://idp.test", "sub-123").unwrap();
+        let account = AccountId::from_uuid(Uuid::now_v7());
+        fx.directory.with_account(&subject, account, AccountActivation::Deactivated, vec![]);
+
+        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap();
+
+        assert!(issued.reactivated, "the app welcomes the holder back");
+        assert_eq!(fx.directory.resumed(), vec![account]);
+        assert_eq!(fx.sessions.count(), 1);
+
+        // The next login finds it active: nothing more to resume.
+        let again = fx.login_handler().handle(password_login(), t0()).await.unwrap();
+        assert!(!again.reactivated);
+        assert_eq!(fx.directory.resumed(), vec![account]);
+    }
+
+    #[tokio::test]
+    async fn login_fails_when_the_account_cannot_be_resumed() {
+        let fx = Fixture::new();
+        let subject = IdpSubject::new("https://idp.test", "sub-123").unwrap();
+        let account = AccountId::from_uuid(Uuid::now_v7());
+        fx.directory.with_account(&subject, account, AccountActivation::Deactivated, vec![]);
+        fx.directory.refuse_resume();
+
+        let err = fx.login_handler().handle(password_login(), t0()).await.unwrap_err();
+
+        assert!(matches!(err, AuthError::AccountNotActive { .. }));
         assert_eq!(fx.sessions.count(), 0);
         assert_eq!(fx.publisher.count(), 0);
     }

@@ -88,6 +88,10 @@ impl AccountDirectory for StubDirectory {
             permissions: vec![Permission::new("posts:write")],
         })
     }
+
+    async fn resume_deactivated(&self, _account_id: &AccountId) -> Result<(), AuthError> {
+        Ok(())
+    }
 }
 
 /// `profile` stub: every account owns exactly one profile, derived

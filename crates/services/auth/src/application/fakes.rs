@@ -68,6 +68,10 @@ pub struct StubAccountDirectory {
     snapshots: Mutex<HashMap<AccountId, AccountSnapshot>>,
     /// Every account looked up, in order.
     looked_up: Mutex<Vec<AccountId>>,
+    /// Every deactivated account resumed, in order.
+    resumed: Mutex<Vec<AccountId>>,
+    /// When set, resuming fails as if the account was suspended meanwhile.
+    refuse_resume: std::sync::atomic::AtomicBool,
 }
 
 impl Default for StubAccountDirectory {
@@ -82,7 +86,26 @@ impl StubAccountDirectory {
             subjects: Mutex::new(HashMap::new()),
             snapshots: Mutex::new(HashMap::new()),
             looked_up: Mutex::new(Vec::new()),
+            resumed: Mutex::new(Vec::new()),
+            refuse_resume: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// The deactivated accounts resumed so far.
+    pub fn resumed(&self) -> Vec<AccountId> {
+        self.resumed.lock().unwrap().clone()
+    }
+
+    /// Changes a known account's activation (e.g. deactivated after login).
+    pub fn set_activation(&self, account_id: &AccountId, activation: AccountActivation) {
+        if let Some(snapshot) = self.snapshots.lock().unwrap().get_mut(account_id) {
+            snapshot.activation = activation;
+        }
+    }
+
+    /// Makes every later resume fail (the account left `Deactivated`).
+    pub fn refuse_resume(&self) {
+        self.refuse_resume.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// The accounts looked up so far.
@@ -128,6 +151,17 @@ impl AccountDirectory for StubAccountDirectory {
             activation: AccountActivation::Active,
             permissions: Vec::new(),
         }))
+    }
+
+    async fn resume_deactivated(&self, account_id: &AccountId) -> Result<(), AuthError> {
+        if self.refuse_resume.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AuthError::AccountNotActive { current: "not_resumable".into() });
+        }
+        self.resumed.lock().unwrap().push(*account_id);
+        if let Some(snapshot) = self.snapshots.lock().unwrap().get_mut(account_id) {
+            snapshot.activation = AccountActivation::Active;
+        }
+        Ok(())
     }
 }
 

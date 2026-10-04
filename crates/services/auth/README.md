@@ -122,7 +122,7 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | Dependency | Purpose | If down → | Degradation |
 |---|---|---|---|
 | Keycloak (IdP) | credential verification on `Login` | `Login` fails (`UNAVAILABLE`) | **Hard** for new logins; refresh/introspect unaffected |
-| `account` (gRPC) | resolve account + gate active on `Login` | `Login` fails | **Hard** for new logins |
+| `account` (gRPC) | resolve account + gate active on `Login` (a self-deactivated account is resumed: `ResumeDeactivatedAccount`, `reactivated = true`) | `Login` fails | **Hard** for new logins |
 | PostgreSQL | session + refresh-token + link ledger | `Refresh`/`Logout` writes fail | **Hard** for refresh/revocation |
 | Redis Cluster | generation map + blacklist (hot path) | revocation checks degrade | **Soft** — generation rebuilds from Postgres; a missed blacklist entry expires with the token |
 | Kafka | `auth.v1.events` emission | events not emitted | **Soft** — best-effort; falls back to the log publisher |

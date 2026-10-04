@@ -40,6 +40,10 @@ impl AccountStatus {
 
     /// Returns `true` if the transition `self → next` is permitted by the
     /// domain state machine.
+    ///
+    /// A suspended account cannot deactivate itself: signing in reactivates a
+    /// self-deactivated account, so `Suspended → Deactivated` would let the
+    /// holder lift an admin suspension by deactivating and logging back in.
     pub fn can_transition_to(&self, next: AccountStatus) -> bool {
         use AccountStatus::*;
         matches!(
@@ -50,7 +54,6 @@ impl AccountStatus {
                 | (Active, Deactivated)
                 | (Active, Deleted)
                 | (Suspended, Active)
-                | (Suspended, Deactivated)
                 | (Suspended, Deleted)
                 | (Deactivated, Active)
                 | (Deactivated, Deleted)

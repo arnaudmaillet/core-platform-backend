@@ -97,6 +97,7 @@ impl AuthServiceHandler {
             account_id: issued.account_id.as_str(),
             tokens: Some(token_pair(&issued)),
             first_link: issued.first_link,
+            reactivated: issued.reactivated,
         }))
     }
 

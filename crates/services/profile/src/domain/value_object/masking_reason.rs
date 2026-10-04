@@ -13,14 +13,23 @@ use crate::error::ProfileError;
 #[serde(rename_all = "snake_case")]
 pub enum MaskingReason {
     AccountSuspended,
+    /// The holder deactivated the account; lifted when they sign back in.
+    AccountDeactivated,
     AccountDeleted,
     ContentPolicyViolation,
 }
 
 impl MaskingReason {
+    /// Masks that the account lifecycle lifts on `account_activated`. A
+    /// content-policy or deletion mask is never lifted by reactivation.
+    pub fn lifted_on_account_activation(&self) -> bool {
+        matches!(self, Self::AccountSuspended | Self::AccountDeactivated)
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::AccountSuspended       => "account_suspended",
+            Self::AccountDeactivated     => "account_deactivated",
             Self::AccountDeleted         => "account_deleted",
             Self::ContentPolicyViolation => "content_policy_violation",
         }
@@ -39,6 +48,7 @@ impl TryFrom<&str> for MaskingReason {
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s {
             "account_suspended"        => Ok(Self::AccountSuspended),
+            "account_deactivated"      => Ok(Self::AccountDeactivated),
             "account_deleted"          => Ok(Self::AccountDeleted),
             "content_policy_violation" => Ok(Self::ContentPolicyViolation),
             other => Err(ProfileError::DomainViolation {
@@ -54,5 +64,24 @@ impl TryFrom<String> for MaskingReason {
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         Self::try_from(s.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_account_lifecycle_masks_are_lifted_on_activation() {
+        assert!(MaskingReason::AccountSuspended.lifted_on_account_activation());
+        assert!(MaskingReason::AccountDeactivated.lifted_on_account_activation());
+        assert!(!MaskingReason::AccountDeleted.lifted_on_account_activation());
+        assert!(!MaskingReason::ContentPolicyViolation.lifted_on_account_activation());
+    }
+
+    #[test]
+    fn deactivated_round_trips_through_its_stored_string() {
+        let reason = MaskingReason::AccountDeactivated;
+        assert_eq!(MaskingReason::try_from(reason.as_str()).unwrap(), reason);
     }
 }

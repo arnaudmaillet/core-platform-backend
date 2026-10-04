@@ -20,7 +20,7 @@ const PAGE: i32 = 100;
 #[derive(Debug, Clone)]
 pub struct HideAccountProfilesCommand {
     pub account_id:        String,
-    /// `account_suspended` or `account_deleted`.
+    /// `account_suspended`, `account_deactivated` or `account_deleted`.
     pub masking_reason:    String,
     pub suspension_reason: Option<String>,
 }
@@ -139,9 +139,11 @@ impl CommandHandler<RestoreAccountProfilesCommand> for MaskAccountProfilesHandle
         let correlation_id = envelope.correlation_id;
 
         self.for_each_profile(&account_id, |profile| {
-            let hidden_by_suspension = profile.status() == ProfileStatus::Hidden
-                && profile.masking_reason() == Some(MaskingReason::AccountSuspended);
-            if !hidden_by_suspension {
+            let hidden_by_account_lifecycle = profile.status() == ProfileStatus::Hidden
+                && profile
+                    .masking_reason()
+                    .is_some_and(|reason| reason.lifted_on_account_activation());
+            if !hidden_by_account_lifecycle {
                 return Ok(false);
             }
             profile.restore(correlation_id)?;

@@ -17,6 +17,7 @@ use crate::application::command::{
     record_login::RecordLoginCommand,
     request_data_export::RequestDataExportCommand,
     request_gdpr_deletion::RequestGdprDeletionCommand,
+    resume_deactivated_account::ResumeDeactivatedAccountCommand,
     revoke_mfa::RevokeMfaCommand,
     revoke_role::RevokeRoleCommand,
     suspend_account::SuspendAccountCommand,
@@ -230,6 +231,19 @@ where
         edge::require_account(&request, &request.get_ref().account_id)?;
         let req = request.into_inner();
         let cmd = DeactivateAccountCommand { account_id: req.account_id.clone() };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_command(&req.account_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    pub async fn resume_deactivated_account(
+        &self,
+        request: Request<proto::ResumeDeactivatedAccountRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        let req = request.into_inner();
+        let cmd = ResumeDeactivatedAccountCommand { account_id: req.account_id.clone() };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await

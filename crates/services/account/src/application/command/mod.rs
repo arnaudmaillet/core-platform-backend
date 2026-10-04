@@ -11,6 +11,7 @@ pub mod record_failed_login;
 pub mod record_login;
 pub mod request_data_export;
 pub mod request_gdpr_deletion;
+pub mod resume_deactivated_account;
 pub mod revoke_mfa;
 pub mod revoke_role;
 pub mod suspend_account;
@@ -29,6 +30,9 @@ pub use record_failed_login::{RecordFailedLoginCommand, RecordFailedLoginHandler
 pub use record_login::{RecordLoginCommand, RecordLoginHandler};
 pub use request_data_export::{RequestDataExportCommand, RequestDataExportHandler};
 pub use request_gdpr_deletion::{RequestGdprDeletionCommand, RequestGdprDeletionHandler};
+pub use resume_deactivated_account::{
+    ResumeDeactivatedAccountCommand, ResumeDeactivatedAccountHandler,
+};
 pub use revoke_mfa::{RevokeMfaCommand, RevokeMfaHandler};
 pub use revoke_role::{RevokeRoleCommand, RevokeRoleHandler};
 pub use suspend_account::{SuspendAccountCommand, SuspendAccountHandler};

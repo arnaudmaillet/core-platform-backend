@@ -68,3 +68,44 @@ async fn suspension_hides_every_profile_of_the_account_until_reactivation() {
     assert!(h.get_by_handle_as(&alt, Viewer::Anonymous).await.is_some());
     assert!(h.get_by_handle_as(&policy_hidden, Viewer::Anonymous).await.is_none());
 }
+
+/// Self-deactivation hides the account's profiles like a suspension does, and
+/// signing back in (`account_activated`) brings them back — but never a profile
+/// a content-policy decision hid in the meantime.
+#[tokio::test]
+async fn deactivation_hides_the_profiles_until_the_holder_signs_back_in() {
+    let h = TestHarness::start().await;
+
+    let account = harness::random_account_id();
+    let (main, policy_hidden) = (harness::random_handle(), harness::random_handle());
+    for handle in [&main, &policy_hidden] {
+        h.create(&account, handle, "Alice").await;
+    }
+    let policy_id = h.get_by_handle(&policy_hidden).await.unwrap().id;
+    h.command_bus
+        .dispatch(Envelope::new(Uuid::now_v7(), HideProfileCommand {
+            profile_id: policy_id,
+            masking_reason: "content_policy_violation".into(),
+            suspension_reason: None,
+        }))
+        .await
+        .expect("hide one profile");
+
+    h.command_bus
+        .dispatch(Envelope::new(Uuid::now_v7(), HideAccountProfilesCommand {
+            account_id: account.clone(),
+            masking_reason: "account_deactivated".into(),
+            suspension_reason: None,
+        }))
+        .await
+        .expect("deactivate");
+    assert!(h.get_by_handle_as(&main, Viewer::Anonymous).await.is_none());
+    assert!(h.get_by_handle_as(&main, Viewer::Account(account.clone())).await.is_some());
+
+    h.command_bus
+        .dispatch(Envelope::new(Uuid::now_v7(), RestoreAccountProfilesCommand { account_id: account }))
+        .await
+        .expect("signed back in");
+    assert!(h.get_by_handle_as(&main, Viewer::Anonymous).await.is_some());
+    assert!(h.get_by_handle_as(&policy_hidden, Viewer::Anonymous).await.is_none());
+}
