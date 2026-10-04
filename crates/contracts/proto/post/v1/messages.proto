@@ -48,6 +48,8 @@ message PostView {
     int64      published_at_ms                  = 11;
     int64      deleted_at_ms                    = 12;
     optional AudioReference audio_ref           = 13;
+    // As the author shares it with this reader: the point for the author,
+    // the centre of its city cell (city level) or absent (ghost mode) for anyone else.
     optional GeoPoint       location            = 14;
     ModerationRestriction   moderation          = 15;
 }

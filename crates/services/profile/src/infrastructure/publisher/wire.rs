@@ -76,7 +76,7 @@ pub enum ProfileEventWire {
         occurred_at_ms: i64,
     },
     /// Ghost mode and location precision (`precise` | `city`).
-    /// `geo-discovery` projects it onto every map surface.
+    /// `geo-discovery` projects it onto every map surface, `post` onto `GetPost`.
     ProfileLocationSettingsChanged {
         profile_id: String,
         ghost: bool,

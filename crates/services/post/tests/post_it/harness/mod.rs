@@ -27,8 +27,9 @@ use post::application::query::list_posts_by_profile::ListPostsByProfileQuery;
 
 pub use post::application::port::PostSummary;
 pub use post::domain::aggregate::Post;
+pub use post::application::port::AuthorLocationStore;
 pub use post::domain::value_object::{
-    ContentAccess, ModerationRestriction, PostStatus, ProfileId, Viewer,
+    ContentAccess, LocationSharing, ModerationRestriction, PostStatus, ProfileId, Viewer,
 };
 pub use test_support::await_until;
 
@@ -53,6 +54,8 @@ pub struct TestHarness {
     pub publisher:   Arc<CapturingPublisher>,
     /// The audience check: authors are visible unless a scenario scripts it.
     pub gate:        Arc<ScriptedGate>,
+    /// The authors' location sharing (the `profile.v1.events` projection).
+    pub locations:   Arc<dyn AuthorLocationStore>,
 }
 
 impl TestHarness {
@@ -75,12 +78,28 @@ impl TestHarness {
             .await
             .expect("integration: build post app");
 
-        Self { command_bus: app.command_bus, query_bus: app.query_bus, publisher, gate }
+        Self {
+            command_bus: app.command_bus,
+            query_bus:   app.query_bus,
+            publisher,
+            gate,
+            locations:   app.author_location_store,
+        }
     }
 
     /// Creates a `TextOnly` post, expecting success.
     pub async fn create(&self, post_id: &str, profile_id: &str) {
         dispatch_create(Arc::clone(&self.command_bus), post_id.to_owned(), profile_id.to_owned())
+            .await
+            .expect("create_post");
+    }
+
+    /// Creates a `TextOnly` post made at `(lat, lng)`, expecting success.
+    pub async fn create_at(&self, post_id: &str, profile_id: &str, lat: f64, lng: f64) {
+        let mut cmd = create_command(post_id.to_owned(), profile_id.to_owned());
+        cmd.location = Some((lat, lng));
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await
             .expect("create_post");
     }
@@ -166,7 +185,11 @@ pub async fn dispatch_create(
     post_id:     String,
     profile_id:  String,
 ) -> Result<(), CqrsError> {
-    let cmd = CreatePostCommand {
+    command_bus.dispatch(Envelope::new(Uuid::now_v7(), create_command(post_id, profile_id))).await
+}
+
+fn create_command(post_id: String, profile_id: String) -> CreatePostCommand {
+    CreatePostCommand {
         post_id,
         profile_id,
         kind:        KIND_TEXT_ONLY,
@@ -176,8 +199,7 @@ pub async fn dispatch_create(
         root_id:     None,
         audio_ref:   None,
         location:    None,
-    };
-    command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await
+    }
 }
 
 /// A fresh random id (UUID string) usable as a post_id or profile_id.

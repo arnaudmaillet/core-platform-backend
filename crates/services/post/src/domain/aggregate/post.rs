@@ -222,6 +222,12 @@ impl Post {
     pub fn root_id(&self)      -> Option<&PostId>    { self.root_id.as_ref() }
     pub fn audio_ref(&self)    -> Option<&AudioReference> { self.audio_ref.as_ref() }
     pub fn location(&self)     -> Option<GeoPoint>   { self.location }
+
+    /// Replaces the location with what a given reader may see of it (read
+    /// path only — a post read this way is never saved).
+    pub fn show_location(&mut self, shown: Option<GeoPoint>) {
+        self.location = shown;
+    }
     pub fn created_at(&self)   -> DateTime<Utc>      { self.created_at }
     pub fn updated_at(&self)   -> DateTime<Utc>      { self.updated_at }
     pub fn published_at(&self) -> Option<DateTime<Utc>> { self.published_at }

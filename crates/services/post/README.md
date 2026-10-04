@@ -124,6 +124,13 @@ reader does not follow, a block either way, or a hidden author → `PST-1001` / 
 author and mesh callers skip the check; anyone else (anonymous included) depends on it, and an
 outage fails closed with `PST-5001` (`UNAVAILABLE`), never by serving the post.
 
+**Location sharing (#657).** `PostView.location` is what the author shares with the reader: the
+post's own point for the author; for anyone else (the mesh included) the point by default, the
+centre of its H3 R5 cell (~87 km², the map's city band) at city level, and nothing in ghost mode.
+The setting comes from profile's `ProfileLocationSettingsChanged`, projected into
+`post.author_location_settings`, and applies to posts made before it changed. A store error fails
+the read rather than show the point.
+
 ### Error contract (`PST-xxxx`)
 
 | Code | Variant | HTTP |
@@ -162,6 +169,7 @@ outage fails closed with `PST-5001` (`UNAVAILABLE`), never by serving the post.
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `profile.v1.events` | `post-author-tier` | denormalize `ProfileTierChanged` into the `author_tiers` projection (`profile_id → tier`); read on the publish path to stamp `author_tier` onto published posts. Other event types commit as no-ops | DLQ `profile.v1.events.dlq` |
+| `profile.v1.events` | `post-author-location` | project `ProfileLocationSettingsChanged` into `author_location_settings` (`profile_id → ghost, city`), which `GetPost` applies to the location it shows anyone but the author. Starts from the earliest offset (a teen profile is created ghosted). Other event types commit as no-ops | DLQ `profile.v1.events.dlq` |
 | `moderation.v1.events` | `post-moderation` | record `enforcement_applied` / `enforcement_reversed` on a **post** as its moderation restriction (`remove_content` → Removed, `visibility_limit` → Limited, `age_gate` → AgeGated; reversal → None), version-guarded by moderation's per-subject `EnforcementVersion` so redelivery converges. Other entities, actor-level actions and other event types commit as no-ops | DLQ `moderation.v1.events.dlq` |
 
 > **Runtime contract:** the event is published after the durable dual-write. Downstream consumers own

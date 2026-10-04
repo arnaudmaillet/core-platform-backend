@@ -31,6 +31,7 @@ tonic             = { workspace = true }
 tonic-reflection  = { workspace = true }
 http              = { workspace = true }
 scylla = { workspace = true }
+h3o    = "0.6"   # city-level location: the centre of the post's R5 cell (as geo-discovery)
 
 [features]
 # Gates the live, container-backed integration suite (tests/integration.rs).
@@ -43,6 +44,8 @@ tokio = { workspace = true }
 # Wire contract test in the moderation consumer: decode events serialized by
 # moderation's own types, so a casing drift fails here (see search, #687).
 moderation = { workspace = true }
+# Same for the location-sharing consumer, against profile's own wire type.
+profile    = { workspace = true }
 
 # ── Integration suite (feature = "integration-post") ─────────────────────────
 # Container orchestration, the RF=1 migration runner, and `await_until` come from
