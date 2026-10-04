@@ -45,9 +45,14 @@ pub struct SignUpConsent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewAccount {
     pub subject:        IdpSubject,
-    pub email:          String,
-    /// The IdP vouches for the address: the account is active at once.
+    /// `None` for a phone-only account.
+    pub email:          Option<String>,
+    /// The IdP (or a code) vouches for the address: the account is active at once.
     pub email_verified: bool,
+    /// E.164, for an account signed up with its phone number.
+    pub phone:          Option<String>,
+    /// A code proved the number: the account is active at once.
+    pub phone_verified: bool,
     /// ISO 8601; the `account` service enforces the minimum age.
     pub date_of_birth:  String,
     /// ISO 3166-1 alpha-2 (the home country), if known.
@@ -92,4 +97,7 @@ pub trait AccountDirectory: Send + Sync + 'static {
 
     /// The account holding `email`, if any.
     async fn find_by_email(&self, email: &str) -> Result<Option<EmailHolder>, AuthError>;
+
+    /// The account holding `phone` (E.164), if any.
+    async fn find_by_phone(&self, phone: &str) -> Result<Option<EmailHolder>, AuthError>;
 }

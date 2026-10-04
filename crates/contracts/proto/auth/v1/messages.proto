@@ -87,7 +87,8 @@ message IdTokenGrant {
     string              nonce     = 3;
 }
 
-// A one-time code from StartVerification, proving control of the address.
+// A one-time code from StartVerification, proving control of the address or
+// the number.
 message VerificationCodeGrant {
     string  challenge_id  = 1;
     string  code          = 2;
@@ -183,7 +184,8 @@ message SignUpResponse {
 // the address leads to is only told to whoever enters the code.
 message StartVerificationRequest {
     VerificationChannel channel     = 1;
-    // An email address (EMAIL).
+    // An email address (EMAIL), or an international phone number (SMS: "+" and
+    // the country code; spaces and dashes are fine).
     string              destination = 2;
     // BCP-47, for the message's language.
     string              locale      = 3;

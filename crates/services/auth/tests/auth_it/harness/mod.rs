@@ -121,6 +121,10 @@ impl AccountDirectory for StubDirectory {
     async fn find_by_email(&self, _email: &str) -> Result<Option<auth::application::port::EmailHolder>, AuthError> {
         Ok(None)
     }
+
+    async fn find_by_phone(&self, _phone: &str) -> Result<Option<auth::application::port::EmailHolder>, AuthError> {
+        Ok(None)
+    }
 }
 
 /// `profile` stub: every account owns exactly one profile, derived

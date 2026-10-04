@@ -29,14 +29,16 @@ use crate::application::port::{
 use crate::domain::aggregate::SubjectLink;
 use crate::domain::value_object::{
     AccountId, DeviceFingerprint, FederatedProvider, IdpSubject, SignInMethod, EMAIL_CODE_ISSUER,
+    PHONE_CODE_ISSUER,
 };
+use crate::application::port::VerificationChannel;
 
 /// How the person proves who they are.
 #[derive(Debug, Clone)]
 pub enum SignUpCredential {
     /// Native Sign in with Apple / Google.
     IdToken { provider: FederatedProvider, id_token: String, nonce: String },
-    /// A one-time code sent to an email address (passwordless account).
+    /// A one-time code sent to an email address or by SMS (passwordless account).
     Code { challenge_id: String, code: String },
 }
 
@@ -46,6 +48,8 @@ struct Proven {
     email:          Option<String>,
     email_verified: bool,
     private_relay:  bool,
+    /// A number a code proved (E.164).
+    phone:          Option<String>,
     /// How this identity signs in.
     method:         SignInMethod,
 }
@@ -170,6 +174,7 @@ impl SignUpHandler {
                     email: identity.email,
                     email_verified: identity.email_verified,
                     private_relay: identity.private_relay,
+                    phone: None,
                     method: (*provider).into(),
                 })
             }
@@ -179,12 +184,23 @@ impl SignUpHandler {
                     .as_ref()
                     .ok_or_else(|| AuthError::VerificationChannelUnavailable { channel: "email".into() })?;
                 let proven = codes.verify(challenge_id, code).await?;
-                Ok(Proven {
-                    subject: IdpSubject::new(EMAIL_CODE_ISSUER, proven.destination.clone())?,
-                    email: Some(proven.destination),
-                    email_verified: true,
-                    private_relay: false,
-                    method: SignInMethod::EmailCode,
+                Ok(match proven.channel {
+                    VerificationChannel::Email => Proven {
+                        subject: IdpSubject::new(EMAIL_CODE_ISSUER, proven.destination.clone())?,
+                        email: Some(proven.destination),
+                        email_verified: true,
+                        private_relay: false,
+                        phone: None,
+                        method: SignInMethod::EmailCode,
+                    },
+                    VerificationChannel::Sms => Proven {
+                        subject: IdpSubject::new(PHONE_CODE_ISSUER, proven.destination.clone())?,
+                        email: None,
+                        email_verified: false,
+                        private_relay: false,
+                        phone: Some(proven.destination),
+                        method: SignInMethod::PhoneCode,
+                    },
                 })
             }
         }
@@ -208,16 +224,22 @@ impl SignUpHandler {
             return Ok(SignUpOutcome::ExistingAccount { method: identity.method });
         }
 
-        let email = identity.email.clone().ok_or(AuthError::IdTokenWithoutEmail)?;
+        // An account needs an email or a phone number.
+        if identity.email.is_none() && identity.phone.is_none() {
+            return Err(AuthError::IdTokenWithoutEmail);
+        }
 
-        // 3. Its verified email belongs to an account made with another method.
-        //    (An account made for this subject by an earlier, interrupted
-        //    sign-up is finished below instead.)
-        if identity.email_verified
-            && !identity.private_relay
-            && let Some(holder) = self.directory.find_by_email(&email).await?
-            && holder.identity_id != subject.to_string()
-        {
+        // 3. Its verified email, or its proven number, belongs to an account
+        //    made with another method. (An account made for this subject by an
+        //    earlier, interrupted sign-up is finished below instead.)
+        let holder = match (&identity.email, &identity.phone) {
+            (Some(email), _) if identity.email_verified && !identity.private_relay => {
+                self.directory.find_by_email(email).await?
+            }
+            (_, Some(phone)) => self.directory.find_by_phone(phone).await?,
+            _ => None,
+        };
+        if let Some(holder) = holder.filter(|h| h.identity_id != subject.to_string()) {
             let method = self
                 .links
                 .find_by_account(&holder.account_id)
@@ -234,8 +256,10 @@ impl SignUpHandler {
             .directory
             .provision(&NewAccount {
                 subject: subject.clone(),
-                email,
+                email: identity.email.clone(),
                 email_verified: identity.email_verified,
+                phone: identity.phone.clone(),
+                phone_verified: identity.phone.is_some(),
                 date_of_birth: cmd.date_of_birth,
                 country: cmd.home_country.map(|c| c.to_ascii_uppercase()),
                 consent: cmd.consent,
@@ -389,7 +413,7 @@ mod tests {
 
         let created = fx.directory.provisioned();
         assert_eq!(created.len(), 1);
-        assert_eq!(created[0].email, "ada@example.com");
+        assert_eq!(created[0].email.as_deref(), Some("ada@example.com"));
         assert_eq!(created[0].country.as_deref(), Some("FR"), "home country, upper-cased");
         assert!(created[0].consent.data_processing && created[0].consent.analytics && !created[0].consent.marketing);
         let link = fx.links.find_by_subject(&IdpSubject::new(APPLE_ISSUER, "apple-1").unwrap()).await.unwrap();
@@ -576,7 +600,7 @@ mod tests {
         let outcome = handler.handle(by_code(started.challenge_id.clone(), code.clone()), t0()).await.unwrap();
         let SignUpOutcome::SignedUp { account_id, .. } = outcome else { panic!("{outcome:?}") };
         let created = fx.directory.provisioned();
-        assert_eq!(created.last().unwrap().email, "mia@example.com");
+        assert_eq!(created.last().unwrap().email.as_deref(), Some("mia@example.com"));
         assert!(created.last().unwrap().email_verified, "the code proved the address");
         assert_eq!(created.last().unwrap().subject, IdpSubject::new(EMAIL_CODE_ISSUER, "mia@example.com").unwrap());
 
@@ -622,5 +646,48 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AuthError::NoAccountForIdentity));
+    }
+
+    #[tokio::test]
+    async fn an_sms_code_signs_up_a_phone_only_account() {
+        use crate::application::command::verification::{StartVerificationCommand, VerificationPolicy};
+        use crate::application::fakes::{InMemoryVerificationStore, RecordingCodeSender};
+        use crate::application::port::VerificationChannel;
+        use crate::domain::value_object::PHONE_CODE_ISSUER;
+
+        let fx = Fixture::new();
+        let sender = Arc::new(RecordingCodeSender::default());
+        let codes = Arc::new(VerificationCodes::new(
+            Arc::new(InMemoryVerificationStore::default()),
+            Arc::clone(&sender) as _,
+            VerificationPolicy::default(),
+        ));
+        let handler = handler(&fx, &Arc::new(StubVerifier::default())).with_codes(Arc::clone(&codes));
+        let by_sms = |number: &str| StartVerificationCommand {
+            channel: VerificationChannel::Sms,
+            destination: number.into(),
+            locale: None,
+        };
+        let sign_up_with = |challenge_id: String, code: String| {
+            let mut env = sign_up("unused", adult_dob(), None);
+            env.payload.credential = SignUpCredential::Code { challenge_id, code };
+            env
+        };
+
+        let started = codes.start(by_sms("+33 6 11 22 33 44")).await.unwrap();
+        let (_, code, _) = sender.last().unwrap();
+        let outcome = handler.handle(sign_up_with(started.challenge_id, code), t0()).await.unwrap();
+        assert!(matches!(outcome, SignUpOutcome::SignedUp { .. }), "{outcome:?}");
+        let created = fx.directory.provisioned().pop().unwrap();
+        assert_eq!(created.email, None, "a phone-only account");
+        assert_eq!(created.phone.as_deref(), Some("+33611223344"));
+        assert!(created.phone_verified);
+        assert_eq!(created.subject, IdpSubject::new(PHONE_CODE_ISSUER, "+33611223344").unwrap());
+
+        // The same number again: sign in with an SMS code instead.
+        let again = codes.start(by_sms("+33611223344")).await.unwrap();
+        let (_, code, _) = sender.last().unwrap();
+        let outcome = handler.handle(sign_up_with(again.challenge_id, code), t0()).await.unwrap();
+        assert!(matches!(outcome, SignUpOutcome::ExistingAccount { method: SignInMethod::PhoneCode }));
     }
 }

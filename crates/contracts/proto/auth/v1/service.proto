@@ -45,9 +45,9 @@ service AuthService {
     // the identity, or its verified email, already has one.
     rpc SignUp(SignUpRequest) returns (SignUpResponse);
 
-    // Sends a one-time code to an email address (edge: public), for a
+    // Sends a one-time code to an email address or by SMS (edge: public), for a
     // passwordless SignUp or Login with `verification_code`. Rate-limited per
-    // address (RESOURCE_EXHAUSTED with `retry-after-secs`).
+    // address / number (RESOURCE_EXHAUSTED with `retry-after-secs`).
     rpc StartVerification(StartVerificationRequest) returns (StartVerificationResponse);
 
     // Start an anonymous GUEST session for an app installation (guest mode:

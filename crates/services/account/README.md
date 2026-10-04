@@ -60,6 +60,11 @@ for topology-agnostic transaction routing.
 > (`NotStarted→Submitted→InReview→Approved|Rejected`) are enforced in the `Account` aggregate —
 > illegal transitions return `FAILED_PRECONDITION`. Uniqueness on `(identity_id, email)` makes
 > `CreateAccount` idempotent.
+>
+> **Phone-only accounts** (guest-mode sign-up by SMS): an account has an email **or** a phone number
+> (or both). The email is optional (`NULL` for a phone-only account; `AccountView.email` is then
+> empty, and `account.created` carries no `email`), a phone number belongs to one account at most
+> (`ACC-1004`), and `VerifyPhone` activates a `PendingVerification` account the way `VerifyEmail` does.
 
 ---
 
@@ -128,6 +133,7 @@ service AccountService {
   rpc GetAccountById (GetAccountByIdRequest) returns (AccountView);
   rpc GetAccountByIdentityId (GetAccountByIdentityIdRequest) returns (AccountView);
   rpc GetAccountByEmail      (GetAccountByEmailRequest)      returns (AccountView);   // mesh only (auth sign-up): never on the edge
+  rpc GetAccountByPhone      (GetAccountByPhoneRequest)      returns (AccountView);   // mesh only (auth phone sign-up)
   rpc GetAccountStatus (GetAccountStatusRequest) returns (AccountStatusView); // auth hot path
   rpc SetDateOfBirth (SetDateOfBirthRequest) returns (AccountView);          // once, when none is on file; min age 13 (16 in AU)
   rpc GetGdprRecord (GetGdprRecordRequest) returns (GdprRecordView);          // the holder's own on the edge

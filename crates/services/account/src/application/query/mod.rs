@@ -1,5 +1,6 @@
 pub mod get_account_by_email;
 pub mod get_account_by_id;
+pub mod get_account_by_phone;
 pub mod get_account_by_identity_id;
 pub mod get_account_status;
 pub mod get_gdpr_record;
@@ -14,6 +15,7 @@ pub use list_accounts_by_status::AccountListView;
 // ── Query types ───────────────────────────────────────────────────────────────
 pub use get_account_by_email::{GetAccountByEmailHandler, GetAccountByEmailQuery};
 pub use get_account_by_id::{GetAccountByIdHandler, GetAccountByIdQuery};
+pub use get_account_by_phone::{GetAccountByPhoneHandler, GetAccountByPhoneQuery};
 pub use get_account_by_identity_id::{
     GetAccountByIdentityIdHandler, GetAccountByIdentityIdQuery,
 };

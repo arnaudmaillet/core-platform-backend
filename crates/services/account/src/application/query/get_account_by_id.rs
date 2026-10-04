@@ -53,7 +53,8 @@ impl From<&Account> for AccountView {
             status: a.status().to_string(),
             suspension_reason: a.suspension_reason().map(str::to_owned),
             deactivated_at: a.deactivated_at(),
-            email: a.email().as_str().to_owned(),
+            // Empty for a phone-only account (no email on file).
+            email: a.email().map(|e| e.as_str().to_owned()).unwrap_or_default(),
             email_verified: a.email_verified(),
             email_verified_at: a.email_verified_at(),
             phone: a.phone().map(|p| p.as_str().to_owned()),

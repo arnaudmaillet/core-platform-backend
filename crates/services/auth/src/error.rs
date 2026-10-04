@@ -46,6 +46,7 @@ use thiserror::Error;
 /// | AUT-6004 | NoAccountForIdentity         | 404  | Low      | No        |
 /// | AUT-6005 | AgeBelowMinimum              | 422  | Low      | No        |
 /// | AUT-6006 | EmailAlreadyRegistered       | 409  | Low      | No        |
+/// | AUT-6007 | PhoneAlreadyRegistered       | 409  | Low      | No        |
 /// | AUT-9001 | DomainViolation              | 422  | Medium   | No        |
 /// | AUT-9002 | InvalidSessionId             | 422  | Low      | No        |
 /// | AUT-9003 | InvalidAccountId             | 422  | Low      | No        |
@@ -201,6 +202,10 @@ pub enum AuthError {
     #[error("this email address already belongs to an account")]
     EmailAlreadyRegistered,
 
+    /// The number is already an account's (a concurrent sign-up won).
+    #[error("this phone number already belongs to an account")]
+    PhoneAlreadyRegistered,
+
     // ── Domain invariants & parse errors (AUT-9xxx) ───────────────────────────
     #[error("domain invariant violated on '{field}': {message}")]
     DomainViolation { field: String, message: String },
@@ -264,6 +269,7 @@ impl AppError for AuthError {
             AuthError::NoAccountForIdentity => "AUT-6004",
             AuthError::AgeBelowMinimum => "AUT-6005",
             AuthError::EmailAlreadyRegistered => "AUT-6006",
+            AuthError::PhoneAlreadyRegistered => "AUT-6007",
 
             AuthError::DomainViolation { .. } => "AUT-9001",
             AuthError::InvalidSessionId(_) => "AUT-9002",
@@ -299,7 +305,9 @@ impl AppError for AuthError {
 
             AuthError::VerificationRateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
 
-            AuthError::SubjectAlreadyLinked { .. } | AuthError::EmailAlreadyRegistered => StatusCode::CONFLICT,
+            AuthError::SubjectAlreadyLinked { .. }
+            | AuthError::EmailAlreadyRegistered
+            | AuthError::PhoneAlreadyRegistered => StatusCode::CONFLICT,
 
             AuthError::AccountNotActive { .. } | AuthError::GuestSessionsDisabled => StatusCode::FORBIDDEN,
 
@@ -406,6 +414,7 @@ impl AppError for AuthError {
             AuthError::NoAccountForIdentity => "There is no account for this sign-in yet.",
             AuthError::AgeBelowMinimum => "You are not old enough to create an account.",
             AuthError::EmailAlreadyRegistered => "This email address already has an account.",
+            AuthError::PhoneAlreadyRegistered => "This phone number already has an account.",
             AuthError::VerificationCodeInvalid => "This code is not valid anymore; ask for a new one.",
             AuthError::VerificationChannelUnavailable { .. } => "Codes cannot be sent this way right now.",
             AuthError::VerificationRateLimited { .. } => "Too many codes were asked for; please wait a moment.",

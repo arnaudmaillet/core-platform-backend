@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 1eb66cee524a05cf3ff33b2427f6c7652515c98e5b116a94e4e9cc422b53cf86
+  source_sha256: 35adade4b9794960533d8b239f3934988e672b36084ca8c33d5a4016da9dc7a0
   translated_at: 2026-10-04
   status: complete
 ---
@@ -73,6 +73,12 @@ gRPC (tonic) ─► AccountServiceHandler ─► Command/Query bus ─► Accoun
 > (`NotStarted→Submitted→InReview→Approved|Rejected`) sont imposées dans l'agrégat `Account` — une
 > transition illégale renvoie `FAILED_PRECONDITION`. L'unicité sur `(identity_id, email)` rend
 > `CreateAccount` idempotent.
+>
+> **Comptes téléphone seul** (inscription par SMS du mode invité) : un compte a un e-mail **ou** un
+> numéro de téléphone (ou les deux). L'e-mail est facultatif (`NULL` pour un compte téléphone seul ;
+> `AccountView.email` est alors vide, et `account.created` ne porte pas d'`email`), un numéro
+> appartient à un compte au plus (`ACC-1004`), et `VerifyPhone` active un compte
+> `PendingVerification` comme le fait `VerifyEmail`.
 
 ---
 
@@ -142,6 +148,7 @@ service AccountService {
   rpc GetAccountById (GetAccountByIdRequest) returns (AccountView);
   rpc GetAccountByIdentityId (GetAccountByIdentityIdRequest) returns (AccountView);
   rpc GetAccountByEmail      (GetAccountByEmailRequest)      returns (AccountView);   // mesh uniquement (inscription d'auth) : jamais sur l'edge
+  rpc GetAccountByPhone      (GetAccountByPhoneRequest)      returns (AccountView);   // mesh uniquement (inscription d'auth par téléphone)
   rpc GetAccountStatus (GetAccountStatusRequest) returns (AccountStatusView); // auth hot path
   rpc SetDateOfBirth (SetDateOfBirthRequest) returns (AccountView);          // une fois, si absente ; âge minimum 13 ans (16 en AU)
   rpc GetGdprRecord (GetGdprRecordRequest) returns (GdprRecordView);          // le sien propre en périphérie

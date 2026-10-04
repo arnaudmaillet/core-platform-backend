@@ -209,14 +209,22 @@ impl AccountDirectory for StubAccountDirectory {
         if age < 13 {
             return Err(AuthError::AgeBelowMinimum);
         }
-        if let Some(holder) = self.emails.lock().unwrap().get(&account.email.to_lowercase())
+        let email = account.email.as_deref().map(str::to_lowercase);
+        if let Some(email) = &email
+            && let Some(holder) = self.emails.lock().unwrap().get(email)
             && holder.identity_id != account.subject.to_string()
         {
             return Err(AuthError::EmailAlreadyRegistered);
         }
+        if let Some(phone) = &account.phone
+            && let Some(holder) = self.emails.lock().unwrap().get(phone)
+            && holder.identity_id != account.subject.to_string()
+        {
+            return Err(AuthError::PhoneAlreadyRegistered);
+        }
         let mut subjects = self.subjects.lock().unwrap();
         let id = *subjects.entry(account.subject.clone()).or_insert_with(|| AccountId::from_uuid(Uuid::now_v7()));
-        let activation = if account.email_verified {
+        let activation = if account.email_verified || account.phone_verified {
             AccountActivation::Active
         } else {
             AccountActivation::Inactive { reason: "pending_verification".into() }
@@ -225,16 +233,23 @@ impl AccountDirectory for StubAccountDirectory {
             .lock()
             .unwrap()
             .insert(id, AccountSnapshot { activation, permissions: Vec::new(), age_bracket: None });
-        self.emails.lock().unwrap().insert(
-            account.email.to_lowercase(),
-            super::port::EmailHolder { account_id: id, identity_id: account.subject.to_string() },
-        );
+        // Emails and numbers share one index here (a number never looks like an email).
+        for key in email.into_iter().chain(account.phone.clone()) {
+            self.emails.lock().unwrap().insert(
+                key,
+                super::port::EmailHolder { account_id: id, identity_id: account.subject.to_string() },
+            );
+        }
         self.provisioned.lock().unwrap().push(account.clone());
         Ok(id)
     }
 
     async fn find_by_email(&self, email: &str) -> Result<Option<super::port::EmailHolder>, AuthError> {
         Ok(self.emails.lock().unwrap().get(&email.to_lowercase()).cloned())
+    }
+
+    async fn find_by_phone(&self, phone: &str) -> Result<Option<super::port::EmailHolder>, AuthError> {
+        Ok(self.emails.lock().unwrap().get(phone).cloned())
     }
 
     async fn resume_deactivated(&self, account_id: &AccountId) -> Result<(), AuthError> {

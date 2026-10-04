@@ -7,6 +7,10 @@ pub const APPLE_ISSUER: &str = "https://appleid.apple.com";
 /// (passwordless accounts): the subject is the normalized address.
 pub const EMAIL_CODE_ISSUER: &str = "urn:core-platform:email";
 
+/// The issuer of identities proven by a one-time code sent by SMS (phone-only
+/// accounts): the subject is the number in E.164.
+pub const PHONE_CODE_ISSUER: &str = "urn:core-platform:phone";
+
 /// Google's id_token issuers (both forms are in use).
 pub const GOOGLE_ISSUERS: [&str; 2] = ["https://accounts.google.com", "accounts.google.com"];
 
@@ -34,6 +38,8 @@ pub enum SignInMethod {
     Password,
     /// A one-time code sent to the email address.
     EmailCode,
+    /// A one-time code sent by SMS to the phone number.
+    PhoneCode,
 }
 
 impl SignInMethod {
@@ -46,6 +52,8 @@ impl SignInMethod {
             Self::Google
         } else if issuer == EMAIL_CODE_ISSUER {
             Self::EmailCode
+        } else if issuer == PHONE_CODE_ISSUER {
+            Self::PhoneCode
         } else {
             Self::Password
         }

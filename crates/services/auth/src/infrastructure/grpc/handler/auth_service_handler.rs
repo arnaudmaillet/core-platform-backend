@@ -447,6 +447,7 @@ fn method_to_proto(method: SignInMethod) -> proto::SignInMethod {
         SignInMethod::Google => proto::SignInMethod::Google,
         SignInMethod::Password => proto::SignInMethod::Password,
         SignInMethod::EmailCode => proto::SignInMethod::EmailCode,
+        SignInMethod::PhoneCode => proto::SignInMethod::PhoneCode,
     }
 }
 

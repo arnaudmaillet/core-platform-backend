@@ -31,7 +31,7 @@ use crate::application::query::{IntrospectHandler, ListSessionsHandler};
 use crate::application::SessionPolicy;
 use crate::config::AuthConfig;
 use crate::infrastructure::cache::{RedisSessionCache, RedisVerificationStore};
-use crate::infrastructure::notify::{LogCodeSender, SmtpCodeSender, UnconfiguredCodeSender};
+use crate::infrastructure::notify::{ChannelCodeSender, LogCodeSender, SmtpCodeSender, SnsCodeSender};
 use crate::application::port::CodeSender;
 use crate::infrastructure::directory::{GrpcAccountDirectory, GrpcProfileDirectory};
 use crate::infrastructure::event::outbox_relay::OutboxRelay;
@@ -263,15 +263,24 @@ impl App {
 
         // One-time codes: SMTP (Amazon SES) when configured, a log line for local
         // runs, otherwise off (StartVerification fails FAILED_PRECONDITION).
-        let code_sender: Arc<dyn CodeSender> = match (config.verification_sender.as_str(), &config.smtp) {
-            ("smtp", Some(smtp)) => Arc::new(SmtpCodeSender::new(smtp.clone()).map_err(|e| e.to_string())?),
+        let email_sender: Option<Arc<dyn CodeSender>> = match (config.verification_sender.as_str(), &config.smtp) {
+            ("smtp", Some(smtp)) => Some(Arc::new(SmtpCodeSender::new(smtp.clone()).map_err(|e| e.to_string())?)),
             ("smtp", None) => return Err("AUTH_VERIFICATION_SENDER=smtp needs AUTH_SMTP_HOST".into()),
             ("log", _) => {
                 tracing::warn!("one-time codes are only logged (AUTH_VERIFICATION_SENDER=log): local runs only");
-                Arc::new(LogCodeSender)
+                Some(Arc::new(LogCodeSender))
             }
-            _ => Arc::new(UnconfiguredCodeSender),
+            _ => None,
         };
+        // SMS codes: SNS when configured; the local `log` sender covers SMS too.
+        let sms_sender: Option<Arc<dyn CodeSender>> = match (config.sms_sender.as_str(), &config.sns) {
+            ("sns", Some(sns)) => Some(Arc::new(SnsCodeSender::new(idp_client.clone(), sns.clone()))),
+            ("sns", None) => return Err("AUTH_SMS_SENDER=sns needs AUTH_SNS_REGION".into()),
+            _ if config.verification_sender == "log" => Some(Arc::new(LogCodeSender)),
+            _ => None,
+        };
+        let code_sender: Arc<dyn CodeSender> =
+            Arc::new(ChannelCodeSender { email: email_sender, sms: sms_sender });
 
         // Native Sign in with Apple / Google: a provider with no client id is off.
         let mut federated = JwksFederatedTokenVerifier::new();

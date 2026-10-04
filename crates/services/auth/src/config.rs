@@ -55,6 +55,9 @@ pub struct AuthConfig {
     /// unset = off), the SMTP relay (Amazon SES), and their policy.
     pub verification_sender: String,
     pub smtp: Option<crate::infrastructure::notify::SmtpConfig>,
+    /// SMS codes through Amazon SNS (`AUTH_SMS_SENDER=sns` + `AUTH_SNS_*`).
+    pub sms_sender: String,
+    pub sns: Option<crate::infrastructure::notify::SnsConfig>,
     pub verification: crate::application::command::VerificationPolicy,
 }
 
@@ -125,6 +128,8 @@ impl AuthConfig {
             federated_jwks_timeout: env_ms("AUTH_FEDERATED_JWKS_TIMEOUT_MS", 3_000),
             verification_sender: env_or("AUTH_VERIFICATION_SENDER", "").trim().to_ascii_lowercase(),
             smtp: smtp_from_env(),
+            sms_sender: env_or("AUTH_SMS_SENDER", "").trim().to_ascii_lowercase(),
+            sns: sns_from_env(),
             verification: crate::application::command::VerificationPolicy {
                 ttl: chrono::Duration::seconds(env_secs("AUTH_VERIFICATION_TTL_SECS", 600)),
                 max_attempts: env_secs("AUTH_VERIFICATION_MAX_ATTEMPTS", 5).max(1) as u32,
@@ -147,6 +152,18 @@ fn smtp_from_env() -> Option<crate::infrastructure::notify::SmtpConfig> {
         username: env_or("AUTH_SMTP_USERNAME", ""),
         password: env_or("AUTH_SMTP_PASSWORD", ""),
         from: env_or("AUTH_SMTP_FROM", ""),
+        code_ttl_minutes: env_secs("AUTH_VERIFICATION_TTL_SECS", 600) / 60,
+    })
+}
+
+/// Amazon SNS for SMS codes, when `AUTH_SNS_REGION` is set.
+fn sns_from_env() -> Option<crate::infrastructure::notify::SnsConfig> {
+    let region = std::env::var("AUTH_SNS_REGION").ok().filter(|r| !r.trim().is_empty())?;
+    Some(crate::infrastructure::notify::SnsConfig {
+        region,
+        access_key_id: env_or("AUTH_SNS_ACCESS_KEY_ID", ""),
+        secret_access_key: env_or("AUTH_SNS_SECRET_ACCESS_KEY", ""),
+        sender_id: std::env::var("AUTH_SNS_SENDER_ID").ok().filter(|s| !s.trim().is_empty()),
         code_ttl_minutes: env_secs("AUTH_VERIFICATION_TTL_SECS", 600) / 60,
     })
 }

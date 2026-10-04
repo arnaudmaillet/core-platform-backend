@@ -20,7 +20,8 @@ use crate::error::AccountError;
 #[derive(Debug, Clone)]
 pub struct AccountCreateParams {
     pub identity_id: IdentityId,
-    pub email: EmailAddress,
+    /// `None` for a phone-only account (signed up with a verified phone number).
+    pub email: Option<EmailAddress>,
     /// Pre-hashed Argon2id password; `None` for SSO-only accounts.
     pub password_hash: Option<PasswordHash>,
     pub phone: Option<PhoneNumber>,
@@ -60,7 +61,8 @@ pub struct Account {
 
     identity_id: IdentityId,
 
-    email: EmailAddress,
+    /// `None` for a phone-only account.
+    email: Option<EmailAddress>,
     email_verified: bool,
     email_verified_at: Option<DateTime<Utc>>,
 
@@ -162,7 +164,7 @@ impl Account {
         status: AccountStatus,
         suspension_reason: Option<String>,
         deactivated_at: Option<DateTime<Utc>>,
-        email: EmailAddress,
+        email: Option<EmailAddress>,
         email_verified: bool,
         email_verified_at: Option<DateTime<Utc>>,
         phone: Option<PhoneNumber>,
@@ -230,6 +232,12 @@ impl Account {
         if self.email_verified {
             return Err(AccountError::EmailAlreadyVerified);
         }
+        let Some(email) = self.email.clone() else {
+            return Err(AccountError::DomainViolation {
+                field: "email".into(),
+                message: "no email address is set on this account".into(),
+            });
+        };
         self.transition_status(AccountStatus::Active)?;
         let now = Utc::now();
         self.email_verified = true;
@@ -237,7 +245,7 @@ impl Account {
         self.touch(now);
         self.pending_events.push(DomainEvent::EmailVerified(EmailVerified {
             account_id: self.id,
-            email: self.email.clone(),
+            email,
             verified_at: now,
             occurred_at: now,
             correlation_id,
@@ -245,14 +253,20 @@ impl Account {
         Ok(())
     }
 
-    /// Marks the phone number as verified.
+    /// Marks the phone number as verified. A phone-only account still pending
+    /// verification becomes `Active` (the number is how it signed up), like
+    /// `verify_email` does for an email account.
     pub fn verify_phone(&mut self, correlation_id: Uuid) -> Result<(), AccountError> {
-        self.require_active()?;
         if self.phone.is_none() {
             return Err(AccountError::DomainViolation {
                 field: "phone".into(),
                 message: "no phone number is set on this account".into(),
             });
+        }
+        if self.status == AccountStatus::PendingVerification {
+            self.transition_status(AccountStatus::Active)?;
+        } else {
+            self.require_active()?;
         }
         let now = self.touch_now();
         self.phone_verified = true;
@@ -296,7 +310,7 @@ impl Account {
     ) -> Result<(), AccountError> {
         self.require_active()?;
         let old_email = self.email.clone();
-        self.email = new_email.clone();
+        self.email = Some(new_email.clone());
         self.email_verified = false;
         self.email_verified_at = None;
         let now = self.touch_now();
@@ -677,7 +691,7 @@ impl Account {
         self.gdpr.anonymized_at = Some(now);
         // The address must stop identifying anyone yet stay unique (NOT NULL,
         // unique index): a per-account tombstone on a reserved TLD (RFC 2606).
-        self.email = EmailAddress::new(format!("anonymized-{}@anonymized.invalid", self.id))?;
+        self.email = Some(EmailAddress::new(format!("anonymized-{}@anonymized.invalid", self.id))?);
         self.email_verified = false;
         self.email_verified_at = None;
         self.gdpr.consent_ip = None;
@@ -784,7 +798,8 @@ impl Account {
 
     pub fn identity_id(&self) -> &IdentityId { &self.identity_id }
 
-    pub fn email(&self) -> &EmailAddress { &self.email }
+    /// `None` for a phone-only account.
+    pub fn email(&self) -> Option<&EmailAddress> { self.email.as_ref() }
 
     pub fn email_verified(&self) -> bool { self.email_verified }
 
@@ -908,7 +923,7 @@ mod tests {
             AccountStatus::Active,
             None,
             None,
-            EmailAddress::new("ops@example.com").expect("email"),
+            Some(EmailAddress::new("ops@example.com").expect("email")),
             true,
             None,
             None,
@@ -966,7 +981,7 @@ mod tests {
             AccountStatus::Active,
             None,
             None,
-            EmailAddress::new("user@example.com").expect("email"),
+            Some(EmailAddress::new("user@example.com").expect("email")),
             true,
             None,
             None,
@@ -1001,7 +1016,7 @@ mod tests {
             status,
             suspension_reason,
             (status == AccountStatus::Deactivated).then(Utc::now),
-            EmailAddress::new("user@example.com").expect("email"),
+            Some(EmailAddress::new("user@example.com").expect("email")),
             true,
             None,
             None,
@@ -1226,7 +1241,7 @@ mod tests {
         account.anonymize(Uuid::now_v7()).unwrap();
 
         assert_eq!(account.status(), AccountStatus::Deleted);
-        assert_eq!(account.email().as_str(), format!("anonymized-{}@anonymized.invalid", account.id()));
+        assert_eq!(account.email().unwrap().as_str(), format!("anonymized-{}@anonymized.invalid", account.id()));
         assert!(!account.email_verified());
         assert!(!account.is_due_for_anonymization(Utc::now()));
         assert!(matches!(

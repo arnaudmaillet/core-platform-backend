@@ -71,6 +71,13 @@ impl Validate for StartVerificationCommand {
                 "destination must be an email address",
             )]);
         }
+        if self.channel == VerificationChannel::Sms && normalize_phone(&self.destination).is_none() {
+            return Err(vec![FieldViolation::new(
+                "destination",
+                "AUT-VAL-041",
+                "destination must be an international phone number (+ and country code)",
+            )]);
+        }
         Ok(())
     }
 }
@@ -96,6 +103,18 @@ pub fn normalize_email(raw: &str) -> Option<String> {
         && !domain.starts_with('.')
         && !domain.ends_with('.');
     valid.then_some(email)
+}
+
+/// A phone number in E.164 (`+` then 8–15 digits), from what people type
+/// (spaces, dashes, dots and parentheses dropped; a leading `00` read as `+`),
+/// or `None`.
+pub fn normalize_phone(raw: &str) -> Option<String> {
+    let compact: String = raw.chars().filter(|c| !matches!(c, ' ' | '-' | '.' | '(' | ')')).collect();
+    let digits = compact.strip_prefix('+').or_else(|| compact.strip_prefix("00"))?;
+    let valid = (8..=15).contains(&digits.len())
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && !digits.starts_with('0');
+    valid.then(|| format!("+{digits}"))
 }
 
 /// `SHA-256(challenge_id ":" code)` hex: what is stored and compared.
@@ -132,10 +151,9 @@ impl VerificationCodes {
             VerificationChannel::Email => normalize_email(&cmd.destination).ok_or_else(|| {
                 AuthError::DomainViolation { field: "destination".into(), message: "not an email address".into() }
             })?,
-            // Phone accounts need `account` to make the email optional first.
-            VerificationChannel::Sms => {
-                return Err(AuthError::VerificationChannelUnavailable { channel: "sms".into() });
-            }
+            VerificationChannel::Sms => normalize_phone(&cmd.destination).ok_or_else(|| {
+                AuthError::DomainViolation { field: "destination".into(), message: "not a phone number".into() }
+            })?,
         };
 
         let key = destination_key(cmd.channel, &destination);
@@ -221,6 +239,15 @@ mod tests {
     }
 
     #[test]
+    fn numbers_normalize_to_e164_or_are_refused() {
+        assert_eq!(normalize_phone("+33 6 12 34 56 78"), Some("+33612345678".into()));
+        assert_eq!(normalize_phone("0033 (6) 12-34-56-78"), Some("+33612345678".into()));
+        for bad in ["", "0612345678", "+33", "+0612345678", "+33 6 12 34 5a 78", "+1234567890123456"] {
+            assert_eq!(normalize_phone(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
     fn addresses_normalize_or_are_refused() {
         assert_eq!(normalize_email("  Ada@Example.COM "), Some("ada@example.com".into()));
         for bad in ["", "ada", "ada@", "@example.com", "ada@example", "a b@example.com", "a@b@c.com", "ada@.com"] {
@@ -261,7 +288,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sends_are_budgeted_per_address_sms_is_not_available_failures_leave_nothing() {
+    async fn sends_are_budgeted_per_address_sms_goes_out_failures_leave_nothing() {
         let (sender, store) = (Arc::new(RecordingCodeSender::default()), Arc::new(InMemoryVerificationStore::default()));
         let codes = codes(Arc::clone(&sender), Arc::clone(&store));
         codes.start(email("eve@example.com")).await.unwrap();
@@ -272,8 +299,10 @@ mod tests {
         ));
         assert!(codes.start(email("other@example.com")).await.is_ok(), "another address has its own budget");
 
-        let sms = StartVerificationCommand { channel: VerificationChannel::Sms, destination: "+33600000000".into(), locale: None };
-        assert!(matches!(codes.start(sms).await, Err(AuthError::VerificationChannelUnavailable { .. })));
+        // SMS goes through its own sender (the recording one takes any channel).
+        let sms = StartVerificationCommand { channel: VerificationChannel::Sms, destination: "+33 6 00 00 00 00".into(), locale: None };
+        assert!(codes.start(sms).await.is_ok());
+        assert_eq!(sender.last().unwrap().0, "+33600000000");
 
         sender.fail();
         let before = store.len();
