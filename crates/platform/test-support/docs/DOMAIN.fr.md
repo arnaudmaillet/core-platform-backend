@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: 417f78a8edb2da7aac6a92ba1d3fc5940365299d0a19252c2b388f9443c56dea
-  translated_at: 2026-06-28
+  source_sha256: c384061b042434769b3233101a0880915f0fb52ba269f91faa33dd9d4349ec2e
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -128,7 +128,7 @@ avec `await_until(label, deadline, probe)` — sondant l'état observable jusqu'
 ## 8. Signaux Émis & Effets de Bord &nbsp;·&nbsp; DEEP
 
 N/A en tant que signal de production — il n'émet que du `tracing` de temps-de-test. Effets de bord (temps-de-test) :
-démarre des containers Docker, applique des migrations, crée des topics Kafka. Rien de cela n'atteint un binaire déployé.
+démarre des containers Docker (labellisés `core-platform.test-support.pid=<PID>`, supprimés quand le process de test se termine ou est interrompu), applique des migrations, crée des topics Kafka. Rien de cela n'atteint un binaire déployé.
 
 ---
 

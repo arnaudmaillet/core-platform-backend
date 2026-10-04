@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: b5b7cba2a69a787f41554ee46aac1f6cef034df0f4b4b8b50d5e70c346a20a1c
-  translated_at: 2026-06-25
+  source_sha256: 6dcc8a6539033be5042f58ff3f7444f4add7b7c9377aefaa2f6efbe0f994e897
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -18,7 +18,7 @@ i18n:
 > | **Rôle** | `platform` — épine dorsale de test **dev-only** (jamais liée dans un binaire de service) |
 > | **Package** | `test-support` (dir : `crates/platform/test-support`) |
 > | **Consommé par** | la suite d'intégration live de chaque service (`tests/<svc>_it/`), en `[dev-dependency]` |
-> | **Dépend de** | `testcontainers(-modules)`, `rdkafka`, `tokio`, `scylla(-storage)`, `sqlx`, `tracing` |
+> | **Dépend de** | `testcontainers(-modules)`, `rdkafka`, `tokio`, `scylla(-storage)`, `sqlx`, `tracing`, `libc` + `signal-hook` (reaper de conteneurs) |
 > | **Stabilité** | contrat stable |
 > | **Feature flags** | aucun |
 > | **Propriétaire** | `<TODO: équipe>` · `<TODO: #canal-slack>` |
@@ -45,7 +45,10 @@ Les cinq piliers (extraits de la suite gold-standard `chat`) :
 
 - **Un jeu de conteneurs par binaire de test** — chaque backend boote paresseusement via un
   `tokio::sync::OnceCell` et est partagé par chaque scénario du binaire ; Kafka/Postgres ne bootent que
-  quand un scénario le demande pour la première fois.
+  quand un scénario le demande pour la première fois. Les statics ne sont jamais droppés : un reaper
+  supprime donc chaque conteneur labellisé avec le PID du process (`core-platform.test-support.pid`) à la
+  sortie normale (`atexit`) et sur SIGINT/SIGTERM/SIGQUIT — le jeu vit exactement aussi longtemps que le
+  binaire de test.
 - **Zéro conflit de port** — chaque endpoint est résolu depuis le **port hôte mappé assigné par l'OS** ;
   rien n'est lié statiquement, donc les suites tournent en concurrence.
 - **Migrations appliquées exactement une fois** — derrière un `OnceCell`, avec l'adaptation de réplication
@@ -69,6 +72,7 @@ pub async fn redis_endpoint() -> String;
 pub async fn kafka_brokers() -> String;
 pub async fn ensure_topics(brokers: &str, topics: &[&str]);
 pub async fn postgres_ready(migrations_dir: &str) -> String;                 // boot + migrate once
+pub const OWNER_LABEL: &str = "core-platform.test-support.pid";              // on every container; value = PID
 
 // migrate.rs — idempotent runners (single-node adaptation)
 pub async fn scylla_apply(contact_point: &str, keyspace: &str, migrations_dir: &str);
@@ -109,8 +113,8 @@ await_until("message visible to guest", Duration::from_secs(5), || async {
 ## ⚙️ Configuration & feature flags
 
 Aucun — pas de variables d'environnement ni de features cargo. Les endpoints sont découverts depuis les
-conteneurs bootés (ports mappés par l'OS) ; le seul prérequis runtime est un **daemon Docker en cours
-d'exécution**.
+conteneurs bootés (ports mappés par l'OS) ; les seuls prérequis runtime sont un **daemon Docker en cours
+d'exécution** et la **CLI `docker` dans le `PATH`** (le reaper de fin de process l'invoque — voir Piège 5).
 
 ---
 
@@ -148,3 +152,17 @@ sur un nœud. Passer par le runner.
 L'isolation est par **namespacing, pas teardown** — chaque scénario doit générer des clés/topics UUID
 frais. Les conteneurs sont partagés sur le binaire par conception ; ne pas compter sur une ardoise propre
 entre scénarios.
+
+**5. Des conteneurs de test restent actifs / les boots Scylla échouent en `StartupTimeout`.**
+Chaque run supprime ses propres conteneurs à la sortie ou sur Ctrl-C ; seuls un SIGKILL, un abort, ou une
+CLI `docker` absente (un avertissement `test-support:` sur stderr) les laissent derrière. Balayer tous les
+restes, quel que soit le run :
+
+```bash
+docker rm -f -v $(docker ps -aq --filter label=core-platform.test-support.pid)
+```
+
+Scylla tourne avec `--reactor-backend epoll` (≈1k des 65536 événements `fs.aio-max-nr` de l'hôte au lieu
+de ≈51k en linux-aio), si bien que plusieurs suites Scylla — ou worktrees — tournent côte à côte. Un log
+de conteneur `Could not setup Async I/O … aio-max-nr` signifie que des conteneurs non labellisés d'un
+checkout plus ancien tiennent le budget : supprimer à la main les conteneurs `scylladb/scylla` périmés.

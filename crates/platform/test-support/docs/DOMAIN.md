@@ -116,7 +116,8 @@ that endpoint, runs a scenario (minting fresh UUID keys for isolation), and asse
 ## 8. Emitted Signals & Side-Effects &nbsp;·&nbsp; DEEP
 
 N/A as a production signal — it emits only test-time `tracing`. Side effects (test-time): starts Docker
-containers, applies migrations, creates Kafka topics. None of this reaches a deployed binary.
+containers (labelled `core-platform.test-support.pid=<PID>`, removed when the test process exits or is
+interrupted), applies migrations, creates Kafka topics. None of this reaches a deployed binary.
 
 ---
 

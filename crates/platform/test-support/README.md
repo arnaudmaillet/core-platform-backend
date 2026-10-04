@@ -7,7 +7,7 @@
 > | **Role** | `platform` — **dev-only** test backbone (never linked into a service binary) |
 > | **Package** | `test-support` (dir: `crates/platform/test-support`) |
 > | **Consumed by** | every service's live integration suite (`tests/<svc>_it/`), as a `[dev-dependency]` |
-> | **Depends on** | `testcontainers(-modules)`, `rdkafka`, `tokio`, `scylla(-storage)`, `sqlx`, `tracing` |
+> | **Depends on** | `testcontainers(-modules)`, `rdkafka`, `tokio`, `scylla(-storage)`, `sqlx`, `tracing`, `libc` + `signal-hook` (container reaper) |
 > | **Stability** | stable contract |
 > | **Feature flags** | none |
 > | **Owner** | `<TODO: team>` · `<TODO: #slack-channel>` |
@@ -33,6 +33,9 @@ The five pillars (extracted from the `chat` gold-standard suite):
 
 - **One container set per test binary** — each backend boots lazily through a `tokio::sync::OnceCell`
   and is shared by every scenario in the binary; Kafka/Postgres boot only when a scenario first asks.
+  The statics are never dropped, so a reaper removes every container labelled with the process's PID
+  (`core-platform.test-support.pid`) at normal exit (`atexit`) and on SIGINT/SIGTERM/SIGQUIT — the set
+  lives exactly as long as the test binary.
 - **Zero port conflicts** — every endpoint is resolved from the **OS-assigned mapped host port**;
   nothing is statically bound, so suites run concurrently.
 - **Migrations applied exactly once** — behind a `OnceCell`, with the single-node replication
@@ -55,6 +58,7 @@ pub async fn redis_endpoint() -> String;
 pub async fn kafka_brokers() -> String;
 pub async fn ensure_topics(brokers: &str, topics: &[&str]);
 pub async fn postgres_ready(migrations_dir: &str) -> String;                 // boot + migrate once
+pub const OWNER_LABEL: &str = "core-platform.test-support.pid";              // on every container; value = PID
 
 // migrate.rs — idempotent runners (single-node adaptation)
 pub async fn scylla_apply(contact_point: &str, keyspace: &str, migrations_dir: &str);
@@ -94,7 +98,8 @@ await_until("message visible to guest", Duration::from_secs(5), || async {
 ## ⚙️ Configuration & feature flags
 
 None — no environment variables and no cargo features. Endpoints are discovered from the booted
-containers (OS-mapped ports); the only runtime prerequisite is a **running Docker daemon**.
+containers (OS-mapped ports); the only runtime prerequisites are a **running Docker daemon** and the
+**`docker` CLI on `PATH`** (the exit-time reaper shells out to it — see Gotcha 5).
 
 ---
 
@@ -129,3 +134,16 @@ and run raw `NetworkTopologyStrategy` DDL, it won't satisfy RF on one node. Go t
 **4. Two scenarios interfere with each other's data.**
 Isolation is by **namespacing, not teardown** — each scenario must mint fresh UUID keys/topics. The
 containers are shared across the binary by design; don't rely on a clean slate between scenarios.
+
+**5. Test containers left running / Scylla boots fail with `StartupTimeout`.**
+Each run removes its own containers at exit or on Ctrl-C; only a SIGKILL, an abort, or a missing `docker`
+CLI (a `test-support:` warning on stderr) leaves them behind. Sweep every leftover from any run with:
+
+```bash
+docker rm -f -v $(docker ps -aq --filter label=core-platform.test-support.pid)
+```
+
+Scylla runs with `--reactor-backend epoll` (≈1k of the host's 65536 `fs.aio-max-nr` events instead of
+≈51k with linux-aio), so several Scylla suites — or worktrees — can run side by side. A container log
+saying `Could not setup Async I/O … aio-max-nr` means unlabelled containers from an older checkout are
+holding the budget: remove the stale `scylladb/scylla` containers by hand.
