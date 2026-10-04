@@ -13,6 +13,8 @@ pub mod ids;
 pub mod penalty_policy;
 pub mod policy_category;
 pub mod policy_version;
+pub mod report_status;
+pub mod reporter_kind;
 pub mod signal;
 pub mod strike;
 pub mod subject_ref;
@@ -28,6 +30,8 @@ pub use ids::{ActorId, AppealId, CaseId, DecisionId, EnforcementId, ReportId, MO
 pub use penalty_policy::PenaltyPolicy;
 pub use policy_category::PolicyCategory;
 pub use policy_version::PolicyVersion;
+pub use report_status::ReportStatus;
+pub use reporter_kind::ReporterKind;
 pub use signal::Signal;
 pub use strike::Strike;
 pub use subject_ref::SubjectRef;

@@ -5,9 +5,12 @@
 
 use async_trait::async_trait;
 
-use crate::domain::aggregate::{Appeal, Case, Decision, EnforcementAction, PenaltyLedger};
+use chrono::{DateTime, Utc};
+
+use crate::domain::aggregate::{Appeal, Case, Decision, EnforcementAction, PenaltyLedger, Report};
 use crate::domain::value_object::{
-    ActorId, AppealId, CaseId, CaseStatus, DecisionId, EnforcementId, EnforcementVersion, SubjectRef,
+    ActorId, AppealId, CaseId, CaseStatus, DecisionId, EnforcementId, EnforcementVersion, ReportId,
+    ReporterKind, SubjectRef,
 };
 use crate::error::ModerationError;
 
@@ -79,4 +82,39 @@ pub trait AppealRepository: Send + Sync + 'static {
     async fn save(&self, appeal: &Appeal) -> Result<(), ModerationError>;
 
     async fn find_by_id(&self, id: &AppealId) -> Result<Option<Appeal>, ModerationError>;
+}
+
+/// A position in a reporter's newest-first report list: the last report of the
+/// previous page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReportCursor {
+    pub reported_at: DateTime<Utc>,
+    pub id: ReportId,
+}
+
+/// A recorded report with the current status of the review case it fed
+/// (`None` while that case is not persisted).
+#[derive(Debug, Clone)]
+pub struct FiledReport {
+    pub report: Report,
+    pub case_status: Option<CaseStatus>,
+}
+
+/// Persistence for the [`Report`] aggregate — the reporter's own record of what
+/// they reported (DSA Art. 16(5)), separate from the evidence the case keeps.
+#[async_trait]
+pub trait ReportRepository: Send + Sync + 'static {
+    /// Records a report. Idempotent on its deterministic id: the same reporter
+    /// reporting the same subject again keeps the first record.
+    async fn record(&self, report: &Report) -> Result<(), ModerationError>;
+
+    /// A reporter's reports, newest first, strictly after `after`, joined with
+    /// the status of each report's case.
+    async fn list_for_reporter(
+        &self,
+        kind: ReporterKind,
+        reporter_id: &ActorId,
+        after: Option<ReportCursor>,
+        limit: usize,
+    ) -> Result<Vec<FiledReport>, ModerationError>;
 }

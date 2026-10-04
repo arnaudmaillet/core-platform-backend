@@ -36,6 +36,8 @@ async fn suspend_then_overturn_on_appeal() {
     let state = h.enforcement_state(&actor).await.expect("enforcement state");
     assert!(state.actor_restricted, "actor restricted on the hot-path projection");
     assert_eq!(state.active_enforcements.len(), 1);
+    // The enforcement names the decision behind it (statement + appeal key).
+    assert_eq!(state.active_enforcements[0].decision_id, decision.decision_id);
 
     // The DSA statement of reasons echoes the pinned policy version.
     let sor = h.statement_of_reasons(&decision.decision_id).await.expect("sor");

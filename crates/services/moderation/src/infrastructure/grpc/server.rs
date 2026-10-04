@@ -18,6 +18,13 @@ impl ModerationService for ModerationServiceHandler {
         self.screen(request).await
     }
 
+    async fn list_my_reports(
+        &self,
+        request: Request<proto::ListMyReportsRequest>,
+    ) -> Result<Response<proto::ListMyReportsResponse>, Status> {
+        self.list_my_reports(request).await
+    }
+
     async fn open_case(
         &self,
         request: Request<proto::OpenCaseRequest>,

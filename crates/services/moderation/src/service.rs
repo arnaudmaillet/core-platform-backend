@@ -53,13 +53,19 @@ impl Service for ModerationService {
 
     /// The RPCs exposed on the client edge listener (`GRPC_EDGE_ADDR`); anything
     /// else on this service is mesh-only. See `transport::grpc::edge`.
-    // The reviewer console (assign/decide/queue/resolve) and the compliance reads
-    // stay mesh-only until a staff permission catalogue exists; Screen is a mesh
-    // callee (media).
+    // The reviewer console (assign/decide/queue/resolve) stays mesh-only until a
+    // staff permission catalogue exists; Screen is a mesh callee (media).
     const EDGE_POLICY: EdgePolicy = &[
+        // DSA Art. 17 / 20: the sanctioned account reads its restrictions, each
+        // one's statement of reasons, and appeals — its own only (actor_id = sub;
+        // a statement of someone else's decision reads as NOT_FOUND).
+        authenticated("/moderation.v1.ModerationService/GetEnforcementState"),
+        authenticated("/moderation.v1.ModerationService/GetStatementOfReasons"),
         authenticated("/moderation.v1.ModerationService/FileAppeal"),
-        // DSA Art. 16: anyone may report, guests included (reporter = the token).
+        // DSA Art. 16: anyone may report, guests included (reporter = the token),
+        // and is told what became of the report.
         member_or_guest("/moderation.v1.ModerationService/SubmitReport"),
+        member_or_guest("/moderation.v1.ModerationService/ListMyReports"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

@@ -27,7 +27,7 @@ use moderation::infrastructure::grpc::{proto, ModerationServiceHandler};
 use moderation::infrastructure::history::ScyllaEvidenceHistory;
 use moderation::infrastructure::persistence::{
     PgAppealRepository, PgCaseRepository, PgDecisionRepository, PgEnforcementRepository,
-    PgPenaltyRepository,
+    PgPenaltyRepository, PgReportRepository,
 };
 
 use postgres_storage::config::StatementLogLevel;
@@ -122,7 +122,9 @@ impl Harness {
         let cases = Arc::new(PgCaseRepository::new(tx.clone()));
         let classifiers = Arc::new(LogClassifierGateway);
 
+        let reports = Arc::new(PgReportRepository::new(tx.clone()));
         let ingest_report = Arc::new(IngestReportHandler::new(
+            reports.clone(),
             cases.clone(),
             publisher.clone(),
             classifiers.clone(),
@@ -131,6 +133,7 @@ impl Harness {
 
         let deps = AppDeps {
             cases,
+            reports,
             decisions: Arc::new(PgDecisionRepository::new(tx.clone())),
             enforcements: Arc::new(PgEnforcementRepository::new(tx.clone())),
             penalties: Arc::new(PgPenaltyRepository::new(tx.clone())),

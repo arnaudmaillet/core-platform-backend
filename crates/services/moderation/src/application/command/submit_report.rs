@@ -10,7 +10,9 @@ use cqrs::Envelope;
 
 use crate::application::command::{IngestReportCommand, IngestReportHandler, ReportOrigin};
 use crate::application::port::{ReportRateLimiter, SubjectResolver};
-use crate::domain::value_object::{ActorId, EntityType, PolicyCategory, ReportId, SubjectRef};
+use crate::domain::value_object::{
+    ActorId, EntityType, PolicyCategory, ReportId, ReporterKind, SubjectRef,
+};
 use crate::error::ModerationError;
 
 /// Who files a client report, from the verified edge token.
@@ -23,10 +25,14 @@ pub enum Reporter {
 }
 
 impl Reporter {
-    fn id(self) -> ActorId {
+    pub fn id(self) -> ActorId {
         match self {
             Self::Member(id) | Self::Guest(id) => id,
         }
+    }
+
+    pub fn kind(self) -> ReporterKind {
+        self.origin().reporter_kind()
     }
 
     fn origin(self) -> ReportOrigin {
@@ -132,15 +138,7 @@ mod tests {
     use crate::domain::value_object::CaseId;
 
     fn handler(fx: &Fixture) -> SubmitReportHandler {
-        SubmitReportHandler::new(
-            Arc::clone(&fx.subjects) as _,
-            Arc::clone(&fx.report_quota) as _,
-            Arc::new(IngestReportHandler::new(
-                Arc::clone(&fx.cases) as _,
-                Arc::clone(&fx.publisher) as _,
-                Arc::clone(&fx.classifiers) as _,
-            )),
-        )
+        fx.submit_report_handler()
     }
 
     fn cmd(reporter: Reporter, entity_type: EntityType, entity_id: &str) -> Envelope<SubmitReportCommand> {

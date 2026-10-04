@@ -87,6 +87,16 @@ enum ScreenVerdict {
     SCREEN_VERDICT_REVIEW = 3;
 }
 
+// What became of a report, as its reporter sees it (DSA Art. 16(5)). Coarse on
+// purpose: the reporter learns whether action was taken, never which sanction
+// hit the reported account.
+enum ReportStatus {
+    REPORT_STATUS_UNSPECIFIED  = 0;
+    REPORT_STATUS_UNDER_REVIEW = 1;
+    REPORT_STATUS_ACTION_TAKEN = 2;
+    REPORT_STATUS_NO_VIOLATION = 3;
+}
+
 // Lifecycle of an Appeal against a decision.
 enum AppealStatus {
     APPEAL_STATUS_UNSPECIFIED = 0;

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: 244c371e01bc70b363f63978185fbc7c3de4617161e27b2b1ab3f7c712d5db77
-  translated_at: 2026-06-28
+  source_sha256: 984f760630736fbdeceb678c79fa3035dedd397cd57457861f26e162f7971351
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -92,7 +92,7 @@ signals/report --(threshold)--> Case opened --(review/decide)--> Decision record
 ## 4. Propriété des Données & Frontières
 
 **Ce contexte est la source de vérité pour :**
-- Cases, decisions (WORM), appeals, penalty ledger, policy versions — **Postgres** db `moderation`. Le registre de décisions est append-only.
+- Cases, decisions (WORM), appeals, penalty ledger, policy versions, et l'enregistrement de chaque auteur de ses signalements (`reports`) — **Postgres** db `moderation`. Le registre de décisions est append-only.
 - Historique de signaux / preuves — **ScyllaDB** keyspace `moderation` (TWCS).
 - La projection d'enforcement + le corpus de hash Screen — **Redis** (dérivé/reconstructible).
 

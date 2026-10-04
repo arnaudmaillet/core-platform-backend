@@ -7,12 +7,14 @@ pub mod case_row;
 pub mod decision_row;
 pub mod enforcement_row;
 pub mod penalty_row;
+pub mod report_row;
 
 pub use appeal_row::AppealRow;
 pub use case_row::CaseRow;
 pub use decision_row::DecisionRow;
 pub use enforcement_row::EnforcementRow;
 pub use penalty_row::PenaltyRow;
+pub use report_row::FiledReportRow;
 
 use uuid::Uuid;
 
