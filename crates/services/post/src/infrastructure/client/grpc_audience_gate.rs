@@ -31,27 +31,57 @@ fn map_access(answer: Option<i32>) -> ContentAccess {
     }
 }
 
+/// `CheckAccess` accepts at most this many viewer profiles per call
+/// (social-graph `MAX_VIEWERS`); an account can own more, so larger sets are
+/// split and the answers combined.
+const MAX_VIEWERS_PER_CALL: usize = 20;
+
+/// Combines one target's answers across viewer chunks, as one call over the
+/// whole set would decide it: a block from any profile hides it; otherwise any
+/// profile that may see it (a follower of a private target) opens it.
+fn combine(answers: impl IntoIterator<Item = ContentAccess>) -> ContentAccess {
+    let mut combined = ContentAccess::HeaderOnly;
+    for answer in answers {
+        match answer {
+            ContentAccess::Hidden => return ContentAccess::Hidden,
+            ContentAccess::Visible => combined = ContentAccess::Visible,
+            ContentAccess::HeaderOnly => {}
+        }
+    }
+    combined
+}
+
 #[async_trait]
 impl AudienceGate for GrpcAudienceGate {
     async fn access(&self, viewers: &[ProfileId], author: &ProfileId) -> Result<ContentAccess, PostError> {
         let author_id = author.as_str();
-        let request = CheckAccessRequest {
-            viewer_profile_ids: viewers.iter().map(ProfileId::as_str).collect(),
-            target_profile_ids: vec![author_id.clone()],
+        // An anonymous reader is one call with no profiles.
+        let chunks: Vec<&[ProfileId]> = if viewers.is_empty() {
+            vec![&[]]
+        } else {
+            viewers.chunks(MAX_VIEWERS_PER_CALL).collect()
         };
-        let response = self
-            .social_graph
-            .clone()
-            .check_access(request)
-            .await
-            .map_err(|status| PostError::AccessCheckUnavailable { reason: status.to_string() })?
-            .into_inner();
-        let answer = response
-            .targets
-            .iter()
-            .find(|t| t.target_profile_id == author_id)
-            .map(|t| t.access);
-        Ok(map_access(answer))
+        let mut answers = Vec::with_capacity(chunks.len());
+        for chunk in chunks {
+            let request = CheckAccessRequest {
+                viewer_profile_ids: chunk.iter().map(ProfileId::as_str).collect(),
+                target_profile_ids: vec![author_id.clone()],
+            };
+            let response = self
+                .social_graph
+                .clone()
+                .check_access(request)
+                .await
+                .map_err(|status| PostError::AccessCheckUnavailable { reason: status.to_string() })?
+                .into_inner();
+            let answer = response
+                .targets
+                .iter()
+                .find(|t| t.target_profile_id == author_id)
+                .map(|t| t.access);
+            answers.push(map_access(answer));
+        }
+        Ok(combine(answers))
     }
 }
 
@@ -67,5 +97,14 @@ mod tests {
         assert_eq!(map_access(Some(ProtoAccess::Unspecified as i32)), ContentAccess::Hidden);
         assert_eq!(map_access(Some(99)), ContentAccess::Hidden);
         assert_eq!(map_access(None), ContentAccess::Hidden, "a missing target");
+    }
+
+    #[test]
+    fn chunked_answers_combine_like_one_call() {
+        use ContentAccess::*;
+        assert_eq!(combine([HeaderOnly, Visible]), Visible, "a follower in any chunk");
+        assert_eq!(combine([Visible, Hidden]), Hidden, "a block in any chunk");
+        assert_eq!(combine([HeaderOnly, HeaderOnly]), HeaderOnly);
+        assert_eq!(combine([Visible]), Visible);
     }
 }
