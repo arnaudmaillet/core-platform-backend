@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::aggregate::Profile;
 use crate::domain::entity::ProfileLink;
-use crate::domain::value_object::{AccountId, ProfileId};
+use crate::domain::value_object::{AccountId, ProfileId, ProfileStatus, Viewer};
 use crate::error::ProfileError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +80,32 @@ impl From<&Profile> for ProfileView {
     }
 }
 
+impl ProfileView {
+    /// The view as `viewer` may see it, or `None` when the profile is not
+    /// visible to them.
+    ///
+    /// The owner (and a trusted internal caller) gets everything. Anyone else
+    /// gets an **active** profile only (hidden, suspended and deleted ones are
+    /// not found), with the owner-only fields cleared: the account id (which
+    /// would link an account's profiles together), locale, timezone and masking
+    /// details. A private profile still shows its header; its posts and lists
+    /// are what privacy withholds.
+    pub fn for_viewer(mut self, viewer: &Viewer) -> Option<Self> {
+        if viewer.sees_everything_of(&self.account_id) {
+            return Some(self);
+        }
+        if self.status != ProfileStatus::Active.as_str() {
+            return None;
+        }
+        self.account_id = String::new();
+        self.locale = String::new();
+        self.timezone = None;
+        self.masked_at = None;
+        self.masking_reason = None;
+        Some(self)
+    }
+}
+
 /// Cache port for the profile read path.
 ///
 /// Three independent Redis key namespaces; TTLs are externalized to the `[cache]`
@@ -108,4 +134,67 @@ pub trait ProfileCache: Send + Sync + 'static {
         &self,
         account_id: &AccountId,
     ) -> Result<(), ProfileError>;
+}
+
+#[cfg(test)]
+mod viewer_tests {
+    use super::*;
+
+    fn view(status: ProfileStatus) -> ProfileView {
+        ProfileView {
+            id: "p-1".into(),
+            account_id: "acct-1".into(),
+            handle: "alice".into(),
+            display_name: "Alice".into(),
+            bio: Some("hi".into()),
+            avatar_url: None,
+            banner_url: None,
+            website_url: Some("https://alice.example".into()),
+            custom_links: Vec::new(),
+            profile_kind: "personal".into(),
+            visibility: "private".into(),
+            verified: false,
+            verification_kind: None,
+            locale: "fr-FR".into(),
+            timezone: Some("Europe/Paris".into()),
+            status: status.as_str().into(),
+            masked_at: None,
+            masking_reason: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            version: 3,
+        }
+    }
+
+    #[test]
+    fn the_owner_and_the_mesh_get_everything() {
+        for viewer in [Viewer::Internal, Viewer::Account("acct-1".into())] {
+            let seen = view(ProfileStatus::Hidden).for_viewer(&viewer).expect("visible");
+            assert_eq!(seen.account_id, "acct-1");
+            assert_eq!(seen.locale, "fr-FR");
+        }
+    }
+
+    #[test]
+    fn others_get_active_profiles_without_owner_only_fields() {
+        for viewer in [Viewer::Anonymous, Viewer::Account("acct-2".into())] {
+            let seen = view(ProfileStatus::Active).for_viewer(&viewer).expect("visible");
+            assert!(seen.account_id.is_empty(), "the account id would link profiles");
+            assert!(seen.locale.is_empty());
+            assert_eq!(seen.timezone, None);
+            // The public header survives, private profile or not.
+            assert_eq!(seen.handle, "alice");
+            assert_eq!(seen.bio.as_deref(), Some("hi"));
+            assert_eq!(seen.website_url.as_deref(), Some("https://alice.example"));
+            assert_eq!(seen.visibility, "private");
+        }
+    }
+
+    #[test]
+    fn hidden_suspended_and_deleted_profiles_are_not_found_for_others() {
+        for status in [ProfileStatus::Hidden, ProfileStatus::Suspended, ProfileStatus::Deleted] {
+            assert!(view(status).for_viewer(&Viewer::Anonymous).is_none(), "{status:?}");
+            assert!(view(status).for_viewer(&Viewer::Account("acct-2".into())).is_none());
+        }
+    }
 }

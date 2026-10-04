@@ -61,6 +61,9 @@ integration-profile = []
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Wire contract test in the account-event consumer: decode events serialized by
+# account's own types, so a shape drift fails here.
+account = { workspace = true }
 
 # ── Integration suite (feature = "integration-profile") ──────────────────────
 # Container orchestration, the RF=1 migration runner, and `await_until` come from

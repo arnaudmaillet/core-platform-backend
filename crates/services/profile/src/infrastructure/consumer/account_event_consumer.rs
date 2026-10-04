@@ -11,15 +11,17 @@ use transport::kafka::consumer::{
 };
 use transport::kafka::producer::KafkaProducerHandle;
 
-use crate::application::command::{HideProfileCommand, RestoreProfileCommand};
+use crate::application::command::{HideAccountProfilesCommand, RestoreAccountProfilesCommand};
 
-/// Kafka event payload published by the account service on `account.v1.events`.
+/// Kafka event payload published by the account service on `account.v1.events`:
+/// account's `DomainEvent`, internally tagged on `type`, snake_case
+/// (`{"type":"account_suspended","account_id":…,"reason":…}`).
 ///
 /// Only the fields relevant to profile masking/restoration are deserialized.
-/// Unknown event kinds are silently ignored.
+/// Event types profile does not act on are committed as no-ops.
 #[derive(Debug, Deserialize)]
 struct AccountEvent {
-    #[serde(rename = "event_kind")]
+    #[serde(rename = "type")]
     kind: String,
     account_id: String,
     #[serde(default)]
@@ -68,34 +70,29 @@ pub async fn run_account_event_consumer<CB: CommandBus + 'static>(
 async fn process_event<CB: CommandBus>(command_bus: &CB, event: &AccountEvent) -> ProcessOutcome {
     let correlation_id = Uuid::now_v7();
 
+    // An account owns N profiles: each command walks all of them.
     let dispatch = match event.kind.as_str() {
-        "AccountSuspended" | "AccountDeleted" => {
-            let masking_reason = if event.kind == "AccountDeleted" {
+        "account_suspended" | "account_deleted" => {
+            let masking_reason = if event.kind == "account_deleted" {
                 "account_deleted"
             } else {
                 "account_suspended"
             };
-
-            // NOTE: HideProfileCommand targets a single profile_id. At the
-            // composition root, iterate all profiles for account_id and dispatch
-            // one command per profile.
-            let cmd = HideProfileCommand {
-                profile_id:        event.account_id.clone(),
+            let cmd = HideAccountProfilesCommand {
+                account_id:        event.account_id.clone(),
                 masking_reason:    masking_reason.to_owned(),
                 suspension_reason: event.reason.clone(),
             };
             command_bus.dispatch(Envelope::new(correlation_id, cmd)).await
         }
 
-        "AccountActivated" | "AccountReactivated" => {
-            let cmd = RestoreProfileCommand {
-                profile_id: event.account_id.clone(),
-            };
+        "account_activated" => {
+            let cmd = RestoreAccountProfilesCommand { account_id: event.account_id.clone() };
             command_bus.dispatch(Envelope::new(correlation_id, cmd)).await
         }
 
         other => {
-            tracing::trace!(event_kind = other, "ignoring unknown account event kind");
+            tracing::trace!(event_kind = other, "ignoring account event kind");
             return ProcessOutcome::Done;
         }
     };
@@ -104,5 +101,53 @@ async fn process_event<CB: CommandBus>(command_bus: &CB, event: &AccountEvent) -
         Ok(())                     => ProcessOutcome::Done,
         Err(e) if e.is_retryable() => ProcessOutcome::Retry(e.to_string()),
         Err(e)                     => ProcessOutcome::Reject(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use account::domain::event::{
+        AccountActivated, AccountDeleted, AccountSuspended, DomainEvent as AccountDomainEvent,
+    };
+    use account::domain::value_object::AccountId;
+    use chrono::Utc;
+
+    use super::*;
+
+    /// Serializes with account's own types and reads it back the way the
+    /// consumer does. The consumer used to expect `{"event_kind":"AccountSuspended"}`,
+    /// a shape account never emitted, so every account event dead-lettered.
+    fn wire(event: AccountDomainEvent) -> AccountEvent {
+        serde_json::from_slice(&serde_json::to_vec(&event).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn decodes_account_lifecycle_events_as_account_emits_them() {
+        let id = AccountId::new();
+        let suspended = wire(AccountDomainEvent::AccountSuspended(AccountSuspended {
+            account_id: id,
+            reason: "spam".into(),
+            occurred_at: Utc::now(),
+            correlation_id: Uuid::now_v7(),
+        }));
+        assert_eq!(suspended.kind, "account_suspended");
+        assert_eq!(suspended.account_id, id.to_string());
+        assert_eq!(suspended.reason.as_deref(), Some("spam"));
+
+        let deleted = wire(AccountDomainEvent::AccountDeleted(AccountDeleted {
+            account_id: id,
+            deleted_by: None,
+            occurred_at: Utc::now(),
+            correlation_id: Uuid::now_v7(),
+        }));
+        assert_eq!(deleted.kind, "account_deleted");
+
+        let activated = wire(AccountDomainEvent::AccountActivated(AccountActivated {
+            account_id: id,
+            occurred_at: Utc::now(),
+            correlation_id: Uuid::now_v7(),
+        }));
+        assert_eq!(activated.kind, "account_activated");
+        assert_eq!(activated.account_id, id.to_string());
     }
 }

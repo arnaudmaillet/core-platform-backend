@@ -21,7 +21,8 @@ use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 
 use crate::application::command::{
     ChangeHandleCommand, ChangeHandleHandler, CreateProfileCommand, CreateProfileHandler,
-    DeleteProfileCommand, DeleteProfileHandler, HideProfileCommand, HideProfileHandler,
+    DeleteProfileCommand, DeleteProfileHandler, HideAccountProfilesCommand, HideProfileCommand,
+    HideProfileHandler, MaskAccountProfilesHandler, RestoreAccountProfilesCommand,
     RestoreProfileCommand, RestoreProfileHandler, SetProfileTierCommand, SetProfileTierHandler,
     SetVisibilityCommand, SetVisibilityHandler, UpdateAvatarCommand, UpdateAvatarHandler,
     UpdateBannerCommand, UpdateBannerHandler, UpdateProfileCommand, UpdateProfileHandler,
@@ -130,6 +131,16 @@ impl App {
                     Arc::clone(&publisher),
                 ))?
                 .register::<RestoreProfileCommand, _>(RestoreProfileHandler::new(
+                    Arc::clone(&repository),
+                    Arc::clone(&cache),
+                    Arc::clone(&publisher),
+                ))?
+                .register::<HideAccountProfilesCommand, _>(MaskAccountProfilesHandler::new(
+                    Arc::clone(&repository),
+                    Arc::clone(&cache),
+                    Arc::clone(&publisher),
+                ))?
+                .register::<RestoreAccountProfilesCommand, _>(MaskAccountProfilesHandler::new(
                     Arc::clone(&repository),
                     Arc::clone(&cache),
                     Arc::clone(&publisher),

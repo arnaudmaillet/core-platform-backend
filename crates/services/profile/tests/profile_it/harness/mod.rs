@@ -24,7 +24,7 @@ use profile::error::ProfileError;
 use profile::infrastructure::publisher::wire::ProfileEventWire;
 
 pub use profile::application::port::profile_cache::ProfileView;
-pub use profile::domain::value_object::ProfileId;
+pub use profile::domain::value_object::{ProfileId, Viewer};
 pub use test_support::await_until;
 
 /// Generous default patience for a cross-component assertion (ScyllaDB LWT,
@@ -153,10 +153,18 @@ impl TestHarness {
             .expect("update_profile");
     }
 
-    /// Resolves a profile by handle.
+    /// Resolves a profile by handle, as a trusted internal caller.
     pub async fn get_by_handle(&self, handle: &str) -> Option<ProfileView> {
+        self.get_by_handle_as(handle, Viewer::Internal).await
+    }
+
+    /// Resolves a profile by handle, as `viewer`.
+    pub async fn get_by_handle_as(&self, handle: &str, viewer: Viewer) -> Option<ProfileView> {
         self.query_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), GetProfileByHandleQuery { handle: handle.to_owned() }))
+            .dispatch(Envelope::new(
+                Uuid::now_v7(),
+                GetProfileByHandleQuery { handle: handle.to_owned(), viewer },
+            ))
             .await
             .expect("get_profile_by_handle")
     }
@@ -164,7 +172,7 @@ impl TestHarness {
     /// Resolves a profile by id (read-through: warms the cache on a miss).
     pub async fn get_by_id(&self, profile_id: &str) -> Option<ProfileView> {
         self.query_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), GetProfileByIdQuery { profile_id: profile_id.to_owned() }))
+            .dispatch(Envelope::new(Uuid::now_v7(), GetProfileByIdQuery { profile_id: profile_id.to_owned(), viewer: Viewer::Internal }))
             .await
             .expect("get_profile_by_id")
     }

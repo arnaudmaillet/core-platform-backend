@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8c0abf083f634da477572f8c16b4cfa5c1e2f452d7d27c2868ee0df674c1e646
-  translated_at: 2026-06-26
+  source_sha256: c0ee0425fd3368e4bb850582adda8b6fc645ca53e82aeaee68335d3a9b0f73f3
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -64,7 +64,7 @@ gRPC ─► ProfileServiceHandler ─► Command bus            Query bus ─►
 
    Redis cache-aside: profile:v1:{id} TTL 300s · handle:v1:{handle} TTL 600s · account:profiles:v1:{id} TTL 120s
 
-   Kafka account.v1.events ─► AccountSuspended→HideProfile · AccountDeleted→HideProfile · AccountActivated→RestoreProfile
+   Kafka account.v1.events ─► account_suspended / account_deleted → masquer chaque profil du compte · account_activated → restaurer ceux que la suspension a masqués
 ```
 
 **Versionnement des clés de cache.** Toutes les clés portent un préfixe `v1:` — incrémenter le suffixe
@@ -139,6 +139,13 @@ service ProfileService {
 }
 ```
 
+**Lectures selon le lecteur.** `GetProfileById/ByHandle` prennent le lecteur du transport
+(`edge::viewer`). Le propriétaire (`sub` du jeton = le compte du profil) et les appelants du mesh
+reçoivent la vue complète. Tout autre lecteur ne reçoit qu'un profil **actif** (masqué, suspendu
+ou supprimé → `NOT_FOUND`), sans les champs réservés au propriétaire : `account_id` (il relierait
+entre eux les profils d'un compte), `locale`, `timezone`, `masked_at`, `masking_reason`. Un profil
+privé renvoie toujours son en-tête ; ce sont ses posts et ses listes que la confidentialité retient.
+
 ### Ports Rust (contrat hexagonal)
 
 ```rust
@@ -179,7 +186,7 @@ réactivement).
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
-| `account.v1.events` | `profile-account-events` | `AccountSuspended/Deleted` → `HideProfile`; `AccountActivated` → `RestoreProfile`; unknown kinds = no-op commit | DLQ `account.v1.events.dlq` |
+| `account.v1.events` | `profile-account-events` | le `DomainEvent` d'account (tagué sur `type`, snake_case) : `account_suspended` / `account_deleted` → masquer **chaque** profil du compte (`HideAccountProfiles`) ; `account_activated` → restaurer les profils masqués par la suspension (`RestoreAccountProfiles` ; un masquage pour violation de politique reste). Idempotent par profil : une redélivrance termine un parcours partiel. Autres types = commit no-op | DLQ `account.v1.events.dlq` |
 | `social-graph.author_tier_changed` | `profile-author-tier` | dénormalise le palier auteur sur le profil (`SetProfileTier`) → ré-émet sur `profile.v1.events` (`ProfileTierChanged`) ; idempotent si palier inchangé | DLQ `social-graph.author_tier_changed.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** le consommateur d'événements compte s'exécute sous
