@@ -12,6 +12,7 @@
 //! - `profile.v1.events` ingestion — profile does not yet publish a Kafka stream (an upstream prerequisite);
 //! - an optional Meilisearch adapter (local-velocity only, never a relevance target).
 
+pub mod audience;
 pub mod consumer;
 pub mod decode;
 pub mod grpc;

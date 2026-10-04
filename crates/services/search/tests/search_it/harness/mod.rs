@@ -68,7 +68,9 @@ impl Harness {
 
         let port: Arc<dyn SearchIndex> = Arc::clone(&index) as Arc<dyn SearchIndex>;
         let projection = ProjectionHandler::new(Arc::clone(&port));
-        let handler = App::compose(port);
+        // The harness calls the handler without an edge principal (the mesh),
+        // so the audience filter never runs; any gate will do.
+        let handler = App::compose(port, Arc::new(NoAudienceCheck));
         Self {
             handler,
             projection,
@@ -242,4 +244,18 @@ fn created() -> DateTime<Utc> {
 
 fn ms(millis: i64) -> DateTime<Utc> {
     Utc.timestamp_millis_opt(millis).single().unwrap()
+}
+
+/// An audience gate for a harness that only reads as the mesh (never filtered).
+struct NoAudienceCheck;
+
+#[async_trait::async_trait]
+impl search::application::port::AudienceGate for NoAudienceCheck {
+    async fn access(
+        &self,
+        _viewers: &[String],
+        _targets: &[String],
+    ) -> Result<std::collections::HashMap<String, search::domain::ContentAccess>, search::error::SearchError> {
+        unreachable!("mesh reads are not filtered")
+    }
 }

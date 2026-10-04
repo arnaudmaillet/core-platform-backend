@@ -4,10 +4,12 @@
 //! root. Each is an `async_trait` so it can be held as `Arc<dyn …>`; in-memory fakes
 //! back the unit tests.
 
+pub mod audience_gate;
 pub mod backfill;
 pub mod index_admin;
 pub mod search_index;
 
+pub use audience_gate::AudienceGate;
 pub use backfill::BackfillSource;
 pub use index_admin::IndexAdmin;
 pub use search_index::{SearchIndex, WriteOutcome};

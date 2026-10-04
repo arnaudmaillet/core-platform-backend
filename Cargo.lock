@@ -5049,6 +5049,7 @@ dependencies = [
  "serde",
  "serde_json",
  "service-runtime",
+ "social-graph-api",
  "test-support",
  "thiserror 2.0.18",
  "tokio",

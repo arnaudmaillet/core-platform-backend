@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 26a0168dbca36491c8925460046b3561f835c2fc3e8786c587aba3e4495d63ff
-  translated_at: 2026-07-03
+  source_sha256: a0cfe932445a9f29895c6472155465e7b424485bdb06175599b0d8a0d9dbb288
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -191,7 +191,7 @@ async fn main() -> anyhow::Result<()> {
 
 > **État de build :** complet jusqu'à la Phase 7 (8 phases : scaffold → proto → domaine → application+ports → adaptateur OpenSearch+décodage → serveur+consommateurs → IT live → durcissement). La suite d'intégration live est derrière le feature `integration-search`. L'ingestion post, **profil** et modération est entièrement câblée (le contenu post + profil est hydraté via `GetPost` / `GetProfileById`).
 >
-> **Autorisation (exigence de déploiement) :** `search` ne s'auto-autorise pas. `Search`/`Suggest` sont exposés à l'appelant ; la **bordure** doit résoudre l'ensemble blocage/sourdine `social-graph` du spectateur et le passer via `SearchRequest.exclude_author_ids` (les exclusions personnelles ne sont jamais indexées). Filtrer l'accès au gateway/`auth-context` avant exposition.
+> **Résultats selon le lecteur.** Pour tout appelant hors mesh, une page de résultats est filtrée par le `CheckAccess` de social-graph sur ses auteurs (un appel groupé, découpé selon les plafonds de la RPC) : un résultat **post** ne reste que si son auteur est `VISIBLE` pour le lecteur (pas un auteur privé qu'il ne suit pas, pas de blocage dans un sens ou l'autre, pas masqué) ; un résultat **profil** reste sauf s'il est `HIDDEN` (un profil privé reste trouvable par son en-tête) ; les hashtags restent toujours. Les suggestions suivent la règle des profils ; les suggestions de posts sont retirées pour les clients (elles ne nomment pas d'auteur). Si le contrôle échoue, search reste disponible (fail-open) mais ne montre rien de non vérifié : résultats profils et posts retirés, hashtags gardés, `degraded = true`. Une page peut revenir plus courte ; le curseur ne change pas. `exclude_author_ids` reste une exclusion supplémentaire fournie par l'appelant (les exclusions personnelles ne sont jamais indexées).
 
 ---
 
@@ -209,6 +209,8 @@ async fn main() -> anyhow::Result<()> {
 | `SEARCH_POST_GRPC_ENDPOINT` | Non | `http://localhost:50056` | endpoint `post` pour l'hydrateur de contenu d'ingestion |
 | `SEARCH_HYDRATE_RPC_TIMEOUT_MS` | Non | `5000` | deadline par requête des RPC d'hydratation — un appel suspendu bloquerait sinon la partition du consumer |
 | `SEARCH_HYDRATE_CONNECT_TIMEOUT_MS` | Non | `2000` | deadline de connexion à l'ouverture des canaux `post` / `profile` |
+| `SEARCH_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Oui** (prod) | `http://localhost:50053` | endpoint `social-graph` du filtre d'audience du chemin de requête (`CheckAccess`) ; injoignable → les résultats clients se réduisent aux hashtags |
+| `SEARCH_AUDIENCE_RPC_TIMEOUT_MS` / `SEARCH_AUDIENCE_CONNECT_TIMEOUT_MS` | Non | `500` / `500` | délais de cet appel (il s'exécute dans la requête de l'utilisateur) |
 
 ### Variables d'infrastructure héritées
 
