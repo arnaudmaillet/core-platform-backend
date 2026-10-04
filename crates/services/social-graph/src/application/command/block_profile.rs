@@ -92,6 +92,14 @@ impl CommandHandler<BlockProfileCommand> for BlockProfileHandler {
         r1?;
         r2?;
 
+        // Pending requests either way are dropped too (a block gates new ones).
+        if let Some(at) = severed.actor_request {
+            self.repo.delete_follow_request(&actor_id, &target_id, at).await?;
+        }
+        if let Some(at) = severed.target_request {
+            self.repo.delete_follow_request(&target_id, &actor_id, at).await?;
+        }
+
         let _ = self.cache.add_block(&actor_id, &target_id).await;
 
         for event in relation.take_events() {

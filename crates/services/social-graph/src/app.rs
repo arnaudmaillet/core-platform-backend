@@ -18,14 +18,16 @@ use redis_storage::{RedisClient, RedisClientBuilder, RedisConfig};
 use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 
 use crate::application::command::{
-    BlockProfileCommand, BlockProfileHandler, FollowProfileCommand, FollowProfileHandler,
+    ApproveFollowRequestCommand, ApproveFollowRequestHandler, BlockProfileCommand,
+    BlockProfileHandler, FollowProfileCommand, FollowProfileHandler, WithdrawFollowRequestCommand,
+    WithdrawFollowRequestHandler,
     RecordProfileAudienceCommand, RecordProfileAudienceHandler, UnblockProfileCommand,
     UnblockProfileHandler, UnfollowProfileCommand, UnfollowProfileHandler,
 };
 use crate::application::port::{EventPublisher, SocialGraphCache, SocialGraphRepository};
 use crate::application::query::{
     CheckAccessHandler, CheckAccessQuery, GetRelationStatusHandler, GetRelationStatusQuery,
-    ListBlocksHandler, ListBlocksQuery,
+    ListBlocksHandler, ListBlocksQuery, ListFollowRequestsHandler, ListFollowRequestsQuery,
     ListFollowersHandler, ListFollowersQuery, ListFollowingHandler, ListFollowingQuery,
 };
 use crate::domain::value_object::TierThresholds;
@@ -97,6 +99,15 @@ impl App {
                 .register::<RecordProfileAudienceCommand, _>(RecordProfileAudienceHandler::new(
                     Arc::clone(&repo),
                 ))?
+                .register::<ApproveFollowRequestCommand, _>(ApproveFollowRequestHandler::new(
+                    Arc::clone(&repo),
+                    Arc::clone(&cache),
+                    Arc::clone(&publisher),
+                    tier_thresholds,
+                ))?
+                .register::<WithdrawFollowRequestCommand, _>(WithdrawFollowRequestHandler::new(
+                    Arc::clone(&repo),
+                ))?
                 .build(),
         );
 
@@ -109,6 +120,7 @@ impl App {
                 .register::<ListFollowersQuery, _>(ListFollowersHandler::new(Arc::clone(&repo)))?
                 .register::<ListFollowingQuery, _>(ListFollowingHandler::new(Arc::clone(&repo)))?
                 .register::<ListBlocksQuery, _>(ListBlocksHandler::new(Arc::clone(&repo)))?
+                .register::<ListFollowRequestsQuery, _>(ListFollowRequestsHandler::new(Arc::clone(&repo)))?
                 .register::<CheckAccessQuery, _>(CheckAccessHandler::new(Arc::clone(&repo)))?
                 .build(),
         );

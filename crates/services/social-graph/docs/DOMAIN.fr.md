@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: a5a89dda0397525a5b1982954fed2851ab869e675ed6e2451a8b948a3a544974
-  translated_at: 2026-06-28
+  source_sha256: 0091372e49d1d4a9d3fcabedb57be892bace57e04c8969540327d89693dedf69
+  translated_at: 2026-10-04
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -70,6 +70,8 @@ dérivés du nombre de followers.
 
 ```
 (none) --(follow)--> following --(unfollow)--> (none)
+(none) --(suivre un profil privé)--> requested --(le propriétaire approuve)--> following
+                                    requested --(refus / annulation / blocage)--> (none)
 (none) --(block)--> blocked (sectionne les follows existants des deux côtés)
 ```
 
@@ -103,6 +105,7 @@ présentation de profil (il calcule le tier ; `profile` le possède + émet).
 | I2 | Un block sectionne les follows existants des deux directions | domaine | `SGR-1xxx` |
 | I3 | Le tier d'auteur est dérivé du nombre de followers franchissant `TierThresholds` | domaine | — |
 | I4 | Les lectures de relations chaudes sont servies depuis les Redis Sets, reconstructibles depuis Scylla | infrastructure | `SGR-1xxx` |
+| I5 | Suivre un profil privé crée une demande en attente, jamais un follow : aucun accès, absent des listes, tant que le propriétaire n'a pas approuvé (un seul batch journalisé : lignes de demande retirées, lignes de follow ajoutées) ; un blocage supprime les demandes dans les deux sens | domaine + application | `SGR-1005` / `SGR-1006` |
 
 ---
 

@@ -43,6 +43,9 @@ message CommandResponse {
     bool   success   = 1;
     string actor_id  = 2;
     string target_id = 3;
+    // Follow only: the target is private, so a request is pending instead of
+    // a follow (RELATION_STATUS_REQUESTED).
+    bool   requested = 4;
 }
 
 // ── Command request messages ──────────────────────────────────────────────────
@@ -123,4 +126,31 @@ message TargetAccess {
 message CheckAccessResponse {
     // One entry per distinct target.
     repeated TargetAccess targets = 1;
+}
+
+// ── Follow requests (private profiles) ────────────────────────────────────────
+
+message ListFollowRequestsRequest {
+    // The private profile whose pending requests to list (the caller's own).
+    string owner_id   = 1;
+    int32  limit      = 2;
+    string page_token = 3;
+}
+
+message ListFollowRequestsResponse {
+    // Requesters, newest first; `followed_at` is when they asked.
+    repeated EdgeSummary requests        = 1;
+    string               next_page_token = 2;
+}
+
+// The owner of `owner_id` answers `requester_id`'s request.
+message AnswerFollowRequestRequest {
+    string owner_id     = 1;
+    string requester_id = 2;
+}
+
+// The requester withdraws their own pending request.
+message CancelFollowRequestRequest {
+    string actor_id  = 1;
+    string target_id = 2;
 }

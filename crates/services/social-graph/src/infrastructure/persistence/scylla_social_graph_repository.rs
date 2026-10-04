@@ -155,6 +155,32 @@ impl ScyllaSocialGraphRepository {
         row.map(|r| Self::ms_to_dt(r.followed_at.0)).transpose()
     }
 
+    async fn get_request_since(
+        &self,
+        requester_id: &ProfileId,
+        target_id:    &ProfileId,
+    ) -> Result<Option<chrono::DateTime<Utc>>, SocialGraphError> {
+        #[derive(DeserializeRow)]
+        struct Row { requested_at: CqlTimestamp }
+
+        let stmt = self.fast_stmt(
+            "SELECT requested_at FROM social_graph.follow_request_status \
+             WHERE requester_id = ? AND target_id = ?",
+        );
+        let row = self
+            .client
+            .session
+            .execute_unpaged(stmt, (requester_id.as_uuid(), target_id.as_uuid()))
+            .await
+            .map_err(scylla_err)?
+            .into_rows_result()
+            .map_err(|e| row_err("get_request_since:rows", e))?
+            .maybe_first_row::<Row>()
+            .map_err(|e| row_err("get_request_since:deser", e))?;
+
+        row.map(|r| Self::ms_to_dt(r.requested_at.0)).transpose()
+    }
+
     async fn get_block_exists(
         &self,
         blocker_id: &ProfileId,
@@ -194,12 +220,14 @@ impl SocialGraphRepository for ScyllaSocialGraphRepository {
         actor_id:  &ProfileId,
         target_id: &ProfileId,
     ) -> Result<Relation, SocialGraphError> {
-        // Fire four concurrent O(1) ScyllaDB point-lookups.
-        let (r1, r2, r3, r4) = tokio::join!(
+        // Fire six concurrent O(1) ScyllaDB point-lookups.
+        let (r1, r2, r3, r4, r5, r6) = tokio::join!(
             self.get_follow_since(actor_id, target_id),
             self.get_follow_since(target_id, actor_id),
             self.get_block_exists(actor_id, target_id),
             self.get_block_exists(target_id, actor_id),
+            self.get_request_since(actor_id, target_id),
+            self.get_request_since(target_id, actor_id),
         );
 
         Ok(Relation::from_context(
@@ -210,8 +238,140 @@ impl SocialGraphRepository for ScyllaSocialGraphRepository {
                 target_follows_actor_since: r2?,
                 actor_blocks_target:        r3?,
                 target_blocks_actor:        r4?,
+                actor_requested_target_at:  r5?,
+                target_requested_actor_at:  r6?,
             },
         ))
+    }
+
+    // ── follow requests ───────────────────────────────────────────────────────
+
+    async fn persist_follow_request(
+        &self,
+        requester_id: &ProfileId,
+        target_id:    &ProfileId,
+        requested_at: chrono::DateTime<Utc>,
+    ) -> Result<(), SocialGraphError> {
+        let ts = Self::dt_ms(requested_at);
+        let mut batch = self.strict_batch();
+        batch.append_statement(
+            "INSERT INTO social_graph.follow_request_status \
+             (requester_id, target_id, requested_at) VALUES (?, ?, ?)",
+        );
+        batch.append_statement(
+            "INSERT INTO social_graph.follow_requests \
+             (target_id, requested_at, requester_id) VALUES (?, ?, ?)",
+        );
+        let values = (
+            (requester_id.as_uuid(), target_id.as_uuid(), ts),
+            (target_id.as_uuid(), ts, requester_id.as_uuid()),
+        );
+        self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn delete_follow_request(
+        &self,
+        requester_id: &ProfileId,
+        target_id:    &ProfileId,
+        requested_at: chrono::DateTime<Utc>,
+    ) -> Result<(), SocialGraphError> {
+        let ts = Self::dt_ms(requested_at);
+        let mut batch = self.strict_batch();
+        batch.append_statement(
+            "DELETE FROM social_graph.follow_request_status \
+             WHERE requester_id = ? AND target_id = ?",
+        );
+        batch.append_statement(
+            "DELETE FROM social_graph.follow_requests \
+             WHERE target_id = ? AND requested_at = ? AND requester_id = ?",
+        );
+        let values = (
+            (requester_id.as_uuid(), target_id.as_uuid()),
+            (target_id.as_uuid(), ts, requester_id.as_uuid()),
+        );
+        self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn approve_follow_request(
+        &self,
+        requester_id: &ProfileId,
+        target_id:    &ProfileId,
+        requested_at: chrono::DateTime<Utc>,
+        followed_at:  chrono::DateTime<Utc>,
+    ) -> Result<(), SocialGraphError> {
+        let req_ts = Self::dt_ms(requested_at);
+        let ts = Self::dt_ms(followed_at);
+        // One logged batch: the request rows go and the three follow rows
+        // appear together, so a crash can never leave both (or neither).
+        let mut batch = self.strict_batch();
+        batch.append_statement(
+            "DELETE FROM social_graph.follow_request_status \
+             WHERE requester_id = ? AND target_id = ?",
+        );
+        batch.append_statement(
+            "DELETE FROM social_graph.follow_requests \
+             WHERE target_id = ? AND requested_at = ? AND requester_id = ?",
+        );
+        batch.append_statement(
+            "INSERT INTO social_graph.follow_status \
+             (follower_id, followee_id, followed_at) VALUES (?, ?, ?)",
+        );
+        batch.append_statement(
+            "INSERT INTO social_graph.following \
+             (follower_id, followed_at, followee_id) VALUES (?, ?, ?)",
+        );
+        batch.append_statement(
+            "INSERT INTO social_graph.followers \
+             (followee_id, followed_at, follower_id) VALUES (?, ?, ?)",
+        );
+        let values = (
+            (requester_id.as_uuid(), target_id.as_uuid()),
+            (target_id.as_uuid(), req_ts, requester_id.as_uuid()),
+            (requester_id.as_uuid(), target_id.as_uuid(), ts),
+            (requester_id.as_uuid(), ts, target_id.as_uuid()),
+            (target_id.as_uuid(), ts, requester_id.as_uuid()),
+        );
+        self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn list_follow_requests(
+        &self,
+        target_id:  &ProfileId,
+        limit:      i32,
+        page_token: Option<&str>,
+    ) -> Result<(Vec<FollowEdge>, Option<String>), SocialGraphError> {
+        // Same shape and page token as the followers list (`requested_at`
+        // plays `followed_at`).
+        let limit = limit.clamp(1, 100);
+        let token = decode_follow_token(page_token)?;
+        let result = if let Some(ref tok) = token {
+            let stmt = self.fast_stmt(
+                "SELECT requester_id, requested_at FROM social_graph.follow_requests \
+                 WHERE target_id = ? AND requested_at < ? LIMIT ?",
+            );
+            self.client
+                .session
+                .execute_unpaged(stmt, (target_id.as_uuid(), CqlTimestamp(tok.followed_at_ms), limit))
+                .await
+        } else {
+            let stmt = self.fast_stmt(
+                "SELECT requester_id, requested_at FROM social_graph.follow_requests \
+                 WHERE target_id = ? LIMIT ?",
+            );
+            self.client.session.execute_unpaged(stmt, (target_id.as_uuid(), limit)).await
+        };
+        let rows: Vec<FollowRow> = result
+            .map_err(scylla_err)?
+            .into_rows_result()
+            .map_err(|e| row_err("list_follow_requests:rows", e))?
+            .rows::<FollowRow>()
+            .map_err(|e| row_err("list_follow_requests:iter", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| row_err("list_follow_requests:deser", e))?;
+        build_follow_page(rows, limit)
     }
 
     // ── persist_follow ────────────────────────────────────────────────────────

@@ -6,11 +6,12 @@ use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
 use crate::application::command::{
-    BlockProfileCommand, FollowProfileCommand, UnblockProfileCommand, UnfollowProfileCommand,
+    ApproveFollowRequestCommand, BlockProfileCommand, FollowProfileCommand, UnblockProfileCommand,
+    UnfollowProfileCommand, WithdrawFollowRequestCommand,
 };
 use crate::application::query::{
-    CheckAccessQuery, GetRelationStatusQuery, ListBlocksQuery, ListFollowersQuery,
-    ListFollowingQuery,
+    CheckAccessQuery, GetRelationStatusQuery, ListBlocksQuery, ListFollowRequestsQuery,
+    ListFollowersQuery, ListFollowingQuery,
 };
 use crate::domain::access::{ContentAccess, Viewer};
 use crate::application::query::get_relation_status::RelationStatusView;
@@ -54,6 +55,7 @@ where
             success:   true,
             actor_id:  actor_id.to_owned(),
             target_id: target_id.to_owned(),
+            requested: false,
         })
     }
 }
@@ -78,7 +80,95 @@ where
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await
-            .map(|_| Self::ok_response(&req.actor_id, &req.target_id))
+            .map_err(cqrs_to_status)?;
+        // A private target got a request rather than a follow: say which.
+        let view: RelationStatusView = self
+            .query_bus
+            .dispatch(Envelope::new(
+                Uuid::now_v7(),
+                GetRelationStatusQuery { actor_id: req.actor_id.clone(), target_id: req.target_id.clone() },
+            ))
+            .await
+            .map_err(cqrs_to_status)?;
+        let mut response = Self::ok_response(&req.actor_id, &req.target_id);
+        response.get_mut().requested = view.status == RelationStatus::Requested;
+        Ok(response)
+    }
+
+    /// The owner's inbox of a private profile (edge: the caller's own profile).
+    pub async fn list_follow_requests(
+        &self,
+        request: Request<proto::ListFollowRequestsRequest>,
+    ) -> Result<Response<proto::ListFollowRequestsResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().owner_id)?;
+        let req = request.into_inner();
+        let query = ListFollowRequestsQuery {
+            owner_id:   req.owner_id,
+            limit:      req.limit.clamp(1, 100) as u32,
+            page_token: Some(req.page_token).filter(|s| !s.is_empty()),
+        };
+        let (edges, next): (Vec<FollowEdge>, Option<String>) = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListFollowRequestsResponse {
+            requests:        edges.into_iter().map(follow_edge_to_proto).collect(),
+            next_page_token: next.unwrap_or_default(),
+        }))
+    }
+
+    /// The owner approves (edge: `owner_id` is one of the caller's profiles).
+    pub async fn approve_follow_request(
+        &self,
+        request: Request<proto::AnswerFollowRequestRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().owner_id)?;
+        let req = request.into_inner();
+        let cmd = ApproveFollowRequestCommand {
+            owner_id:     req.owner_id.clone(),
+            requester_id: req.requester_id.clone(),
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_response(&req.requester_id, &req.owner_id))
+            .map_err(cqrs_to_status)
+    }
+
+    /// The owner declines (edge: `owner_id` is one of the caller's profiles).
+    pub async fn decline_follow_request(
+        &self,
+        request: Request<proto::AnswerFollowRequestRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().owner_id)?;
+        let req = request.into_inner();
+        self.withdraw(req.requester_id, req.owner_id).await
+    }
+
+    /// The requester cancels (edge: `actor_id` is one of the caller's profiles).
+    pub async fn cancel_follow_request(
+        &self,
+        request: Request<proto::CancelFollowRequestRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().actor_id)?;
+        let req = request.into_inner();
+        self.withdraw(req.actor_id, req.target_id).await
+    }
+
+    async fn withdraw(
+        &self,
+        requester_id: String,
+        target_id: String,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        let cmd = WithdrawFollowRequestCommand {
+            requester_id: requester_id.clone(),
+            target_id:    target_id.clone(),
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_response(&requester_id, &target_id))
             .map_err(cqrs_to_status)
     }
 
@@ -303,6 +393,7 @@ fn relation_status_to_i32(s: RelationStatus) -> i32 {
         RelationStatus::MutualFollow => 4,
         RelationStatus::Blocking    => 5,
         RelationStatus::BlockedBy   => 6,
+        RelationStatus::Requested   => 7,
     }
 }
 
