@@ -52,6 +52,9 @@ message PostView {
     // the centre of its city cell (city level) or absent (ghost mode) for anyone else.
     optional GeoPoint       location            = 14;
     ModerationRestriction   moderation          = 15;
+    // The post's own reuse permission (#669); unset = the author's default.
+    optional bool           allow_remix         = 16;
+    optional bool           allow_sound_reuse   = 17;
 }
 
 message PostSummary {
@@ -76,6 +79,10 @@ message CreatePostRequest {
     string     root_id                       = 6;
     optional AudioReference audio_ref        = 7;
     optional GeoPoint       location         = 8;
+    // This post's own remix / original-sound reuse permission (#669); absent
+    // follows the author's profile default.
+    optional bool           allow_remix       = 9;
+    optional bool           allow_sound_reuse = 10;
 }
 
 message CreatePostResponse {

@@ -23,11 +23,18 @@ async fn interaction_settings_round_trip_and_are_announced() {
         messages: InteractionAudience::NoOne,
         allow_downloads: false,
         show_like_counts: false,
+        allow_remix: false,
+        allow_sound_reuse: true,
     };
     h.command_bus
         .dispatch(Envelope::new(
             Uuid::now_v7(),
-            SetInteractionSettingsCommand { profile_id: profile.id.clone(), settings: quiet },
+            SetInteractionSettingsCommand {
+                profile_id: profile.id.clone(),
+                settings: quiet,
+                allow_remix: Some(quiet.allow_remix),
+                allow_sound_reuse: Some(quiet.allow_sound_reuse),
+            },
         ))
         .await
         .expect("set");

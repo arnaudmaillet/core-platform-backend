@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 865b47fd6a6923fff7927165dd9448fe03becc2fee6e6c8f21f13021e76b9271
+  source_sha256: 8d375540251665e1517c5646fd03bc3933d7b17e82fe465c7fe654fe7efd2faf
   translated_at: 2026-10-05
   status: complete
 ---
@@ -127,6 +127,15 @@ service PostService {
 message GeoPoint { double lat = 1; double lng = 2; }  // WGS-84 ; absent → post non géo-indexé
 ```
 
+**Permissions de réutilisation (#669).** Un post peut fixer ses propres `allow_remix` /
+`allow_sound_reuse` ; sinon il suit le réglage par défaut du profil de son auteur (projeté depuis
+`ProfileInteractionSettingsChanged` dans `post.author_reuse_settings` ; désactivé par défaut pour les
+ados). Un son original appartient au post qui l'a créé (`post.audio_origins`, premier écrit gagnant).
+`CreatePost` avec le son de quelqu'un d'autre — quel que soit le nom que lui donne la requête — est refusé
+(`PST-1008`, 403) sauf si ce post, ou à défaut son auteur, autorise la réutilisation ; ses propres sons et les
+sons inconnus (pistes de bibliothèque) sont libres. Le remix n'a pas encore de surface serveur : le drapeau
+est stocké pour le client.
+
 **Récemment supprimés (#663).** Une suppression est une pierre tombale : le post est indexé dans
 `post.deleted_by_profile` (lignes expirées au bout de 30 jours) et `ListRecentlyDeleted` montre à l'auteur ses
 posts restaurables. `RestorePost` en ramène un dans les 30 jours tel qu'il était — publié (réannoncé sur
@@ -173,6 +182,7 @@ magasin fait échouer la lecture plutôt que de montrer le point.
 | PST-1005 | `AuthorMismatch` | 403 |
 | PST-1006 | `PostNotDeleted` (restauration d'un post non supprimé) | 409 |
 | PST-1007 | `RestoreWindowExpired` (supprimé il y a plus de 30 jours) | 410 |
+| PST-1008 | `SoundReuseNotAllowed` (le créateur du son n'autorise pas sa réutilisation) | 403 |
 | PST-2001..2003 | carousel cardinality / video length | 422 |
 | PST-3001..3004 | thumbnail / MIME / CDN URL / dimensions | 422 |
 | PST-9001/9002 | invalid post/profile ID | 422 |

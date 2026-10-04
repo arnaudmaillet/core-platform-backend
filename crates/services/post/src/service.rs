@@ -20,7 +20,7 @@ use transport::kafka::consumer::{KafkaConsumerBuilder, KafkaConsumerHandle};
 use transport::kafka::producer::{KafkaProducerBuilder, KafkaProducerHandle};
 
 use crate::app::{App, Backends};
-use crate::application::port::{AudienceGate, AuthorLocationStore, AuthorTierStore, AuthorWindowStore};
+use crate::application::port::{AudienceGate, AuthorLocationStore, AuthorTierStore, AuthorWindowStore, ReuseRegistry};
 use crate::infrastructure::client::GrpcAudienceGate;
 use tonic::transport::Channel;
 use crate::infrastructure::consumer::{
@@ -103,7 +103,11 @@ impl Service for PostService {
         spawn_author_tier_consumer(Arc::clone(&app.author_tier_store));
         // Inbound integration: authors' ghost mode / location precision → the
         // location GetPost shows anyone but the author.
-        spawn_author_location_consumer(Arc::clone(&app.author_location_store), Arc::clone(&app.author_window_store));
+        spawn_author_location_consumer(
+            Arc::clone(&app.author_location_store),
+            Arc::clone(&app.author_window_store),
+            Arc::clone(&app.reuse_registry),
+        );
         // Inbound integration: moderation outcomes (takedowns, reversals) → the
         // restriction post's reads apply.
         spawn_moderation_consumer(Arc::clone(&app.command_bus));
@@ -159,7 +163,11 @@ fn build_author_tier_consumer() -> anyhow::Result<(KafkaConsumerHandle, KafkaPro
 /// `post.author_location_settings`). A new group starts from the earliest
 /// offset: settings made before it first ran (teen profiles are created
 /// ghosted) must not be skipped.
-fn spawn_author_location_consumer(store: Arc<dyn AuthorLocationStore>, windows: Arc<dyn AuthorWindowStore>) {
+fn spawn_author_location_consumer(
+    store: Arc<dyn AuthorLocationStore>,
+    windows: Arc<dyn AuthorWindowStore>,
+    reuse: Arc<dyn ReuseRegistry>,
+) {
     tokio::spawn(async move {
         loop {
             let built = build_consumer(
@@ -170,7 +178,14 @@ fn spawn_author_location_consumer(store: Arc<dyn AuthorLocationStore>, windows: 
             );
             match built {
                 Ok((consumer, producer)) => {
-                    run_author_location_consumer(consumer, Arc::clone(&store), Arc::clone(&windows), producer).await;
+                    run_author_location_consumer(
+                        consumer,
+                        Arc::clone(&store),
+                        Arc::clone(&windows),
+                        Arc::clone(&reuse),
+                        producer,
+                    )
+                    .await;
                     tracing::warn!("author-location consumer exited; respawning after backoff");
                 }
                 Err(error) => {

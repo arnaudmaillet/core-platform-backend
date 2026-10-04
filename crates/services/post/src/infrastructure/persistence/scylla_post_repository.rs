@@ -9,7 +9,7 @@ use scylla::value::CqlTimestamp;
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
 
 use crate::application::port::{PostRepository, PostSummary};
-use crate::domain::aggregate::Post;
+use crate::domain::aggregate::{Post, ReuseOverrides};
 use crate::domain::entity::MediaAttachment;
 use crate::domain::value_object::{
     AudioId, AudioKind, AudioReference, Caption, GeoPoint, ModerationRestriction, ModerationState,
@@ -173,7 +173,7 @@ fn row_to_post(row: PostRow) -> Result<Post, PostError> {
         published_at,
         deleted_at,
         moderation,
-    ))
+    ).with_reuse(ReuseOverrides { allow_remix: row.allow_remix, allow_sound_reuse: row.allow_sound_reuse }))
 }
 
 fn profile_row_to_summary(row: PostProfileRow) -> Result<PostSummary, PostError> {
@@ -241,6 +241,19 @@ impl PostRepository for ScyllaPostRepository {
             )
             .await
             .map_err(scylla_err)?;
+
+        // The post's own reuse permissions (#669), only when it sets any.
+        let reuse = post.reuse();
+        if reuse.allow_remix.is_some() || reuse.allow_sound_reuse.is_some() {
+            let stmt_reuse = self.strict_stmt(
+                "UPDATE post.posts SET allow_remix = ?, allow_sound_reuse = ? WHERE post_id = ?",
+            );
+            self.client
+                .session
+                .execute_unpaged(stmt_reuse, (reuse.allow_remix, reuse.allow_sound_reuse, post.id().as_uuid()))
+                .await
+                .map_err(scylla_err)?;
+        }
 
         let stmt_index = self.strict_stmt(
             "INSERT INTO post.posts_by_profile \
@@ -379,7 +392,8 @@ impl PostRepository for ScyllaPostRepository {
         let stmt = self.fast_stmt(
             "SELECT post_id, profile_id, kind, status, caption, attachments, \
              parent_id, root_id, created_at, updated_at, published_at, deleted_at, \
-             audio_id, audio_kind, lat, lng, moderation_restriction, moderation_version \
+             audio_id, audio_kind, lat, lng, moderation_restriction, moderation_version, \
+             allow_remix, allow_sound_reuse \
              FROM post.posts WHERE post_id = ?",
         );
         let result = self

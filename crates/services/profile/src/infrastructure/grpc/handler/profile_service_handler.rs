@@ -205,7 +205,11 @@ where
                 messages: audience_from_proto(s.messages)?,
                 allow_downloads: s.allow_downloads,
                 show_like_counts: s.show_like_counts,
+                // Overwritten by the command from the two options below.
+                ..InteractionSettings::default()
             },
+            allow_remix: s.allow_remix,
+            allow_sound_reuse: s.allow_sound_reuse,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -739,6 +743,8 @@ fn interaction_to_proto(s: InteractionSettings) -> proto::InteractionSettings {
         messages: audience_to_proto(s.messages),
         allow_downloads: s.allow_downloads,
         show_like_counts: s.show_like_counts,
+        allow_remix: Some(s.allow_remix),
+        allow_sound_reuse: Some(s.allow_sound_reuse),
     }
 }
 

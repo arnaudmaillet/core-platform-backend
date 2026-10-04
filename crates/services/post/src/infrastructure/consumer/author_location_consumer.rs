@@ -7,7 +7,7 @@ use error::AppError;
 use transport::kafka::consumer::{run_consumer, KafkaConsumerHandle, ProcessOutcome, RetryPolicy};
 use transport::kafka::producer::KafkaProducerHandle;
 
-use crate::application::port::{AuthorLocationStore, AuthorWindowStore};
+use crate::application::port::{AuthorLocationStore, AuthorWindowStore, ReuseDefaults, ReuseRegistry};
 use crate::domain::value_object::{LocationSharing, ProfileId};
 
 /// Lenient read DTO for `profile.v1.events` (the internally-tagged
@@ -28,6 +28,11 @@ struct ProfileV1Event {
     /// `all` | `six_months` | `one_month` | `three_days`.
     #[serde(default)]
     post_window: Option<String>,
+    /// Remix / sound reuse defaults (#669); absent on older events ⇒ allowed.
+    #[serde(default)]
+    allow_remix: Option<bool>,
+    #[serde(default)]
+    allow_sound_reuse: Option<bool>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -36,6 +41,8 @@ enum Outcome {
     Record(ProfileId, LocationSharing),
     /// The author's post window in days (`None`: every post).
     Window(ProfileId, Option<u32>),
+    /// The author's remix / sound reuse defaults.
+    Reuse(ProfileId, ReuseDefaults),
     Poison(String),
 }
 
@@ -43,12 +50,19 @@ fn outcome(event: &ProfileV1Event) -> Outcome {
     let tab = match event.event_type.as_str() {
         "ProfileLocationSettingsChanged" => false,
         "ProfileTabSettingsChanged" => true,
+        "ProfileInteractionSettingsChanged" => false,
         _ => return Outcome::Skip,
     };
     let profile_id = match ProfileId::try_from(event.profile_id.as_str()) {
         Ok(id) => id,
         Err(e) => return Outcome::Poison(e.to_string()),
     };
+    if event.event_type == "ProfileInteractionSettingsChanged" {
+        return Outcome::Reuse(profile_id, ReuseDefaults {
+            allow_remix:       event.allow_remix.unwrap_or(true),
+            allow_sound_reuse: event.allow_sound_reuse.unwrap_or(true),
+        });
+    }
     if tab {
         return match event.post_window.as_deref() {
             Some("all") => Outcome::Window(profile_id, None),
@@ -81,14 +95,15 @@ pub async fn run_author_location_consumer(
     consumer: KafkaConsumerHandle,
     store: Arc<dyn AuthorLocationStore>,
     windows: Arc<dyn AuthorWindowStore>,
+    reuse: Arc<dyn ReuseRegistry>,
     producer: KafkaProducerHandle,
 ) {
     info!("post author-location consumer started");
 
     let policy = RetryPolicy::default();
     let result = run_consumer::<ProfileV1Event, _>(&consumer, &producer, &policy, move |event| {
-        let (store, windows) = (Arc::clone(&store), Arc::clone(&windows));
-        Box::pin(async move { process_event(store.as_ref(), windows.as_ref(), event).await })
+        let (store, windows, reuse) = (Arc::clone(&store), Arc::clone(&windows), Arc::clone(&reuse));
+        Box::pin(async move { process_event(store.as_ref(), windows.as_ref(), reuse.as_ref(), event).await })
     })
     .await;
 
@@ -100,6 +115,7 @@ pub async fn run_author_location_consumer(
 async fn process_event(
     store: &dyn AuthorLocationStore,
     windows: &dyn AuthorWindowStore,
+    reuse: &dyn ReuseRegistry,
     event: &ProfileV1Event,
 ) -> ProcessOutcome {
     let written = match outcome(event) {
@@ -107,6 +123,7 @@ async fn process_event(
         Outcome::Poison(reason) => return ProcessOutcome::Reject(reason),
         Outcome::Record(profile_id, sharing) => store.set(&profile_id, sharing).await,
         Outcome::Window(profile_id, days) => windows.set(&profile_id, days).await,
+        Outcome::Reuse(profile_id, defaults) => reuse.set_defaults(&profile_id, defaults).await,
     };
     match written {
         Ok(())                     => ProcessOutcome::Done,
@@ -161,6 +178,29 @@ mod tests {
             occurred_at_ms: 1,
         });
         assert_eq!(outcome(&event), Outcome::Window(ProfileId::try_from(id.as_str()).unwrap(), Some(30)));
+    }
+
+    #[test]
+    fn reuse_defaults_are_read_from_profiles_own_wire() {
+        let id = Uuid::now_v7().to_string();
+        let event = wire(ProfileEventWire::ProfileInteractionSettingsChanged {
+            profile_id: id.clone(),
+            comments: "everyone".into(),
+            mentions: "everyone".into(),
+            messages: "everyone".into(),
+            allow_downloads: true,
+            show_like_counts: true,
+            allow_remix: true,
+            allow_sound_reuse: false,
+            occurred_at_ms: 1,
+        });
+        assert_eq!(
+            outcome(&event),
+            Outcome::Reuse(
+                ProfileId::try_from(id.as_str()).unwrap(),
+                ReuseDefaults { allow_remix: true, allow_sound_reuse: false },
+            ),
+        );
     }
 
     #[test]

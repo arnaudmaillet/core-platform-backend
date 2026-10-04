@@ -143,6 +143,8 @@ mod tests {
             messages: "no_one".into(),
             allow_downloads: false,
             show_like_counts: true,
+            allow_remix: true,
+            allow_sound_reuse: true,
             occurred_at_ms: 1,
         };
         assert_eq!(

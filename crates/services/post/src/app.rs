@@ -25,6 +25,7 @@ use crate::application::query::list_recently_deleted::{ListRecentlyDeletedHandle
 use crate::application::command::update_post::{UpdatePostCommand, UpdatePostHandler};
 use crate::application::port::{
     AudienceGate, AuthorLocationStore, AuthorTierStore, AuthorWindowStore, EventPublisher, RecentlyDeleted,
+    ReuseRegistry,
 };
 use crate::application::query::get_post::{GetPostHandler, GetPostQuery};
 use crate::application::query::list_posts_by_profile::{
@@ -32,7 +33,7 @@ use crate::application::query::list_posts_by_profile::{
 };
 use crate::infrastructure::persistence::{
     ScyllaAuthorLocationStore, ScyllaAuthorTierStore, ScyllaAuthorWindowStore, ScyllaPostRepository,
-    ScyllaRecentlyDeleted,
+    ScyllaRecentlyDeleted, ScyllaReuseRegistry,
 };
 
 /// Storage endpoints the graph is wired against. Post has no Redis and emits its
@@ -59,6 +60,9 @@ pub struct App {
     pub author_location_store: Arc<dyn AuthorLocationStore>,
     /// The authors' post window, exposed likewise for the same consumer.
     pub author_window_store: Arc<dyn AuthorWindowStore>,
+    /// The authors' reuse defaults and sound origins (#669), exposed for the
+    /// author-settings consumer.
+    pub reuse_registry: Arc<dyn ReuseRegistry>,
 }
 
 impl App {
@@ -75,6 +79,8 @@ impl App {
             Arc::new(ScyllaAuthorTierStore::new(Arc::clone(&scylla_client)));
         let author_location_store: Arc<dyn AuthorLocationStore> =
             Arc::new(ScyllaAuthorLocationStore::new(Arc::clone(&scylla_client)));
+        let reuse_registry: Arc<dyn ReuseRegistry> =
+            Arc::new(ScyllaReuseRegistry::new(Arc::clone(&scylla_client)));
         let recently_deleted: Arc<dyn RecentlyDeleted> =
             Arc::new(ScyllaRecentlyDeleted::new(Arc::clone(&scylla_client)));
         let author_window_store: Arc<dyn AuthorWindowStore> =
@@ -85,6 +91,7 @@ impl App {
                 .register::<CreatePostCommand, _>(CreatePostHandler {
                     repository: Arc::clone(&repository),
                     publisher:  Arc::clone(&publisher),
+                    reuse:      Arc::clone(&reuse_registry),
                 })?
                 .register::<PublishPostCommand, _>(PublishPostHandler {
                     repository:        Arc::clone(&repository),
@@ -139,6 +146,7 @@ impl App {
             author_tier_store,
             author_location_store,
             author_window_store,
+            reuse_registry,
         })
     }
 }

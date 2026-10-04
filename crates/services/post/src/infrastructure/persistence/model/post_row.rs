@@ -32,4 +32,7 @@ pub struct PostRow {
     /// NULL until moderation first acts on the post (migration 0007).
     pub moderation_restriction: Option<i8>,
     pub moderation_version:     Option<i64>,
+    /// NULL ⇒ the author's default (migration 0011).
+    pub allow_remix:            Option<bool>,
+    pub allow_sound_reuse:      Option<bool>,
 }

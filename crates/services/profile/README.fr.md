@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 7d17ac8be12f37f55bad1ab2eefef6335498d6002b523835da5e27d5803d0e89
+  source_sha256: a01a83d8fc033f7f02e24a869b2e1fa06f22c20d2cede5e541bd1a7392209a8f
   translated_at: 2026-10-05
   status: complete
 ---
@@ -128,7 +128,7 @@ service ProfileService {
   rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);
   rpc UpdateBanner(UpdateBannerRequest) returns (CommandResponse);
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
-  rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // qui peut commenter / mentionner / écrire, téléchargements, compteurs de likes ; les ados démarrent abonnés uniquement
+  rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // qui peut commenter / mentionner / écrire, téléchargements, compteurs de likes, remix et réutilisation du son original (#669 ; absent d'une requête ⇒ inchangé) ; les ados démarrent abonnés uniquement, sans téléchargement / remix / réutilisation du son
   rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse); // mode fantôme + précis / niveau ville (réservé au propriétaire sur la vue) ; les ados démarrent fantômes ; geo-discovery l'applique
   rpc SetFeedSettings(SetFeedSettingsRequest) returns (CommandResponse); // #662 contenu sensible moins (par défaut) / standard, synchronisé entre appareils ; le client l'envoie comme content_level de timeline ; réservé au propriétaire sur la vue
   rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse); // #664 fenêtre de posts (tout / 6 mois / 1 mois / 3 jours ; post masque les posts plus anciens aux visiteurs) + visibilité des onglets j'aime / enregistrés / republications / lieux (stockée ; aucun onglet servi pour l'instant) ; partiel ; réservé au propriétaire sur la vue

@@ -12,6 +12,14 @@ use crate::{
 };
 
 const MAX_CAROUSEL_ITEMS: usize = 10;
+
+/// A post's own remix / original-sound reuse permissions (#669); `None`
+/// follows the author's default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ReuseOverrides {
+    pub allow_remix:       Option<bool>,
+    pub allow_sound_reuse: Option<bool>,
+}
 /// How long a deleted post stays in "Recently deleted" and can be restored.
 pub const RESTORE_WINDOW: chrono::Duration = chrono::Duration::days(30);
 const MAX_CAROUSEL_VIDEO_SECS: f32 = 15.0;
@@ -33,6 +41,9 @@ pub struct Post {
     deleted_at:     Option<DateTime<Utc>>,
     /// What moderation imposes on the post (from `moderation.v1.events`).
     moderation:     ModerationState,
+    /// The post's own remix / original-sound reuse permission (#669); `None`
+    /// follows its author's default.
+    reuse:          ReuseOverrides,
     pending_events: Vec<DomainEvent>,
 }
 
@@ -69,6 +80,7 @@ impl Post {
             published_at: None,
             deleted_at: None,
             moderation: ModerationState::default(),
+            reuse: ReuseOverrides::default(),
             pending_events: Vec::new(),
         })
     }
@@ -107,6 +119,7 @@ impl Post {
             published_at,
             deleted_at,
             moderation,
+            reuse: ReuseOverrides::default(),
             pending_events: Vec::new(),
         }
     }
@@ -260,6 +273,14 @@ impl Post {
     pub fn root_id(&self)      -> Option<&PostId>    { self.root_id.as_ref() }
     pub fn audio_ref(&self)    -> Option<&AudioReference> { self.audio_ref.as_ref() }
     pub fn location(&self)     -> Option<GeoPoint>   { self.location }
+    pub fn reuse(&self)        -> ReuseOverrides     { self.reuse }
+
+    /// Sets the post's own remix / sound-reuse permissions (at creation, or
+    /// restored from storage).
+    pub fn with_reuse(mut self, reuse: ReuseOverrides) -> Self {
+        self.reuse = reuse;
+        self
+    }
 
     /// Replaces the location with what a given reader may see of it (read
     /// path only — a post read this way is never saved).
