@@ -48,6 +48,8 @@ integration-chat = []
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Wire contract test of the presence-settings worker against profile's own type.
+profile = { workspace = true }
 
 # ── Integration suite (feature = "integration-chat") ─────────────────────────
 # These are compiled for any `cargo test -p chat`, but the test code that uses

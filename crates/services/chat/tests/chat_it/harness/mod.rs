@@ -29,7 +29,7 @@ use scylla_storage::ScyllaConfig;
 use transport::kafka::config::client::KafkaClientConfig;
 
 use chat::app::{App, AppConfig, Backends};
-use chat::application::port::{HotTailCache, PresenceStore, RoutingRegistry};
+use chat::application::port::{HotTailCache, PresenceSettingsStore, PresenceStore, RoutingRegistry};
 use chat::infrastructure::grpc::handler::ChatServiceHandler;
 use chat::infrastructure::streaming::ConversationBroadcastRegistry;
 
@@ -99,6 +99,7 @@ impl Default for HarnessOptions {
 pub struct TestHarness {
     pub handler:           ChatServiceHandler<InMemoryCommandBus, InMemoryQueryBus>,
     pub presence:          Arc<dyn PresenceStore>,
+    pub presence_settings: Arc<dyn PresenceSettingsStore>,
     pub routing:           Arc<dyn RoutingRegistry>,
     pub hot_tail:          Arc<dyn HotTailCache>,
     pub member_registry:   Arc<ConversationBroadcastRegistry>,
@@ -157,11 +158,13 @@ impl TestHarness {
             audience_ttl_secs:           opts.audience_ttl_secs,
             // UUID-suffixed so parallel scenarios never share a consumer group.
             visibility_consumer_group:   format!("chat-it-visibility-{}", Uuid::now_v7()),
+            presence_settings_consumer_group: format!("chat-it-presence-{}", Uuid::now_v7()),
         };
 
         let App {
             handler,
             presence,
+            presence_settings,
             routing,
             hot_tail,
             member_registry,
@@ -175,6 +178,7 @@ impl TestHarness {
         Self {
             handler,
             presence,
+            presence_settings,
             routing,
             hot_tail,
             member_registry,

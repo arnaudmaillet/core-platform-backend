@@ -1,5 +1,7 @@
+pub mod presence_settings_worker;
 pub mod visibility_worker;
 
+pub use presence_settings_worker::PresenceSettingsWorker;
 pub use visibility_worker::VisibilityWorker;
 
 use transport::kafka::config::client::KafkaClientConfig;

@@ -807,6 +807,7 @@ dependencies = [
  "futures",
  "http",
  "infra-config",
+ "profile",
  "rdkafka",
  "redis-storage",
  "scylla",

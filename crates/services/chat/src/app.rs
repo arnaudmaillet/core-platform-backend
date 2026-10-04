@@ -29,8 +29,8 @@ use crate::application::command::{
     UnsubscribeHandler,
 };
 use crate::application::port::{
-    ConversationRepository, EventPublisher, HotTailCache, MemberRepository, PresenceStore,
-    ReceiptStore, RoutingRegistry,
+    ConversationRepository, EventPublisher, HotTailCache, MemberRepository, PresenceSettingsStore,
+    PresenceStore, ReceiptStore, RoutingRegistry,
 };
 use crate::application::query::{
     GetHistoryHandler, GetHistoryQuery, ListMembersHandler, ListMembersQuery,
@@ -44,13 +44,13 @@ use crate::infrastructure::grpc::handler::chat_handler::StreamingParams;
 use crate::infrastructure::grpc::handler::ChatServiceHandler;
 use crate::infrastructure::persistence::{
     ScyllaConversationRepository, ScyllaMemberRepository, ScyllaMessageRepository,
-    ScyllaSubscriptionRepository,
+    ScyllaPresenceSettingsStore, ScyllaSubscriptionRepository,
 };
 use crate::infrastructure::routing::{
     Fanout, MessageFanout, PlaneAttach, PlaneSubscriber, RedisPlaneBroadcaster,
 };
 use crate::infrastructure::streaming::{ConversationBroadcastRegistry, PlaneFanoutSink};
-use crate::infrastructure::worker::VisibilityWorker;
+use crate::infrastructure::worker::{PresenceSettingsWorker, VisibilityWorker};
 
 /// Storage/transport endpoints the graph is wired against.
 ///
@@ -81,6 +81,9 @@ pub struct AppConfig {
     /// Kafka consumer-group id for the per-pod [`VisibilityWorker`]. Production
     /// uses a stable id; scenarios suffix a UUID for isolation.
     pub visibility_consumer_group:  String,
+    /// Kafka consumer-group id for the [`PresenceSettingsWorker`] (stable in
+    /// production; scenarios suffix a UUID).
+    pub presence_settings_consumer_group: String,
 }
 
 /// A fully-wired chat service bound to its backends, plus the shared `Arc`
@@ -93,6 +96,8 @@ pub struct App {
     pub scylla:            Arc<ScyllaClient>,
     pub redis:             RedisClient,
     pub presence:          Arc<dyn PresenceStore>,
+    /// The members' presence settings (projected from `profile.v1.events`).
+    pub presence_settings: Arc<dyn PresenceSettingsStore>,
     pub routing:           Arc<dyn RoutingRegistry>,
     pub hot_tail:          Arc<dyn HotTailCache>,
     pub member_registry:   Arc<ConversationBroadcastRegistry>,
@@ -132,6 +137,8 @@ impl App {
         let presence = Arc::new(RedisPresenceStore::new(redis_client.clone()));
         let receipt = Arc::new(RedisReceiptStore::new(redis_client.clone()));
         let routing = Arc::new(RedisRoutingRegistry::new(redis_client.clone()));
+        let presence_settings: Arc<dyn PresenceSettingsStore> =
+            Arc::new(ScyllaPresenceSettingsStore::new(Arc::clone(&scylla_client)));
         let broadcaster = Arc::new(RedisPlaneBroadcaster::new(redis_client.clone()));
 
         // ── In-process fan-out registries + per-pod subscriber ───────────────
@@ -201,6 +208,14 @@ impl App {
                 config.visibility_consumer_group.clone(),
             );
             tokio::spawn(worker.run());
+            tokio::spawn(
+                PresenceSettingsWorker::new(
+                    cfg.clone(),
+                    Arc::clone(&presence_settings),
+                    config.presence_settings_consumer_group.clone(),
+                )
+                .run(),
+            );
         }
 
         // ── Registry reapers ─────────────────────────────────────────────────
@@ -226,6 +241,7 @@ impl App {
             Arc::clone(&routing) as Arc<dyn RoutingRegistry>,
             Arc::clone(&conversation_repo) as Arc<dyn ConversationRepository>,
             Arc::clone(&member_repo) as Arc<dyn MemberRepository>,
+            Arc::clone(&presence_settings),
             params,
         );
 
@@ -234,6 +250,7 @@ impl App {
             scylla: scylla_client,
             redis: redis_client,
             presence: presence as Arc<dyn PresenceStore>,
+            presence_settings,
             routing: routing as Arc<dyn RoutingRegistry>,
             hot_tail: hot_tail as Arc<dyn HotTailCache>,
             member_registry,

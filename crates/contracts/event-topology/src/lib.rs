@@ -116,6 +116,8 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("social-graph.author_tier_changed", "profile"),
     // chat visibility teardown (self-consume)
     ("chat.conversation.unpublished", "chat"),
+    // profile presence settings (activity status, read receipts) → chat
+    ("profile.v1.events", "chat"),
     // counter popularity → realtime broadcast + geo virality re-score +
     // timeline discovery hot score
     ("counter.v1.popularity", "realtime"),

@@ -166,7 +166,15 @@ service ChatService {
 
 **Boundary invariants:** `StreamConversation` requires roster membership (`PERMISSION_DENIED`
 otherwise); `StreamPublic` requires `visibility == Public` (`FAILED_PRECONDITION` otherwise); the
-audience stream is structurally incapable of carrying presence/typing/receipts.
+audience stream is structurally incapable of carrying presence/typing/receipts. `Heartbeat` and
+`SendTyping` also require roster membership (a non-member cannot inject Member-Plane signals).
+
+**Presence settings (#661).** A member who turned **activity status** off (profile discovery settings)
+announces no presence: no online/offline event, no heartbeat. One who turned **read receipts** off
+broadcasts no `ReceiptEvent`, and `ListMembers` withholds its `last_read` from the other members (it still
+sees its own; its unread state is unchanged). The settings are projected from `profile.v1.events`
+(`ProfileDiscoverySettingsChanged`, group `chat-presence-settings`, from the earliest offset) into
+`chat.presence_settings`; when they cannot be read, presence and receipts are withheld (fail closed).
 
 ### Rust ports (hexagonal contract)
 
