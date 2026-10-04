@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: 41b31b4820853c1d04e1a20c835747a012d5dcffb0d58c423f01dd98d521b6ca
+  source_sha256: a995904f257de7fc9840b0a5d907240516ee59a6efacfd7b6ebac97f4e97aa46
   translated_at: 2026-10-04
   status: complete
 ---
@@ -54,7 +54,7 @@ réelle ; tous les autres détiennent des références dérivées, non faisant-a
 | Credential metadata | Hash de mot de passe, enrôlement MFA, codes de récupération — *métadonnées*, pas le flux d'auth | `PasswordHash`, `MfaState`, `RecoveryCodeHash` |
 | KYC status | L'état de vérification know-your-customer | `KycStatus`, `KycStatusChanged` |
 | Role | Le rôle d'autorisation assigné au compte | `AccountRole`, `RoleAssigned`/`RoleRevoked` |
-| GDPR record | L'état de traitement licite des données (demandes export/suppression) | `GdprRecord`, `GdprDeletionRequested`, `GdprDataExportRequested` |
+| GDPR record | L'état de traitement licite des données (consentements, demandes export/suppression) | `GdprRecord`, `ConsentPurpose`, `ConsentsUpdated`, `GdprDeletionRequested`, `GdprDataExportRequested` |
 | Encrypted bytes | Les champs PII chiffrés au repos | `EncryptedBytes` |
 
 ---

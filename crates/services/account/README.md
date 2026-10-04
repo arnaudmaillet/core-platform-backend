@@ -127,7 +127,8 @@ service AccountService {
   rpc GetAccountById (GetAccountByIdRequest) returns (AccountView);
   rpc GetAccountByIdentityId (GetAccountByIdentityIdRequest) returns (AccountView);
   rpc GetAccountStatus (GetAccountStatusRequest) returns (AccountStatusView); // auth hot path
-  rpc GetGdprRecord (GetGdprRecordRequest) returns (GdprRecordView);          // restricted
+  rpc GetGdprRecord (GetGdprRecordRequest) returns (GdprRecordView);          // the holder's own on the edge
+  rpc UpdateConsents (UpdateConsentsRequest) returns (GdprRecordView);         // GDPR Art. 7 consents + history
   rpc ListAccountsByStatus (ListAccountsByStatusRequest) returns (ListAccountsByStatusResponse);
 }
 ```
@@ -171,7 +172,7 @@ Stable codes are `ACC-1xxx` (lifecycle) … `ACC-9xxx` (identifiers), via the sh
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested` | `account_id` | `profile` (suspend/deactivate/delete → mask; activate → restore) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `ConsentsUpdated` | `account_id` | `profile` (suspend/deactivate/delete → mask; activate → restore) |
 
 **Consumes:** none — `account` is a pure event producer.
 

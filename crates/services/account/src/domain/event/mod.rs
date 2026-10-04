@@ -5,6 +5,7 @@ pub mod account_deleted;
 pub mod account_suspended;
 pub mod email_changed;
 pub mod email_verified;
+pub mod consents_updated;
 pub mod gdpr_data_export_requested;
 pub mod gdpr_deletion_requested;
 pub mod kyc_status_changed;
@@ -22,6 +23,7 @@ pub use account_deleted::AccountDeleted;
 pub use account_suspended::AccountSuspended;
 pub use email_changed::EmailChanged;
 pub use email_verified::EmailVerified;
+pub use consents_updated::{ConsentChange, ConsentsUpdated};
 pub use gdpr_data_export_requested::GdprDataExportRequested;
 pub use gdpr_deletion_requested::GdprDeletionRequested;
 pub use kyc_status_changed::KycStatusChanged;
@@ -57,6 +59,7 @@ pub enum DomainEvent {
     KycStatusChanged(KycStatusChanged),
     GdprDeletionRequested(GdprDeletionRequested),
     GdprDataExportRequested(GdprDataExportRequested),
+    ConsentsUpdated(ConsentsUpdated),
 }
 
 impl DomainEvent {
@@ -78,6 +81,7 @@ impl DomainEvent {
             Self::KycStatusChanged(_)        => "account.kyc_status_changed",
             Self::GdprDeletionRequested(_)   => "account.gdpr_deletion_requested",
             Self::GdprDataExportRequested(_) => "account.gdpr_data_export_requested",
+            Self::ConsentsUpdated(_)         => "account.consents_updated",
         }
     }
 }

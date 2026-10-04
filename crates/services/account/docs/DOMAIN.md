@@ -43,7 +43,7 @@ references.
 | Credential metadata | Password hash, MFA enrolment, recovery codes — *metadata*, not auth flow | `PasswordHash`, `MfaState`, `RecoveryCodeHash` |
 | KYC status | Know-your-customer verification state | `KycStatus`, `KycStatusChanged` |
 | Role | Authorization role assigned to the account | `AccountRole`, `RoleAssigned`/`RoleRevoked` |
-| GDPR record | The lawful-data-handling state (export/deletion requests) | `GdprRecord`, `GdprDeletionRequested`, `GdprDataExportRequested` |
+| GDPR record | The lawful-data-handling state (consents, export/deletion requests) | `GdprRecord`, `ConsentPurpose`, `ConsentsUpdated`, `GdprDeletionRequested`, `GdprDataExportRequested` |
 | Encrypted bytes | At-rest-encrypted PII fields | `EncryptedBytes` |
 
 ---

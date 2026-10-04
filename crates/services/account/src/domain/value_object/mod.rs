@@ -1,6 +1,7 @@
 pub mod account_id;
 pub mod account_role;
 pub mod account_status;
+pub mod consent_purpose;
 pub mod country_code;
 pub mod email_address;
 pub mod encrypted_bytes;
@@ -13,6 +14,7 @@ pub mod recovery_code_hash;
 pub use account_id::AccountId;
 pub use account_role::AccountRole;
 pub use account_status::AccountStatus;
+pub use consent_purpose::ConsentPurpose;
 pub use country_code::CountryCode;
 pub use email_address::EmailAddress;
 pub use encrypted_bytes::EncryptedBytes;

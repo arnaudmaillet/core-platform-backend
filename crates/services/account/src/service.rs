@@ -42,7 +42,7 @@ impl Service for AccountService {
     /// The RPCs exposed on the client edge listener (`GRPC_EDGE_ADDR`); anything
     /// else on this service is mesh-only. See `transport::grpc::edge`.
     // Self-service only: every listed RPC binds `account_id` to the token subject.
-    // Admin/compliance RPCs (KYC, suspend, roles, GDPR record, listing) and the
+    // Admin/compliance RPCs (KYC, suspend, roles, listing) and the
     // auth-plane writes (RecordLogin, Anonymize, CreateAccount) stay mesh-only
     // until a staff permission catalogue exists.
     const EDGE_POLICY: EdgePolicy = &[
@@ -54,6 +54,9 @@ impl Service for AccountService {
         authenticated("/account.v1.AccountService/DeactivateAccount"),
         authenticated("/account.v1.AccountService/RequestGdprDeletion"),
         authenticated("/account.v1.AccountService/RequestDataExport"),
+        // The holder's own GDPR record and consents (GDPR Art. 7, 15).
+        authenticated("/account.v1.AccountService/GetGdprRecord"),
+        authenticated("/account.v1.AccountService/UpdateConsents"),
         authenticated("/account.v1.AccountService/GetAccountById"),
         authenticated("/account.v1.AccountService/GetAccountStatus"),
     ];
