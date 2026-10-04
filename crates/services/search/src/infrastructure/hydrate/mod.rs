@@ -130,9 +130,13 @@ impl SourceHydrator for GrpcSourceHydrator {
 /// draft (a `PostUpdated` fires for drafts too) or a soft-deleted post converges
 /// to "absent", so a stale or out-of-order event can never index one. The status
 /// is read at hydration time, so whatever order events arrive in, the document
-/// follows the post's current state.
+/// follows the post's current state. A post moderation removed or limited
+/// converges to "absent" too: a takedown survives a re-announce (a delete then
+/// restore, #663), whatever moderation's own stream did to the document.
 fn post_event(view: post_api::PostView, revision: u64) -> SourceEvent {
-    if view.status != post_api::PostStatus::Published as i32 {
+    let hidden_by_moderation = view.moderation == post_api::ModerationRestriction::Removed as i32
+        || view.moderation == post_api::ModerationRestriction::Limited as i32;
+    if view.status != post_api::PostStatus::Published as i32 || hidden_by_moderation {
         return deleted(EntityKind::Post, view.post_id);
     }
     let snapshot = PostSnapshot {
@@ -228,6 +232,22 @@ mod tests {
             }
             other => panic!("expected an upsert, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_post_moderation_removed_or_limited_converges_to_absent() {
+        for restriction in [post_api::ModerationRestriction::Removed, post_api::ModerationRestriction::Limited] {
+            let mut v = view(post_api::PostStatus::Published);
+            v.moderation = restriction as i32;
+            assert_eq!(
+                post_event(v, 7),
+                SourceEvent::Post(PostEvent::Deleted(EntityDeletion { id: "post-1".into() })),
+                "{restriction:?}"
+            );
+        }
+        let mut gated = view(post_api::PostStatus::Published);
+        gated.moderation = post_api::ModerationRestriction::AgeGated as i32;
+        assert!(matches!(post_event(gated, 7), SourceEvent::Post(PostEvent::Published(_))));
     }
 
     #[test]

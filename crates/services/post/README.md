@@ -118,8 +118,10 @@ message GeoPoint { double lat = 1; double lng = 2; }  // WGS-84; absent → post
 **Recently deleted (#663).** A delete is a tombstone: the post is indexed in `post.deleted_by_profile`
 (rows expire after 30 days) and `ListRecentlyDeleted` shows the author their restorable posts.
 `RestorePost` brings one back within 30 days as it was — published (re-announced on `post.published` at its
-original publication time, so feeds, the map and search take it back) or a draft — and removes it from the
-list. Both are edge `authenticated`, bound to `profile_id`.
+original publication time, so feeds and search take it back; a post moderation removed or limited is
+restored to its author only, never re-announced, so a takedown survives delete → restore) or a draft — and
+removes it from the list. geo-discovery suppresses a deleted post for good: a restored post's map pin does
+not come back. Both are edge `authenticated`, bound to `profile_id`.
 
 **Viewer-aware reads.** The reader comes from the transport (`edge::viewer`), never from a request
 field. A draft, a deleted post, or a post moderation **removed** is visible to its author (any

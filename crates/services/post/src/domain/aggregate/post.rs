@@ -134,8 +134,8 @@ impl Post {
     }
 
     /// A deleted post comes back within [`RESTORE_WINDOW`] of its deletion, as
-    /// it was: published (announced again, at its original publication time)
-    /// or a draft.
+    /// it was: published (announced again, at its original publication time —
+    /// unless moderation removed or limited it) or a draft.
     pub fn restore(&mut self, now: DateTime<Utc>) -> Result<(), PostError> {
         let Some(deleted_at) = self.deleted_at.filter(|_| self.status == PostStatus::Deleted) else {
             return Err(PostError::PostNotDeleted { post_id: self.id.as_str() });
@@ -148,8 +148,15 @@ impl Post {
         match self.published_at {
             Some(published_at) => {
                 self.status = PostStatus::Published;
-                let event = self.published_event(published_at);
-                self.pending_events.push(event);
+                // A post moderation removed or limited comes back to its author
+                // but is not re-announced: a takedown survives delete → restore.
+                if !matches!(
+                    self.moderation.restriction,
+                    ModerationRestriction::Removed | ModerationRestriction::Limited
+                ) {
+                    let event = self.published_event(published_at);
+                    self.pending_events.push(event);
+                }
             }
             None => self.status = PostStatus::Draft,
         }
@@ -356,6 +363,20 @@ mod restore_tests {
         let events = p.take_events();
         assert!(matches!(events.as_slice(),
             [DomainEvent::PostPublished(e)] if e.published_at_ms == published_at.timestamp_millis()));
+    }
+
+    #[test]
+    fn a_post_moderation_removed_or_limited_is_restored_but_not_re_announced() {
+        for restriction in [ModerationRestriction::Removed, ModerationRestriction::Limited] {
+            let mut p = post();
+            p.publish().unwrap();
+            assert!(p.apply_moderation(restriction, 1));
+            p.delete().unwrap();
+            p.take_events();
+            p.restore(Utc::now()).unwrap();
+            assert_eq!(p.status(), PostStatus::Published);
+            assert!(p.take_events().is_empty(), "{restriction:?}: the takedown survives");
+        }
     }
 
     #[test]

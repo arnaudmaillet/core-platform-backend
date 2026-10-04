@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 89c64601726a6b4d631a2e788f7e6192424434155289cd2c06eab06294ab7792
+  source_sha256: 32f1e1b1d86944c16c0a1f251adc6677e5d90c5058a37e99aaec94f71fd03099
   translated_at: 2026-10-05
   status: complete
 ---
@@ -130,8 +130,10 @@ message GeoPoint { double lat = 1; double lng = 2; }  // WGS-84 ; absent → pos
 **Récemment supprimés (#663).** Une suppression est une pierre tombale : le post est indexé dans
 `post.deleted_by_profile` (lignes expirées au bout de 30 jours) et `ListRecentlyDeleted` montre à l'auteur ses
 posts restaurables. `RestorePost` en ramène un dans les 30 jours tel qu'il était — publié (réannoncé sur
-`post.published` à sa date de publication d'origine, pour que fils, carte et recherche le reprennent) ou
-brouillon — et le retire de la liste. Les deux sont `authenticated` sur l'edge, liés à `profile_id`.
+`post.published` à sa date de publication d'origine, pour que fils et recherche le reprennent ; un post
+retiré ou limité par la modération n'est restauré que pour son auteur, jamais réannoncé, pour qu'un retrait
+survive à supprimer → restaurer) ou brouillon — et le retire de la liste. geo-discovery écarte définitivement
+un post supprimé : l'épingle d'un post restauré ne revient pas sur la carte. Les deux sont `authenticated` sur l'edge, liés à `profile_id`.
 
 **Lectures selon le lecteur.** Le lecteur vient du transport (`edge::viewer`), jamais d'un champ de
 requête. Un brouillon, un post supprimé ou un post **retiré** par la modération n'est visible que de
