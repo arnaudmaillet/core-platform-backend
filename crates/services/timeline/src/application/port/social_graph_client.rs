@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 
-use crate::domain::value_object::{AuthorId, ProfileId};
+use crate::domain::value_object::{AuthorId, ContentAccess, ProfileId};
 use crate::error::TimelineError;
 
 /// Port for cross-service communication with services/social-graph via gRPC.
@@ -36,4 +38,13 @@ pub trait SocialGraphClient: Send + Sync + 'static {
         profile_id: &ProfileId,
         page_size:  i32,
     ) -> Result<Vec<AuthorId>, TimelineError>;
+
+    /// What `viewers` (a reader's profile ids; empty for a guest) may see of
+    /// each author's content (`CheckAccess`). One answer per author; a missing
+    /// one counts as hidden. Errors are `AccessCheckUnavailable`.
+    async fn check_access(
+        &self,
+        viewers: &[String],
+        authors: &[AuthorId],
+    ) -> Result<HashMap<AuthorId, ContentAccess>, TimelineError>;
 }

@@ -57,6 +57,29 @@ pub struct TimelineConfig {
     /// Format: "http://host:port" (no trailing slash).
     pub social_graph_endpoint: String,
 
+    /// How long a published post stays in the discovery pool, in seconds.
+    pub discovery_window_secs: u64,
+
+    /// Most posts the discovery pool holds (oldest evicted first).
+    pub discovery_pool_cap: usize,
+
+    /// Hot-score gravity, in seconds: a post this much newer ranks like one ten
+    /// times more popular.
+    pub discovery_hot_gravity_secs: f64,
+
+    /// NEARBY: radius of the wide ring (popular posts) and of the close ring
+    /// (any post), in km, and how many candidates are ranked per request.
+    pub nearby_radius_km:       f64,
+    pub nearby_close_radius_km: f64,
+    pub nearby_candidates:      usize,
+
+    /// gRPC endpoint for the geo-discovery service (NEARBY candidates).
+    pub geo_discovery_endpoint: String,
+
+    /// Kafka consumer group ID for the discovery pool worker (`post.v1.events`,
+    /// `moderation.v1.events`, `counter.v1.popularity`).
+    pub kafka_group_discovery: String,
+
     /// Kafka consumer group ID for the post-published worker (consumes the unified
     /// `post.v1.events` stream).
     pub kafka_group_post_published: String,
@@ -88,6 +111,20 @@ impl TimelineConfig {
             social_graph_endpoint:      env_str(
                 "TIMELINE_SOCIAL_GRAPH_ENDPOINT",
                 "http://social-graph:50051",
+            ),
+            discovery_window_secs:      env_u64("TIMELINE_DISCOVERY_WINDOW_SECS",     259_200),
+            discovery_pool_cap:         env_usize("TIMELINE_DISCOVERY_POOL_CAP",      10_000),
+            discovery_hot_gravity_secs: env_f64("TIMELINE_DISCOVERY_HOT_GRAVITY_SECS", 45_000.0),
+            nearby_radius_km:           env_f64("TIMELINE_NEARBY_RADIUS_KM",          25.0),
+            nearby_close_radius_km:     env_f64("TIMELINE_NEARBY_CLOSE_RADIUS_KM",    2.0),
+            nearby_candidates:          env_usize("TIMELINE_NEARBY_CANDIDATES",       300),
+            geo_discovery_endpoint:     env_str(
+                "TIMELINE_GEO_DISCOVERY_ENDPOINT",
+                "http://localhost:50054",
+            ),
+            kafka_group_discovery:      env_str(
+                "TIMELINE_KAFKA_GROUP_DISCOVERY",
+                "timeline-discovery",
             ),
             kafka_group_post_published: env_str(
                 "TIMELINE_KAFKA_GROUP_POST_PUBLISHED",
@@ -123,6 +160,10 @@ fn env_i32(var: &str, default: i32) -> i32 {
 
 fn env_usize(var: &str, default: usize) -> usize {
     std::env::var(var).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+
+fn env_f64(var: &str, default: f64) -> f64 {
+    std::env::var(var).ok().and_then(|v| v.parse().ok()).filter(|v: &f64| v.is_finite() && *v > 0.0).unwrap_or(default)
 }
 
 fn env_str(var: &str, default: &str) -> String {

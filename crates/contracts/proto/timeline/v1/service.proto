@@ -35,4 +35,15 @@ service TimelineService {
     // Pagination: cursor-based via page_token encoding published_at_ms of
     // the last returned item.
     rpc GetAudioFeed (GetAudioFeedRequest) returns (GetAudioFeedResponse);
+
+    // Returns a page of the discovery feed: a non-personalised pool of recent
+    // public posts that needs no follow graph (For You for guests and members).
+    //
+    // The pool holds posts published in the last TIMELINE_DISCOVERY_WINDOW_SECS
+    // (Redis), fed by post.v1.events, counter.v1.popularity and
+    // moderation.v1.events. Deleted, removed and visibility-limited posts are
+    // never shown; age-gated ones only at CONTENT_LEVEL_STANDARD. The reader's
+    // audience is checked with social-graph CheckAccess; when that check is
+    // unavailable the read fails (UNAVAILABLE), it never shows unchecked posts.
+    rpc GetDiscoveryFeed (GetDiscoveryFeedRequest) returns (GetDiscoveryFeedResponse);
 }

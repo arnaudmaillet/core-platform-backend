@@ -7,14 +7,14 @@
 //! a scenario can assert that, e.g., a warmed following-set is not rebuilt from
 //! gRPC again.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
 
-use timeline::application::port::SocialGraphClient;
-use timeline::domain::value_object::{AuthorId, ProfileId};
+use timeline::application::port::{NearbyPosts, SocialGraphClient};
+use timeline::domain::value_object::{AuthorId, ContentAccess, PostId, ProfileId};
 use timeline::error::TimelineError;
 
 /// A deterministic, call-counting stand-in for the social-graph service.
@@ -26,6 +26,9 @@ pub struct FakeSocialGraph {
     following: Mutex<HashMap<ProfileId, Vec<AuthorId>>>,
     followers_calls: AtomicUsize,
     following_calls: AtomicUsize,
+    /// Authors whose content no reader may see (a private profile the reader
+    /// does not follow, say); every other author is visible.
+    private:         Mutex<HashSet<AuthorId>>,
 }
 
 impl FakeSocialGraph {
@@ -37,6 +40,11 @@ impl FakeSocialGraph {
     pub fn add_follow(&self, follower: ProfileId, author: AuthorId) {
         self.followers.lock().unwrap().entry(author).or_default().push(follower);
         self.following.lock().unwrap().entry(follower).or_default().push(author);
+    }
+
+    /// Makes `author`'s content invisible to every reader (`HEADER_ONLY`).
+    pub fn make_private(&self, author: AuthorId) {
+        self.private.lock().unwrap().insert(author);
     }
 
     /// Number of `list_all_followers` calls observed so far.
@@ -68,5 +76,30 @@ impl SocialGraphClient for FakeSocialGraph {
     ) -> Result<Vec<AuthorId>, TimelineError> {
         self.following_calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.following.lock().unwrap().get(profile_id).cloned().unwrap_or_default())
+    }
+
+    async fn check_access(
+        &self,
+        _viewers: &[String],
+        authors:  &[AuthorId],
+    ) -> Result<HashMap<AuthorId, ContentAccess>, TimelineError> {
+        let private = self.private.lock().unwrap();
+        Ok(authors
+            .iter()
+            .map(|a| (*a, if private.contains(a) { ContentAccess::HeaderOnly } else { ContentAccess::Visible }))
+            .collect())
+    }
+}
+
+/// geo-discovery's map index, as a fixed list of posts around any point.
+#[derive(Default)]
+pub struct FakeNearby {
+    pub posts: Mutex<Vec<PostId>>,
+}
+
+#[async_trait]
+impl NearbyPosts for FakeNearby {
+    async fn around(&self, _lat: f64, _lng: f64) -> Result<Vec<PostId>, TimelineError> {
+        Ok(self.posts.lock().unwrap().clone())
     }
 }

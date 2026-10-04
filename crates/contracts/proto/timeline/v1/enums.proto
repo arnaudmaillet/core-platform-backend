@@ -11,3 +11,31 @@ enum FanOutMode {
     FAN_OUT_MODE_WRITE       = 1;
     FAN_OUT_MODE_READ        = 2;
 }
+
+// How GetDiscoveryFeed orders its pool. v1 is non-personalised: the same
+// request returns the same order for every viewer, before the audience filter.
+enum DiscoveryRanking {
+    // Treated as FOR_YOU.
+    DISCOVERY_RANKING_UNSPECIFIED = 0;
+    // Three TRENDING items for one fresh item (a recent post nobody has
+    // engaged with yet), so new posts get a chance to be seen.
+    DISCOVERY_RANKING_FOR_YOU     = 1;
+    // Time-decayed popularity ("hot"): log10(popularity) plus a gravity term on
+    // the publication time. Only posts that have some popularity.
+    DISCOVERY_RANKING_TRENDING    = 2;
+    // Newest first.
+    DISCOVERY_RANKING_RECENT      = 3;
+    // Posts geotagged near lat/lng (from geo-discovery), ordered by hot score.
+    DISCOVERY_RANKING_NEARBY      = 4;
+}
+
+// Which posts a discovery read may show.
+enum ContentLevel {
+    // Treated as RESTRICTED.
+    CONTENT_LEVEL_UNSPECIFIED = 0;
+    // No post moderation age-gated (mature content). Always applied to guest
+    // sessions, whatever the request says.
+    CONTENT_LEVEL_RESTRICTED  = 1;
+    // Age-gated posts included.
+    CONTENT_LEVEL_STANDARD    = 2;
+}

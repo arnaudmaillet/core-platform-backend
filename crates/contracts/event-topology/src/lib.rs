@@ -114,18 +114,21 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("social-graph.author_tier_changed", "profile"),
     // chat visibility teardown (self-consume)
     ("chat.conversation.unpublished", "chat"),
-    // counter popularity → realtime broadcast + geo virality re-score
+    // counter popularity → realtime broadcast + geo virality re-score +
+    // timeline discovery hot score
     ("counter.v1.popularity", "realtime"),
     ("counter.v1.popularity", "geo-discovery"),
+    ("counter.v1.popularity", "timeline"),
     // auth lifecycle → compliance plane
     ("auth.v1.events", "audit"),
     // moderation decisions → compliance plane, search visibility, media takedown,
-    // post read restriction, map suppression
+    // post read restriction, map suppression, discovery feed suppression
     ("moderation.v1.events", "audit"),
     ("moderation.v1.events", "search"),
     ("moderation.v1.events", "media"),
     ("moderation.v1.events", "post"),
     ("moderation.v1.events", "geo-discovery"),
+    ("moderation.v1.events", "timeline"),
     // media lifecycle → Plane-B processing pipeline (self-consume)
     ("media.v1.events", "media"),
     // audit generic ingest lane (see DEFERRED)

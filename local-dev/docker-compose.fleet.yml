@@ -369,6 +369,8 @@ services:
       REDIS_TOPOLOGY: standalone
       KAFKA_BROKERS: redpanda:9092
       TIMELINE_SOCIAL_GRAPH_ENDPOINT: http://social-graph-server:50053
+      # Discovery feed: NEARBY candidates.
+      TIMELINE_GEO_DISCOVERY_ENDPOINT: http://geo-discovery-server:50054
     ports:
       - "50070:50070"
     depends_on:

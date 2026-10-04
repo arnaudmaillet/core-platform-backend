@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 019c8caba000d403f729c4eefb3514b8d135c41e49bf3f1da9e872e380506c44
+  source_sha256: aa0c2abe9bd4393a6092ba8f490cf17a64febf459dc4df8f85b183e8d126b337
   translated_at: 2026-10-04
   status: complete
 ---
@@ -60,8 +60,8 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `chat.member.joined` | `chat` | — *(orphan — see below)* |
 | `chat.member.left` | `chat` | — *(orphan — see below)* |
 | `chat.message.sent` | `chat` | — *(orphan — see below)* |
-| `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery` |
-| `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery` |
+| `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery`, `timeline` |
+| `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline` |
 | `auth.v1.events` | `auth` | `audit` |
 | `media.v1.events` | `media` | `media` |
 

@@ -96,12 +96,15 @@ secondary lookup.
 | ScyllaDB (`timeline`) | durable cold store | cold-start + ingest fail | **Hard** for cold reads; ingest retries |
 | Kafka | fan-out ingest | feed stops updating | **Soft** — existing feed served |
 | `social-graph` (gRPC) | following-set rebuild | rebuild on Redis miss fails | **Soft** — boots lazily; `TML-3001` retryable |
+| `social-graph` (gRPC) | `CheckAccess` for the discovery feed | discovery reads fail | **Hard** for discovery (fail closed, `TML-8002`) |
+| `geo-discovery` (gRPC) | NEARBY candidates (`QueryTile`) | NEARBY fails | **Soft** — other rankings unaffected; `TML-8003` |
 
 **Upstream (blast radius):**
 
 | Caller | Uses | Impact if `timeline` is down |
 |---|---|---|
 | `<TODO: BFF / mobile>` | `GetFollowingFeed` | the Following home feed stops loading |
+| iOS client (edge) | `GetDiscoveryFeed` | For You / Trending / Nearby stop loading |
 
 > **Critical path?** Yes for the home-feed surface; it is a derived read-model, so an outage degrades
 > the feed but not posting/social actions.
@@ -118,11 +121,42 @@ rpc GetFollowingFeed(GetFollowingFeedRequest) returns (GetFollowingFeedResponse)
 message GetFollowingFeedRequest  { string profile_id=1; int32 limit=2; string page_token=3; }
 message GetFollowingFeedResponse { repeated FeedItem items=1; string next_page_token=2; bool is_cold=3; }
 message FeedItem { string post_id=1; string author_id=2; int64 published_at_ms=3; }
+
+rpc GetDiscoveryFeed(GetDiscoveryFeedRequest) returns (GetDiscoveryFeedResponse);   // edge public_read
+
+message GetDiscoveryFeedRequest  { DiscoveryRanking ranking=1; string region=2; optional double lat=3;
+                                   optional double lng=4; ContentLevel content_level=5; string page_token=6; int32 limit=7; }
+message GetDiscoveryFeedResponse { repeated FeedItem items=1; string next_page_token=2; string region_applied=3;
+                                   ContentLevel content_level_applied=4; }
 ```
 
 > **Wire contract:** the cursor is `base64url("{published_at_ms}:{post_id_hyphenated}")` — opaque to
 > clients, decoded server-side only. `limit` is clamped to `TIMELINE_MAX_PAGE_SIZE`. `is_cold=true` means
 > the page was served from ScyllaDB while Redis warms asynchronously.
+
+### Discovery feed (`GetDiscoveryFeed`)
+
+A non-personalised feed that needs no follow graph: For You for guests and members (#673, B3).
+
+- **Pool** (Redis, `timeline:{disc}:recent|fresh|hot` + a `timeline:disc:post:<id>` hash per post): posts
+  published in the last `TIMELINE_DISCOVERY_WINDOW_SECS` (72 h), capped at `TIMELINE_DISCOVERY_POOL_CAP`. Fed
+  by one consumer (`timeline-discovery`) on `post.v1.events` (published / deleted), `counter.v1.popularity`
+  (all-time popularity) and `moderation.v1.events` (version-guarded restriction, recorded even before the
+  publication is seen). Cache-like: if Redis loses it, it refills within one window.
+- **Rankings.** `TRENDING` = the hot score `log10(max(popularity, 1)) + (published_s − epoch) / gravity`
+  (`TIMELINE_DISCOVERY_HOT_GRAVITY_SECS`, 12.5 h: a post that much newer ranks like one ten times more
+  popular), posts with some popularity only; `RECENT` = newest first; `FOR_YOU` = three hot for one *fresh*
+  (no popularity yet); `NEARBY` = geo-discovery's posts around `lat`/`lng` (a wide ring above geo's
+  virality floor, plus a close ring with no floor), ranked by hot score.
+- **Filters.** Deleted, removed and visibility-limited posts are never shown; age-gated ones only at
+  `CONTENT_LEVEL_STANDARD`. A **guest always gets `RESTRICTED`**; anyone else gets what it asks for,
+  `RESTRICTED` by default (no date of birth is known server-side yet). The reader comes from the token
+  (`edge::viewer`): authors it may not see (`CheckAccess` ≠ `VISIBLE`) are left out, and the read **fails
+  closed** (`TML-8002`, UNAVAILABLE) when social-graph cannot answer. Mesh callers are unfiltered by audience.
+- **Paging.** The cursor carries one position per stream and is bound to its ranking. A page can be short
+  (even empty) with a non-empty token when its candidates were filtered out; a post moving from fresh to hot
+  can come back on a later page — clients de-duplicate by `post_id`.
+- **Region.** Accepted, not applied yet: v1 ranks one global pool (`region_applied` is empty).
 
 ### Rust ports (hexagonal contract)
 
@@ -133,6 +167,8 @@ pub trait TierCache: Send + Sync { /* author tier + warm flag */ }
 pub trait FollowingStore: Send + Sync { /* following set (SADD/SREM/SMEMBERS) */ }
 pub trait FeedRepository / AuthorPostRepository: Send + Sync { /* ScyllaDB cold layer */ }
 pub trait SocialGraphClient: Send + Sync { /* paginated gRPC to social-graph */ }
+pub trait DiscoveryPool: Send + Sync { /* discovery indices + per-post meta (Redis) */ }
+pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point */ }
 ```
 
 ### Error contract (`TML-xxxx`)
@@ -145,6 +181,8 @@ pub trait SocialGraphClient: Send + Sync { /* paginated gRPC to social-graph */ 
 | TML-4001 | `ColdStartFailed` | 500 |
 | TML-5001/5002 | `ScriptReturnInvalid` / `BackfillFailed` | 500 |
 | TML-6001 | `InvalidPageToken` | 422 |
+| TML-8001 | `LocationRequired` (NEARBY without lat/lng) | 422 |
+| TML-8002/8003 | `AccessCheckUnavailable` / `NearbyUnavailable` (retryable) | 503 |
 | TML-9001..9004 | invalid ids / domain violation | 422 |
 
 ---
@@ -161,6 +199,7 @@ pub trait SocialGraphClient: Send + Sync { /* paginated gRPC to social-graph */ 
 | `post.deleted` | `timeline-post-deleted` | VIP ZREM or Scylla purge | DLQ `{topic}.dlq` |
 | `social-graph.followed` | `timeline-sg-followed` | backfill recent posts + update following set | DLQ `{topic}.dlq` |
 | `social-graph.unfollowed` | `timeline-sg-unfollowed` | prune posts + update following set | DLQ `{topic}.dlq` |
+| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction) | DLQ `{topic}.dlq` |
 
 > **Runtime contract (mandatory):** all workers run under `run_consumer` — manual commit after success,
 > bounded retry with backoff + jitter, DLQ on exhaustion/poison. All downstream writes are idempotent
@@ -194,7 +233,7 @@ timeline = { path = "crates/services/timeline" }
 Library-only. Implements [`service_runtime::Service`](../../platform/service-runtime/README.md) as
 `timeline::service::TimelineService` — `build` maps `TimelineConfig → AppConfig`, constructs the
 social-graph gRPC client over a **lazily-connected** channel (timeline boots even if social-graph isn't
-reachable yet), assembles cache/persistence adapters + CQRS buses, and spawns the four ingestion
+reachable yet), assembles cache/persistence adapters + CQRS buses, and spawns the five ingestion
 workers; `register` adds the gRPC + reflection services (query-only surface); `health_probes` checks
 Scylla/Redis.
 
@@ -231,7 +270,13 @@ async fn main() -> anyhow::Result<()> {
 | `TIMELINE_MAX_VIP_MERGE_SOURCES` | `50` | Max VIP ZSETs merged per request. |
 | `TIMELINE_SOCIAL_GRAPH_PAGE_SIZE` | `500` | Pagination size for social-graph lists. |
 | `TIMELINE_SOCIAL_GRAPH_ENDPOINT` | `http://social-graph:50051` | social-graph gRPC endpoint. |
-| `TIMELINE_KAFKA_GROUP_*` | `timeline-*` | Consumer group IDs (post-published/deleted, sg-followed/unfollowed). |
+| `TIMELINE_DISCOVERY_WINDOW_SECS` | `259200` | How long a post stays in the discovery pool (72 h). |
+| `TIMELINE_DISCOVERY_POOL_CAP` | `10000` | Max posts in the discovery pool. |
+| `TIMELINE_DISCOVERY_HOT_GRAVITY_SECS` | `45000` | Hot-score gravity (12.5 h per 10× popularity). |
+| `TIMELINE_GEO_DISCOVERY_ENDPOINT` | `http://localhost:50054` | geo-discovery gRPC endpoint (NEARBY). |
+| `TIMELINE_NEARBY_RADIUS_KM` · `TIMELINE_NEARBY_CLOSE_RADIUS_KM` | `25` · `2` | NEARBY wide / close ring radius. |
+| `TIMELINE_NEARBY_CANDIDATES` | `300` | NEARBY candidates ranked per request. |
+| `TIMELINE_KAFKA_GROUP_*` | `timeline-*` | Consumer group IDs (post-published/deleted, sg-followed/unfollowed, discovery). |
 
 > Standard ScyllaDB / Redis / Kafka connection variables from the shared storage crates apply.
 > `TIMELINE_GRPC_ADDR` defaults to `0.0.0.0:50070`.
