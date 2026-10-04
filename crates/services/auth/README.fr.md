@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 41a1bb92c7ee439fe6b8934c45ec927a1fd81ceda1598cd616f14287e24f3422
-  translated_at: 2026-10-04
+  source_sha256: 0597f5201f7d9e8a7e26c9375b837ecccc0e36b8ba26fe44a3826eac8321469a
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -120,13 +120,24 @@ qui saisit le code. L'e-mail part en SMTP vers **Amazon SES** (`AUTH_VERIFICATIO
 `AUTH_SMTP_*`) ; `log` écrit le code dans les logs (exécutions locales uniquement) ; non défini =
 désactivé (`AUT-5012`).
 
-**Comptes téléphone seul (SMS).** Les mêmes codes partent par SMS (`channel = SMS`, tout numéro
-international — normalisé en E.164) : identité = le numéro sous `urn:core-platform:phone`, un compte
+**Comptes téléphone seul (SMS).** Les mêmes codes partent par SMS (`channel = SMS`, un numéro
+international normalisé en E.164) : identité = le numéro sous `urn:core-platform:phone`, un compte
 **sans e-mail** (`account` l'active sur le numéro vérifié), qui se reconnecte avec un nouveau code SMS
 (`SIGN_IN_METHOD_PHONE_CODE`). Un numéro déjà détenu par un autre compte répond `existing_account`
 avec la méthode de ce compte. Le SMS part via **Amazon SNS** (`Publish`, transactionnel, SigV4 avec
 des clés statiques : `AUTH_SMS_SENDER=sns`, `AUTH_SNS_*`) ; avec `AUTH_VERIFICATION_SENDER=log` les
-codes SMS sont aussi journalisés.
+codes SMS sont aussi journalisés. **Garde-fous contre le SMS pumping** (chaque SMS coûte) : le numéro
+doit être un numéro **mobile** valide (métadonnées libphonenumber : ni fixe, ni surtaxé, ni à coût
+partagé, ni VoIP) d'un pays de `AUTH_SMS_COUNTRIES` — par défaut les marchés de lancement, UE 27 +
+IS LI NO + GB CH + GP GF MQ RE YT, **exactement** la liste autorisée de la protect configuration SNS
+(core-platform-infra `global/messaging/sms`) ; les territoires qui partagent un indicatif sont résolus
+vers leur propre pays (Jersey sous +44 est `JE`) — sinon `FAILED_PRECONDITION` `AUT-5015`, décidé
+d'après le seul numéro. Chaque SMS compte ensuite dans un **budget quotidien global au service**
+(`AUTH_SMS_DAILY_BUDGET`, 50, par jour UTC, Redis `auth:{sms-budget}:<YYYYMMDD>`) ; une fois épuisé,
+les codes SMS répondent `UNAVAILABLE` `AUT-5016` jusqu'au jour UTC suivant (l'e-mail continue de
+fonctionner) et auth journalise une `error` (à alerter). Dimensionnez-le d'après la limite de
+dépense mensuelle SNS (≈ limite / 30 / prix d'un SMS), pour que la limite de SNS ne soit jamais ce
+qui coupe les SMS pour le mois.
 
 ### Identifiants et step-up
 
@@ -241,6 +252,8 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_SMTP_HOST` · `AUTH_SMTP_PORT` · `AUTH_SMTP_USERNAME` · `AUTH_SMTP_PASSWORD` · `AUTH_SMTP_FROM` | Relais SMTP des codes e-mail (SES : `email-smtp.<region>.amazonaws.com`, `587`, STARTTLS, identifiants SMTP SES, un expéditeur vérifié). | — · `587` |
 | `AUTH_SMS_SENDER` | Mode d'envoi des codes SMS : `sns`, non défini = désactivé (ou journalisés si `AUTH_VERIFICATION_SENDER=log`). | — |
 | `AUTH_SNS_REGION` · `AUTH_SNS_ACCESS_KEY_ID` · `AUTH_SNS_SECRET_ACCESS_KEY` · `AUTH_SNS_SENDER_ID` | Amazon SNS pour les codes SMS (un utilisateur IAM autorisé à `sns:Publish` ; sender id alphanumérique facultatif là où les pays l'autorisent). | — |
+| `AUTH_SMS_COUNTRIES` | Pays (ISO 3166-1 alpha-2, séparés par des virgules) vers lesquels les codes SMS peuvent partir ; doit être égal à la liste autorisée de la protect configuration SNS (infra `global/messaging/sms`). Un code inconnu fait échouer le démarrage. | les marchés de lancement (37) |
+| `AUTH_SMS_DAILY_BUDGET` | SMS que le service entier peut envoyer par jour UTC (`0` = aucun) ; au-delà `AUT-5016`. | `50` |
 | `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES` | Durée de vie d'un code, essais par code, codes par adresse par heure / par jour, délai avant renvoi, codes faux par adresse en 24 h avant verrouillage. | `600` · `5` · `5` · `20` · `30` · `15` |
 | Postgres / Redis / Kafka | via les `from_env()` des crates de stockage partagées | — |
 

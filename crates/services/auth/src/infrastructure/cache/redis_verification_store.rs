@@ -8,6 +8,8 @@
 //!   per-address send budget (hourly and daily counters, a resend cooldown
 //!   marker) and its wrong-code count across challenges. The address only
 //!   appears hashed in key names; all four share one slot.
+//! - `auth:{sms-budget}:<YYYYMMDD>` — the SMS sent by the whole service that
+//!   UTC day (kept 2 days).
 
 use async_trait::async_trait;
 use chrono::Duration;
@@ -36,6 +38,10 @@ fn failure_key(destination_key: &str) -> String {
     format!("auth:{{otpd:{destination_key}}}:fail")
 }
 
+fn sms_budget_key(day: chrono::NaiveDate) -> String {
+    format!("auth:{{sms-budget}}:{}", day.format("%Y%m%d"))
+}
+
 fn cache_err(e: fred::error::Error) -> AuthError {
     AuthError::Cache(RedisStorageError::from(e))
 }
@@ -61,6 +67,15 @@ wait = over(KEYS[1], tonumber(ARGV[1]), 3600)
 if wait > 0 then return wait end
 redis.call('SET', KEYS[3], '1', 'EX', tonumber(ARGV[3]))
 return 0
+"#;
+
+/// KEYS = the day's SMS counter · ARGV = budget. Returns 1 when admitted.
+/// Refusals are counted too, so the counter reads how hard the budget is hit.
+const RESERVE_SMS: &str = r#"
+local n = redis.call('INCR', KEYS[1])
+if n == 1 then redis.call('EXPIRE', KEYS[1], 172800) end
+if n > tonumber(ARGV[1]) then return 0 end
+return 1
 "#;
 
 /// KEYS = failure counter · ARGV = window secs. Returns the count.
@@ -201,5 +216,14 @@ impl VerificationStore for RedisVerificationStore {
         use fred::interfaces::KeysInterface;
         let _: i64 = self.client.del(challenge_key(challenge_id)).await.map_err(cache_err)?;
         Ok(())
+    }
+
+    async fn reserve_sms(&self, daily_budget: u32) -> Result<bool, AuthError> {
+        let admitted: i64 = self
+            .client
+            .eval(RESERVE_SMS, vec![sms_budget_key(chrono::Utc::now().date_naive())], vec![daily_budget.to_string()])
+            .await
+            .map_err(cache_err)?;
+        Ok(admitted == 1)
     }
 }

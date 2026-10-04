@@ -39,6 +39,8 @@ use thiserror::Error;
 /// | AUT-5012 | VerificationChannelUnavailable | 422 | Medium  | No        |
 /// | AUT-5013 | VerificationRateLimited      | 429  | Low      | No        |
 /// | AUT-5014 | VerificationSendFailed       | 503  | High     | **Yes**   |
+/// | AUT-5015 | SmsDestinationNotSupported   | 422  | Low      | No        |
+/// | AUT-5016 | SmsBudgetExhausted           | 503  | **High** | No        |
 /// | AUT-1005 | GuestSessionsDisabled        | 403  | Low      | No        |
 /// | AUT-6001 | AccountNotActive             | 403  | Medium   | No        |
 /// | AUT-6002 | AccountDirectoryUnavailable  | 503  | High     | **Yes**   |
@@ -178,6 +180,15 @@ pub enum AuthError {
     #[error("the verification code could not be sent")]
     VerificationSendFailed,
 
+    /// SMS codes do not go to this number: its country is not on the SMS
+    /// allow-list, or it is not a mobile number.
+    #[error("SMS codes cannot be sent to this number")]
+    SmsDestinationNotSupported,
+
+    /// The service-wide SMS budget of the day is spent (an SMS-pumping guard).
+    #[error("no more SMS codes can be sent today")]
+    SmsBudgetExhausted,
+
     // ── Account directory (AUT-6xxx) ──────────────────────────────────────────
     #[error("account is not active; current status: '{current}'")]
     AccountNotActive { current: String },
@@ -262,6 +273,8 @@ impl AppError for AuthError {
             AuthError::VerificationChannelUnavailable { .. } => "AUT-5012",
             AuthError::VerificationRateLimited { .. } => "AUT-5013",
             AuthError::VerificationSendFailed => "AUT-5014",
+            AuthError::SmsDestinationNotSupported => "AUT-5015",
+            AuthError::SmsBudgetExhausted => "AUT-5016",
 
             AuthError::AccountNotActive { .. } => "AUT-6001",
             AuthError::AccountDirectoryUnavailable => "AUT-6002",
@@ -320,7 +333,8 @@ impl AppError for AuthError {
             | AuthError::CredentialManagementUnavailable
             | AuthError::AccountDirectoryUnavailable
             | AuthError::ProfileDirectoryUnavailable
-            | AuthError::VerificationSendFailed => StatusCode::SERVICE_UNAVAILABLE,
+            | AuthError::VerificationSendFailed
+            | AuthError::SmsBudgetExhausted => StatusCode::SERVICE_UNAVAILABLE,
 
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         }
@@ -340,7 +354,8 @@ impl AppError for AuthError {
             | AuthError::SigningKeyUnavailable
             | AuthError::IdpUnavailable
             | AuthError::CredentialManagementUnavailable
-            | AuthError::AccountDirectoryUnavailable => Severity::High,
+            | AuthError::AccountDirectoryUnavailable
+            | AuthError::SmsBudgetExhausted => Severity::High,
 
             AuthError::InvalidSessionTransition { .. }
             | AuthError::RefreshTokenAlreadyRotated
@@ -419,6 +434,8 @@ impl AppError for AuthError {
             AuthError::VerificationChannelUnavailable { .. } => "Codes cannot be sent this way right now.",
             AuthError::VerificationRateLimited { .. } => "Too many codes were asked for; please wait a moment.",
             AuthError::VerificationSendFailed => "We could not send the code. Please try again.",
+            AuthError::SmsDestinationNotSupported => "We cannot text a code to this number; please use your email instead.",
+            AuthError::SmsBudgetExhausted => "Codes by text message are unavailable right now; please use your email instead.",
             _ => "A domain constraint was violated.",
         }
     }
