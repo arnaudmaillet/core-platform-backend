@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: dfb80aa0a4532b2022db718deb7e261aaf1b462ab5a998f24033dd022a76618c
+  source_sha256: 7b14a0540e70f0df724ad51fcd0aa9f19b098bf66817641f783c0397c26a381a
   translated_at: 2026-10-05
   status: complete
 ---
@@ -263,6 +263,7 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Deadlines de requête / de connexion des appels HTTP Keycloak (échange de token) | `5000` · `2000` |
 | `AUTH_GUEST_SESSIONS_ENABLED` | Interrupteur de `StartGuestSession`. **Désactivé par défaut** : il écrit une session par appel sans identifiant, donc à laisser éteint partout où les contrôles anti-abus (limites par IP / par appareil, App Attest) ne sont pas devant lui. Éteint → `AUT-1005` (`PERMISSION_DENIED`). | `false` |
 | `AUTH_FEDERATED_NONCE_REQUIRED` | Un `SignUp` / `Login` par id_token doit consommer un nonce de `StartFederatedSignIn` (sinon `AUT-5008`). Désactivé : un nonce créé par le client est seulement journalisé — à activer quand tous les clients appellent `StartFederatedSignIn`. | `false` |
+| `AUTH_GUEST_RETENTION_DAYS` · `AUTH_GUEST_RETENTION_INTERVAL_SECS` | Conservation des données d'invités : les invités jamais devenus un compte et sans session active (identifiant d'appareil, langue, pays), et les sessions d'invités terminées (appareil, IP, refresh tokens), sont supprimés après ce nombre de jours ; une passe tourne au démarrage puis à cet intervalle sur chaque réplica (par lots, idempotente). Les invités devenus un compte sont conservés (cadeau de bienvenue une fois par appareil). | `90` · `3600` |
 | `AUTH_APPLE_AUDIENCES` · `AUTH_GOOGLE_AUDIENCES` | Client ids (séparés par des virgules) pour lesquels un id_token Apple / Google doit être émis (`aud` : bundle / services ids de l'app ; client ids OAuth Google). Vide = l'inscription par ce fournisseur est désactivée (`AUT-5009`). | — |
 | `AUTH_FEDERATED_JWKS_TIMEOUT_MS` | Délai de récupération des JWKS d'un fournisseur. | `3000` |
 | `AUTH_FEDERATED_JWKS_REFRESH_SECS` | Les clés d'Apple / Google sont récupérées au démarrage puis à cet intervalle en arrière-plan (rotations prises en compte, clés retirées abandonnées ; un échec conserve les dernières clés). Un `kid` inconnu déclenche toujours une récupération, au plus une fois par minute. | `21600` |

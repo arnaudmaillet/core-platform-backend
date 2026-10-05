@@ -26,6 +26,17 @@ pub trait GuestRegistry: Send + Sync + 'static {
     /// Records a new guest. Idempotent on `guest_id`.
     async fn record(&self, guest: &GuestRecord) -> Result<(), AuthError>;
 
+    /// Deletes up to `limit` guests per shard first seen before `seen_before`
+    /// that never became an account and have no live session, and guest
+    /// sessions (with their refresh tokens) that ended before `seen_before`.
+    /// Returns how many guests went.
+    async fn purge_stale(
+        &self,
+        seen_before: DateTime<Utc>,
+        now: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<u64, AuthError>;
+
     /// The guest became `account_id` (it signed up or signed in on its device).
     async fn mark_upgraded(
         &self,

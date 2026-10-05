@@ -53,6 +53,9 @@ pub struct AuthConfig {
     /// `GRPC_TRUSTED_PROXY_HOPS` (the runtime's setting, default 1 = the ALB):
     /// how the client's address is read for per-IP code lockouts.
     pub trusted_proxy_hops: usize,
+    /// `AUTH_GUEST_RETENTION_DAYS` (default 90): guests that never became an
+    /// account (and their ended sessions) are deleted after this long.
+    pub guest_retention_days: i64,
     /// Native Sign in with Apple / Google: the app's client ids a provider's
     /// id_token must be minted for (`aud`). Empty = that provider is off.
     pub apple_audiences: Vec<String>,
@@ -136,6 +139,7 @@ impl AuthConfig {
                 .ok()
                 .and_then(|v| v.trim().parse().ok())
                 .unwrap_or(transport::grpc::client_ip::DEFAULT_TRUSTED_PROXY_HOPS),
+            guest_retention_days: env_secs("AUTH_GUEST_RETENTION_DAYS", 90).max(1),
             guest_sessions_enabled: std::env::var("AUTH_GUEST_SESSIONS_ENABLED")
                 .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes")),
             federated_nonce_required: std::env::var("AUTH_FEDERATED_NONCE_REQUIRED")

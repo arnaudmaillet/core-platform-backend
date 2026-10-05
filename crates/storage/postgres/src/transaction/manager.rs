@@ -105,6 +105,15 @@ impl TransactionManager {
         }
     }
 
+    /// Every pool: the single node's, or each shard's. For maintenance that
+    /// must visit all data (retention purges), never for routed reads/writes.
+    pub fn all_pools(&self) -> Vec<&PgPool> {
+        match self.topology.as_ref() {
+            Topology::SingleNode { pool } => vec![pool],
+            Topology::ApplicationSharded { cluster } => cluster.pools().map(|(_, pool)| pool).collect(),
+        }
+    }
+
     /// Returns the pool that owns `key` — topology-agnostic.
     ///
     /// - **SingleNode**: `key` is accepted but routing is skipped; the single

@@ -105,6 +105,17 @@ impl Service for AuthService {
         );
         tokio::spawn(app.relay.clone().run(relay_interval));
 
+        // Guest data past retention, hourly (every replica: the deletes are
+        // idempotent and batched).
+        let retention_interval = std::time::Duration::from_secs(
+            std::env::var("AUTH_GUEST_RETENTION_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3_600)
+                .max(60),
+        );
+        tokio::spawn(app.guest_retention.clone().run(retention_interval));
+
         Ok(Self { app })
     }
 

@@ -17,8 +17,8 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    ChangePasswordHandler, FederatedNonces, LoginHandler, LogoutAllSessionsHandler, LogoutHandler, MemberSessions,
-    NonceBoundVerifier, RefreshHandler, SignUpHandler, StartGuestSessionHandler, VerificationCodes,
+    ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler, LogoutAllSessionsHandler, LogoutHandler,
+    MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler, StartGuestSessionHandler, VerificationCodes,
     VerifyCredentialsHandler,
 };
 use crate::application::port::{
@@ -96,6 +96,9 @@ pub struct App {
     /// Drains the auth_outbox table to the broker; spawned by the runtime
     /// adapter. Handlers never touch the broker directly anymore.
     pub relay: OutboxRelay,
+    /// Deletes guest data past `AUTH_GUEST_RETENTION_DAYS`; spawned by the
+    /// runtime adapter.
+    pub guest_retention: GuestRetention,
 }
 
 impl App {
@@ -305,6 +308,10 @@ impl App {
             federated.spawn_refresh(config.federated_jwks_refresh);
         }
 
+        let guest_retention = GuestRetention::new(
+            Arc::new(PgGuestRegistry::new(tx.clone())),
+            chrono::Duration::days(config.guest_retention_days),
+        );
         let deps = AppDeps {
             idp: Arc::new(KeycloakIdentityProvider::new(idp_client, config.keycloak)),
             credentials,
@@ -331,7 +338,14 @@ impl App {
             policy: config.policy,
         };
 
-        Ok(App { handler: App::compose(deps).with_trusted_proxy_hops(config.trusted_proxy_hops), pool, redis, jwks_json, relay })
+        Ok(App {
+            handler: App::compose(deps).with_trusted_proxy_hops(config.trusted_proxy_hops),
+            pool,
+            redis,
+            jwks_json,
+            relay,
+            guest_retention,
+        })
     }
 }
 
