@@ -9,7 +9,7 @@ use comment_api::GetCommentRequest;
 use post_api::post_service_client::PostServiceClient;
 use post_api::GetPostRequest;
 use profile_api::profile_service_client::ProfileServiceClient;
-use profile_api::GetProfileByIdRequest;
+use profile_api::{GetProfileByIdRequest, ListProfilesByAccountRequest, ProfileStatus};
 use tonic::transport::Channel;
 use tonic::{Code, Status};
 use uuid::Uuid;
@@ -92,4 +92,26 @@ impl SubjectResolver for GrpcSubjectResolver {
         };
         self.profile_owner(&author_profile).await
     }
+
+    async fn profiles_of(&self, account: &ActorId) -> Result<Vec<String>, ModerationError> {
+        let request = ListProfilesByAccountRequest {
+            account_id: account.as_str(),
+            limit: MAX_PROFILES_PER_ACCOUNT,
+            page_token: String::new(),
+        };
+        match self.profiles.clone().list_profiles_by_account(request).await {
+            Ok(r) => Ok(r
+                .into_inner()
+                .profiles
+                .into_iter()
+                .filter(|p| p.status() != ProfileStatus::Deleted)
+                .map(|p| p.profile_id)
+                .collect()),
+            Err(status) if status.code() == Code::NotFound => Ok(Vec::new()),
+            Err(_) => Err(ModerationError::ContentDirectoryUnavailable),
+        }
+    }
 }
+
+/// One page of an account's profiles: far more than an account holds.
+const MAX_PROFILES_PER_ACCOUNT: i32 = 50;

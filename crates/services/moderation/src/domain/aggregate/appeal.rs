@@ -214,6 +214,8 @@ impl Appeal {
             actor_id: self.actor_id,
             by_reporter: self.appellant == Appellant::Reporter,
             overturned: overturn,
+            // The handler names them: the aggregate knows the account only.
+            profile_ids: Vec::new(),
             occurred_at: now,
             correlation_id,
         }));

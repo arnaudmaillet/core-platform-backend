@@ -81,6 +81,10 @@ pub struct AppealResolved {
     #[serde(default)]
     pub by_reporter: bool,
     pub overturned: bool,
+    /// The appellant account's profiles when the appeal was resolved: who
+    /// `notification` tells of the outcome (#744). Absent from older events.
+    #[serde(default)]
+    pub profile_ids: Vec<String>,
     pub occurred_at: DateTime<Utc>,
     pub correlation_id: Uuid,
 }

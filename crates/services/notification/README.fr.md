@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 74bf8290a7ea0a0bb98e7052a87f4ac6f4519eb2f5974735700f007da262a84e
+  source_sha256: 674dfa3d295ae415e518cd4d955f263a48138a20282f54b7b0c860dbe3a99fc9
   translated_at: 2026-10-05
   status: complete
 ---
@@ -20,7 +20,7 @@ i18n:
 > | **Palier (Tier)** | **TIER-2** — dérivé/best-effort ; le fil est durable, les pushs sont best-effort |
 > | **Binaire déployable** | `crates/apps/notification-server` (crate bibliothèque : `crates/services/notification`) |
 > | **Bases de données** | ScyllaDB keyspace `notification` (fil TWCS + compteurs) · Redis (collapse + non-lus) |
-> | **Asynchrone** | ne publie rien · consomme `engagement.reactions` / `comment.created` / `post.published` / `social-graph.followed` / `social-graph.follow_requested` |
+> | **Asynchrone** | ne publie rien · consomme `engagement.reactions` / `comment.created` / `post.published` / `social-graph.followed` / `social-graph.follow_requested` / `moderation.v1.events` (appeal outcomes) |
 > | **Appelants amont** | `<TODO: mobile / BFF (stream + lectures de fil)>` |
 > | **Dépendances aval** | ScyllaDB, Redis, Kafka |
 > | **SLO** | lecture du compte de non-lus sub-ms (Redis) · lecture de fil paginée O(1) · push best-effort |
@@ -191,6 +191,7 @@ identifiers — via le crate partagé `error`.
 |---|---|---|---|
 | `engagement.reactions` | `notification-reaction-consumer` | reaction notifications (collapsed) | DLQ `{topic}.dlq` |
 | `social-graph.followed` + `social-graph.follow_requested` | `notification-follow-consumer` | follows → `FOLLOW` to the followee; a request to a private profile → `FOLLOW_REQUEST` to its owner (the app opens the requests inbox); an approved request (`via_request`) → `FOLLOW_ACCEPTED` to the requester, not the owner again (#755). Subject: the other profile (`SUBJECT_KIND_PROFILE`). Block-gated, self-guarded, one notification per event (deterministic id) | DLQ `{topic}.dlq` |
+| `moderation.v1.events` (`appeal_resolved` only) | `notification-appeal-consumer` | an appeal's outcome → `APPEAL_UPHELD` / `APPEAL_OVERTURNED` to **every profile** moderation names (`profile_ids`: the appellant account's profiles, #744). Subject: the appeal (`SUBJECT_KIND_APPEAL`, the app opens it via `ListMyAppeals`). A platform notice: no sender (nil `sender_profile_id`, `sender_count` 0), not block-gated; one notification per (appeal, profile) (deterministic id). Other moderation events are ignored | DLQ `{topic}.dlq` |
 | `comment.created` | `notification-comment-consumer` | comment notifications (block-gated, self-guarded; none for a `quiet` event: a restricted author, #659) | DLQ `{topic}.dlq` |
 | `post.published` | `notification-mention-consumer` | parse `@mentions`, cache post author | DLQ `{topic}.dlq` |
 

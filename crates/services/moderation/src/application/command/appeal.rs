@@ -5,10 +5,11 @@ use cqrs::Envelope;
 
 use crate::application::port::{
     AppealRepository, CaseRepository, DecisionRepository, EnforcementProjection,
-    EnforcementRepository, EventPublisher, ReportRepository,
+    EnforcementRepository, EventPublisher, ReportRepository, SubjectResolver,
 };
 use crate::domain::aggregate::appeal::appealable_until;
 use crate::domain::aggregate::{Appeal, Appellant, Decision, DecisionAuthor, DecisionParams};
+use crate::domain::event::DomainEvent;
 use crate::domain::value_object::{ActionType, ActorId, AppealId, CaseId, CaseStatus, DecisionId, ReporterKind};
 use crate::error::ModerationError;
 
@@ -127,12 +128,16 @@ pub struct ResolveAppealOutcome {
 /// append-only entry referencing the original), reverses the active enforcement
 /// the original decision created (clearing the hot-path projection for actor-level
 /// ones), closes the case, and publishes `EnforcementReversed` + `AppealResolved`.
+/// `AppealResolved` names the appellant account's profiles, which
+/// `notification` tells of the outcome (#744): they are read first, so an
+/// unreachable profile directory resolves nothing (retry later).
 pub struct ResolveAppealHandler {
     appeals: Arc<dyn AppealRepository>,
     decisions: Arc<dyn DecisionRepository>,
     enforcements: Arc<dyn EnforcementRepository>,
     cases: Arc<dyn CaseRepository>,
     projection: Arc<dyn EnforcementProjection>,
+    subjects: Arc<dyn SubjectResolver>,
     publisher: Arc<dyn EventPublisher>,
 }
 
@@ -143,9 +148,10 @@ impl ResolveAppealHandler {
         enforcements: Arc<dyn EnforcementRepository>,
         cases: Arc<dyn CaseRepository>,
         projection: Arc<dyn EnforcementProjection>,
+        subjects: Arc<dyn SubjectResolver>,
         publisher: Arc<dyn EventPublisher>,
     ) -> Self {
-        Self { appeals, decisions, enforcements, cases, projection, publisher }
+        Self { appeals, decisions, enforcements, cases, projection, subjects, publisher }
     }
 
     pub async fn handle(
@@ -167,6 +173,8 @@ impl ResolveAppealHandler {
             .await?
             .ok_or(ModerationError::DecisionNotFound { id: appeal.decision_id().as_str() })?;
 
+        // Who is told of the outcome, before anything is written.
+        let profile_ids = self.subjects.profiles_of(&appeal.actor_id()).await?;
         appeal.resolve(cmd.overturn, cmd.rationale.clone(), now, correlation_id)?;
         self.appeals.save(&appeal).await?;
 
@@ -182,7 +190,7 @@ impl ResolveAppealHandler {
                     self.cases.save(&case).await?;
                 }
             }
-            self.publish_all(appeal.drain_events()).await?;
+            self.publish_all(addressed(appeal.drain_events(), &profile_ids)).await?;
             return Ok(ResolveAppealOutcome { appeal, reversal: None });
         }
 
@@ -235,19 +243,29 @@ impl ResolveAppealHandler {
             self.cases.save(&case).await?;
         }
 
-        self.publish_all(appeal.drain_events()).await?;
+        self.publish_all(addressed(appeal.drain_events(), &profile_ids)).await?;
         Ok(ResolveAppealOutcome { appeal, reversal })
     }
 
     async fn publish_all(
         &self,
-        events: Vec<crate::domain::event::DomainEvent>,
+        events: Vec<DomainEvent>,
     ) -> Result<(), ModerationError> {
         for event in &events {
             self.publisher.publish(event).await?;
         }
         Ok(())
     }
+}
+
+/// `events` with every `AppealResolved` naming `profile_ids` as its recipients.
+fn addressed(mut events: Vec<DomainEvent>, profile_ids: &[String]) -> Vec<DomainEvent> {
+    for event in &mut events {
+        if let DomainEvent::AppealResolved(resolved) = event {
+            resolved.profile_ids = profile_ids.to_vec();
+        }
+    }
+    events
 }
 
 #[cfg(test)]
@@ -347,6 +365,54 @@ mod tests {
         let out = fx.resolve_appeal_handler().handle(resolve, t0()).await.unwrap();
         assert!(out.reversal.is_none());
         assert!(fx.projection.is_actor_restricted(&subject().actor_id()).await.unwrap());
+    }
+
+    /// #744: the outcome names the appellant account's profiles, which
+    /// notification tells — read before anything is written.
+    #[tokio::test]
+    async fn the_outcome_names_the_appellants_profiles_or_resolves_nothing() {
+        let fx = Fixture::new();
+        let decision_id = actioned_decision(&fx, PolicyCategory::Harassment).await;
+        let file = Envelope::new(
+            Uuid::now_v7(),
+            FileAppealCommand { decision_id, actor_id: subject().actor_id(), statement: "unfair".into() },
+        );
+        let appeal = fx.file_appeal_handler().handle(file, t0()).await.unwrap();
+
+        // The profile directory is down: nothing is resolved, the appeal waits.
+        fx.subjects.profiles_down.store(true, std::sync::atomic::Ordering::SeqCst);
+        let err = fx.resolve_appeal_handler().handle(resolve(appeal.id(), false), t0()).await.unwrap_err();
+        assert!(matches!(err, ModerationError::ContentDirectoryUnavailable), "{err:?}");
+        let stored = fx.appeals.find_by_id(&appeal.id()).await.unwrap().unwrap();
+        assert!(!stored.status().is_terminal(), "the appeal is still open");
+
+        fx.subjects.profiles_down.store(false, std::sync::atomic::Ordering::SeqCst);
+        fx.subjects.with_profiles(subject().actor_id(), &["pro-1", "pro-2"]);
+        fx.publisher.clear();
+        fx.resolve_appeal_handler().handle(resolve(appeal.id(), false), t0()).await.unwrap();
+        let Some(DomainEvent::AppealResolved(resolved)) = fx.publisher.events().pop() else {
+            panic!("AppealResolved last");
+        };
+        assert_eq!(resolved.profile_ids, vec!["pro-1".to_owned(), "pro-2".to_owned()]);
+        assert!(!resolved.overturned && !resolved.by_reporter);
+    }
+
+    /// Events from before the field read as naming nobody.
+    #[test]
+    fn an_older_appeal_resolved_names_no_profile() {
+        let json = serde_json::json!({
+            "type": "appeal_resolved",
+            "appeal_id": Uuid::now_v7(),
+            "decision_id": Uuid::now_v7(),
+            "actor_id": Uuid::now_v7(),
+            "overturned": true,
+            "occurred_at": t0(),
+            "correlation_id": Uuid::now_v7(),
+        });
+        let Ok(DomainEvent::AppealResolved(e)) = serde_json::from_value::<DomainEvent>(json) else {
+            panic!("decodes");
+        };
+        assert!(e.profile_ids.is_empty() && !e.by_reporter);
     }
 
     #[tokio::test]

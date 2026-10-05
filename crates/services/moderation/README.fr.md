@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 91b274c0875b67c2b7f68df85139c9ee3a68e9976d0c93ac9182f370d38aadc7
+  source_sha256: 4eafb1371024ded5a8993600460b0128cad2a121f1a122ef5dc0a37c7ecfb3bd
   translated_at: 2026-10-05
   status: complete
 ---
@@ -160,7 +160,10 @@ rpc GetEnforcementState   (..) returns (..);   // edge : son propre état unique
 > état. Le requérant le suit (art. 20(4)–(5)) : son exposé des motifs porte `appeal` (son recours contre cette
 > décision), et `ListMyAppeals` (edge `authenticated`, le requérant est le jeton, du plus récent au plus ancien, paginé
 > comme `ListMyReports`) renvoie le `status` de chaque recours et, une fois tranché, `resolved_at` et les motifs du
-> modérateur (`outcome`, tiré de `ResolveAppeal.rationale`, obligatoire).
+> modérateur (`outcome`, tiré de `ResolveAppeal.rationale`, obligatoire). Le résultat est aussi **notifié** (#744) :
+> `appeal_resolved` nomme les profils du compte requérant (`profile_ids`, tirés de `ListProfilesByAccount` de profile,
+> sans les profils supprimés), et `notification` informe chacun d'eux. Ils sont lus avant toute écriture : si l'annuaire
+> des profils est injoignable, `ResolveAppeal` répond `MOD-8004` (`UNAVAILABLE`, à réessayer) sans rien trancher.
 >
 > **Le recours de l'auteur d'un signalement (DSA art. 20(1)).** Le notifiant est aussi un plaignant : un **membre** qui
 > a signalé le contenu avant la décision peut la contester (`FileAppeal` avec son propre compte en `actor_id` ; vérifié

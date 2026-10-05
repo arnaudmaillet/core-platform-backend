@@ -16,6 +16,10 @@ pub enum NotificationKind {
     FollowRequest,
     /// The recipient's follow request was accepted (#755).
     FollowAccepted,
+    /// The recipient's appeal was decided: the decision stands (#744).
+    AppealUpheld,
+    /// The recipient's appeal was decided in their favour (#744).
+    AppealOverturned,
 }
 
 impl NotificationKind {
@@ -28,6 +32,8 @@ impl NotificationKind {
             Self::Follow         => 5,
             Self::FollowRequest  => 6,
             Self::FollowAccepted => 7,
+            Self::AppealUpheld     => 8,
+            Self::AppealOverturned => 9,
         }
     }
 
@@ -40,6 +46,8 @@ impl NotificationKind {
             5 => Ok(Self::Follow),
             6 => Ok(Self::FollowRequest),
             7 => Ok(Self::FollowAccepted),
+            8 => Ok(Self::AppealUpheld),
+            9 => Ok(Self::AppealOverturned),
             n => Err(NotificationError::UnknownNotificationKind { kind: n.to_string() }),
         }
     }
@@ -57,6 +65,8 @@ impl NotificationKind {
             Self::Follow         => "follow",
             Self::FollowRequest  => "follow_request",
             Self::FollowAccepted => "follow_accepted",
+            Self::AppealUpheld     => "appeal_upheld",
+            Self::AppealOverturned => "appeal_overturned",
         }
     }
 }

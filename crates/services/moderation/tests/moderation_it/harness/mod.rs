@@ -64,6 +64,10 @@ impl moderation::application::port::SubjectResolver for StubSubjects {
     ) -> Result<Option<ActorId>, ModerationError> {
         Ok(entity_id.starts_with("post-").then(|| ActorId::from_uuid(OWNER)))
     }
+
+    async fn profiles_of(&self, account: &ActorId) -> Result<Vec<String>, ModerationError> {
+        Ok(vec![format!("profile-of-{}", account.as_str())])
+    }
 }
 
 /// Report quota in this suite: 3 per hour (real Redis counters).

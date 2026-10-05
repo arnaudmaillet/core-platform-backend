@@ -53,6 +53,8 @@ integration-notification = []
 tokio = { workspace = true }
 # Wire contract test of the follow worker against social-graph's own events.
 social-graph = { workspace = true }
+# Wire contract test of the appeal worker against moderation's own events.
+moderation = { workspace = true }
 # Edge principals (the token's claims) in the integration suite.
 auth-context = { workspace = true }
 

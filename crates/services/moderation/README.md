@@ -149,7 +149,10 @@ rpc GetEnforcementState   (..) returns (..);   // edge: own state only; DISCOURA
 > it (Art. 20(4)–(5)): their statement carries `appeal` (their appeal of that decision), and `ListMyAppeals` (edge
 > `authenticated`, the appellant is the token, newest first, paged like `ListMyReports`) returns each appeal's
 > `status` and, once resolved, `resolved_at` and the reviewer's reasons (`outcome`, from `ResolveAppeal.rationale`,
-> required).
+> required). The outcome is also **notified** (#744): `appeal_resolved` names the appellant account's profiles
+> (`profile_ids`, from profile's `ListProfilesByAccount`, deleted ones left out), and `notification` tells each of
+> them. They are read before anything is written, so an unreachable profile directory makes `ResolveAppeal` answer
+> `MOD-8004` (`UNAVAILABLE`, retry) with nothing resolved.
 >
 > **A reporter's appeal (DSA Art. 20(1)).** The notifier is a complainant too: a **member** who reported the content
 > before the decision may appeal it (`FileAppeal` with their own account as `actor_id`; checked against `reports`).

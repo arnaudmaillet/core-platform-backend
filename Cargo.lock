@@ -3443,6 +3443,7 @@ dependencies = [
  "fred",
  "futures",
  "http",
+ "moderation",
  "notification-api",
  "once_cell",
  "redis-storage",

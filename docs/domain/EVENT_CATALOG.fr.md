@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 7982baee59c2f5974f128bae19d14731269e7e29f7025c45578d6203cf7a9d30
+  source_sha256: 017524c2794a42c745a329a845f02a2783f9ccfc605919c12b7c94857622bb39
   translated_at: 2026-10-05
   status: complete
 ---
@@ -62,7 +62,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `chat.member.left` | `chat` | — *(orphan — see below)* |
 | `chat.message.sent` | `chat` | — *(orphan — see below)* |
 | `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery`, `timeline` |
-| `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline` |
+| `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline`, `notification` |
 | `auth.v1.events` | `auth` | `audit` |
 | `media.v1.events` | `media` | `media` |
 
@@ -163,7 +163,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `decision_recorded` | une décision d'intégrité faisant autorité a été prise — porte *qui a décidé* + *pourquoi* (SoR DSA) | une décision est enregistrée (auto-screen / revue humaine / réversion d'appel) | `audit` (scelle la justification en enveloppe crypto-shred) |
 | `enforcement_applied` / `enforcement_reversed` | une conséquence a été appliquée/levée contre un acteur (versionnée) | l'enforcement commite | `timeline`, `chat`, `account` (dénorm Plane-B) ; `post` (garde la restriction qu'appliquent ses lectures : `remove_content` → auteur seul) ; `search`, `media` (visibilité / retrait) ; `geo-discovery` (suppression de la carte : `remove_content` / `visibility_limit` masquent un post, une réversion le restaure) ; `audit` |
 | `case_opened` / `case_resolved` | une unité de revue a été ouverte/fermée | seuil d'ingestion / action du relecteur | consommateurs Plane-B |
-| `appeal_resolved` | un appel a été tranché | résolution de l'appel | consommateurs Plane-B |
+| `appeal_resolved` | un appel a été tranché (maintenu / annulé ; `by_reporter` ; `profile_ids` = les profils du compte appelant) | résolution de l'appel | `notification` (informe chacun des `profile_ids` du résultat, #744) |
 
 > Clé `actor_id` pour l'ordonnancement par acteur. `decision_recorded` est la variante preuve de
 > conformité (les consommateurs offender-centric l'ignorent ; `audit` consomme celui-ci +

@@ -6,3 +6,4 @@ mod stream_lifetime;
 mod unread_counter;
 mod comment_notifications;
 mod follow_notifications;
+mod appeal_notifications;

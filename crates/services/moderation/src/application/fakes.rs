@@ -558,11 +558,19 @@ impl EventPublisher for RecordingEventPublisher {
 #[derive(Default)]
 pub struct StubSubjectResolver {
     pub owners: Mutex<HashMap<String, ActorId>>,
+    /// Account → its profiles.
+    pub profiles: Mutex<HashMap<ActorId, Vec<String>>>,
+    /// Makes the profile directory unreachable.
+    pub profiles_down: std::sync::atomic::AtomicBool,
 }
 
 impl StubSubjectResolver {
     pub fn own(&self, entity_id: &str, account: ActorId) {
         self.owners.lock().unwrap().insert(entity_id.to_owned(), account);
+    }
+
+    pub fn with_profiles(&self, account: ActorId, profiles: &[&str]) {
+        self.profiles.lock().unwrap().insert(account, profiles.iter().map(|p| (*p).to_owned()).collect());
     }
 }
 
@@ -574,6 +582,13 @@ impl super::port::SubjectResolver for StubSubjectResolver {
         entity_id: &str,
     ) -> Result<Option<ActorId>, ModerationError> {
         Ok(self.owners.lock().unwrap().get(entity_id).copied())
+    }
+
+    async fn profiles_of(&self, account: &ActorId) -> Result<Vec<String>, ModerationError> {
+        if self.profiles_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(ModerationError::ContentDirectoryUnavailable);
+        }
+        Ok(self.profiles.lock().unwrap().get(account).cloned().unwrap_or_default())
     }
 }
 
@@ -706,6 +721,7 @@ impl Fixture {
             Arc::clone(&self.enforcements) as _,
             Arc::clone(&self.cases) as _,
             Arc::clone(&self.projection) as _,
+            Arc::clone(&self.subjects) as _,
             Arc::clone(&self.publisher) as _,
         )
     }
