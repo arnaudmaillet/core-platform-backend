@@ -17,8 +17,9 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    ChangePasswordHandler, LoginHandler, LogoutAllSessionsHandler, LogoutHandler, MemberSessions,
-    RefreshHandler, SignUpHandler, StartGuestSessionHandler, VerificationCodes, VerifyCredentialsHandler,
+    ChangePasswordHandler, FederatedNonces, LoginHandler, LogoutAllSessionsHandler, LogoutHandler, MemberSessions,
+    NonceBoundVerifier, RefreshHandler, SignUpHandler, StartGuestSessionHandler, VerificationCodes,
+    VerifyCredentialsHandler,
 };
 use crate::application::port::{
     AccountDirectory, CredentialAdmin, EventPublisher, FederatedTokenVerifier, GuestRegistry,
@@ -30,7 +31,7 @@ use crate::application::port::{
 use crate::application::query::{IntrospectHandler, ListSessionsHandler};
 use crate::application::SessionPolicy;
 use crate::config::AuthConfig;
-use crate::infrastructure::cache::{RedisSessionCache, RedisVerificationStore};
+use crate::infrastructure::cache::{RedisNonceStore, RedisSessionCache, RedisVerificationStore};
 use crate::infrastructure::notify::{ChannelCodeSender, LogCodeSender, SmtpCodeSender, SnsCodeSender};
 use crate::application::port::CodeSender;
 use crate::infrastructure::directory::{GrpcAccountDirectory, GrpcProfileDirectory};
@@ -68,6 +69,9 @@ pub struct AppDeps {
     pub federated: Arc<dyn FederatedTokenVerifier>,
     /// Email one-time codes (StartVerification, code SignUp / Login).
     pub codes: Arc<VerificationCodes>,
+    /// Server-issued sign-in nonces (StartFederatedSignIn), redeemed by the
+    /// id_token SignUp / Login.
+    pub nonces: Arc<FederatedNonces>,
     pub policy: SessionPolicy,
 }
 
@@ -98,6 +102,9 @@ impl App {
     /// Pure composition: assemble the six application handlers from the ports and
     /// wrap them in the gRPC handler. No I/O — drives the unit/integration graph.
     pub fn compose(deps: AppDeps) -> AuthServiceHandler {
+        // Every id_token sign-in also redeems its server-issued nonce.
+        let federated: Arc<dyn FederatedTokenVerifier> =
+            Arc::new(NonceBoundVerifier::new(Arc::clone(&deps.federated), Arc::clone(&deps.nonces)));
         let login = Arc::new(LoginHandler::new(
             Arc::clone(&deps.idp),
             Arc::clone(&deps.directory),
@@ -110,10 +117,10 @@ impl App {
             Arc::clone(&deps.publisher),
             deps.policy.clone(),
         )
-        .with_federated(Arc::clone(&deps.federated), Arc::clone(&deps.guests))
+        .with_federated(Arc::clone(&federated), Arc::clone(&deps.guests))
         .with_codes(Arc::clone(&deps.codes)));
         let sign_up = Arc::new(SignUpHandler::new(
-            Arc::clone(&deps.federated),
+            Arc::clone(&federated),
             Arc::clone(&deps.directory),
             Arc::clone(&deps.links),
             Arc::clone(&deps.guests),
@@ -197,6 +204,7 @@ impl App {
         )
         .with_sign_up(sign_up)
         .with_codes(deps.codes)
+        .with_federated_nonces(deps.nonces)
     }
 
     /// Builds the concrete adapter graph from config + backend connections.
@@ -310,6 +318,10 @@ impl App {
                 code_sender,
                 config.verification.clone(),
             )),
+            nonces: Arc::new(FederatedNonces::new(
+                Arc::new(RedisNonceStore::new(redis.clone())),
+                config.federated_nonce_required,
+            )),
             policy: config.policy,
         };
 
@@ -345,6 +357,10 @@ mod tests {
                 Arc::new(crate::application::fakes::InMemoryVerificationStore::default()),
                 Arc::new(crate::application::fakes::RecordingCodeSender::default()),
                 crate::application::command::VerificationPolicy::default(),
+            )),
+            nonces: Arc::new(FederatedNonces::new(
+                Arc::new(crate::application::fakes::InMemoryNonceStore::default()),
+                true,
             )),
             policy: fx.policy.clone(),
         })

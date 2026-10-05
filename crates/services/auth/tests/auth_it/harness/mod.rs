@@ -206,6 +206,10 @@ impl Harness {
                 std::sync::Arc::new(auth::infrastructure::notify::LogCodeSender),
                 auth::application::command::VerificationPolicy::default(),
             )),
+            nonces: std::sync::Arc::new(auth::application::command::FederatedNonces::new(
+                std::sync::Arc::new(auth::infrastructure::cache::RedisNonceStore::new(redis.clone())),
+                true,
+            )),
             policy: SessionPolicy::new(
                 ChronoDuration::minutes(10),
                 ChronoDuration::minutes(30),

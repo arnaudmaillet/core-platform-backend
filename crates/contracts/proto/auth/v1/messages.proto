@@ -82,8 +82,9 @@ message PasswordGrant {
 message IdTokenGrant {
     FederatedProvider   provider  = 1;
     string              id_token  = 2;
-    // The raw nonce the app generated for this sign-in. The token's `nonce`
-    // claim must equal it, or its SHA-256 hex (what the app passes to Apple).
+    // The raw nonce of this sign-in, from StartFederatedSignIn (single use).
+    // The token's `nonce` claim must equal it, or its SHA-256 hex (what the app
+    // passes to Apple).
     string              nonce     = 3;
 }
 
@@ -190,6 +191,15 @@ message StartVerificationRequest {
     // BCP-47, for the message's language.
     string              locale      = 3;
     DeviceContext       device      = 4;
+}
+
+message StartFederatedSignInRequest {}
+
+message StartFederatedSignInResponse {
+    // The raw nonce (base64url, no padding). Single use.
+    string  nonce            = 1;
+    // It must be redeemed (SignUp / Login) within this many seconds.
+    int64   expires_in_secs  = 2;
 }
 
 message StartVerificationResponse {

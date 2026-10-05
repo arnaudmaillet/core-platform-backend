@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: c271868c8f37aeb53da19d9ba675889053d33ee2ee639b7dd2f6aa6cc807c2ad
+  source_sha256: 860e222b25d43b87df0bfbaeca3ef32bf73dfa27cd15c1a2d729a14197e7bd51
   translated_at: 2026-10-05
   status: complete
 ---
@@ -87,6 +87,13 @@ l'outbox (le plan d'audit enregistre des comptes). La vérification App Attest e
 Google**. auth vérifie lui-même le jeton contre les JWKS du fournisseur (signature, émetteur,
 audience = les client ids de l'app `AUTH_APPLE_AUDIENCES` / `AUTH_GOOGLE_AUDIENCES`, expiration,
 nonce — le nonce brut ou son SHA-256 hex) ; un fournisseur sans client id est désactivé (`AUT-5009`).
+**Le nonce est celui du serveur :** l'app appelle d'abord `StartFederatedSignIn` (edge **public**)
+pour un nonce à usage unique (32 octets aléatoires, base64url ; Redis `auth:{fnonce:<sha256>}`,
+10 min), le passe au fournisseur (Apple : son SHA-256 hex) et le renvoie brut ; `SignUp` / `Login` le
+consomment une fois le jeton vérifié, si bien qu'un id_token volé ne peut pas être rejoué pendant sa
+durée de vie. Tant que tous les clients ne le font pas, `AUTH_FEDERATED_NONCE_REQUIRED=false` (par
+défaut) se contente de journaliser un nonce que le serveur n'a pas émis ; `true` le refuse
+(`AUT-5008`).
 La requête porte aussi la **date de naissance** (sous l'âge minimum → `AUT-6005`, rien n'est créé),
 le **consentement** (version de la politique, traitement des données obligatoire, marketing,
 analytics) et le **pays d'origine**. Le compte est créé via `account` (`CreateAccount` →
@@ -248,6 +255,7 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_ACCOUNT_RPC_TIMEOUT_MS` · `AUTH_ACCOUNT_CONNECT_TIMEOUT_MS` | Deadlines par requête / de connexion sur le canal `account` (chemin chaud du login — échouer vite, ne jamais bloquer) | `2000` · `2000` |
 | `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Deadlines de requête / de connexion des appels HTTP Keycloak (échange de token) | `5000` · `2000` |
 | `AUTH_GUEST_SESSIONS_ENABLED` | Interrupteur de `StartGuestSession`. **Désactivé par défaut** : il écrit une session par appel sans identifiant, donc à laisser éteint partout où les contrôles anti-abus (limites par IP / par appareil, App Attest) ne sont pas devant lui. Éteint → `AUT-1005` (`PERMISSION_DENIED`). | `false` |
+| `AUTH_FEDERATED_NONCE_REQUIRED` | Un `SignUp` / `Login` par id_token doit consommer un nonce de `StartFederatedSignIn` (sinon `AUT-5008`). Désactivé : un nonce créé par le client est seulement journalisé — à activer quand tous les clients appellent `StartFederatedSignIn`. | `false` |
 | `AUTH_APPLE_AUDIENCES` · `AUTH_GOOGLE_AUDIENCES` | Client ids (séparés par des virgules) pour lesquels un id_token Apple / Google doit être émis (`aud` : bundle / services ids de l'app ; client ids OAuth Google). Vide = l'inscription par ce fournisseur est désactivée (`AUT-5009`). | — |
 | `AUTH_FEDERATED_JWKS_TIMEOUT_MS` | Délai de récupération des JWKS d'un fournisseur. | `3000` |
 | `AUTH_VERIFICATION_SENDER` | Mode d'envoi des codes : `smtp` (Amazon SES), `log` (exécutions locales uniquement — le code est journalisé), non défini = désactivé (`AUT-5012`). | — |

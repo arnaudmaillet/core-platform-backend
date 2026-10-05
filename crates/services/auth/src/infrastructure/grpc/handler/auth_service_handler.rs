@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use transport::grpc::edge;
 use crate::application::command::{
-    ChangePasswordCommand, ChangePasswordHandler, IssuedSession, LoginCommand, LoginHandler,
+    ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, IssuedSession, LoginCommand, LoginHandler,
     LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutCommand, LogoutHandler,
     RefreshCommand, RefreshHandler, SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome,
     StartGuestSessionCommand, StartGuestSessionHandler, StartVerificationCommand, VerificationCodes,
@@ -44,6 +44,7 @@ pub struct AuthServiceHandler {
     verify_credentials: Arc<VerifyCredentialsHandler>,
     sign_up: Option<Arc<SignUpHandler>>,
     codes: Option<Arc<VerificationCodes>>,
+    nonces: Option<Arc<FederatedNonces>>,
 }
 
 impl AuthServiceHandler {
@@ -71,6 +72,7 @@ impl AuthServiceHandler {
             verify_credentials,
             sign_up: None,
             codes: None,
+            nonces: None,
         }
     }
 
@@ -104,6 +106,25 @@ impl AuthServiceHandler {
             challenge_id: started.challenge_id,
             expires_in_secs: started.expires_in_secs,
             resend_after_secs: started.resend_after_secs,
+        }))
+    }
+
+    /// Enables StartFederatedSignIn (server-issued sign-in nonces).
+    pub fn with_federated_nonces(mut self, nonces: Arc<FederatedNonces>) -> Self {
+        self.nonces = Some(nonces);
+        self
+    }
+
+    /// Edge `public`: a single-use nonce for a native Sign in with Apple / Google.
+    pub async fn start_federated_sign_in(
+        &self,
+        _request: Request<proto::StartFederatedSignInRequest>,
+    ) -> Result<Response<proto::StartFederatedSignInResponse>, Status> {
+        let nonces = self.nonces.as_ref().ok_or_else(|| Status::unimplemented("sign-in nonces are not enabled"))?;
+        let started = nonces.start().await.map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::StartFederatedSignInResponse {
+            nonce: started.nonce,
+            expires_in_secs: started.expires_in_secs,
         }))
     }
 

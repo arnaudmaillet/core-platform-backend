@@ -39,6 +39,13 @@ impl AuthService for AuthServiceHandler {
         self.sign_up(request).await
     }
 
+    async fn start_federated_sign_in(
+        &self,
+        request: Request<proto::StartFederatedSignInRequest>,
+    ) -> Result<Response<proto::StartFederatedSignInResponse>, Status> {
+        self.start_federated_sign_in(request).await
+    }
+
     async fn logout(
         &self,
         request: Request<proto::LogoutRequest>,

@@ -51,6 +51,8 @@ impl Service for AuthService {
         // One-time codes to an email address (passwordless sign-up / sign-in);
         // budgeted per address here and per IP at the edge.
         public("/auth.v1.AuthService/StartVerification"),
+        // A single-use nonce for native Sign in with Apple / Google.
+        public("/auth.v1.AuthService/StartFederatedSignIn"),
         authenticated("/auth.v1.AuthService/Logout"),
         authenticated("/auth.v1.AuthService/LogoutAllSessions"),
         authenticated("/auth.v1.AuthService/ListSessions"),
