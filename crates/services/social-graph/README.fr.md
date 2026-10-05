@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 979f1d314f5e880a2d9a2cbc154a5c09bac0e691fdc872adb55973d067c7a2f3
+  source_sha256: dd35f4caedfade8273dcce75c25d16eb237e7653445962cbde85c58e9afdacaf
   translated_at: 2026-10-05
   status: complete
 ---
@@ -147,7 +147,7 @@ service SocialGraphService {
   rpc ListBlocks(ListBlocksRequest) returns (ListBlocksResponse);
   rpc ListMutes(ListMutesRequest) returns (ListMutesResponse);   // propriétaire
   rpc ListRestricted(ListRestrictedRequest) returns (ListRestrictedResponse);   // propriétaire
-  rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY
+  rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY : par cible, l'accès au contenu, plus `follows` / `mutual` (un profil lecteur suit la cible / ils se suivent mutuellement — l'audience de localisation d'un auteur, #657)
   rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);   // MESH-ONLY : l'acteur peut-il commenter / mentionner / écrire à la cible (ses réglages d'interaction profile, blocages) ; `held` quand la limite temporaire de la cible (#669) couvre l'acteur — un commentaire / message d'un non-abonné, ou d'un abonné de moins de 7 jours sous `recent_followers` ; en cas de refus, `refusal` dit pourquoi (`BLOCKED`, `NO_ONE`, ou `AUDIENCE` : l'audience abonnés / mutuels exclut l'acteur — chat fait alors de ce message une demande, #656)
   rpc ListMutedProfiles(ListMutedProfilesRequest) returns (ListMutedProfilesResponse);   // MESH-ONLY : les mises en sourdine d'un lecteur pour une portée (timeline)
   rpc ListRestrictedAmong(ListRestrictedAmongRequest) returns (ListRestrictedAmongResponse);   // MESH-ONLY : quels commentateurs le propriétaire du post a restreints (comment)

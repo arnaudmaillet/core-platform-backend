@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::application::port::SocialGraphRepository;
-use crate::domain::access::ContentAccess;
+use crate::domain::access::{ContentAccess, Relationship};
 use crate::domain::value_object::ProfileId;
 use crate::error::SocialGraphError;
 
@@ -22,7 +22,16 @@ pub struct CheckAccessQuery {
 }
 
 impl Query for CheckAccessQuery {
-    type Response = Vec<(ProfileId, ContentAccess)>;
+    type Response = Vec<TargetAnswer>;
+}
+
+/// One target's answer: the content access, and how the viewers relate to
+/// it (an author's location audience, #657).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetAnswer {
+    pub target:   ProfileId,
+    pub access:   ContentAccess,
+    pub relation: Relationship,
 }
 
 pub struct CheckAccessHandler {
@@ -51,7 +60,7 @@ impl QueryHandler<CheckAccessQuery> for CheckAccessHandler {
     async fn handle(
         &self,
         envelope: Envelope<CheckAccessQuery>,
-    ) -> Result<Vec<(ProfileId, ContentAccess)>, Self::Error> {
+    ) -> Result<Vec<TargetAnswer>, Self::Error> {
         let q = &envelope.payload;
         let viewers = parse(&q.viewer_profile_ids, "viewer_profile_ids", MAX_VIEWERS)?;
         let mut targets = parse(&q.target_profile_ids, "target_profile_ids", MAX_TARGETS)?;
@@ -59,6 +68,9 @@ impl QueryHandler<CheckAccessQuery> for CheckAccessHandler {
         targets.dedup();
 
         let facts = self.repo.load_access_facts(&viewers, &targets).await?;
-        Ok(targets.iter().map(|t| (*t, facts.access(&viewers, t))).collect())
+        Ok(targets
+            .iter()
+            .map(|t| TargetAnswer { target: *t, access: facts.access(&viewers, t), relation: facts.relation(&viewers, t) })
+            .collect())
     }
 }

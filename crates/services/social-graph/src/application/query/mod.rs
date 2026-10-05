@@ -10,7 +10,7 @@ pub mod list_following;
 pub mod mutes;
 pub mod restrictions;
 
-pub use check_access::{CheckAccessHandler, CheckAccessQuery};
+pub use check_access::{CheckAccessHandler, CheckAccessQuery, TargetAnswer};
 pub use check_interaction::{CheckInteractionHandler, CheckInteractionQuery};
 pub use get_list_privacy::{GetListPrivacyHandler, GetListPrivacyQuery};
 pub use get_relation_status::{GetRelationStatusQuery, GetRelationStatusHandler};
