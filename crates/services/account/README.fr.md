@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: bdceec11bdbb6229b430293ed5455e5bc257c0a3975a247f175d70bb9053aa30
-  translated_at: 2026-10-04
+  source_sha256: 2cafbea9bceb3277819eb3110a3e3683db6e3ec89c5370ddeb9dd46701a41116
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -128,6 +128,8 @@ service AccountService {
   rpc CreateAccount (CreateAccountRequest) returns (CommandResponse);
   rpc VerifyEmail (VerifyEmailRequest) returns (CommandResponse);   // mesh uniquement : auth, après une preuve (id_token vérifié ou code)
   rpc VerifyPhone (VerifyPhoneRequest) returns (CommandResponse);   // mesh uniquement : auth, après un code SMS
+  rpc ChangeEmail (ChangeEmailRequest) returns (CommandResponse);   // mesh uniquement : auth, après un code envoyé à la nouvelle adresse (#651)
+  rpc ChangePhone (ChangePhoneRequest) returns (CommandResponse);   // mesh uniquement : idem, par SMS — les deux posent et vérifient d'un coup ; ACC-1003/1004 si déjà prise
   rpc ChangePassword (ChangePasswordRequest) returns (CommandResponse);
   rpc EnrollMfa (EnrollMfaRequest) returns (CommandResponse);
   rpc RevokeMfa (RevokeMfaRequest) returns (CommandResponse);

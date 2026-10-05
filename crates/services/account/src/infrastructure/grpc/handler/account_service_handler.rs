@@ -27,6 +27,7 @@ use crate::application::command::{
     update_consents::UpdateConsentsCommand,
     update_kyc_status::UpdateKycStatusCommand,
     verify_email::VerifyEmailCommand,
+    change_contact::{ChangeEmailCommand, ChangePhoneCommand},
     verify_phone::VerifyPhoneCommand,
 };
 use crate::application::query::{
@@ -126,6 +127,36 @@ where
 
     /// Mesh only (not in `EDGE_POLICY`): it carries no proof, so auth calls it
     /// once the holder proved the address (a verified id_token or a code).
+    /// Mesh only (absent from the edge policy): auth, after the holder proved
+    /// the new address (#651).
+    pub async fn change_email(
+        &self,
+        request: Request<proto::ChangeEmailRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        let req = request.into_inner();
+        let cmd = ChangeEmailCommand { account_id: req.account_id.clone(), email: req.email };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_command(&req.account_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    /// Mesh only (absent from the edge policy): auth, after the holder proved
+    /// the new number (#651).
+    pub async fn change_phone(
+        &self,
+        request: Request<proto::ChangePhoneRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        let req = request.into_inner();
+        let cmd = ChangePhoneCommand { account_id: req.account_id.clone(), phone: req.phone };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_command(&req.account_id))
+            .map_err(cqrs_error_to_status)
+    }
+
     pub async fn verify_email(
         &self,
         request: Request<proto::VerifyEmailRequest>,

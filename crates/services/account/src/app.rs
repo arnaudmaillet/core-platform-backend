@@ -29,7 +29,8 @@ use crate::application::command::{
     ResumeDeactivatedAccountCommand, ResumeDeactivatedAccountHandler,
     RevokeMfaCommand, RevokeMfaHandler, RevokeRoleCommand, RevokeRoleHandler, SuspendAccountCommand,
     SuspendAccountHandler, UpdateConsentsCommand, UpdateConsentsHandler, UpdateKycStatusCommand, UpdateKycStatusHandler, VerifyEmailCommand,
-    VerifyEmailHandler, VerifyPhoneCommand, VerifyPhoneHandler,
+    VerifyEmailHandler, VerifyPhoneCommand, VerifyPhoneHandler, ChangeEmailCommand, ChangeEmailHandler,
+    ChangePhoneCommand, ChangePhoneHandler,
 };
 use crate::application::port::{AccountRepository, EventPublisher};
 use crate::application::query::{
@@ -68,6 +69,8 @@ impl App {
                 .register::<CreateAccountCommand, _>(CreateAccountHandler::new(Arc::clone(&repository)))?
                 .register::<VerifyEmailCommand, _>(VerifyEmailHandler::new(Arc::clone(&repository)))?
                 .register::<VerifyPhoneCommand, _>(VerifyPhoneHandler::new(Arc::clone(&repository)))?
+                .register::<ChangeEmailCommand, _>(ChangeEmailHandler::new(Arc::clone(&repository)))?
+                .register::<ChangePhoneCommand, _>(ChangePhoneHandler::new(Arc::clone(&repository)))?
                 .register::<ChangePasswordCommand, _>(ChangePasswordHandler::new(Arc::clone(&repository)))?
                 .register::<EnrollMfaCommand, _>(EnrollMfaHandler::new(Arc::clone(&repository)))?
                 .register::<RevokeMfaCommand, _>(RevokeMfaHandler::new(Arc::clone(&repository)))?

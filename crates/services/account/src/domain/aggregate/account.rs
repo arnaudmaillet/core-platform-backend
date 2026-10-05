@@ -324,6 +324,34 @@ impl Account {
         Ok(())
     }
 
+    /// Replaces the email with one its holder just proved they control (#651:
+    /// auth checked a one-time code sent to it): set and verified at once.
+    /// Requires `Active`. Emits [`EmailChanged`] then [`EmailVerified`].
+    pub fn replace_email_proven(&mut self, new_email: EmailAddress, correlation_id: Uuid) -> Result<(), AccountError> {
+        self.change_email(new_email.clone(), correlation_id)?;
+        let now = Utc::now();
+        self.email_verified = true;
+        self.email_verified_at = Some(now);
+        self.pending_events.push(DomainEvent::EmailVerified(EmailVerified {
+            account_id: self.id,
+            email: new_email,
+            verified_at: now,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(())
+    }
+
+    /// Replaces the phone number with one its holder just proved (#651: a
+    /// one-time SMS code): set and verified at once. Requires `Active`. Emits
+    /// [`PhoneChanged`].
+    pub fn replace_phone_proven(&mut self, new_phone: PhoneNumber, correlation_id: Uuid) -> Result<(), AccountError> {
+        self.change_phone(Some(new_phone), correlation_id)?;
+        self.phone_verified = true;
+        self.phone_verified_at = Some(Utc::now());
+        Ok(())
+    }
+
     /// Updates (or removes) the phone number.
     ///
     /// Requires `Active` status. Emits [`PhoneChanged`].
@@ -1292,5 +1320,21 @@ mod tests {
             account.anonymize(Uuid::now_v7()).unwrap();
             assert_eq!(account.status(), AccountStatus::Deleted, "{status}");
         }
+    }
+
+    #[test]
+    fn a_proven_contact_replaces_the_old_one_verified_at_once() {
+        let mut account = admin_account_with_overrides(vec![]);
+        let new_email = EmailAddress::new("new@example.com").unwrap();
+        account.replace_email_proven(new_email.clone(), Uuid::now_v7()).unwrap();
+        assert_eq!(account.email(), Some(&new_email));
+        assert!(account.email_verified() && account.email_verified_at().is_some());
+        let kinds: Vec<_> = account.drain_events().iter().map(std::mem::discriminant).collect();
+        assert_eq!(kinds.len(), 2, "EmailChanged then EmailVerified");
+
+        let phone = PhoneNumber::new("+33612345678").unwrap();
+        account.replace_phone_proven(phone.clone(), Uuid::now_v7()).unwrap();
+        assert_eq!(account.phone(), Some(&phone));
+        assert!(account.phone_verified());
     }
 }

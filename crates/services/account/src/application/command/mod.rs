@@ -20,6 +20,7 @@ pub mod set_date_of_birth;
 pub mod suspend_account;
 pub mod update_consents;
 pub mod update_kyc_status;
+pub mod change_contact;
 pub mod verify_email;
 pub mod verify_phone;
 
@@ -45,5 +46,6 @@ pub use set_date_of_birth::{SetDateOfBirthCommand, SetDateOfBirthHandler};
 pub use suspend_account::{SuspendAccountCommand, SuspendAccountHandler};
 pub use update_consents::{UpdateConsentsCommand, UpdateConsentsHandler};
 pub use update_kyc_status::{UpdateKycStatusCommand, UpdateKycStatusHandler};
+pub use change_contact::{ChangeEmailCommand, ChangeEmailHandler, ChangePhoneCommand, ChangePhoneHandler};
 pub use verify_email::{VerifyEmailCommand, VerifyEmailHandler};
 pub use verify_phone::{VerifyPhoneCommand, VerifyPhoneHandler};
