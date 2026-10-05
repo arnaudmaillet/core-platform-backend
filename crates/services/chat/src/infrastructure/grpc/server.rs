@@ -37,6 +37,7 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         audience_ttl_secs:           config.presence_ttl_secs,
         visibility_consumer_group:   "chat-visibility-consumer".to_owned(),
         presence_settings_consumer_group: "chat-presence-settings".to_owned(),
+        inbox_consumer_group:        "chat-inbox".to_owned(),
     };
 
     let backends = Backends {

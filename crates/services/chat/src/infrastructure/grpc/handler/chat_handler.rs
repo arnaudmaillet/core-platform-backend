@@ -23,9 +23,10 @@ use crate::application::port::{
     ReceiptStore, RoutingRegistry,
 };
 use crate::application::query::{
-    GetHistoryQuery, ListConversationsByMemberQuery, ListMembersQuery, ListSubscriptionsQuery, MemberConversation,
-    MemberView as QueryMemberView,
+    GetHistoryQuery, InboxPage, ListConversationsByMemberQuery, ListInboxQuery, ListMembersQuery,
+    ListSubscriptionsQuery, MemberConversation, MemberView as QueryMemberView,
 };
+use crate::application::port::Folder;
 use crate::domain::value_object::{ContentType, ConversationId, MessageId, ProfileId};
 use crate::error::ChatError;
 use crate::infrastructure::cache::keys::audience_shard_for;
@@ -490,6 +491,52 @@ where
         }))
     }
 
+    /// The caller's inbox, one folder (#656).
+    async fn list_inbox(
+        &self,
+        request: Request<proto::ListInboxRequest>,
+    ) -> Result<Response<proto::ListInboxResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let folder = match proto::InboxFolder::try_from(req.folder) {
+            Ok(proto::InboxFolder::Requests) => Folder::Requests,
+            Ok(proto::InboxFolder::Inbox) => Folder::Inbox,
+            Err(_) => return Err(Status::invalid_argument("unknown inbox folder")),
+        };
+        let query = ListInboxQuery {
+            profile_id: req.profile_id,
+            folder,
+            limit:      if req.limit > 0 { req.limit } else { 20 },
+            page_token: non_empty(req.page_token),
+        };
+        let page: InboxPage = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListInboxResponse {
+            entries: page
+                .items
+                .into_iter()
+                .map(|item| proto::InboxEntryView {
+                    conversation_id:  item.entry.conversation_id.as_str(),
+                    kind:             item.entry.kind.as_tinyint() as i32,
+                    peer_id:          item.entry.peer.map(|p| p.as_str()).unwrap_or_default(),
+                    last_activity_ms: item.entry.activity.timestamp_millis(),
+                    last_message:     item.entry.last.map(|l| proto::MessagePreview {
+                        message_id:   l.message_id.as_str(),
+                        sender_id:    l.sender_id.as_str(),
+                        content_type: l.content_type.as_tinyint() as i32,
+                        preview:      l.preview,
+                    }),
+                    unread:           item.unread,
+                    request:          item.request,
+                })
+                .collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+        }))
+    }
+
     /// Mesh only (#653): the conversations a profile is a member of, for the
     /// GDPR export.
     async fn list_conversations_by_member(
@@ -929,6 +976,13 @@ where
         request: Request<proto::ListConversationsByMemberRequest>,
     ) -> Result<Response<proto::ListConversationsByMemberResponse>, Status> {
         self.list_conversations_by_member(request).await
+    }
+
+    async fn list_inbox(
+        &self,
+        request: Request<proto::ListInboxRequest>,
+    ) -> Result<Response<proto::ListInboxResponse>, Status> {
+        self.list_inbox(request).await
     }
 
     async fn stream_conversation(

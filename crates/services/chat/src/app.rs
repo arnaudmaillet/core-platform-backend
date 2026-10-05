@@ -23,28 +23,29 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    CreateConversationCommand, CreateConversationHandler, DirectConversations, DirectMessaging, InviteMemberCommand,
+    CreateConversationCommand, CreateConversationHandler, DirectConversations, DirectMessaging, InboxProjector,
+    InviteMemberCommand,
     InviteMemberHandler, JoinAsMemberCommand, JoinAsMemberHandler,
     MarkReadCommand, MarkReadHandler, SendMessageHandler, SendMessages, SubscribeCommand,
     SubscribeHandler, ToggleVisibilityCommand, ToggleVisibilityHandler, UnsubscribeCommand,
     UnsubscribeHandler,
 };
 use crate::application::port::{
-    ConversationRepository, EventPublisher, HotTailCache, InteractionGate, MemberRepository, PresenceSettingsStore,
-    PresenceStore, ReceiptStore, RoutingRegistry,
+    ConversationRepository, EventPublisher, HotTailCache, InboxStore, InteractionGate, MemberRepository,
+    PresenceSettingsStore, PresenceStore, ReceiptStore, RoutingRegistry,
 };
 use crate::application::query::{
-    GetHistoryHandler, GetHistoryQuery, ListMembersHandler, ListMembersQuery,
+    GetHistoryHandler, GetHistoryQuery, ListInboxHandler, ListInboxQuery, ListMembersHandler, ListMembersQuery,
     ListConversationsByMemberHandler, ListConversationsByMemberQuery, ListSubscriptionsHandler, ListSubscriptionsQuery,
 };
 use crate::infrastructure::cache::{
     RedisHotTailCache, RedisPresenceStore, RedisReceiptStore, RedisRoutingRegistry,
 };
-use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
+use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher, ProjectingPublisher};
 use crate::infrastructure::grpc::handler::chat_handler::StreamingParams;
 use crate::infrastructure::grpc::handler::ChatServiceHandler;
 use crate::infrastructure::persistence::{
-    ScyllaConversationRepository, ScyllaInvitationRepository, ScyllaMemberRepository,
+    ScyllaConversationRepository, ScyllaInboxStore, ScyllaInvitationRepository, ScyllaMemberRepository,
     ScyllaMessageRepository,
     ScyllaPresenceSettingsStore, ScyllaSubscriptionRepository,
 };
@@ -52,7 +53,7 @@ use crate::infrastructure::routing::{
     Fanout, MessageFanout, PlaneAttach, PlaneSubscriber, RedisPlaneBroadcaster,
 };
 use crate::infrastructure::streaming::{ConversationBroadcastRegistry, PlaneFanoutSink};
-use crate::infrastructure::worker::{PresenceSettingsWorker, VisibilityWorker};
+use crate::infrastructure::worker::{InboxWorker, PresenceSettingsWorker, VisibilityWorker};
 
 /// Storage/transport endpoints the graph is wired against.
 ///
@@ -90,6 +91,8 @@ pub struct AppConfig {
     /// Kafka consumer-group id for the [`PresenceSettingsWorker`] (stable in
     /// production; scenarios suffix a UUID).
     pub presence_settings_consumer_group: String,
+    /// Kafka consumer-group id for the [`InboxWorker`] (#656).
+    pub inbox_consumer_group: String,
 }
 
 /// A fully-wired chat service bound to its backends, plus the shared `Arc`
@@ -141,6 +144,12 @@ impl App {
             Arc::new(ScyllaSubscriptionRepository::new(Arc::clone(&scylla_client)));
         let invitation_repo =
             Arc::new(ScyllaInvitationRepository::new(Arc::clone(&scylla_client)));
+        let inbox: Arc<dyn InboxStore> = Arc::new(ScyllaInboxStore::new(Arc::clone(&scylla_client)));
+        let inbox_projector = Arc::new(InboxProjector {
+            conversation_repo: Arc::clone(&conversation_repo) as Arc<dyn ConversationRepository>,
+            member_repo:       Arc::clone(&member_repo) as Arc<dyn MemberRepository>,
+            inbox:             Arc::clone(&inbox),
+        });
 
         // ── Cache / routing adapters ─────────────────────────────────────────
         let hot_tail = Arc::new(RedisHotTailCache::new(redis_client.clone()));
@@ -179,13 +188,19 @@ impl App {
             member_repo:       &member_repo,
             subscription_repo: &subscription_repo,
             invitation_repo:   &invitation_repo,
+            inbox:             &inbox,
         };
         let commands = match &kafka {
             Some(cfg) => {
                 let producer = KafkaProducerBuilder::new(ProducerConfig::new(cfg.clone())).build()?;
-                build_commands(Arc::new(KafkaEventPublisher::new(producer)), &repos, interaction_gate)?
+                build_commands(Arc::new(KafkaEventPublisher::new(producer)), &repos, interaction_gate.clone())?
             }
-            None => build_commands(Arc::new(LogEventPublisher), &repos, interaction_gate)?,
+            // No broker: the inbox follows inline.
+            None => build_commands(
+                Arc::new(ProjectingPublisher::new(LogEventPublisher, Arc::clone(&inbox_projector))),
+                &repos,
+                interaction_gate.clone(),
+            )?,
         };
 
         let query_bus = QueryBusBuilder::new()
@@ -203,6 +218,13 @@ impl App {
                 conversation_repo: Arc::clone(&conversation_repo),
                 member_repo:       Arc::clone(&member_repo),
             })?
+            .register::<ListInboxQuery, _>(ListInboxHandler {
+                conversation_repo: Arc::clone(&conversation_repo) as Arc<dyn ConversationRepository>,
+                member_repo:       Arc::clone(&member_repo) as Arc<dyn MemberRepository>,
+                inbox:             Arc::clone(&inbox),
+                gate:              interaction_gate,
+                max_page_size:     config.max_page_size,
+            })?
             .register::<ListSubscriptionsQuery, _>(ListSubscriptionsHandler {
                 subscription_repo: Arc::clone(&subscription_repo),
                 max_page_size:     config.max_page_size,
@@ -218,6 +240,9 @@ impl App {
                 config.visibility_consumer_group.clone(),
             );
             tokio::spawn(worker.run());
+            tokio::spawn(
+                InboxWorker::new(cfg.clone(), Arc::clone(&inbox_projector), config.inbox_consumer_group.clone()).run(),
+            );
             tokio::spawn(
                 PresenceSettingsWorker::new(
                     cfg.clone(),
@@ -280,6 +305,7 @@ struct Repos<'a> {
     member_repo:       &'a Arc<ScyllaMemberRepository>,
     subscription_repo: &'a Arc<ScyllaSubscriptionRepository>,
     invitation_repo:   &'a Arc<ScyllaInvitationRepository>,
+    inbox:             &'a Arc<dyn InboxStore>,
 }
 
 /// The command side: the bus, plus the two services whose answers the gRPC
@@ -297,7 +323,7 @@ fn build_commands<EP: EventPublisher>(
     repos:     &Repos<'_>,
     gate:      Option<Arc<dyn InteractionGate>>,
 ) -> Result<Commands, Box<dyn std::error::Error>> {
-    let Repos { conversation_repo, message_repo, member_repo, subscription_repo, invitation_repo } = *repos;
+    let Repos { conversation_repo, message_repo, member_repo, subscription_repo, invitation_repo, inbox } = *repos;
     let sender: Arc<dyn SendMessages> = Arc::new(SendMessageHandler {
         conversation_repo: Arc::clone(conversation_repo),
         member_repo:       Arc::clone(member_repo),
@@ -310,6 +336,7 @@ fn build_commands<EP: EventPublisher>(
         member_repo:       Arc::clone(member_repo),
         publisher:         Arc::clone(&publisher),
         gate:              gate.clone(),
+        inbox:             Arc::clone(inbox),
     });
     let bus = CommandBusBuilder::new()
         .register::<CreateConversationCommand, _>(CreateConversationHandler {

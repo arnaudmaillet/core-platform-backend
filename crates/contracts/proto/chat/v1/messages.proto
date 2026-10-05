@@ -176,6 +176,43 @@ message ListSubscriptionsResponse {
     string          next_page_token  = 2;
 }
 
+// The caller's inbox, one folder, newest activity first (#656).
+message ListInboxRequest {
+    string      profile_id = 1;
+    InboxFolder folder     = 2;
+    int32       limit      = 3;
+    // The `next_page_token` of the previous page (empty: the first).
+    string      page_token = 4;
+}
+// The last delivered message, previewed.
+message MessagePreview {
+    string      message_id    = 1;
+    string      sender_id     = 2;
+    ContentType content_type  = 3;
+    // The body's first 100 characters.
+    string      preview       = 4;
+}
+message InboxEntryView {
+    string           conversation_id  = 1;
+    ConversationKind kind             = 2;
+    // The other member of a direct conversation.
+    string           peer_id          = 3;
+    // The last message's time, else when the caller joined.
+    int64            last_activity_ms = 4;
+    // Absent before any delivered message.
+    MessagePreview   last_message     = 5;
+    // The last message is someone else's and newer than the caller's read
+    // position. A request stays unread until answered (no receipt is kept).
+    bool             unread           = 6;
+    // The caller's own request, awaiting the peer's answer.
+    bool             request          = 7;
+}
+message ListInboxResponse {
+    repeated InboxEntryView entries         = 1;
+    // Empty on the last page. A page may come back short, never skipping.
+    string                  next_page_token = 2;
+}
+
 message ListConversationsByMemberRequest {
     string member_id  = 1;
     int32  limit      = 2;

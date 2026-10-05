@@ -72,6 +72,7 @@ impl Service for ChatService {
         authenticated("/chat.v1.ChatService/GetHistory"),
         authenticated("/chat.v1.ChatService/ListMembers"),
         authenticated("/chat.v1.ChatService/ListSubscriptions"),
+        authenticated("/chat.v1.ChatService/ListInbox"),
         authenticated("/chat.v1.ChatService/StreamConversation"),
         authenticated("/chat.v1.ChatService/StreamPublic"),
     ];
@@ -95,6 +96,7 @@ impl Service for ChatService {
             audience_ttl_secs:           config.presence_ttl_secs,
             visibility_consumer_group:   "chat-visibility-consumer".to_owned(),
             presence_settings_consumer_group: "chat-presence-settings".to_owned(),
+            inbox_consumer_group:        "chat-inbox".to_owned(),
         };
 
         let backends = Backends {
@@ -171,7 +173,11 @@ mod tests {
     /// Direct messages (#656) are the caller's own profile's.
     #[test]
     fn direct_messages_are_on_the_edge_for_members() {
-        for method in ["/chat.v1.ChatService/OpenDirectConversation", "/chat.v1.ChatService/RespondToMessageRequest"] {
+        for method in [
+            "/chat.v1.ChatService/OpenDirectConversation",
+            "/chat.v1.ChatService/RespondToMessageRequest",
+            "/chat.v1.ChatService/ListInbox",
+        ] {
             assert!(ChatService::EDGE_POLICY.iter().any(|rule| rule.method == method), "{method}");
         }
     }

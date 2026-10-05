@@ -37,3 +37,9 @@ enum ContentType {
     CONTENT_TYPE_MEDIA  = 1;
     CONTENT_TYPE_SYSTEM = 2;
 }
+
+// A folder of a member's inbox (#656).
+enum InboxFolder {
+    INBOX_FOLDER_INBOX    = 0; // accepted direct conversations, groups, channels one writes in
+    INBOX_FOLDER_REQUESTS = 1; // message requests to the member, unanswered
+}

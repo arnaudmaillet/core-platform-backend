@@ -124,6 +124,11 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("profile.v1.events", "comment"),
     // chat visibility teardown (self-consume)
     ("chat.conversation.unpublished", "chat"),
+    // each member's inbox (#656), projected from chat's own facts (self-consume)
+    ("chat.message.sent", "chat"),
+    ("chat.conversation.created", "chat"),
+    ("chat.member.joined", "chat"),
+    ("chat.member.left", "chat"),
     // profile presence settings (activity status, read receipts) → chat
     ("profile.v1.events", "chat"),
     // counter popularity → realtime broadcast + geo virality re-score +
@@ -212,25 +217,8 @@ pub const ORPHAN_PRODUCERS: &[(&str, &str)] = &[
         "Block is enforced on the gRPC read path; no stream consumer yet.",
     ),
     (
-        "chat.conversation.created",
-        "Chat owns its own delivery plane; reserved for future fan-out.",
-    ),
-    (
         "chat.conversation.published",
         "Chat delivery-plane headroom.",
-    ),
-    (
-        "chat.member.joined",
-        "Chat delivery-plane headroom.",
-    ),
-    (
-        "chat.member.left",
-        "Chat delivery-plane headroom.",
-    ),
-    (
-        "chat.message.sent",
-        "Future realtime/notification consolidation; chat streams to clients \
-         directly today.",
     ),
 ];
 

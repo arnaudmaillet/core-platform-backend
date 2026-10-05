@@ -11,3 +11,4 @@ mod private_concealment;
 mod stream_public_edge;
 mod conversations_by_member;
 mod direct_messages;
+mod inbox;
