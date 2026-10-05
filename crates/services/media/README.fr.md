@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: e37457d8563ab54999c4723ed98ce54a46975a5843ede3ea34a97d5203d539e8
+  source_sha256: c89b3c2413ec93669bde1aa02f1bd9db0ce0fbea061ba867aa8a3b946788b78e
   translated_at: 2026-10-05
   status: complete
 ---
@@ -88,6 +88,19 @@ hash* = une *nouvelle URL*, donc **l'invalidation de cache est une opération
 réservée aux retraits** — jamais une préoccupation du chemin d'édition. Le média
 privé utilise des URLs signées à courte durée de vie, émises par requête *après*
 que la périphérie a autorisé le spectateur.
+
+**Les retraits atteignent l'origine.** Une URL publique n'expirant jamais, une
+quarantaine ne peut pas compter sur `ResolveDelivery` seul (une URL déjà distribuée
+continue de fonctionner). Elle est d'abord enregistrée (plus de nouvelle URL), puis
+**tous les objets des arbres de l'asset** (`{kind}/{hash}/…` : rendus, toute la sortie
+HLS d'une vidéo) et son upload d'origine **passent sous `quarantine/`** — un préfixe
+que l'accès d'origine du CDN n'autorise pas — et le CDN est purgé en dernier. Une
+restauration les remet en place *avant* de rétablir l'asset. Chaque étape est
+idempotente : un événement rejoué ne refait que ce qui reste. Des octets identiques
+partagent leurs clés : si un autre asset aux mêmes octets est encore diffusé, les
+objets partagés restent (journalisé), sauf si l'asset retiré est sous **conservation
+légale**, qui les déplace toujours. Une suppression efface les copies publiques comme
+en quarantaine (la conservation légale la bloque toujours d'abord).
 
 > **Invariants** (et où ils sont appliqués) : aucun message ne porte de charge
 > utile `bytes` (revue proto + règle de contrat `media-api`) ; les transitions

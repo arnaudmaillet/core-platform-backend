@@ -3,6 +3,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use cqrs::Envelope;
 
+use crate::application::command::asset_objects;
 use crate::application::port::{AssetRepository, CdnGateway, DeliveryCache, EventPublisher, ObjectStore};
 use crate::domain::value_object::{AssetId, OwnerId, StorageKey};
 use crate::error::MediaError;
@@ -63,11 +64,15 @@ impl DeleteAssetHandler {
         // Legal-hold guard fires here, before any byte is purged.
         asset.delete(now)?;
 
-        // Purge bytes: every rendition object + the staging object.
-        let mut keys: Vec<StorageKey> =
-            asset.renditions().iter().map(|r| r.storage_key().clone()).collect();
-        keys.push(StorageKey::staging(asset.id()));
-        for key in &keys {
+        // Purge bytes: every object of the asset's trees, public or quarantined
+        // (a video's whole HLS output too), and the staging object.
+        let (mut objects, public) = if asset_objects::owns_objects(self.assets.as_ref(), &asset).await? {
+            asset_objects::all(self.store.as_ref(), &asset).await?
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        objects.push(StorageKey::staging(asset.id()));
+        for key in &objects {
             self.store.delete(key).await?;
         }
         // Persist the tombstone before the edge purge: a CDN outage must not
@@ -78,7 +83,9 @@ impl DeleteAssetHandler {
             self.publisher.publish(&event).await?;
         }
         self.cache.invalidate(&asset.id()).await?;
-        self.cdn.invalidate(&keys).await?;
+        if !public.is_empty() {
+            self.cdn.invalidate(&public).await?;
+        }
         Ok(DeleteOutcome { deleted: true })
     }
 }
@@ -108,6 +115,28 @@ mod tests {
         assert_eq!(fx.publisher.event_types(), vec!["media.asset_deleted"]);
         // The CDN was invalidated for the purged keys.
         assert!(!fx.cdn.invalidated_keys().is_empty());
+    }
+
+    #[tokio::test]
+    async fn deleting_a_quarantined_asset_erases_its_quarantined_objects_too() {
+        use crate::application::command::{ApplyModerationCommand, ModerationAction};
+        let fx = Fixture::new();
+        let (asset_id, owner) = fx.ready_asset(MediaKind::PostImage).await;
+        let asset = fx.assets.find_by_id(&asset_id).await.unwrap().unwrap();
+        for r in asset.renditions() {
+            fx.store.put_object(r.storage_key(), 10, "etag");
+        }
+        fx.apply_moderation_handler()
+            .handle(
+                Envelope::new(Uuid::now_v7(), ApplyModerationCommand { asset_id, action: ModerationAction::Quarantine }),
+                t0(),
+            )
+            .await
+            .unwrap();
+        assert!(fx.store.keys().iter().all(|k| k.starts_with("quarantine/")));
+
+        fx.delete_handler().handle(env(asset_id, owner), t0()).await.unwrap();
+        assert!(fx.store.keys().is_empty(), "no copy survives a delete");
     }
 
     #[tokio::test]

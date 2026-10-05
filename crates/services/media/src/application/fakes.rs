@@ -176,6 +176,36 @@ impl ObjectStore for StubObjectStore {
         self.objects.lock().unwrap().remove(key.as_str());
         Ok(())
     }
+
+    async fn list(&self, prefix: &str) -> Result<Vec<StorageKey>, MediaError> {
+        let mut keys: Vec<StorageKey> = self
+            .objects
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|k| k.starts_with(prefix))
+            .map(|k| StorageKey::from_raw(k.clone()))
+            .collect();
+        keys.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        Ok(keys)
+    }
+
+    async fn relocate(&self, from: &StorageKey, to: &StorageKey) -> Result<(), MediaError> {
+        let mut objects = self.objects.lock().unwrap();
+        if let Some(head) = objects.remove(from.as_str()) {
+            objects.insert(to.as_str().to_owned(), head);
+        }
+        Ok(())
+    }
+}
+
+impl StubObjectStore {
+    /// Every key currently stored.
+    pub fn keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self.objects.lock().unwrap().keys().cloned().collect();
+        keys.sort();
+        keys
+    }
 }
 
 // ─── CdnGateway ──────────────────────────────────────────────────────────────────
@@ -556,6 +586,7 @@ impl Fixture {
     pub fn apply_moderation_handler(&self) -> super::command::ApplyModerationHandler {
         super::command::ApplyModerationHandler::new(
             Arc::clone(&self.assets) as _,
+            Arc::clone(&self.store) as _,
             Arc::clone(&self.cdn) as _,
             Arc::clone(&self.cache) as _,
             Arc::clone(&self.publisher) as _,

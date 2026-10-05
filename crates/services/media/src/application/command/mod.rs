@@ -4,6 +4,7 @@
 //! lifecycle events durable-first.
 
 pub mod apply_moderation;
+mod asset_objects;
 pub mod commit_upload;
 pub mod delete_asset;
 pub mod issue_ticket;

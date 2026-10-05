@@ -3,7 +3,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use cqrs::Envelope;
 
-use crate::application::port::{AssetRepository, CdnGateway, DeliveryCache, EventPublisher};
+use crate::application::command::asset_objects;
+use crate::application::port::{AssetRepository, CdnGateway, DeliveryCache, EventPublisher, ObjectStore};
 use crate::domain::value_object::{AssetId, AssetState, StorageKey};
 use crate::error::MediaError;
 
@@ -35,12 +36,16 @@ pub struct ApplyModerationOutcome {
 /// This is the content-service side of moderation's enforcement — `media` flips
 /// visibility, it does not decide.
 ///
-/// The quarantine is **persisted first**: from then on `ResolveDelivery` stops
-/// handing out URLs whatever the CDN does. The edge purge comes last; if it
-/// fails the error propagates and the consumer redelivers, and the redelivery —
-/// the asset already quarantined, a no-op transition — only purges again.
+/// A quarantine is **persisted first**: from then on `ResolveDelivery` stops
+/// handing out URLs. Then the asset's objects move under `quarantine/` (the
+/// origin refuses a URL handed out before), then the edge is purged. Any failure
+/// propagates and the consumer redelivers; the redelivery — the asset already
+/// quarantined, a no-op transition — redoes only what is left (moves are
+/// idempotent). A restore moves the objects back **before** reinstating the
+/// asset, so it is never deliverable with its objects away.
 pub struct ApplyModerationHandler {
     assets: Arc<dyn AssetRepository>,
+    store: Arc<dyn ObjectStore>,
     cdn: Arc<dyn CdnGateway>,
     cache: Arc<dyn DeliveryCache>,
     publisher: Arc<dyn EventPublisher>,
@@ -49,11 +54,12 @@ pub struct ApplyModerationHandler {
 impl ApplyModerationHandler {
     pub fn new(
         assets: Arc<dyn AssetRepository>,
+        store: Arc<dyn ObjectStore>,
         cdn: Arc<dyn CdnGateway>,
         cache: Arc<dyn DeliveryCache>,
         publisher: Arc<dyn EventPublisher>,
     ) -> Self {
-        Self { assets, cdn, cache, publisher }
+        Self { assets, store, cdn, cache, publisher }
     }
 
     pub async fn handle(
@@ -69,7 +75,12 @@ impl ApplyModerationHandler {
 
         match cmd.action {
             ModerationAction::Quarantine => asset.quarantine(now)?,
-            ModerationAction::Restore => asset.restore(now)?,
+            ModerationAction::Restore => {
+                if asset.state() == AssetState::Quarantined {
+                    asset_objects::release(self.store.as_ref(), &asset).await?;
+                }
+                asset.restore(now)?;
+            }
         }
         self.assets.save(&asset).await?;
         for event in asset.drain_events() {
@@ -78,9 +89,11 @@ impl ApplyModerationHandler {
         // Drop the cached delivery so the next read re-resolves against the new state.
         self.cache.invalidate(&asset.id()).await?;
 
-        if cmd.action == ModerationAction::Quarantine {
-            // Purge the edge's cached copies of every rendition (the takedown path).
-            let keys: Vec<StorageKey> = asset.renditions().iter().map(|r| r.storage_key().clone()).collect();
+        if cmd.action == ModerationAction::Quarantine
+            && asset_objects::owns_objects(self.assets.as_ref(), &asset).await?
+        {
+            // The origin stops serving, then the edge drops its cached copies.
+            let keys: Vec<StorageKey> = asset_objects::quarantine(self.store.as_ref(), &asset).await?;
             if !keys.is_empty() {
                 self.cdn.invalidate(&keys).await?;
             }
@@ -158,6 +171,58 @@ mod tests {
         assert_eq!(out.state, Some(AssetState::Quarantined));
         assert!(!fx.cdn.invalidated_keys().is_empty(), "purged on redelivery");
         assert!(fx.publisher.event_types().is_empty(), "no second quarantine event");
+    }
+
+    /// Stores the asset's renditions (and an extra object of the same tree, like
+    /// an HLS segment) in the fake store; returns the tree's keys.
+    async fn publish_objects(fx: &Fixture, asset_id: AssetId) -> Vec<String> {
+        let asset = fx.assets.find_by_id(&asset_id).await.unwrap().unwrap();
+        let mut keys: Vec<StorageKey> = asset.renditions().iter().map(|r| r.storage_key().clone()).collect();
+        keys.push(StorageKey::from_raw(format!("{}seg_001.m4s", keys[0].tree_prefix())));
+        for key in &keys {
+            fx.store.put_object(key, 10, "etag");
+        }
+        let mut keys: Vec<String> = keys.iter().map(|k| k.as_str().to_owned()).collect();
+        keys.sort();
+        keys
+    }
+
+    #[tokio::test]
+    async fn a_takedown_moves_the_whole_tree_out_of_the_origin_and_a_restore_brings_it_back() {
+        let fx = Fixture::new();
+        let (asset_id, _owner) = fx.ready_asset(MediaKind::PostImage).await;
+        let public = publish_objects(&fx, asset_id).await;
+        let stored = fx.store.keys(); // the tree and the original upload
+
+        fx.apply_moderation_handler().handle(env(asset_id, ModerationAction::Quarantine), t0()).await.unwrap();
+        let mut quarantined: Vec<String> = stored.iter().map(|k| format!("quarantine/{k}")).collect();
+        quarantined.sort();
+        assert_eq!(fx.store.keys(), quarantined, "nothing left at a public key, the upload included");
+        let mut purged = fx.cdn.invalidated_keys();
+        purged.sort();
+        assert_eq!(purged, public, "the edge purges every public path, segments included");
+
+        // Redelivered: nothing more to move, the purge is repeated.
+        fx.apply_moderation_handler().handle(env(asset_id, ModerationAction::Quarantine), t0()).await.unwrap();
+        assert_eq!(fx.store.keys(), quarantined);
+
+        fx.apply_moderation_handler().handle(env(asset_id, ModerationAction::Restore), t0()).await.unwrap();
+        assert_eq!(fx.store.keys(), stored, "restored to the public keys");
+    }
+
+    #[tokio::test]
+    async fn objects_shared_with_another_delivered_asset_stay_put() {
+        let fx = Fixture::new();
+        // Same bytes (the fake probe hashes every upload alike): same keys.
+        let (taken_down, _) = fx.ready_asset(MediaKind::PostImage).await;
+        let (_still_live, _) = fx.ready_asset(MediaKind::PostImage).await;
+        publish_objects(&fx, taken_down).await;
+        let stored = fx.store.keys();
+
+        let out =
+            fx.apply_moderation_handler().handle(env(taken_down, ModerationAction::Quarantine), t0()).await.unwrap();
+        assert_eq!(out.state, Some(AssetState::Quarantined), "the asset itself is still taken down");
+        assert_eq!(fx.store.keys(), stored, "the other asset's objects are untouched");
     }
 
     #[tokio::test]

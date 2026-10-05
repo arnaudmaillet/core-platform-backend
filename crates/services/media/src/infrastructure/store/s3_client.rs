@@ -115,6 +115,51 @@ impl S3Client {
         Ok(())
     }
 
+    /// An object's bytes and content type, or `None` when it does not exist.
+    pub async fn get_object(&self, key: &str) -> Result<Option<(Vec<u8>, String)>, MediaError> {
+        let url = self.presign_get(key, self.presign_ttl);
+        let resp = self.http.get(url).send().await.map_err(reqwest_err)?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            return Err(MediaError::ObjectStoreUnavailable);
+        }
+        let content_type = resp
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_owned();
+        Ok(Some((resp.bytes().await.map_err(reqwest_err)?.to_vec(), content_type)))
+    }
+
+    /// Every key under `prefix` (ListObjectsV2, followed across pages).
+    pub async fn list_keys(&self, prefix: &str) -> Result<Vec<String>, MediaError> {
+        let mut keys = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut action = self.bucket.list_objects_v2(Some(&self.credentials));
+            action.with_prefix(prefix);
+            if let Some(token) = &token {
+                action.with_continuation_token(token.as_str());
+            }
+            let url = action.sign(self.presign_ttl);
+            let resp = self.http.get(url).send().await.map_err(reqwest_err)?;
+            if !resp.status().is_success() {
+                return Err(MediaError::ObjectStoreUnavailable);
+            }
+            let body = resp.text().await.map_err(reqwest_err)?;
+            let page = rusty_s3::actions::ListObjectsV2::parse_response(&body)
+                .map_err(|_| MediaError::ObjectStoreUnavailable)?;
+            keys.extend(page.contents.into_iter().map(|c| c.key));
+            match page.next_continuation_token {
+                Some(next) => token = Some(next),
+                None => return Ok(keys),
+            }
+        }
+    }
+
     /// Deletes an object. Idempotent: a 404 is treated as success.
     pub async fn delete(&self, key: &str) -> Result<(), MediaError> {
         let url = self.presign_delete(key, self.presign_ttl);
