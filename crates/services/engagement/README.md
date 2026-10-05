@@ -243,8 +243,9 @@ async fn main() -> anyhow::Result<()> {
 
 - **Migrations:** `0001_create_keyspace.cql` → `0002_create_post_reactions_table.cql` →
   `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` against
-  `engagement`, applied **before** first start. (0002's table comment held a `;`, which split the
-  statement for the `;`-splitting migration runner; it is a comma now — same schema.)
+  `engagement`, applied **before** first start. (0002's table comment held a `;`; the integration
+  suites' runner split on it until it became quote-aware like `apps/migrator` — prod never was affected.
+  It is a comma now — same schema.)
 - **Redis durability:** enable AOF (`appendonly yes`, `appendfsync everysec`) — without it, a restart
   loses the current flush window and requires cold-start recovery from the Scylla ledger.
 - **Kafka:** pre-create `engagement.reactions` with ≥ 12 partitions.
