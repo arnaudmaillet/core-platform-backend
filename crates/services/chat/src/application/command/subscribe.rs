@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::port::{ConversationRepository, SubscriptionRepository};
+use crate::application::port::{ConversationRepository, MemberRepository, SubscriptionRepository};
 use crate::domain::value_object::{ConversationId, ProfileId};
 use crate::error::ChatError;
 
@@ -11,7 +11,9 @@ use crate::error::ChatError;
 ///
 /// Audience subscription is a read-side concern: it never touches the aggregate
 /// roster, so it carries no roster cap and emits no lifecycle event. It only
-/// requires the conversation to be public.
+/// requires the conversation to be public: on a private one, a member gets the
+/// precise [`ChatError::ConversationNotPublic`] while anyone else gets
+/// [`ChatError::ConversationConcealed`] (indistinguishable from not-found).
 pub struct SubscribeCommand {
     pub conversation_id: String,
     pub subscriber_id:   String,
@@ -40,14 +42,16 @@ impl Validate for SubscribeCommand {
     }
 }
 
-pub struct SubscribeHandler<CR, SR> {
+pub struct SubscribeHandler<CR, MR, SR> {
     pub conversation_repo: Arc<CR>,
+    pub member_repo:       Arc<MR>,
     pub subscription_repo: Arc<SR>,
 }
 
-impl<CR, SR> CommandHandler<SubscribeCommand> for SubscribeHandler<CR, SR>
+impl<CR, MR, SR> CommandHandler<SubscribeCommand> for SubscribeHandler<CR, MR, SR>
 where
     CR: ConversationRepository,
+    MR: MemberRepository,
     SR: SubscriptionRepository,
 {
     type Error = ChatError;
@@ -67,8 +71,12 @@ where
             })?;
 
         if !conversation.visibility().is_public() {
-            return Err(ChatError::ConversationNotPublic {
-                conversation_id: conversation_id.as_str(),
+            // Only a member already knows this conversation exists.
+            let is_member = self.member_repo.find(&conversation_id, &subscriber_id).await?.is_some();
+            return Err(if is_member {
+                ChatError::ConversationNotPublic { conversation_id: conversation_id.as_str() }
+            } else {
+                conversation.concealed()
             });
         }
 
@@ -123,5 +131,62 @@ where
         let subscriber_id   = ProfileId::try_from(cmd.subscriber_id.as_str())?;
 
         self.subscription_repo.unsubscribe(&conversation_id, &subscriber_id).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::command::fakes::{
+        FakeConversations, FakeMembers, FakeSubscriptions, Fixture,
+    };
+    use crate::domain::value_object::Role;
+
+    async fn subscribe(
+        f: &Fixture,
+        subscriptions: &Arc<FakeSubscriptions>,
+        subscriber: ProfileId,
+    ) -> Result<(), ChatError> {
+        let handler: SubscribeHandler<FakeConversations, FakeMembers, FakeSubscriptions> = SubscribeHandler {
+            conversation_repo: Arc::clone(&f.conversations),
+            member_repo:       Arc::clone(&f.members),
+            subscription_repo: Arc::clone(subscriptions),
+        };
+        handler
+            .handle(Envelope::new(uuid::Uuid::now_v7(), SubscribeCommand {
+                conversation_id: f.conversation_id.as_str(),
+                subscriber_id:   subscriber.as_str(),
+            }))
+            .await
+    }
+
+    #[tokio::test]
+    async fn outsider_subscribing_to_a_private_conversation_is_concealed() {
+        let f = Fixture::private_group();
+        let subscriptions = Arc::default();
+        let outsider = Fixture::profile();
+
+        let err = subscribe(&f, &subscriptions, outsider).await.unwrap_err();
+        assert!(matches!(err, ChatError::ConversationConcealed { .. }), "{err:?}");
+        assert!(!subscriptions.has(&f.conversation_id, &outsider));
+    }
+
+    #[tokio::test]
+    async fn member_subscribing_to_a_private_conversation_gets_not_public() {
+        let f = Fixture::private_group();
+        let member = f.add_member(Role::Member);
+
+        let err = subscribe(&f, &Arc::default(), member).await.unwrap_err();
+        assert!(matches!(err, ChatError::ConversationNotPublic { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn anyone_may_subscribe_to_a_public_conversation() {
+        let f = Fixture::public_group();
+        let subscriptions = Arc::default();
+        let outsider = Fixture::profile();
+
+        subscribe(&f, &subscriptions, outsider).await.unwrap();
+        assert!(subscriptions.has(&f.conversation_id, &outsider));
     }
 }

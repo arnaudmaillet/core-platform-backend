@@ -86,7 +86,8 @@ New-message reads for guests never hit Scylla at all; they arrive over the broad
 
 > **Invariants** (and where enforced): `StreamConversation` requires roster membership
 > (`PERMISSION_DENIED` otherwise) — enforced at the gRPC boundary; `StreamPublic` requires
-> `visibility == Public` (`FAILED_PRECONDITION` otherwise); the audience stream is *structurally*
+> `visibility == Public`; an outsider of a **private** conversation gets `NOT_FOUND` from every RPC,
+> exactly as for a missing conversation (see below); the audience stream is *structurally*
 > incapable of carrying presence/typing/receipts; the 500-member group cap is a domain-layer invariant;
 > joining a private conversation requires a pending invitation (`NOT_FOUND` otherwise, see below) —
 > domain-layer invariant.
@@ -167,10 +168,30 @@ service ChatService {
 > `CONTENT_TYPE_TEXT=0…SYSTEM=2`). No `UNSPECIFIED` sentinel — the gRPC layer casts directly with no
 > off-by-one mapping.
 
-**Boundary invariants:** `StreamConversation` requires roster membership (`PERMISSION_DENIED`
-otherwise); `StreamPublic` requires `visibility == Public` (`FAILED_PRECONDITION` otherwise); the
-audience stream is structurally incapable of carrying presence/typing/receipts. `Heartbeat` and
-`SendTyping` also require roster membership (a non-member cannot inject Member-Plane signals).
+**Boundary invariants:** `StreamConversation` requires roster membership; `StreamPublic` requires
+`visibility == Public`; the audience stream is structurally incapable of carrying
+presence/typing/receipts. `Heartbeat` and `SendTyping` also require roster membership (a non-member
+cannot inject Member-Plane signals).
+
+**Private conversations are unprobeable.** A caller that is not on the roster of a **private**
+conversation gets the same answer from every RPC as for a conversation that does not exist —
+`NOT_FOUND` with `CHT-1009`, byte-identical on the wire to `CHT-1001` — so no RPC can be used to test
+whether a private conversation exists. Members, and outsiders of a **public** conversation (which is
+discoverable anyway), keep the precise error:
+
+| Caller | Member-only RPCs¹ | `ToggleVisibility` | `GetHistory` | `Subscribe` | `StreamPublic` |
+|---|---|---|---|---|---|
+| member | allowed | `PERMISSION_DENIED` unless owner/admin | full history | `FAILED_PRECONDITION` (`CHT-1008`) on a private one | `NOT_FOUND` on a private one |
+| outsider, **public** | `PERMISSION_DENIED` (`CHT-1007`) | `PERMISSION_DENIED` (`CHT-1007`) | from the public-since watermark | allowed | allowed |
+| outsider, **private** | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) |
+| any, conversation missing | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) |
+
+¹ `SendMessage`, `MarkRead`, `SendTyping`, `Heartbeat`, `ListMembers`, `StreamConversation`. They
+authorize with a single roster read; the conversation is loaded **only when that read misses**, to pick
+the answer (`application::access::deny_non_member`), so the member hot path is unchanged.
+`StreamPublic` conceals a private conversation even from members, because its `subscriber_id` is not
+bound to the caller and so cannot vouch for membership. `JoinAsMember` and `InviteMember` follow the
+same rule (next paragraph).
 
 **Joining a private conversation.** `JoinAsMember` is open-join on a **public** conversation only.
 On a **private** one (group or channel) it requires a pending invitation for the caller, issued by an
@@ -223,6 +244,9 @@ shared `error` crate:
 
 `CHT-1009` (private conversation the caller may not see) is deliberately rendered exactly like
 `CHT-1001` on the wire (`NOT_FOUND`, same message); the distinct code exists only in server logs.
+Every conversation-scoped RPC returns it to an outsider of a private conversation, so `CHT-1007`
+(not a member) and `CHT-1008` (not public) only ever reach members or outsiders of a public
+conversation.
 
 ---
 
@@ -410,9 +434,11 @@ for f in crates/services/chat/migrations/*.cql; do cqlsh -f "$f"; done
 
 > Format: **symptom → root cause → mitigation.** One entry per real incident class.
 
-**1. `StreamPublic` returns `FAILED_PRECONDITION: conversation is not public`.**
-Root cause: the conversation is `Private` (or was just unpublished). Audience access requires
-`visibility == Public`. Mitigation: confirm via `GetHistory` as a member, or
+**1. `StreamPublic` (or `Subscribe`, `GetHistory`, …) returns `NOT_FOUND` for a conversation that exists.**
+Root cause: the conversation is `Private` (or was just unpublished) and the caller is not on its
+roster: the service answers exactly as for a missing conversation (`CHT-1009` in the server logs,
+see *Private conversations are unprobeable*). `StreamPublic` answers this way even for members.
+Audience access requires `visibility == Public`. Mitigation: confirm via `GetHistory` as a member, or
 `ToggleVisibility{make_public:true}` if intended. After an unpublish, the `VisibilityWorker` closes
 guest streams cluster-wide — clients must stop retrying `StreamPublic`.
 

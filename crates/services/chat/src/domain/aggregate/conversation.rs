@@ -240,6 +240,22 @@ impl Conversation {
         ChatError::ConversationConcealed { conversation_id: self.id.as_str() }
     }
 
+    /// The error for `profile_id`, which is **not on the roster**, attempting a
+    /// member-only operation. A `Public` conversation is discoverable, so the
+    /// caller gets the precise [`ChatError::NotAMember`]; a `Private` one is
+    /// [`concealed`](Self::concealed), so an outsider cannot use the gap between
+    /// "not a member" and "not found" to probe for its existence.
+    pub fn deny_outsider(&self, profile_id: ProfileId) -> ChatError {
+        if self.visibility.is_public() {
+            ChatError::NotAMember {
+                profile_id:      profile_id.as_str(),
+                conversation_id: self.id.as_str(),
+            }
+        } else {
+            self.concealed()
+        }
+    }
+
     /// Releases a profile from the Member Plane. The owner cannot leave (a
     /// conversation always has an owner); ownership transfer is a separate
     /// operation handled at the application layer.
@@ -394,5 +410,20 @@ mod tests {
         let member = Participant::new(pid(), Role::Member).unwrap();
         let err = c.invite(&member, pid()).unwrap_err();
         assert!(matches!(err, ChatError::NotAuthorized { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn outsider_of_a_private_conversation_is_concealed() {
+        let c = group();
+        let err = c.deny_outsider(pid());
+        assert!(matches!(err, ChatError::ConversationConcealed { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn outsider_of_a_public_conversation_is_not_a_member() {
+        let mut c = group();
+        c.publish().unwrap();
+        let err = c.deny_outsider(pid());
+        assert!(matches!(err, ChatError::NotAMember { .. }), "{err:?}");
     }
 }

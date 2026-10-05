@@ -14,6 +14,7 @@ use uuid::Uuid;
 use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
+use crate::application::access::deny_non_member;
 use crate::application::command::{
     CreateConversationCommand, InviteMemberCommand, JoinAsMemberCommand, MarkReadCommand,
     SendMessageCommand, SubscribeCommand, ToggleVisibilityCommand, UnsubscribeCommand,
@@ -103,7 +104,9 @@ where
         }
     }
 
-    /// Member-Plane signals (presence, typing) come from roster members only.
+    /// Member-Plane access (stream, presence, typing) is for roster members only.
+    /// A non-member gets `PERMISSION_DENIED` on a public conversation and
+    /// `NOT_FOUND` — byte-identical to a missing one — on a private conversation.
     async fn require_member(&self, conversation_id: &ConversationId, member_id: &ProfileId) -> Result<(), Status> {
         let member = self
             .member_repo
@@ -111,7 +114,8 @@ where
             .await
             .map_err(chat_err_to_status)?;
         if member.is_none() {
-            return Err(Status::permission_denied("not a member of this conversation"));
+            let denied = deny_non_member(&*self.conversation_repo, conversation_id, *member_id).await;
+            return Err(chat_err_to_status(denied));
         }
         Ok(())
     }
@@ -448,15 +452,7 @@ where
         let member_id       = parse_profile(&req.member_id)?;
 
         // Authorization: Member-Plane access requires roster membership.
-        if self
-            .member_repo
-            .find(&conversation_id, &member_id)
-            .await
-            .map_err(chat_err_to_status)?
-            .is_none()
-        {
-            return Err(Status::permission_denied("not a member of this conversation"));
-        }
+        self.require_member(&conversation_id, &member_id).await?;
 
         // Pod-level Redis subscription (refcounted) + local fan-out receiver.
         self.attach.attach_member(&conversation_id).await.map_err(chat_err_to_status)?;
@@ -517,14 +513,21 @@ where
         let subscriber_id   = parse_profile(&req.subscriber_id)?;
 
         // Authorization: Audience-Plane access requires a public conversation.
+        // `subscriber_id` is not bound to the caller here, so membership cannot
+        // be trusted to refine the answer: a private conversation is concealed
+        // for everyone, exactly like a missing one.
         let conversation = self
             .conversation_repo
             .find(&conversation_id)
             .await
             .map_err(chat_err_to_status)?
-            .ok_or_else(|| Status::not_found("conversation not found"))?;
+            .ok_or_else(|| {
+                chat_err_to_status(ChatError::ConversationNotFound {
+                    conversation_id: conversation_id.as_str(),
+                })
+            })?;
         if !conversation.visibility().is_public() {
-            return Err(Status::failed_precondition("conversation is not public"));
+            return Err(chat_err_to_status(conversation.concealed()));
         }
 
         let shard = audience_shard_for(subscriber_id.as_uuid(), self.params.audience_shard_count);

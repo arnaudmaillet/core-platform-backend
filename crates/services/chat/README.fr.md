@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 1281697d846ad5cc7978e92c6d7e0c26200782b4f03870f840ace0a26ed61b24
+  source_sha256: 1549f178196f1a0f7575f419fd7e0b71d49b30a43ea52b631be1b02a2075c8ab
   translated_at: 2026-10-05
   status: complete
 ---
@@ -100,8 +100,9 @@ la charge de lecture sont physiquement séparés par l'âge du bucket. Les lectu
 pour les invités ne touchent jamais Scylla ; elles arrivent par le plan de diffusion.
 
 > **Invariants** (et où ils sont imposés) : `StreamConversation` exige l'appartenance au roster
-> (`PERMISSION_DENIED` sinon) — imposé à la frontière gRPC ; `StreamPublic` exige `visibility == Public`
-> (`FAILED_PRECONDITION` sinon) ; le flux audience est *structurellement* incapable de transporter
+> (`PERMISSION_DENIED` sinon) — imposé à la frontière gRPC ; `StreamPublic` exige `visibility == Public` ;
+> un tiers d'une conversation **privée** reçoit `NOT_FOUND` de chaque RPC, exactement comme pour une
+> conversation inexistante (voir plus bas) ; le flux audience est *structurellement* incapable de transporter
 > présence/saisie/accusés ; le plafond de 500 membres par groupe est un invariant de la couche domaine ;
 > rejoindre une conversation privée exige une invitation en attente (`NOT_FOUND` sinon, voir plus bas) —
 > invariant de la couche domaine.
@@ -184,10 +185,30 @@ service ChatService {
 > `…PUBLIC=1` ; `ROLE_OWNER=0…GUEST=4` ; `CONTENT_TYPE_TEXT=0…SYSTEM=2`). Pas de sentinelle
 > `UNSPECIFIED` — la couche gRPC effectue un cast direct, sans décalage d'indice.
 
-**Invariants à la frontière :** `StreamConversation` exige l'appartenance au roster (`PERMISSION_DENIED`
-sinon) ; `StreamPublic` exige `visibility == Public` (`FAILED_PRECONDITION` sinon) ; le flux audience
-est structurellement incapable de transporter présence/saisie/accusés. `Heartbeat` et `SendTyping`
-exigent aussi l'appartenance au roster (un non-membre ne peut pas injecter de signaux du Member Plane).
+**Invariants à la frontière :** `StreamConversation` exige l'appartenance au roster ; `StreamPublic`
+exige `visibility == Public` ; le flux audience est structurellement incapable de transporter
+présence/saisie/accusés. `Heartbeat` et `SendTyping` exigent aussi l'appartenance au roster (un
+non-membre ne peut pas injecter de signaux du Member Plane).
+
+**Les conversations privées sont insondables.** Un appelant absent du roster d'une conversation
+**privée** reçoit de chaque RPC la même réponse que pour une conversation inexistante — `NOT_FOUND`
+avec `CHT-1009`, identique octet pour octet sur le fil à `CHT-1001` — si bien qu'aucune RPC ne permet
+de tester l'existence d'une conversation privée. Les membres, et les tiers d'une conversation
+**publique** (de toute façon découvrable), conservent l'erreur précise :
+
+| Appelant | RPC réservées aux membres¹ | `ToggleVisibility` | `GetHistory` | `Subscribe` | `StreamPublic` |
+|---|---|---|---|---|---|
+| membre | autorisé | `PERMISSION_DENIED` sauf owner/admin | historique complet | `FAILED_PRECONDITION` (`CHT-1008`) sur une privée | `NOT_FOUND` sur une privée |
+| tiers, **publique** | `PERMISSION_DENIED` (`CHT-1007`) | `PERMISSION_DENIED` (`CHT-1007`) | à partir du filigrane public-since | autorisé | autorisé |
+| tiers, **privée** | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) |
+| tous, conversation inexistante | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) |
+
+¹ `SendMessage`, `MarkRead`, `SendTyping`, `Heartbeat`, `ListMembers`, `StreamConversation`. Elles
+autorisent par une seule lecture du roster ; la conversation n'est chargée **que si cette lecture
+échoue**, pour choisir la réponse (`application::access::deny_non_member`) : le chemin chaud des membres
+est inchangé. `StreamPublic` masque une conversation privée même aux membres, car son `subscriber_id`
+n'est pas lié à l'appelant et ne peut donc pas attester l'appartenance. `JoinAsMember` et `InviteMember`
+suivent la même règle (paragraphe suivant).
 
 **Rejoindre une conversation privée.** `JoinAsMember` n'est en accès libre que sur une conversation
 **publique**. Sur une conversation **privée** (groupe ou canal), il exige une invitation en attente pour
@@ -242,7 +263,9 @@ le crate partagé `error` :
 
 `CHT-1009` (conversation privée que l'appelant ne peut pas voir) est volontairement rendu exactement
 comme `CHT-1001` sur le fil (`NOT_FOUND`, même message) ; le code distinct n'existe que dans les journaux
-serveur.
+serveur. Chaque RPC portant sur une conversation le renvoie à un tiers d'une conversation privée : ainsi
+`CHT-1007` (non-membre) et `CHT-1008` (non publique) n'atteignent jamais que des membres ou des tiers
+d'une conversation publique.
 
 ---
 
@@ -435,9 +458,12 @@ for f in crates/services/chat/migrations/*.cql; do cqlsh -f "$f"; done
 
 > Format : **symptôme → cause racine → mitigation.** Une entrée par classe d'incident réelle.
 
-**1. `StreamPublic` renvoie `FAILED_PRECONDITION: conversation is not public`.**
-Cause racine : la conversation est `Private` (ou vient d'être dépubliée). L'accès audience exige
-`visibility == Public`. Mitigation : confirmer via `GetHistory` en tant que membre, ou
+**1. `StreamPublic` (ou `Subscribe`, `GetHistory`, …) renvoie `NOT_FOUND` pour une conversation qui existe.**
+Cause racine : la conversation est `Private` (ou vient d'être dépubliée) et l'appelant n'est pas dans son
+roster : le service répond exactement comme pour une conversation inexistante (`CHT-1009` dans les
+journaux serveur, voir *Les conversations privées sont insondables*). `StreamPublic` répond ainsi même
+aux membres. L'accès audience exige `visibility == Public`. Mitigation : confirmer via `GetHistory` en
+tant que membre, ou
 `ToggleVisibility{make_public:true}` si c'est voulu. Après une dépublication, le `VisibilityWorker`
 ferme les flux invités à l'échelle du cluster — les clients doivent cesser de réessayer `StreamPublic`.
 

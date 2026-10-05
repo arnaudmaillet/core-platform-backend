@@ -1,6 +1,6 @@
 pub mod create_conversation;
 #[cfg(test)]
-mod fakes;
+pub(crate) mod fakes;
 pub mod invite_member;
 pub mod join_as_member;
 pub mod mark_read;

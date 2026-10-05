@@ -1,16 +1,19 @@
 //! In-memory port fakes for the command-handler unit tests (no Scylla/Kafka).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
+use uuid::Uuid;
+
 use crate::application::port::{
     ConversationRepository, EventPublisher, InvitationRepository, MemberRepository,
+    MessageRepository, MessageSummary, SubscriptionRepository,
 };
-use crate::domain::aggregate::{Conversation, Invitation, Participant};
+use crate::domain::aggregate::{Conversation, Invitation, Message, Participant};
 use crate::domain::event::{DomainEvent, MessageEvent};
 use crate::domain::value_object::{
     ConversationId, ConversationKind, MessageId, ProfileId, Role, Visibility,
@@ -166,6 +169,78 @@ impl EventPublisher for FakePublisher {
 
     async fn publish_message(&self, _: &MessageEvent) -> Result<(), ChatError> {
         Ok(())
+    }
+}
+
+/// Message log fake: counts writes and records the visibility floor each
+/// history read was served with (`None` = full member history).
+#[derive(Default)]
+pub struct FakeMessages {
+    inserts: Mutex<usize>,
+    floors:  Mutex<Vec<Option<i64>>>,
+}
+
+impl FakeMessages {
+    pub fn inserts(&self) -> usize {
+        *self.inserts.lock().unwrap()
+    }
+
+    pub fn floors(&self) -> Vec<Option<i64>> {
+        self.floors.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl MessageRepository for FakeMessages {
+    async fn insert(&self, _: &Message) -> Result<(), ChatError> {
+        *self.inserts.lock().unwrap() += 1;
+        Ok(())
+    }
+
+    async fn list_history(
+        &self,
+        _: &ConversationId,
+        _: i32,
+        _: Option<(i64, Uuid)>,
+        floor: Option<i64>,
+    ) -> Result<(Vec<MessageSummary>, Option<(i64, Uuid)>), ChatError> {
+        self.floors.lock().unwrap().push(floor);
+        Ok((Vec::new(), None))
+    }
+}
+
+#[derive(Default)]
+pub struct FakeSubscriptions(Mutex<HashSet<(ConversationId, ProfileId)>>);
+
+impl FakeSubscriptions {
+    pub fn has(&self, c: &ConversationId, p: &ProfileId) -> bool {
+        self.0.lock().unwrap().contains(&(*c, *p))
+    }
+}
+
+#[async_trait]
+impl SubscriptionRepository for FakeSubscriptions {
+    async fn subscribe(&self, c: &ConversationId, p: &ProfileId) -> Result<(), ChatError> {
+        self.0.lock().unwrap().insert((*c, *p));
+        Ok(())
+    }
+
+    async fn unsubscribe(&self, c: &ConversationId, p: &ProfileId) -> Result<(), ChatError> {
+        self.0.lock().unwrap().remove(&(*c, *p));
+        Ok(())
+    }
+
+    async fn is_subscribed(&self, p: &ProfileId, c: &ConversationId) -> Result<bool, ChatError> {
+        Ok(self.has(c, p))
+    }
+
+    async fn list_by_user(
+        &self,
+        _: &ProfileId,
+        _: i32,
+        _: Option<Uuid>,
+    ) -> Result<(Vec<ConversationId>, Option<Uuid>), ChatError> {
+        Ok((Vec::new(), None))
     }
 }
 
