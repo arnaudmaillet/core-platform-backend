@@ -24,6 +24,9 @@ pub struct CreateCommentCommand {
     pub gif_url:    Option<String>,
     pub gif_width:  Option<u32>,
     pub gif_height: Option<u32>,
+    /// The commenter is cleared for mature content (not a guest, not 13–17):
+    /// an age-gated post takes comments from such commenters only.
+    pub mature:     bool,
 }
 
 impl Command for CreateCommentCommand {}
@@ -88,7 +91,7 @@ where
             cmd.gif_height,
         )?;
 
-        let (held, quiet) = match self.gate.may_comment(&author_id, &post_id).await? {
+        let (held, quiet) = match self.gate.may_comment(&author_id, &post_id, cmd.mature).await? {
             CommentAdmission::Allowed => (false, false),
             CommentAdmission::Quiet => (false, true),
             CommentAdmission::Held => (true, false),

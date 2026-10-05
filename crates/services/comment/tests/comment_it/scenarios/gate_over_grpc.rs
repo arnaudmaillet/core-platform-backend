@@ -125,6 +125,11 @@ async fn an_age_gated_posts_comments_are_for_readers_cleared_for_mature_content(
     assert_eq!(h.try_list_top_level_rated(&post, viewer(&reader), true).await.unwrap().len(), 1, "an adult");
     assert!(h.try_list_top_level_rated(&post, viewer(&reader), false).await.unwrap().is_empty(), "13–17 / guest");
     assert_eq!(h.try_list_top_level_rated(&post, viewer(&owner), false).await.unwrap().len(), 1, "its author");
+
+    // Nor do they comment on it (they would know its id from a link).
+    assert_eq!(h.try_create_rated(&post, &reader, false).await.unwrap_err().error_code(), "CMT-1004");
+    h.try_create_rated(&post, &reader, true).await.expect("an adult comments");
+    h.try_create_rated(&post, &owner, false).await.expect("its author always may");
 }
 
 #[tokio::test]

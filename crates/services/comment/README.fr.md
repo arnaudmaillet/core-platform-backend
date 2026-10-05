@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 838df10053b2b47568fe9b565b27784d2f6ccf967899c593a404033ff98200c9
+  source_sha256: 4b8157f3c851a1a8ebb0416038169b2da2a36551c0a78643f2610591842f9085
   translated_at: 2026-10-05
   status: complete
 ---
@@ -141,7 +141,8 @@ la page) :
   de blocage dans un sens ou l'autre, pas masqué). Sinon `GetComment` renvoie `CMT-1001` et les
   listes sont vides ;
 - les commentaires d'un post **soumis à une limite d'âge** ne sont pas lisibles par un client anonyme, un
-  invité ou un lecteur de 13 à 17 ans (`CMT-1001` / listes vides), comme le post lui-même ;
+  invité ou un lecteur de 13 à 17 ans (`CMT-1001` / listes vides), comme le post lui-même, et ils ne
+  peuvent pas non plus le commenter (`CMT-1004`, même avec son identifiant) ; son auteur le peut toujours ;
 - les commentaires d'un auteur **masqué** pour le lecteur (blocage dans un sens ou l'autre, profil
   masqué) sont retirés ; le commentaire d'un profil privé sur un post lisible reste. Une page peut
   revenir plus courte tandis que `next_token` reste valide ;
