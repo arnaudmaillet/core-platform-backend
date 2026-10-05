@@ -8,6 +8,7 @@ use social_graph::application::command::AudienceFact;
 use social_graph::application::query::CheckInteractionQuery;
 use social_graph::domain::interaction::{
     InteractionAudience, InteractionKind, InteractionLimit, InteractionPolicy, InteractionVerdict, LimitAudience,
+    Refusal,
 };
 use social_graph::domain::value_object::ProfileId;
 
@@ -19,7 +20,7 @@ async fn verdict(h: &TestHarness, actor: &ProfileId, target: &ProfileId, kind: I
 }
 
 async fn may(h: &TestHarness, actor: &ProfileId, target: &ProfileId, kind: InteractionKind) -> bool {
-    verdict(h, actor, target, kind).await != InteractionVerdict::Refused
+    !verdict(h, actor, target, kind).await.is_refused()
 }
 
 #[tokio::test]
@@ -50,7 +51,11 @@ async fn the_owners_audience_decides_and_a_block_always_refuses() {
     .await;
     assert!(!may(&h, &stranger, &owner, InteractionKind::Comment).await);
     assert!(may(&h, &follower, &owner, InteractionKind::Comment).await);
-    assert!(!may(&h, &follower, &owner, InteractionKind::Message).await);
+    assert_eq!(
+        verdict(&h, &follower, &owner, InteractionKind::Message).await,
+        InteractionVerdict::Refused(Refusal::Audience),
+        "a follower who isn't followed back may only request"
+    );
     assert!(may(&h, &mutual, &owner, InteractionKind::Message).await);
     assert!(may(&h, &stranger, &owner, InteractionKind::Mention).await);
     assert!(may(&h, &owner, &owner, InteractionKind::Message).await, "oneself");
@@ -58,6 +63,21 @@ async fn the_owners_audience_decides_and_a_block_always_refuses() {
     // The owner blocks the mutual: nothing gets through.
     h.block(&owner, &mutual).await;
     assert!(!may(&h, &mutual, &owner, InteractionKind::Mention).await);
+    assert_eq!(
+        verdict(&h, &mutual, &owner, InteractionKind::Message).await,
+        InteractionVerdict::Refused(Refusal::Blocked)
+    );
+
+    // No one: refused as such, even for a mutual.
+    h.audience(
+        &owner,
+        AudienceFact::Interaction(InteractionPolicy { messages: InteractionAudience::NoOne, ..InteractionPolicy::default() }),
+    )
+    .await;
+    assert_eq!(
+        verdict(&h, &follower, &owner, InteractionKind::Message).await,
+        InteractionVerdict::Refused(Refusal::NoOne)
+    );
 }
 
 #[tokio::test]

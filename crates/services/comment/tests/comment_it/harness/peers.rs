@@ -122,7 +122,7 @@ impl SocialGraphService for GraphServer {
     ) -> Result<Response<social_graph_api::CheckInteractionResponse>, Status> {
         let actor = request.into_inner().actor_profile_id;
         let (allowed, held) = self.0.interaction.lock().unwrap().get(&actor).copied().unwrap_or((true, false));
-        Ok(Response::new(social_graph_api::CheckInteractionResponse { allowed, held }))
+        Ok(Response::new(social_graph_api::CheckInteractionResponse { allowed, held, ..Default::default() }))
     }
 
     async fn list_restricted_among(

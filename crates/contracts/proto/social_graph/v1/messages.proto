@@ -191,6 +191,9 @@ message CheckInteractionResponse {
     // With allowed: accept the comment / message but hold it for the target's
     // review — the target's temporary interaction limit covers the actor (#669).
     bool held    = 2;
+    // Without allowed: why (a block, no one, or an audience that excludes
+    // the actor). UNSPECIFIED when allowed, and from servers before #656.
+    InteractionRefusal refusal = 3;
 }
 
 // ── List privacy (#659) ───────────────────────────────────────────────────────

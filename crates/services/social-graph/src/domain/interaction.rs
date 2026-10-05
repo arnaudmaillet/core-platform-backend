@@ -99,7 +99,26 @@ pub enum InteractionVerdict {
     Allowed,
     /// Accepted, but held for the target's review (a limit is on, #669).
     Held,
-    Refused,
+    Refused(Refusal),
+}
+
+impl InteractionVerdict {
+    pub fn is_refused(self) -> bool {
+        matches!(self, Self::Refused(_))
+    }
+}
+
+/// Why an interaction is refused. The owning service decides what the actor
+/// learns: chat turns an [`Audience`](Self::Audience) refusal into a message
+/// request (#656), and must never tell a blocked actor they are blocked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// A block, either way.
+    Blocked,
+    /// The target's audience for this kind is no one.
+    NoOne,
+    /// The target's audience (followers / mutuals) excludes the actor.
+    Audience,
 }
 
 impl InteractionPolicy {
@@ -128,8 +147,8 @@ pub fn interaction_verdict(
     kind: InteractionKind,
     now: chrono::DateTime<chrono::Utc>,
 ) -> InteractionVerdict {
-    if !may_interact(relation, policy, kind) {
-        return InteractionVerdict::Refused;
+    if let Some(refusal) = refusal(relation, policy, kind) {
+        return InteractionVerdict::Refused(refusal);
     }
     let Some(limit) = policy.limit.filter(|l| now.timestamp_millis() < l.until_ms) else {
         return InteractionVerdict::Allowed;
@@ -148,13 +167,21 @@ pub fn interaction_verdict(
 /// May the relation's actor do `kind` to its target, whose policy is `policy`?
 /// A block either way always refuses; then the target's audience decides.
 pub fn may_interact(relation: &Relation, policy: &InteractionPolicy, kind: InteractionKind) -> bool {
+    refusal(relation, policy, kind).is_none()
+}
+
+/// Why the relation's actor may not do `kind` to its target, if it may not.
+pub fn refusal(relation: &Relation, policy: &InteractionPolicy, kind: InteractionKind) -> Option<Refusal> {
     if relation.actor_blocks_target() || relation.target_blocks_actor() {
-        return false;
+        return Some(Refusal::Blocked);
     }
-    policy.audience(kind).admits(
-        relation.actor_follows_target_since().is_some(),
-        relation.target_follows_actor_since().is_some(),
-    )
+    let audience = policy.audience(kind);
+    if audience == InteractionAudience::NoOne {
+        return Some(Refusal::NoOne);
+    }
+    let admitted =
+        audience.admits(relation.actor_follows_target_since().is_some(), relation.target_follows_actor_since().is_some());
+    (!admitted).then_some(Refusal::Audience)
 }
 
 #[cfg(test)]
@@ -240,7 +267,24 @@ mod tests {
         // Expired: allowed again. A block still refuses.
         let later = now + chrono::Duration::days(2);
         assert_eq!(interaction_verdict(&stranger, &non_followers, c, later), InteractionVerdict::Allowed);
-        assert_eq!(interaction_verdict(&relation(false, false, true), &non_followers, c, now), InteractionVerdict::Refused);
+        assert_eq!(
+            interaction_verdict(&relation(false, false, true), &non_followers, c, now),
+            InteractionVerdict::Refused(Refusal::Blocked)
+        );
+    }
+
+    #[test]
+    fn a_refusal_says_why_a_block_first() {
+        let m = InteractionKind::Message;
+        let policy = |messages| InteractionPolicy { messages, ..InteractionPolicy::default() };
+        let (stranger, follower) = (relation(false, false, false), relation(true, false, false));
+        assert_eq!(refusal(&stranger, &policy(InteractionAudience::Followers), m), Some(Refusal::Audience));
+        assert_eq!(refusal(&follower, &policy(InteractionAudience::Mutuals), m), Some(Refusal::Audience));
+        assert_eq!(refusal(&follower, &policy(InteractionAudience::Followers), m), None);
+        assert_eq!(refusal(&relation(true, true, false), &policy(InteractionAudience::NoOne), m), Some(Refusal::NoOne));
+        // A block outranks every audience, "no one" included.
+        assert_eq!(refusal(&relation(true, true, true), &policy(InteractionAudience::NoOne), m), Some(Refusal::Blocked));
+        assert_eq!(refusal(&relation(true, true, true), &policy(InteractionAudience::Everyone), m), Some(Refusal::Blocked));
     }
 
     #[test]

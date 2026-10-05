@@ -16,7 +16,7 @@ use crate::application::query::{
     ListRestrictedQuery, MutedProfilesQuery, RestrictedAmongQuery,
 };
 use crate::domain::access::{ContentAccess, Viewer};
-use crate::domain::interaction::{InteractionAudience, InteractionKind, InteractionVerdict};
+use crate::domain::interaction::{InteractionAudience, InteractionKind, InteractionVerdict, Refusal};
 use crate::domain::list_privacy::ListPrivacy;
 use crate::domain::mute::{Mute, MuteScope, MuteScopes};
 use crate::domain::value_object::ProfileId;
@@ -128,9 +128,16 @@ where
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
+        let refusal = match verdict {
+            InteractionVerdict::Refused(Refusal::Blocked) => proto::InteractionRefusal::Blocked,
+            InteractionVerdict::Refused(Refusal::NoOne) => proto::InteractionRefusal::NoOne,
+            InteractionVerdict::Refused(Refusal::Audience) => proto::InteractionRefusal::Audience,
+            InteractionVerdict::Allowed | InteractionVerdict::Held => proto::InteractionRefusal::Unspecified,
+        };
         Ok(Response::new(proto::CheckInteractionResponse {
-            allowed: verdict != InteractionVerdict::Refused,
+            allowed: !verdict.is_refused(),
             held:    verdict == InteractionVerdict::Held,
+            refusal: refusal as i32,
         }))
     }
 
