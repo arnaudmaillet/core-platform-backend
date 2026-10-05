@@ -181,4 +181,16 @@ pub trait CodeSender: Send + Sync + 'static {
     ) -> Result<(), AuthError> {
         Ok(())
     }
+
+    /// Tells the holder at `email` that their GDPR data export is ready
+    /// (#653): its download `link`, working until `expires_at`. Email only.
+    async fn send_export_ready_notice(
+        &self,
+        _email: &str,
+        _link: &str,
+        _expires_at: chrono::DateTime<chrono::Utc>,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        Ok(())
+    }
 }

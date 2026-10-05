@@ -17,7 +17,7 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    AccountErasure, AttestMode, GuestAttestation, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
+    AccountErasure, ExportReadyNotifier, AttestMode, GuestAttestation, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
     LogoutAllSessionsHandler, LogoutHandler, MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler,
     MfaPolicy, MfaSettingsHandler, MfaVerifier, StartGuestSessionHandler, VerificationCodes, VerifyCredentialsHandler,
 };
@@ -114,6 +114,8 @@ pub struct App {
     /// Erases an account's auth data on `account_deleted` (GDPR Art. 17); fed
     /// by the account-event consumer the runtime adapter spawns.
     pub erasure: Arc<AccountErasure>,
+    /// Emails a delivered GDPR export's link (#653); fed by the same consumer.
+    pub export_ready: Arc<ExportReadyNotifier>,
 }
 
 impl App {
@@ -381,6 +383,12 @@ impl App {
             Arc::new(RedisMfaStore::new(redis.clone())),
             MfaPolicy::default(),
         ));
+        let codes = Arc::new(VerificationCodes::new(
+            Arc::new(RedisVerificationStore::new(redis.clone())),
+            code_sender,
+            config.verification.clone(),
+        ));
+        let export_ready = Arc::new(ExportReadyNotifier::new(Arc::clone(&directory), Arc::clone(&codes)));
         let deps = AppDeps {
             idp: Arc::new(KeycloakIdentityProvider::new(idp_client, config.keycloak)),
             credentials,
@@ -395,11 +403,7 @@ impl App {
             guests: Arc::new(PgGuestRegistry::new(tx.clone())),
             guest_sessions_enabled: config.guest_sessions_enabled,
             federated,
-            codes: Arc::new(VerificationCodes::new(
-                Arc::new(RedisVerificationStore::new(redis.clone())),
-                code_sender,
-                config.verification.clone(),
-            )),
+            codes: Arc::clone(&codes),
             nonces: Arc::new(FederatedNonces::new(
                 Arc::new(RedisNonceStore::new(redis.clone())),
                 config.federated_nonce_required,
@@ -432,6 +436,7 @@ impl App {
             relay,
             guest_retention,
             erasure,
+            export_ready,
         })
     }
 }

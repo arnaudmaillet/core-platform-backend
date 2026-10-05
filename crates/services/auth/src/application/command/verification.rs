@@ -250,6 +250,17 @@ impl VerificationCodes {
         self.sender.send_mfa_changed_notice(email, change, locale).await
     }
 
+    /// Tells the holder at `email` that their data export is ready (#653).
+    pub async fn notify_export_ready(
+        &self,
+        email: &str,
+        link: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        self.sender.send_export_ready_notice(email, link, expires_at, locale).await
+    }
+
     pub async fn start(&self, cmd: StartVerificationCommand) -> Result<StartedVerification, AuthError> {
         ensure_valid(&cmd)?;
         let (destination, sms_country) = match cmd.channel {

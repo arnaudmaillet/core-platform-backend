@@ -2,7 +2,7 @@ use account_api::account_service_client::AccountServiceClient;
 use account_api::{
     AccountStatus, AgeBracket as ProtoAgeBracket, CreateAccountRequest, GetAccountByEmailRequest,
     GetAccountByIdRequest, GetAccountByIdentityIdRequest, GetAccountByPhoneRequest,
-    ChangeEmailRequest, ChangePhoneRequest, ConsumeRecoveryCodeRequest, EnrollMfaRequest, GetMfaSecretRequest,
+    ChangeEmailRequest, ChangePhoneRequest, ConsumeRecoveryCodeRequest, EnrollMfaRequest, GetGdprRecordRequest, GetMfaSecretRequest,
     ReplaceRecoveryCodesRequest, ResumeDeactivatedAccountRequest, RevokeMfaRequest, UpdateConsentsRequest,
     VerifyEmailRequest, VerifyPhoneRequest,
 };
@@ -253,6 +253,30 @@ impl AccountDirectory for GrpcAccountDirectory {
                 AuthError::AccountNotActive { current: status.message().to_owned() }
             }
             _ => AuthError::AccountDirectoryUnavailable,
+        })
+    }
+
+    #[instrument(name = "auth.directory.export_link", skip(self), fields(account.id = %account_id))]
+    async fn export_link(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Option<(String, chrono::DateTime<chrono::Utc>)>, AuthError> {
+        let record = self
+            .client
+            .clone()
+            .get_gdpr_record(GetGdprRecordRequest { account_id: account_id.as_str() })
+            .await
+            .map_err(|status| match status.code() {
+                Code::NotFound => AuthError::AccountNotActive { current: "not_found".into() },
+                _ => AuthError::AccountDirectoryUnavailable,
+            })?
+            .into_inner();
+        let expires_at = record
+            .data_export_expires_at
+            .and_then(|ts| chrono::DateTime::from_timestamp(ts.seconds, ts.nanos.max(0) as u32));
+        Ok(match (record.data_export_url.is_empty(), expires_at) {
+            (false, Some(at)) => Some((record.data_export_url, at)),
+            _ => None,
         })
     }
 

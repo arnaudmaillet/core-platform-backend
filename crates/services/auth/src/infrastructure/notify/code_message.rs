@@ -169,6 +169,36 @@ pub fn mfa_changed_notice_message(change: MfaChange, locale: Option<&str>) -> (S
     (subject.to_owned(), format!("{what}\n\n{tail}\n"))
 }
 
+/// The email telling the holder their data export is ready (#653): the link
+/// and the day it stops working (UTC).
+pub fn export_ready_notice_message(
+    link: &str,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    locale: Option<&str>,
+) -> (String, String) {
+    let day = expires_at.format("%Y-%m-%d");
+    if locale.is_some_and(|l| l.to_ascii_lowercase().starts_with("fr")) {
+        (
+            "Ton export de données est prêt".to_owned(),
+            format!(
+                "L'export de tes données que tu as demandé est prêt :\n\n{link}\n\nCe lien fonctionne jusqu'au {day} \
+                 (UTC) ; tu le retrouves aussi dans les réglages de confidentialité de l'app. Ne le partage avec \
+                 personne : il donne accès à tes données. Si tu n'as rien demandé, sécurise ton compte : change ton \
+                 mot de passe et contacte-nous depuis l'app.\n"
+            ),
+        )
+    } else {
+        (
+            "Your data export is ready".to_owned(),
+            format!(
+                "The export of your data you asked for is ready:\n\n{link}\n\nThis link works until {day} (UTC); \
+                 it is also in the app's privacy settings. Do not share it: it gives access to your data. If you \
+                 did not ask for it, secure your account: change your password and contact us from the app.\n"
+            ),
+        )
+    }
+}
+
 /// The SMS text for `code` (short: one segment).
 pub fn sms_message(code: &str, minutes: i64, locale: Option<&str>) -> String {
     if locale.is_some_and(|l| l.to_ascii_lowercase().starts_with("fr")) {
@@ -249,5 +279,16 @@ mod tests {
         assert!(body.contains("signed out") && body.contains("If it was you"), "{body}");
         let (subject, _) = mfa_changed_notice_message(MfaChange::BackupCodesRegenerated, None);
         assert_eq!(subject, "New backup codes");
+    }
+
+    #[test]
+    fn the_export_notice_carries_the_link_and_its_last_day() {
+        let at = chrono::DateTime::parse_from_rfc3339("2026-10-12T08:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        let (subject, body) = export_ready_notice_message("https://x/a.zip", at, Some("fr"));
+        assert_eq!(subject, "Ton export de données est prêt");
+        assert!(body.contains("https://x/a.zip") && body.contains("2026-10-12"), "{body}");
+        let (subject, body) = export_ready_notice_message("https://x/a.zip", at, None);
+        assert_eq!(subject, "Your data export is ready");
+        assert!(body.contains("Do not share it"), "{body}");
     }
 }

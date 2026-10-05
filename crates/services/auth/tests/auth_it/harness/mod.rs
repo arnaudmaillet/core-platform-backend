@@ -152,6 +152,13 @@ impl AccountDirectory for StubDirectory {
         })
     }
 
+    async fn export_link(
+        &self,
+        _account_id: &AccountId,
+    ) -> Result<Option<(String, chrono::DateTime<chrono::Utc>)>, AuthError> {
+        Ok(None)
+    }
+
     async fn enroll_mfa(&self, account_id: &AccountId, sealed_seed: &[u8], code_hashes: &[String]) -> Result<(), AuthError> {
         let mut mfa = self.mfa.lock().unwrap();
         if mfa.contains_key(account_id) {

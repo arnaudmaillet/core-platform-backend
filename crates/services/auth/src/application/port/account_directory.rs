@@ -125,6 +125,14 @@ pub trait AccountDirectory: Send + Sync + 'static {
     ) -> Result<(), AuthError>;
 
     /// The account's two-step material (#649), for checking a code.
+    /// The holder's delivered GDPR data export (#653): its download link and
+    /// when it stops working, as `account` signs it now — `None` when there is
+    /// none to hand out (not delivered, superseded, expired).
+    async fn export_link(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Option<(String, chrono::DateTime<chrono::Utc>)>, AuthError>;
+
     async fn mfa_secret(&self, account_id: &AccountId) -> Result<super::MfaSecret, AuthError>;
 
     /// Spends the backup code hashed `code_hash`: `true` when one matched
