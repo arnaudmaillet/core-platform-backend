@@ -68,4 +68,16 @@ impl CodeSender for ChannelCodeSender {
             None => Ok(()),
         }
     }
+
+    async fn send_new_login_notice(
+        &self,
+        email: &str,
+        device: Option<&str>,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        match &self.email {
+            Some(sender) => sender.send_new_login_notice(email, device, locale).await,
+            None => Ok(()),
+        }
+    }
 }

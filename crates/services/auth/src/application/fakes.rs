@@ -454,6 +454,19 @@ impl SessionRepository for InMemorySessionRepository {
             .cloned()
             .collect())
     }
+
+    async fn device_history(
+        &self,
+        account_id: &AccountId,
+        device_id: &str,
+    ) -> Result<super::port::DeviceHistory, AuthError> {
+        let sessions = self.sessions.lock().unwrap();
+        let mine: Vec<&Session> = sessions.values().filter(|s| s.account_id() == *account_id).collect();
+        Ok(super::port::DeviceHistory {
+            any_session: !mine.is_empty(),
+            seen_device: mine.iter().any(|s| s.device().device_id() == Some(device_id)),
+        })
+    }
 }
 
 // ─── RefreshTokenRepository ──────────────────────────────────────────────────
@@ -1016,6 +1029,8 @@ pub struct RecordingCodeSender {
     notices: Mutex<Vec<(String, Option<String>)>>,
     /// (changed channel, email told) of every contact-changed notice (#651).
     contact_notices: Mutex<Vec<(super::port::VerificationChannel, String)>>,
+    /// (email told, device) of every new-sign-in notice (#649).
+    login_notices: Mutex<Vec<(String, Option<String>)>>,
     failing: std::sync::atomic::AtomicBool,
 }
 
@@ -1031,6 +1046,11 @@ impl RecordingCodeSender {
 
     pub fn recover(&self) {
         self.failing.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The (email told, device) of every new-sign-in notice.
+    pub fn login_notices(&self) -> Vec<(String, Option<String>)> {
+        self.login_notices.lock().unwrap().clone()
     }
 
     /// The (changed channel, email told) of every contact-changed notice.
@@ -1077,6 +1097,16 @@ impl super::port::CodeSender for RecordingCodeSender {
         _locale: Option<&str>,
     ) -> Result<(), AuthError> {
         self.contact_notices.lock().unwrap().push((changed, email.to_owned()));
+        Ok(())
+    }
+
+    async fn send_new_login_notice(
+        &self,
+        email: &str,
+        device: Option<&str>,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        self.login_notices.lock().unwrap().push((email.to_owned(), device.map(str::to_owned)));
         Ok(())
     }
 }

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 2d471fef808f189e554600f21c73581bc03ec3bb998d61aa479582ef3e4a2efa
+  source_sha256: b3f4636a21bd5ae177c32102b0924d9832b0159322342f46a3239cf9dec4ee42
   translated_at: 2026-10-05
   status: complete
 ---
@@ -180,6 +180,14 @@ l'API Admin de Keycloak (`reset-password`, un client confidentiel à service acc
 `password_changed` ; celle de l'appelant reste). Nouveaux mots de passe : 8 à 128 caractères et
 différents de l'actuel (`AUT-VAL-024/025/026`), puis la politique du realm (`AUT-5006`, sa règle dans
 le message). Sans client admin configuré, les RPC d'identifiants répondent `UNAVAILABLE` (`AUT-5005`).
+
+**Alertes de nouvelle connexion (#649).** Une connexion depuis un appareil que le compte n'a jamais
+utilisé — son `device_id` (`DeviceContext`) absent de toutes les sessions que le compte a eues, quel que
+soit leur statut — envoie un e-mail à l'adresse du compte (« Nouvelle connexion à ton compte », avec
+l'user agent de l'appareil). Pas à la toute première connexion du compte, pas sans `device_id`, et
+seulement là où les transports de codes sont configurés. L'historique est lu avant l'émission de la
+session ; l'e-mail part en arrière-plan, si bien qu'une alerte ne fait jamais échouer ni ralentir une
+connexion. Les alertes push attendent APNs.
 
 **Changer son e-mail ou son téléphone (#651).** `ChangeContact(challenge_id, code)` (edge
 **authenticated**, membres, derrière le step-up ci-dessous) : le titulaire envoie d'abord un code à la

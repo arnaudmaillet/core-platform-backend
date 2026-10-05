@@ -142,6 +142,41 @@ impl LoginHandler {
         }
     }
 
+    /// Did `device` never sign in to the account before (an account that did
+    /// sign in before, #649)? Only with the code transports to announce it, a
+    /// device id to tell devices apart, and the history readable: anything
+    /// else is "no" — an alert never fails or slows a sign-in.
+    async fn is_new_device(&self, account_id: &AccountId, device: &DeviceFingerprint) -> bool {
+        let (Some(_), Some(device_id)) = (&self.codes, device.device_id()) else { return false };
+        match self.members.sessions.device_history(account_id, device_id).await {
+            Ok(history) => history.is_new_device(),
+            Err(error) => {
+                tracing::warn!(%error, "device history unreadable; no new-sign-in alert");
+                false
+            }
+        }
+    }
+
+    /// Emails the account's address about the new device, in the background
+    /// (best effort, off the sign-in's path).
+    fn announce_new_device(&self, account_id: AccountId, user_agent: Option<String>) {
+        let (Some(codes), directory) = (self.codes.clone(), Arc::clone(&self.directory)) else { return };
+        tokio::spawn(async move {
+            let email = match directory.contact(&account_id).await {
+                Ok(contact) => contact.email,
+                Err(error) => {
+                    tracing::warn!(%error, "no new-sign-in alert: contact unreadable");
+                    return;
+                }
+            };
+            if let Some(email) = email
+                && let Err(error) = codes.notify_new_login(&email, user_agent.as_deref(), None).await
+            {
+                tracing::warn!(%error, "new-sign-in alert not sent");
+            }
+        });
+    }
+
     /// Enables passwordless sign-in with an email one-time code.
     pub fn with_codes(mut self, codes: Arc<VerificationCodes>) -> Self {
         self.codes = Some(codes);
@@ -241,11 +276,17 @@ impl LoginHandler {
             first_link = true;
         }
 
-        // 5. Issue the session, its refresh token and the edge access token.
+        // 5. Issue the session, its refresh token and the edge access token —
+        //    after reading whether this device ever signed in to the account.
+        let new_device = self.is_new_device(&account_id, &cmd.device).await;
+        let user_agent = cmd.device.user_agent().map(str::to_owned);
         let issued = self
             .members
             .issue(account_id, subject, cmd.device, permissions, age_bracket, now, correlation_id)
             .await?;
+        if new_device {
+            self.announce_new_device(account_id, user_agent);
+        }
 
         // 6. The guest this device was is now this member.
         if let (Some(token), Some(guests)) = (cmd.guest_refresh_token.as_deref(), &self.guests) {
@@ -431,4 +472,54 @@ mod tests {
         let session = fx.sessions.find_by_id(&issued.session_id).await.unwrap().unwrap();
         assert_eq!(session.generation(), Generation::INITIAL);
     }
+
+    /// #649: a sign-in from a device the account never used is emailed to the
+    /// account's address — not the account's very first sign-in, not a known
+    /// device, not one without a device id.
+    #[tokio::test]
+    async fn a_sign_in_from_a_new_device_is_emailed_to_the_account() {
+        use crate::application::command::verification::{VerificationCodes, VerificationPolicy};
+        use crate::application::fakes::{InMemoryVerificationStore, RecordingCodeSender};
+        use crate::application::port::ContactDetails;
+
+        let fx = Fixture::new();
+        fx.idp.with_password("pw");
+        let sender = Arc::new(RecordingCodeSender::default());
+        let codes = Arc::new(VerificationCodes::new(
+            Arc::new(InMemoryVerificationStore::default()),
+            Arc::clone(&sender) as _,
+            VerificationPolicy::default(),
+        ));
+        let handler = fx.login_handler().with_codes(codes);
+        let login = |device_id: Option<&str>| {
+            Envelope::new(
+                Uuid::now_v7(),
+                LoginCommand {
+                    grant: AuthnGrant::Password { username: "user".into(), password: "pw".into() },
+                    device: DeviceFingerprint::new(Some("App/1.0 iPhone".into()), None, device_id.map(str::to_owned)),
+                    guest_refresh_token: None,
+                    client_ip: None,
+                },
+            )
+        };
+        let settle = || tokio::time::sleep(std::time::Duration::from_millis(50));
+
+        // The very first sign-in: nothing to compare with, no alert.
+        let first = handler.handle(login(Some("phone")), t0()).await.unwrap();
+        fx.directory.with_contact(first.account_id, ContactDetails { email: Some("me@example.com".into()), phone: None });
+        settle().await;
+        assert!(sender.login_notices().is_empty());
+
+        // The same phone again; then a device with no id: nothing to tell.
+        handler.handle(login(Some("phone")), t0()).await.unwrap();
+        handler.handle(login(None), t0()).await.unwrap();
+        settle().await;
+        assert!(sender.login_notices().is_empty());
+
+        // A new device: the account's address is told, naming the device.
+        handler.handle(login(Some("laptop")), t0()).await.unwrap();
+        settle().await;
+        assert_eq!(sender.login_notices(), vec![("me@example.com".to_owned(), Some("App/1.0 iPhone".to_owned()))]);
+    }
 }
+

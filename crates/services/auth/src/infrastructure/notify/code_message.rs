@@ -70,6 +70,31 @@ pub fn contact_changed_notice_message(email_changed: bool, locale: Option<&str>)
     }
 }
 
+/// The email telling the holder their account was signed in to from a device
+/// it never saw (#649), named by its user agent when known.
+pub fn new_login_notice_message(device: Option<&str>, locale: Option<&str>) -> (String, String) {
+    let device = device.map(|d| d.chars().take(120).collect::<String>()).filter(|d| !d.trim().is_empty());
+    if locale.is_some_and(|l| l.to_ascii_lowercase().starts_with("fr")) {
+        let from = device.map(|d| format!(" ({d})")).unwrap_or_default();
+        (
+            "Nouvelle connexion à ton compte".to_owned(),
+            format!(
+                "Ton compte vient d'être connecté depuis un nouvel appareil{from}.\n\nSi c'était toi, tu n'as rien \
+                 à faire. Sinon, change ton mot de passe et déconnecte les autres appareils depuis l'app.\n"
+            ),
+        )
+    } else {
+        let from = device.map(|d| format!(" ({d})")).unwrap_or_default();
+        (
+            "New sign-in to your account".to_owned(),
+            format!(
+                "Your account was just signed in to from a new device{from}.\n\nIf it was you, there is nothing to \
+                 do. If not, change your password and sign the other devices out from the app.\n"
+            ),
+        )
+    }
+}
+
 /// The SMS text for `code` (short: one segment).
 pub fn sms_message(code: &str, minutes: i64, locale: Option<&str>) -> String {
     if locale.is_some_and(|l| l.to_ascii_lowercase().starts_with("fr")) {
@@ -113,6 +138,15 @@ mod tests {
         assert!(subject.contains("adresse e-mail") && body.contains("sécurise"), "{subject} / {body}");
         let (subject, _) = contact_changed_notice_message(false, None);
         assert_eq!(subject, "Your phone number was changed");
+    }
+
+    #[test]
+    fn the_new_login_notice_names_the_device_when_known() {
+        let (subject, body) = new_login_notice_message(Some("CorePlatform/1.4 iPhone15,3"), Some("fr"));
+        assert_eq!(subject, "Nouvelle connexion à ton compte");
+        assert!(body.contains("(CorePlatform/1.4 iPhone15,3)"), "{body}");
+        let (_, body) = new_login_notice_message(None, None);
+        assert!(body.contains("a new device.\n"), "{body}");
     }
 }
 
