@@ -163,6 +163,8 @@ async fn members_keep_their_precise_errors_on_a_private_conversation() {
     assert_eq!(not_public.code(), Code::FailedPrecondition, "{not_public:?}");
     let already = probe(&h, "JoinAsMember", &conv, &owner).await.expect("re-join");
     assert_eq!(already.code(), Code::AlreadyExists, "{already:?}");
+    let not_streamable = probe(&h, "StreamPublic", &conv, &owner).await.expect("stream a private one");
+    assert_eq!(not_streamable.code(), Code::FailedPrecondition, "{not_streamable:?}");
 
     // And every member RPC that it is allowed to call still succeeds.
     for rpc in ["SendMessage", "MarkRead", "SendTyping", "Heartbeat", "GetHistory", "ListMembers", "StreamConversation"] {

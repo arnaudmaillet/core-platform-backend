@@ -181,7 +181,7 @@ discoverable anyway), keep the precise error:
 
 | Caller | Member-only RPCs¹ | `ToggleVisibility` | `GetHistory` | `Subscribe` | `StreamPublic` |
 |---|---|---|---|---|---|
-| member | allowed | `PERMISSION_DENIED` unless owner/admin | full history | `FAILED_PRECONDITION` (`CHT-1008`) on a private one | `NOT_FOUND` on a private one |
+| member | allowed | `PERMISSION_DENIED` unless owner/admin | full history | `FAILED_PRECONDITION` (`CHT-1008`) on a private one | `FAILED_PRECONDITION` (`CHT-1008`) on a private one |
 | outsider, **public** | `PERMISSION_DENIED` (`CHT-1007`) | `PERMISSION_DENIED` (`CHT-1007`) | from the public-since watermark | allowed | allowed |
 | outsider, **private** | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) |
 | any, conversation missing | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) |
@@ -189,8 +189,9 @@ discoverable anyway), keep the precise error:
 ¹ `SendMessage`, `MarkRead`, `SendTyping`, `Heartbeat`, `ListMembers`, `StreamConversation`. They
 authorize with a single roster read; the conversation is loaded **only when that read misses**, to pick
 the answer (`application::access::deny_non_member`), so the member hot path is unchanged.
-`StreamPublic` conceals a private conversation even from members, because its `subscriber_id` is not
-bound to the caller and so cannot vouch for membership. `JoinAsMember` and `InviteMember` follow the
+`Subscribe` and `StreamPublic` check membership only on a private conversation, for a `subscriber_id`
+bound to the caller at the edge (`edge::require_profile`: one of the token's `pids`; a guest owns
+none), so nobody can ask about someone else's membership. `JoinAsMember` and `InviteMember` follow the
 same rule (next paragraph).
 
 **Joining a private conversation.** `JoinAsMember` is open-join on a **public** conversation only.
@@ -437,8 +438,8 @@ for f in crates/services/chat/migrations/*.cql; do cqlsh -f "$f"; done
 **1. `StreamPublic` (or `Subscribe`, `GetHistory`, …) returns `NOT_FOUND` for a conversation that exists.**
 Root cause: the conversation is `Private` (or was just unpublished) and the caller is not on its
 roster: the service answers exactly as for a missing conversation (`CHT-1009` in the server logs,
-see *Private conversations are unprobeable*). `StreamPublic` answers this way even for members.
-Audience access requires `visibility == Public`. Mitigation: confirm via `GetHistory` as a member, or
+see *Private conversations are unprobeable*); a member gets `FAILED_PRECONDITION` (`CHT-1008`)
+instead. Audience access requires `visibility == Public`. Mitigation: confirm via `GetHistory` as a member, or
 `ToggleVisibility{make_public:true}` if intended. After an unpublish, the `VisibilityWorker` closes
 guest streams cluster-wide — clients must stop retrying `StreamPublic`.
 

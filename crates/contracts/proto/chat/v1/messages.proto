@@ -165,7 +165,7 @@ message StreamConversationResponse {
 
 message StreamPublicRequest {
     string conversation_id = 1;
-    string subscriber_id   = 2; // ephemeral guest id; used for shard assignment
+    string subscriber_id   = 2; // the caller's own profile id (bound at the edge); keys the audience shard
 }
 message StreamPublicResponse {
     MessageView message = 1;

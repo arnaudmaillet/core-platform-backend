@@ -508,14 +508,17 @@ where
         &self,
         request: Request<proto::StreamPublicRequest>,
     ) -> Result<Response<StreamPublicStream>, Status> {
+        // The subscriber is the caller's own profile, like every other actor
+        // field: it keys the audience shard and refines the private-conversation
+        // answer below, so it must not be someone else's.
+        edge::require_profile(&request, &request.get_ref().subscriber_id)?;
         let req = request.into_inner();
         let conversation_id = parse_conversation(&req.conversation_id)?;
         let subscriber_id   = parse_profile(&req.subscriber_id)?;
 
         // Authorization: Audience-Plane access requires a public conversation.
-        // `subscriber_id` is not bound to the caller here, so membership cannot
-        // be trusted to refine the answer: a private conversation is concealed
-        // for everyone, exactly like a missing one.
+        // On a private one, a member gets the precise "not public"; anyone else
+        // gets the same answer as for a missing conversation.
         let conversation = self
             .conversation_repo
             .find(&conversation_id)
@@ -527,7 +530,13 @@ where
                 })
             })?;
         if !conversation.visibility().is_public() {
-            return Err(chat_err_to_status(conversation.concealed()));
+            let is_member = self
+                .member_repo
+                .find(&conversation_id, &subscriber_id)
+                .await
+                .map_err(chat_err_to_status)?
+                .is_some();
+            return Err(chat_err_to_status(conversation.deny_audience(is_member)));
         }
 
         let shard = audience_shard_for(subscriber_id.as_uuid(), self.params.audience_shard_count);

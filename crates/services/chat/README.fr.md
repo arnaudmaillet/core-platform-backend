@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 1549f178196f1a0f7575f419fd7e0b71d49b30a43ea52b631be1b02a2075c8ab
+  source_sha256: 666cfab71d9926f7569b811038aa08dbaeb4ee3604ac5f7d6edf14af8e57a73f
   translated_at: 2026-10-05
   status: complete
 ---
@@ -198,7 +198,7 @@ de tester l'existence d'une conversation privée. Les membres, et les tiers d'un
 
 | Appelant | RPC réservées aux membres¹ | `ToggleVisibility` | `GetHistory` | `Subscribe` | `StreamPublic` |
 |---|---|---|---|---|---|
-| membre | autorisé | `PERMISSION_DENIED` sauf owner/admin | historique complet | `FAILED_PRECONDITION` (`CHT-1008`) sur une privée | `NOT_FOUND` sur une privée |
+| membre | autorisé | `PERMISSION_DENIED` sauf owner/admin | historique complet | `FAILED_PRECONDITION` (`CHT-1008`) sur une privée | `FAILED_PRECONDITION` (`CHT-1008`) sur une privée |
 | tiers, **publique** | `PERMISSION_DENIED` (`CHT-1007`) | `PERMISSION_DENIED` (`CHT-1007`) | à partir du filigrane public-since | autorisé | autorisé |
 | tiers, **privée** | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) | `NOT_FOUND` (`CHT-1009`) |
 | tous, conversation inexistante | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) | `NOT_FOUND` (`CHT-1001`) |
@@ -206,9 +206,10 @@ de tester l'existence d'une conversation privée. Les membres, et les tiers d'un
 ¹ `SendMessage`, `MarkRead`, `SendTyping`, `Heartbeat`, `ListMembers`, `StreamConversation`. Elles
 autorisent par une seule lecture du roster ; la conversation n'est chargée **que si cette lecture
 échoue**, pour choisir la réponse (`application::access::deny_non_member`) : le chemin chaud des membres
-est inchangé. `StreamPublic` masque une conversation privée même aux membres, car son `subscriber_id`
-n'est pas lié à l'appelant et ne peut donc pas attester l'appartenance. `JoinAsMember` et `InviteMember`
-suivent la même règle (paragraphe suivant).
+est inchangé. `Subscribe` et `StreamPublic` ne vérifient l'appartenance que sur une conversation
+privée, pour un `subscriber_id` lié à l'appelant à la frontière (`edge::require_profile` : l'un des
+`pids` du jeton ; un invité n'en possède aucun) : personne ne peut s'enquérir de l'appartenance d'autrui.
+`JoinAsMember` et `InviteMember` suivent la même règle (paragraphe suivant).
 
 **Rejoindre une conversation privée.** `JoinAsMember` n'est en accès libre que sur une conversation
 **publique**. Sur une conversation **privée** (groupe ou canal), il exige une invitation en attente pour
@@ -461,8 +462,8 @@ for f in crates/services/chat/migrations/*.cql; do cqlsh -f "$f"; done
 **1. `StreamPublic` (ou `Subscribe`, `GetHistory`, …) renvoie `NOT_FOUND` pour une conversation qui existe.**
 Cause racine : la conversation est `Private` (ou vient d'être dépubliée) et l'appelant n'est pas dans son
 roster : le service répond exactement comme pour une conversation inexistante (`CHT-1009` dans les
-journaux serveur, voir *Les conversations privées sont insondables*). `StreamPublic` répond ainsi même
-aux membres. L'accès audience exige `visibility == Public`. Mitigation : confirmer via `GetHistory` en
+journaux serveur, voir *Les conversations privées sont insondables*) ; un membre reçoit plutôt
+`FAILED_PRECONDITION` (`CHT-1008`). L'accès audience exige `visibility == Public`. Mitigation : confirmer via `GetHistory` en
 tant que membre, ou
 `ToggleVisibility{make_public:true}` si c'est voulu. Après une dépublication, le `VisibilityWorker`
 ferme les flux invités à l'échelle du cluster — les clients doivent cesser de réessayer `StreamPublic`.

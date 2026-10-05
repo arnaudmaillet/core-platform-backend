@@ -73,11 +73,7 @@ where
         if !conversation.visibility().is_public() {
             // Only a member already knows this conversation exists.
             let is_member = self.member_repo.find(&conversation_id, &subscriber_id).await?.is_some();
-            return Err(if is_member {
-                ChatError::ConversationNotPublic { conversation_id: conversation_id.as_str() }
-            } else {
-                conversation.concealed()
-            });
+            return Err(conversation.deny_audience(is_member));
         }
 
         self.subscription_repo.subscribe(&conversation_id, &subscriber_id).await

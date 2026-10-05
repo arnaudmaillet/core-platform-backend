@@ -51,8 +51,9 @@ impl Service for ChatService {
 
     /// The RPCs exposed on the client edge listener (`GRPC_EDGE_ADDR`); anything
     /// else on this service is mesh-only. See `transport::grpc::edge`.
-    // StreamPublic's `subscriber_id` is an ephemeral guest shard key, not an
-    // identity, so it is authenticated but not actor-bound.
+    // Every actor field is bound to the caller in the handler
+    // (`edge::require_profile`), StreamPublic's `subscriber_id` included: it
+    // keys the audience shard and gates the member-only "not public" answer.
     const EDGE_POLICY: EdgePolicy = &[
         authenticated("/chat.v1.ChatService/CreateConversation"),
         authenticated("/chat.v1.ChatService/ToggleVisibility"),

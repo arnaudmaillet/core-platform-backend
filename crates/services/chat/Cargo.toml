@@ -68,3 +68,4 @@ scylla-storage = { workspace = true }
 redis-storage  = { workspace = true }
 transport      = { workspace = true }
 cqrs           = { workspace = true }
+auth-context   = { workspace = true }
