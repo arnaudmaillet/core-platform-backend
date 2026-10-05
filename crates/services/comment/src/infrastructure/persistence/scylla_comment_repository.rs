@@ -5,6 +5,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, TimeZone, Utc};
 use scylla::observability::history::HistoryListener;
 use scylla::response::PagingState;
+use scylla::statement::batch::{Batch, BatchType};
 use scylla::statement::unprepared::Statement;
 use scylla::value::CqlTimestamp;
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
@@ -211,6 +212,21 @@ impl ScyllaCommentRepository {
         Ok(())
     }
 
+    /// An empty **logged** batch on the Strict profile: its statements apply
+    /// together even if the coordinator dies mid-write.
+    fn strict_batch(&self) -> Batch {
+        let mut batch = Batch::new(BatchType::Logged);
+        batch.set_execution_profile_handle(Some(
+            self.client
+                .profiles
+                .get(ScyllaProfileKind::Strict)
+                .clone()
+                .into_handle_with_label("strict-batch".to_string()),
+        ));
+        batch.set_history_listener(Arc::clone(&self.client.history_listener) as Arc<dyn HistoryListener>);
+        batch
+    }
+
     fn fast_stmt(&self, cql: &str) -> Statement {
         let mut s = Statement::new(cql);
         s.set_execution_profile_handle(Some(
@@ -242,70 +258,61 @@ impl CommentRepository for ScyllaCommentRepository {
         let gif_width  = comment.gif().map(|g| g.gif_width as i32);
         let gif_height = comment.gif().map(|g| g.gif_height as i32);
 
-        // Write to source-of-truth table first.
-        let stmt_main = self.strict_stmt(
+        // The comment, its feed row and its author-index row: one logged batch,
+        // so a comment never exists without the rows that list it (#653 — the
+        // GDPR export reads the author index).
+        let mut batch = self.strict_batch();
+        batch.append_statement(
             "INSERT INTO comment.comments \
              (comment_id, post_id, author_id, parent_id, status, body, \
               gif_id, gif_url, gif_width, gif_height, created_at, updated_at, deleted_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         );
-        self.client
-            .session
-            .execute_unpaged(
-                stmt_main,
-                (
-                    comment.id().as_uuid(),
-                    comment.post_id().as_uuid(),
-                    comment.author_id().as_uuid(),
-                    parent_uuid,
-                    comment.status().as_tinyint(),
-                    comment.body().map(CommentBody::as_str),
-                    gif_id,
-                    gif_url,
-                    gif_width,
-                    gif_height,
-                    dt_ms(comment.created_at()),
-                    dt_ms(comment.updated_at()),
-                    comment.deleted_at().map(dt_ms),
-                ),
-            )
-            .await
-            .map_err(scylla_err)?;
-
-        // Write to feed table.
-        let stmt_feed = self.strict_stmt(
+        batch.append_statement(
             "INSERT INTO comment.comments_by_post \
              (post_id, parent_id, created_at, comment_id, author_id, status, \
               body, gif_url, gif_width, gif_height) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         );
-        self.client
-            .session
-            .execute_unpaged(
-                stmt_feed,
-                (
-                    comment.post_id().as_uuid(),
-                    parent_uuid,
-                    dt_ms(comment.created_at()),
-                    comment.id().as_uuid(),
-                    comment.author_id().as_uuid(),
-                    comment.status().as_tinyint(),
-                    comment.body().map(CommentBody::as_str),
-                    gif_url,
-                    gif_width,
-                    gif_height,
-                ),
-            )
-            .await
-            .map_err(scylla_err)?;
-
-        self.index_by_author(
-            comment.author_id().as_uuid(),
-            comment.created_at().timestamp_millis(),
-            comment.id().as_uuid(),
-            comment.post_id().as_uuid(),
-        )
-        .await?;
+        batch.append_statement(
+            "INSERT INTO comment.comments_by_author (author_id, created_at, comment_id, post_id) VALUES (?, ?, ?, ?)",
+        );
+        let values = (
+            (
+                comment.id().as_uuid(),
+                comment.post_id().as_uuid(),
+                comment.author_id().as_uuid(),
+                parent_uuid,
+                comment.status().as_tinyint(),
+                comment.body().map(CommentBody::as_str),
+                gif_id,
+                gif_url,
+                gif_width,
+                gif_height,
+                dt_ms(comment.created_at()),
+                dt_ms(comment.updated_at()),
+                comment.deleted_at().map(dt_ms),
+            ),
+            (
+                comment.post_id().as_uuid(),
+                parent_uuid,
+                dt_ms(comment.created_at()),
+                comment.id().as_uuid(),
+                comment.author_id().as_uuid(),
+                comment.status().as_tinyint(),
+                comment.body().map(CommentBody::as_str),
+                gif_url,
+                gif_width,
+                gif_height,
+            ),
+            (
+                comment.author_id().as_uuid(),
+                dt_ms(comment.created_at()),
+                comment.id().as_uuid(),
+                comment.post_id().as_uuid(),
+            ),
+        );
+        self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
 
         if comment.held() {
             self.set_held(comment, true).await?;
@@ -449,44 +456,22 @@ impl CommentRepository for ScyllaCommentRepository {
             .map(CommentId::as_uuid)
             .unwrap_or(NIL_UUID);
 
-        let stmt_main = self.strict_stmt(
-            "DELETE FROM comment.comments WHERE comment_id = ?",
-        );
-        self.client
-            .session
-            .execute_unpaged(stmt_main, (comment.id().as_uuid(),))
-            .await
-            .map_err(scylla_err)?;
-
-        let stmt_author = self.strict_stmt(
-            "DELETE FROM comment.comments_by_author WHERE author_id = ? AND created_at = ? AND comment_id = ?",
-        );
-        self.client
-            .session
-            .execute_unpaged(
-                stmt_author,
-                (comment.author_id().as_uuid(), dt_ms(comment.created_at()), comment.id().as_uuid()),
-            )
-            .await
-            .map_err(scylla_err)?;
-
-        let stmt_feed = self.strict_stmt(
+        // All three rows or none (a logged batch).
+        let mut batch = self.strict_batch();
+        batch.append_statement("DELETE FROM comment.comments WHERE comment_id = ?");
+        batch.append_statement(
             "DELETE FROM comment.comments_by_post \
              WHERE post_id = ? AND parent_id = ? AND created_at = ? AND comment_id = ?",
         );
-        self.client
-            .session
-            .execute_unpaged(
-                stmt_feed,
-                (
-                    comment.post_id().as_uuid(),
-                    parent_uuid,
-                    dt_ms(comment.created_at()),
-                    comment.id().as_uuid(),
-                ),
-            )
-            .await
-            .map_err(scylla_err)?;
+        batch.append_statement(
+            "DELETE FROM comment.comments_by_author WHERE author_id = ? AND created_at = ? AND comment_id = ?",
+        );
+        let values = (
+            (comment.id().as_uuid(),),
+            (comment.post_id().as_uuid(), parent_uuid, dt_ms(comment.created_at()), comment.id().as_uuid()),
+            (comment.author_id().as_uuid(), dt_ms(comment.created_at()), comment.id().as_uuid()),
+        );
+        self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
 
         Ok(())
     }

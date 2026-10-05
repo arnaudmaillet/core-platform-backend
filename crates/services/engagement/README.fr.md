@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 5d95eb8e87c38c26bce544e4ecd246ec5e7bbc1ce3e73fcfe69594f943319949
+  source_sha256: dacd342be9e83b15cfc2415afbd0d975df5476a0b792fac43b8065c86af0430c
   translated_at: 2026-10-05
   status: complete
 ---
@@ -259,8 +259,8 @@ async fn main() -> anyhow::Result<()> {
 - **Migrations :** `0001_create_keyspace.cql` → `0002_create_post_reactions_table.cql` →
   `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` sur
   `engagement`, appliquées **avant** le premier démarrage. (Le commentaire de table de 0002 contenait un
-  `;`, qui coupait l'instruction pour le lanceur de migrations qui découpe sur `;` ; c'est une virgule
-  désormais — même schéma.)
+  `;` ; le lanceur des suites d'intégration coupait dessus jusqu'à ce qu'il respecte les guillemets comme
+  `apps/migrator` — la prod n'a jamais été touchée. C'est une virgule désormais — même schéma.)
 - **Durabilité Redis :** activer l'AOF (`appendonly yes`, `appendfsync everysec`) — sans cela, un
   redémarrage perd la fenêtre de flush courante et nécessite une récupération cold-start depuis le ledger
   Scylla.

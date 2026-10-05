@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: f5d82bc8292e19ccb0f6516fab4f39a6049050e80d520eb23c2abaf8747e2038
+  source_sha256: f2f9a15e6d9b03b8bf48fd6165cd58385a5ad2d1f153ed936c4637a99a5a5e81
   translated_at: 2026-10-05
   status: complete
 ---
@@ -62,7 +62,7 @@ gRPC CommentService ─► CommandBus ─► CreateComment ─► Comment::creat
 |---|---|---|---|
 | `comment.comments` | `comment_id` | — | source-of-truth point reads & mutations (LCS) |
 | `comment.comments_by_post` | `post_id` | `parent_id, created_at DESC, comment_id` | feed pagination, no ALLOW FILTERING (TWCS) |
-| `comment.comments_by_author` | `author_id` | `created_at DESC, comment_id DESC` | les commentaires d'un profil (pointeurs vers `comments`), pour l'export RGPD (#653) |
+| `comment.comments_by_author` | `author_id` | `created_at DESC, comment_id DESC` | les commentaires d'un profil (pointeurs vers `comments`), pour l'export RGPD (#653) ; écrite et purgée avec `comments` et `comments_by_post` dans un même LOGGED BATCH |
 
 **Sentinelle nil-UUID :** les commentaires de premier niveau stockent `parent_id = 0000…0000`
 (lexicographiquement le plus petit), faisant du scan de premier niveau un préfixe de clustering valide ;

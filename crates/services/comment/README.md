@@ -50,7 +50,7 @@ gRPC CommentService ─► CommandBus ─► CreateComment ─► Comment::creat
 |---|---|---|---|
 | `comment.comments` | `comment_id` | — | source-of-truth point reads & mutations (LCS) |
 | `comment.comments_by_post` | `post_id` | `parent_id, created_at DESC, comment_id` | feed pagination, no ALLOW FILTERING (TWCS) |
-| `comment.comments_by_author` | `author_id` | `created_at DESC, comment_id DESC` | a profile's own comments (pointers into `comments`), for the GDPR export (#653) |
+| `comment.comments_by_author` | `author_id` | `created_at DESC, comment_id DESC` | a profile's own comments (pointers into `comments`), for the GDPR export (#653); written and purged with `comments` and `comments_by_post` in one LOGGED BATCH |
 
 **Nil-UUID sentinel:** top-level comments store `parent_id = 0000…0000` (lexicographically smallest),
 making the top-level scan a valid clustering prefix; replies use their actual parent `comment_id`.
