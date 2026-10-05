@@ -297,6 +297,7 @@ fn post_to_proto(post: Post) -> proto::PostView {
         moderation:      post.moderation().restriction.as_tinyint() as i32 + 1,
         allow_remix:       post.reuse().allow_remix,
         allow_sound_reuse: post.reuse().allow_sound_reuse,
+        outside_window:    post.outside_window(),
     }
 }
 

@@ -147,7 +147,8 @@ outage fails closed with `PST-5001` (`UNAVAILABLE`), never by serving the post.
 **Post history window (#664).** An author may show visitors only their recent posts (6 months, 1 month,
 3 days). For any client but the author, `ListPostsByProfile` stops at the first older post (the list is
 newest first; no next token) and `GetPost` answers `PST-1001` for one; the author and mesh callers see every
-post. Nothing is deleted. The window comes from profile's `ProfileTabSettingsChanged`, projected into
+post. A mesh `GetPost` marks such a post `outside_window`, so a service serving clients withholds it too
+(comment hides its comments). Nothing is deleted. The window comes from profile's `ProfileTabSettingsChanged`, projected into
 `post.author_post_windows` by the author-settings consumer below.
 
 **Location sharing (#657). `PostView.location` is what the author shares with the reader: the

@@ -38,10 +38,12 @@ fn unavailable(status: tonic::Status) -> CommentError {
     CommentError::AccessCheckUnavailable { reason: status.to_string() }
 }
 
-/// Whether the post's own state lets anyone but its author read it.
+/// Whether the post's own state lets anyone but its author read it: published,
+/// not removed by moderation, and within its author's post window (#664).
 fn post_is_public(view: &post_api::PostView) -> bool {
     view.status == PostStatus::Published as i32
         && view.moderation != ModerationRestriction::Removed as i32
+        && !view.outside_window
 }
 
 /// An age-gated post (and its comments) is for readers cleared for mature
@@ -430,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn only_published_and_not_removed_posts_are_public() {
+    fn only_published_unremoved_posts_within_the_window_are_public() {
         let view = |status: PostStatus, moderation: ModerationRestriction| post_api::PostView {
             status: status as i32,
             moderation: moderation as i32,
@@ -441,5 +443,7 @@ mod tests {
         assert!(!post_is_public(&view(PostStatus::Published, ModerationRestriction::Removed)));
         assert!(!post_is_public(&view(PostStatus::Draft, ModerationRestriction::None)));
         assert!(!post_is_public(&view(PostStatus::Deleted, ModerationRestriction::None)));
+        let older = post_api::PostView { outside_window: true, ..view(PostStatus::Published, ModerationRestriction::None) };
+        assert!(!post_is_public(&older), "older than its author's window");
     }
 }
