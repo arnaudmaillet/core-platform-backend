@@ -4349,6 +4349,7 @@ dependencies = [
  "infra-config",
  "profile-api",
  "prost-types",
+ "rand 0.9.2",
  "redis-storage",
  "regex",
  "scylla",
