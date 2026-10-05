@@ -228,6 +228,18 @@ impl VerificationCodes {
         self.sender.send_contact_changed_notice(changed, email, locale).await
     }
 
+    /// Tells the holder at `email` of a sign-in from a new device (#649),
+    /// through the code transports.
+    pub async fn notify_new_login(
+        &self,
+        email: &str,
+        device: Option<&str>,
+        ip: Option<&str>,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        self.sender.send_new_login_notice(email, device, ip, locale).await
+    }
+
     pub async fn start(&self, cmd: StartVerificationCommand) -> Result<StartedVerification, AuthError> {
         ensure_valid(&cmd)?;
         let (destination, sms_country) = match cmd.channel {

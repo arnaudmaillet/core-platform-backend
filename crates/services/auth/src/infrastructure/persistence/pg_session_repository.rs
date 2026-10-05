@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use postgres_storage::{StorageError, TransactionManager};
 use tracing::instrument;
 
-use crate::application::port::SessionRepository;
+use crate::application::port::{DeviceHistory, RECENT_SESSIONS, SessionRepository};
 use crate::domain::aggregate::Session;
 use crate::domain::value_object::{AccountId, SessionId};
 use crate::error::AuthError;
@@ -148,5 +148,28 @@ impl SessionRepository for PgSessionRepository {
         .await
         .map_err(storage)?;
         rows.into_iter().map(Session::try_from).collect()
+    }
+
+    async fn device_history(
+        &self,
+        account_id: &AccountId,
+        device_id: Option<&str>,
+    ) -> Result<DeviceHistory, AuthError> {
+        let pool = self.tx.pool_for(account_id).map_err(AuthError::Storage)?;
+        // `device_id = NULL` is never true: a sign-in without an id saw no device.
+        let (any_session, seen_device, recent_without_device_id): (bool, bool, bool) = sqlx::query_as(
+            "SELECT COUNT(*) > 0, COALESCE(BOOL_OR(device_id = $2), false), \
+                    COALESCE((SELECT BOOL_AND(device_id IS NULL) FROM \
+                        (SELECT device_id FROM sessions WHERE account_id = $1 \
+                         ORDER BY issued_at DESC LIMIT $3) recent), false) \
+             FROM sessions WHERE account_id = $1",
+        )
+        .bind(account_id.as_uuid())
+        .bind(device_id)
+        .bind(RECENT_SESSIONS)
+        .fetch_one(pool)
+        .await
+        .map_err(storage)?;
+        Ok(DeviceHistory { any_session, seen_device, recent_without_device_id })
     }
 }

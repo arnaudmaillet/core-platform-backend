@@ -155,4 +155,18 @@ pub trait CodeSender: Send + Sync + 'static {
     ) -> Result<(), AuthError> {
         Ok(())
     }
+
+    /// Tells the holder at `email` that their account was just signed in to from
+    /// a device it never saw (#649), described by `device` (its user agent, client-
+    /// written: never trusted as markup) and the `ip` it came from.
+    /// Email only.
+    async fn send_new_login_notice(
+        &self,
+        _email: &str,
+        _device: Option<&str>,
+        _ip: Option<&str>,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        Ok(())
+    }
 }

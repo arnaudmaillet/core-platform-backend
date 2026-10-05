@@ -39,6 +39,17 @@ impl CodeSender for LogCodeSender {
         tracing::warn!(changed = changed.as_str(), email, "contact-changed notice (log sender — local only)");
         Ok(())
     }
+
+    async fn send_new_login_notice(
+        &self,
+        email: &str,
+        device: Option<&str>,
+        ip: Option<&str>,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        tracing::warn!(email, device, ip, "new sign-in notice (log sender — local only)");
+        Ok(())
+    }
 }
 
 /// No transport configured: codes cannot be sent (FAILED_PRECONDITION).

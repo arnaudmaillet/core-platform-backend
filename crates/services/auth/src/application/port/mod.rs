@@ -33,7 +33,7 @@ pub use identity_provider::{AuthnGrant, IdentityProvider, NormalizedClaims};
 pub use profile_directory::{profile_ids_or_empty, ProfileDirectory};
 pub use refresh_token_repository::RefreshTokenRepository;
 pub use session_cache::SessionCache;
-pub use session_repository::SessionRepository;
+pub use session_repository::{DeviceHistory, RECENT_SESSIONS, SessionRepository};
 pub use subject_link_repository::SubjectLinkRepository;
 pub use token_minter::{GeneratedRefresh, TokenMinter};
 pub use verification::{
