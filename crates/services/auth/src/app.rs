@@ -298,6 +298,12 @@ impl App {
         if let Some(google) = JwksFederatedTokenVerifier::google(config.google_audiences.clone(), config.federated_jwks_timeout) {
             federated = federated.with(crate::domain::value_object::FederatedProvider::Google, google);
         }
+        // Keys fetched now and every AUTH_FEDERATED_JWKS_REFRESH_SECS: the first
+        // sign-in pays no fetch, and a withdrawn key stops verifying.
+        let federated = Arc::new(federated);
+        if !config.apple_audiences.is_empty() || !config.google_audiences.is_empty() {
+            federated.spawn_refresh(config.federated_jwks_refresh);
+        }
 
         let deps = AppDeps {
             idp: Arc::new(KeycloakIdentityProvider::new(idp_client, config.keycloak)),
@@ -312,7 +318,7 @@ impl App {
             publisher,
             guests: Arc::new(PgGuestRegistry::new(tx.clone())),
             guest_sessions_enabled: config.guest_sessions_enabled,
-            federated: Arc::new(federated),
+            federated,
             codes: Arc::new(VerificationCodes::new(
                 Arc::new(RedisVerificationStore::new(redis.clone())),
                 code_sender,
