@@ -107,6 +107,7 @@ impl Harness {
             hashtags: hashtags.into_iter().map(str::to_owned).collect(),
             thumbnail_key: String::new(),
             created_at: created(),
+            visible_until: None,
             revision,
         })))
         .await;
@@ -182,6 +183,40 @@ impl Harness {
     }
 
     /// The profile's own "findable by search" setting (#661).
+    /// Indexes a post created at `created_at`, leaving search at `visible_until`
+    /// (its author's post window, as the hydrated view carries it).
+    pub async fn index_post_at(
+        &self,
+        post_id: &str,
+        author: &str,
+        caption: &str,
+        created_at: DateTime<Utc>,
+        visible_until: Option<DateTime<Utc>>,
+    ) {
+        self.apply(SourceEvent::Post(PostEvent::Published(PostSnapshot {
+            post_id: post_id.to_owned(),
+            author_id: author.to_owned(),
+            author_handle: author.to_owned(),
+            caption: caption.to_owned(),
+            hashtags: vec![],
+            thumbnail_key: String::new(),
+            created_at,
+            visible_until,
+            revision: 1,
+        })))
+        .await;
+    }
+
+    /// The author's post window changes (#664).
+    pub async fn post_window(&self, author: &str, window_days: Option<u32>, occurred_ms: i64) {
+        self.apply(SourceEvent::Profile(ProfileEvent::PostWindowChanged {
+            profile_id: author.to_owned(),
+            window_days,
+            occurred_at: ms(occurred_ms),
+        }))
+        .await;
+    }
+
     pub async fn discoverable(&self, profile_id: &str, searchable: bool, occurred_ms: i64) {
         self.apply(SourceEvent::Profile(ProfileEvent::DiscoverabilityChanged {
             profile_id: profile_id.to_owned(),

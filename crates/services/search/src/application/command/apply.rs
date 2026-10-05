@@ -30,6 +30,8 @@ pub enum ApplyOutcome {
     Deleted,
     /// A GDPR purge removed this many documents.
     Purged(u64),
+    /// An author's post window was applied to this many of their posts.
+    WindowApplied(u64),
     /// The engine's external-version guard rejected a stale/out-of-order write.
     StaleIgnored,
     /// The event mapped to no index change (e.g. a non-indexable moderated entity).
@@ -76,6 +78,14 @@ impl ProjectionHandler {
             IndexMutation::PurgeByAuthor { author_id } => {
                 let removed = self.index.purge_by_author(&author_id).await?;
                 ApplyOutcome::Purged(removed)
+            }
+            IndexMutation::SetPostWindow {
+                author_id,
+                window_days,
+                version,
+            } => {
+                let updated = self.index.set_post_window(&author_id, window_days, version).await?;
+                ApplyOutcome::WindowApplied(updated)
             }
             IndexMutation::Skip(reason) => ApplyOutcome::Skipped(reason),
         };
@@ -355,6 +365,37 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out, ApplyOutcome::Skipped(SkipReason::NotIndexable));
+    }
+
+    #[tokio::test]
+    async fn a_post_window_applies_to_the_authors_posts_newest_change_wins() {
+        let fx = Fixture::new();
+        let h = fx.projection_handler();
+        for (post, author) in [("post-1", "acct-1"), ("post-2", "acct-1"), ("post-3", "acct-2")] {
+            h.apply(env(post_event(post, author, "hello", 1)), fx.now()).await.unwrap();
+        }
+        let window = |days: Option<u32>, secs: i64| {
+            env(SourceEvent::Profile(ProfileEvent::PostWindowChanged {
+                profile_id: "acct-1".to_owned(),
+                window_days: days,
+                occurred_at: Utc.timestamp_opt(secs, 0).unwrap(),
+            }))
+        };
+
+        let out = h.apply(window(Some(30), 1_700_000_200), fx.now()).await.unwrap();
+        assert_eq!(out, ApplyOutcome::WindowApplied(2));
+        let end = fx.index.visible_until("post-1").expect("windowed");
+        assert_eq!(end, crate::application::fakes::t0() + chrono::Duration::days(30));
+        assert_eq!(fx.index.visible_until("post-3"), None, "another author's post");
+
+        // Older than the applied change: ignored.
+        let out = h.apply(window(None, 1_700_000_100), fx.now()).await.unwrap();
+        assert_eq!(out, ApplyOutcome::WindowApplied(0));
+        assert!(fx.index.visible_until("post-1").is_some());
+
+        let out = h.apply(window(None, 1_700_000_300), fx.now()).await.unwrap();
+        assert_eq!(out, ApplyOutcome::WindowApplied(2));
+        assert_eq!(fx.index.visible_until("post-1"), None);
     }
 
     #[tokio::test]

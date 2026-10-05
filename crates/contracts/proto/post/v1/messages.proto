@@ -59,6 +59,10 @@ message PostView {
     // other than the author get NOT_FOUND instead, so a mesh caller serving
     // clients (comments, search) must withhold the post too.
     bool                    outside_window      = 18;
+    // Mesh reads only: when the post leaves its author's post window (#664),
+    // created_at + the window; 0 without a window. A read model serving clients
+    // (search) stores it to withhold the post once that time passes.
+    int64                   visible_until_ms    = 19;
 }
 
 message PostSummary {

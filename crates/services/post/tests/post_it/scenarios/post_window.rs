@@ -31,12 +31,17 @@ async fn posts_older_than_the_window_are_hidden_from_visitors_only() {
     assert!(!as_author.outside_window(), "nothing is withheld from the author");
     assert_eq!(h.list(&author_id).await.len(), 3);
     // The mesh reads it marked, so comment and search withhold it from clients.
-    assert!(h.get(&month_old).await.expect("mesh read").outside_window());
-    assert!(!h.get(&recent).await.expect("mesh read").outside_window());
+    let marked = h.get(&month_old).await.expect("mesh read");
+    assert!(marked.outside_window());
+    assert_eq!(marked.visible_until(), Some(marked.created_at() + chrono::Duration::days(30)));
+    let fresh = h.get(&recent).await.expect("mesh read");
+    assert!(!fresh.outside_window());
+    assert_eq!(fresh.visible_until(), Some(fresh.created_at() + chrono::Duration::days(30)), "search withholds it later");
 
     // Six months brings the month-old post back; all posts brings everything.
     h.windows.set(&author_pid, Some(183)).await.unwrap();
     assert_eq!(h.list_as(&author_id, visitor.clone()).await.len(), 2);
     h.windows.set(&author_pid, None).await.unwrap();
     assert_eq!(h.list_as(&author_id, visitor).await.len(), 3);
+    assert_eq!(h.get(&year_old).await.unwrap().visible_until(), None, "no window, no end");
 }

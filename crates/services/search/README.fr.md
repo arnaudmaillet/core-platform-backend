@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: eaad5721d9fc5ec9d9d122e4099057e4e027c7ce2449c05886532dfedda748b4
+  source_sha256: 6503a4c371b7d0c3e31c2049bba82b1275b94756e1bc1fb87967fbcc554fda4d
   translated_at: 2026-10-05
   status: complete
 ---
@@ -143,11 +143,13 @@ Chaque faute implémente `error::AppError` avec un code `SCH-XXXX` stable, mapp�
 | Topic | Groupe de consommateurs | Rôle | À l'épuisement/poison |
 |---|---|---|---|
 | `post.v1.events` | `search-post-indexer` | indexe/met à jour/supprime les posts (contenu hydraté via `GetPost`) | DLQ `post.v1.events.dlq` |
-| `profile.v1.events` | `search-profile-indexer` | indexe/met à jour/supprime les profils (contenu hydraté via `GetProfileById`) ; masquage par le propriétaire → drapeau de visibilité **owner** | DLQ `profile.v1.events.dlq` |
+| `profile.v1.events` | `search-profile-indexer` | indexe/met à jour/supprime les profils (contenu hydraté via `GetProfileById`) ; masquage par le propriétaire → drapeau de visibilité **owner** ; `ProfileTabSettingsChanged` → la fenêtre de posts de l'auteur | DLQ `profile.v1.events.dlq` |
 | `moderation.v1.events` | `search-moderation-indexer` | bascule le drapeau de visibilité **moderation** au masquage ; rétablit à la réversion | DLQ `moderation.v1.events.dlq` |
 | `<hashtag stream>` | `search-post-indexer` | maintient l'index hashtag (dérivé des événements post) | DLQ `<...>.dlq` |
 
 > **Deux autorités de visibilité :** un document n'est recherchable que si **les deux** drapeaux l'autorisent — `searchable = moderation_searchable AND owner_searchable`. Ce sont deux champs indépendants, chacun avec sa propre garde de version, écrits par des flux différents (`moderation.v1.events` vs un événement de masquage par le propriétaire du profil). Aucune autorité ne peut surpasser l'autre : un propriétaire de profil qui rétablit sa propre visibilité ne peut pas lever un masquage de modération, et inversement. Une **troisième autorité**, `discoverable` (#661), porte le choix du profil d'être trouvable par la recherche (`by_handle_search` de `ProfileDiscoverySettingsChanged`) ; le masquage et la modération n'y touchent pas. Ses deux champs ont été ajoutés aux index existants sur place : `ensure_indices` pose les propriétés communes à chaque démarrage, une mise à jour `_mapping` additive (sans réindexation). Un drapeau absent vaut visible. Un post **soumis à une limite d'âge** (`age_gate` de la modération) est hors de la recherche pour tous : search n'a pas de niveau de contenu par lecteur, il tient donc le contenu mature à l'écart des 13–17 ans et des invités de façon prudente (RESTRICTED par défaut, comme les fils de découverte).
+
+> **Fenêtre d'historique des posts (#664) :** un post que l'auteur ne montre plus aux visiteurs reste indexé mais sort de la recherche à `visible_until` (`must_not range visible_until <= now` ; pas de champ, pas de fenêtre). L'hydratation le prend dans le `GetPost` mesh de post (`visible_until_ms` : `created_at` + la fenêtre), si bien qu'un post sort à l'heure dite sans événement. Un changement de fenêtre (`ProfileTabSettingsChanged.post_window` : `all` / `six_months` 183 j / `one_month` 30 j / `three_days` 3 j, les mêmes jours que post) le recalcule pour tous les posts de l'auteur par un `_update_by_query` gardé par `window_version` (heure de l'événement), si bien qu'élargir la fenêtre ramène les posts sans réindexation. Un `post_window` inconnu part en DLQ pour être rejoué. Un post publié pendant que la fenêtre change peut garder l'ancienne fin jusqu'à sa prochaine modification (l'hydratation et le changement se croisent).
 
 > **Contrat d'exécution (obligatoire) :** tous les consommateurs s'exécutent sous `run_consumer` — commit manuel après une issue terminale, retry borné avec backoff + jitter, DLQ à l'épuisement/poison, reconstruction depuis le dernier offset commité sur erreur broker. **Idempotence :** la garde de version externe du moteur (`version_type=external`) ; les suppressions sont idempotentes par nature ; une écriture de version périmée (`SCH-2002`) et un type d'événement inconnu sont repliés en `Ok` pour que l'offset soit tout de même commité. Une boucle `run_consumer` par topic source (la logique dépend du topic).
 

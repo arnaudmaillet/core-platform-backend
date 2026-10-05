@@ -47,6 +47,9 @@ pub struct Post {
     /// Read path only: older than its author's post window (#664). Set for a
     /// mesh read, which still gets the post; never stored.
     outside_window: bool,
+    /// Read path only: when the post leaves its author's post window (#664),
+    /// for a mesh read; never stored.
+    visible_until:  Option<DateTime<Utc>>,
     pending_events: Vec<DomainEvent>,
 }
 
@@ -85,6 +88,7 @@ impl Post {
             moderation: ModerationState::default(),
             reuse: ReuseOverrides::default(),
             outside_window: false,
+            visible_until: None,
             pending_events: Vec::new(),
         })
     }
@@ -125,6 +129,7 @@ impl Post {
             moderation,
             reuse: ReuseOverrides::default(),
             outside_window: false,
+            visible_until: None,
             pending_events: Vec::new(),
         }
     }
@@ -299,6 +304,13 @@ impl Post {
         self.outside_window = true;
     }
     pub fn outside_window(&self) -> bool { self.outside_window }
+
+    /// Records when the post leaves its author's post window (#664), for a
+    /// mesh reader (read path only).
+    pub fn show_visible_until(&mut self, until: DateTime<Utc>) {
+        self.visible_until = Some(until);
+    }
+    pub fn visible_until(&self) -> Option<DateTime<Utc>> { self.visible_until }
     pub fn created_at(&self)   -> DateTime<Utc>      { self.created_at }
     pub fn updated_at(&self)   -> DateTime<Utc>      { self.updated_at }
     pub fn published_at(&self) -> Option<DateTime<Utc>> { self.published_at }

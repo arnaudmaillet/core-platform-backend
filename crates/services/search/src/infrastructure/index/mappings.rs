@@ -54,6 +54,10 @@ pub(super) fn common_properties() -> Value {
         // Added in place to existing indices (additive `_mapping` update).
         "discoverable":                  { "type": "boolean" },
         "discovery_version":             { "type": "long" },
+        // A post's author's post window (#664): it leaves search at
+        // `visible_until`; `window_version` guards the window changes.
+        "visible_until":                 { "type": "date" },
+        "window_version":                { "type": "long" },
         "content_version":               { "type": "long" },
         "created_at":                    { "type": "date" },
         "indexed_at":                    { "type": "date" },

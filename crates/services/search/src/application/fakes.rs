@@ -41,6 +41,7 @@ pub fn post_event(post_id: &str, author_id: &str, caption: &str, revision: u64) 
         hashtags: vec![],
         thumbnail_key: format!("thumbs/{post_id}.jpg"),
         created_at: t0(),
+        visible_until: None,
         revision,
     }))
 }
@@ -87,6 +88,8 @@ struct Entry {
     moderation: Vis,
     owner: Vis,
     discovery: Vis,
+    /// The last post window applied (#664), its version guard.
+    window_version: DocVersion,
     doc: Option<IndexDocument>,
 }
 
@@ -153,6 +156,14 @@ impl InMemorySearchIndex {
         }
     }
 
+    /// When a stored post leaves its author's post window (#664).
+    pub fn visible_until(&self, id: &str) -> Option<DateTime<Utc>> {
+        match self.store.lock().unwrap().get(&(EntityKind::Post, id.to_owned()))?.doc {
+            Some(IndexDocument::Post(ref d)) => d.visible_until,
+            _ => None,
+        }
+    }
+
     /// Force a slot hidden directly (used to set up the "hidden docs excluded" test
     /// without threading a moderation event).
     pub fn force_hidden(&self, kind: EntityKind, id: &str) {
@@ -182,6 +193,7 @@ impl SearchIndex for InMemorySearchIndex {
                 let moderation = e.moderation;
                 let owner = e.owner;
                 let discovery = e.discovery;
+                let window_version = e.window_version;
                 store.insert(
                     key,
                     Entry {
@@ -190,6 +202,7 @@ impl SearchIndex for InMemorySearchIndex {
                         moderation,
                         owner,
                         discovery,
+                        window_version,
                         doc: Some(document.clone()),
                     },
                 );
@@ -210,6 +223,7 @@ impl SearchIndex for InMemorySearchIndex {
                         owner: seed,
                         // Never seeded by content (a missing flag is visible).
                         discovery: Vis::visible(),
+                        window_version: DocVersion::new(0),
                         doc: Some(document.clone()),
                     },
                 );
@@ -245,6 +259,7 @@ impl SearchIndex for InMemorySearchIndex {
                     moderation: Vis::visible(),
                     owner: Vis::visible(),
                     discovery: Vis::visible(),
+                    window_version: DocVersion::new(0),
                     doc: None,
                 };
                 entry.set_vis(authority, Vis { searchable, version });
@@ -266,14 +281,39 @@ impl SearchIndex for InMemorySearchIndex {
         Ok((before - store.len()) as u64)
     }
 
+    async fn set_post_window(
+        &self,
+        author_id: &AuthorId,
+        window_days: Option<u32>,
+        version: DocVersion,
+    ) -> Result<u64, SearchError> {
+        let mut store = self.store.lock().unwrap();
+        let mut updated = 0;
+        for entry in store.values_mut() {
+            let Some(IndexDocument::Post(doc)) = entry.doc.as_mut() else { continue };
+            if doc.author_id != *author_id || !version.is_newer_than(&entry.window_version) {
+                continue;
+            }
+            doc.visible_until = window_days.map(|d| doc.created_at + chrono::Duration::days(i64::from(d)));
+            entry.window_version = version;
+            updated += 1;
+        }
+        Ok(updated)
+    }
+
     async fn search(&self, query: &SearchQuery) -> Result<SearchResults, SearchError> {
         let store = self.store.lock().unwrap();
+        let now = Utc::now();
         let mut hits: Vec<SearchHit> = Vec::new();
         for entry in store.values() {
             let Some(doc) = entry.doc.as_ref() else {
                 continue; // visibility-only placeholder, no content to match
             };
             if !entry.visible() {
+                continue;
+            }
+            // Past its author's post window (#664).
+            if matches!(doc, IndexDocument::Post(p) if p.visible_until.is_some_and(|t| t <= now)) {
                 continue;
             }
             if !query.kinds.is_empty() && !query.kinds.contains(&doc.kind()) {

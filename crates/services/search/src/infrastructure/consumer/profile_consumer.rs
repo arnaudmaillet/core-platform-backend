@@ -41,18 +41,19 @@ async fn process(
 ) -> ProcessOutcome {
     let now = Utc::now();
     let result = match map_profile(event.clone()) {
-        Decoded::Ready(source_event) => projection
+        Err(e) => Err(e),
+        Ok(Decoded::Ready(source_event)) => projection
             .apply(Envelope::new(Uuid::now_v7(), source_event), now)
             .await
             .map(|_| ()),
-        Decoded::NeedsContent(content_ref) => match hydrator.hydrate(content_ref, now).await {
+        Ok(Decoded::NeedsContent(content_ref)) => match hydrator.hydrate(content_ref, now).await {
             Ok(source_event) => projection
                 .apply(Envelope::new(Uuid::now_v7(), source_event), now)
                 .await
                 .map(|_| ()),
             Err(e) => Err(e),
         },
-        Decoded::Ignore => Ok(()),
+        Ok(Decoded::Ignore) => Ok(()),
     };
     ProcessOutcome::from_result(result)
 }

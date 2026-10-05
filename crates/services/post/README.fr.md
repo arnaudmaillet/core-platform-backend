@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3a73764dded6f8142617141312085934b9e63eac33bb98f41bae46ab353b98bc
+  source_sha256: cfc30122bf829ce6b66d9836d02c37e9d604a41521d52695ab66e9da23dba751
   translated_at: 2026-10-05
   status: complete
 ---
@@ -163,7 +163,8 @@ panne échoue fermé avec `PST-5001` (`UNAVAILABLE`), jamais en servant le post.
 plus ancien (la liste va du plus récent au plus ancien ; pas de jeton suivant) et `GetPost` répond `PST-1001`
 pour un tel post ; l'auteur et les appelants du mesh voient tous les posts. Un `GetPost` du mesh marque
 un tel post `outside_window`, pour qu'un service qui sert des clients le retienne aussi (comment masque ses
-commentaires). Rien n'est supprimé. La fenêtre
+commentaires), et donne à tout post sous une fenêtre son `visible_until_ms` (`created_at` + la fenêtre :
+search le retire des résultats à partir de là). Rien n'est supprimé. La fenêtre
 vient du `ProfileTabSettingsChanged` de profile, projeté dans `post.author_post_windows` par le consommateur
 des réglages d'auteur ci-dessous.
 

@@ -131,14 +131,15 @@ fn is_content_action(action: Option<&str>) -> bool {
 pub fn decode_profile(json: &[u8]) -> Result<Decoded, SearchError> {
     let event: ProfileWireEvent =
         serde_json::from_slice(json).map_err(|e| decode_err("profile", e))?;
-    Ok(map_profile(event))
+    map_profile(event)
 }
 
 /// Map an already-deserialized profile wire event to a [`Decoded`]. Content-bearing
 /// changes need hydration; owner masking maps to an owner-authority visibility flip
-/// (independent of any moderation hide); delete is direct. Pure, infallible.
-pub fn map_profile(event: ProfileWireEvent) -> Decoded {
-    match event {
+/// (independent of any moderation hide); delete is direct. Pure; an unknown
+/// post window (a newer profile) fails, so the event is dead-lettered for replay.
+pub fn map_profile(event: ProfileWireEvent) -> Result<Decoded, SearchError> {
+    Ok(match event {
         ProfileWireEvent::ProfileCreated {
             profile_id,
             occurred_at_ms,
@@ -188,8 +189,32 @@ pub fn map_profile(event: ProfileWireEvent) -> Decoded {
             searchable: by_handle_search,
             occurred_at: ms_to_dt(occurred_at_ms),
         })),
+        ProfileWireEvent::ProfileTabSettingsChanged {
+            profile_id,
+            post_window,
+            occurred_at_ms,
+        } => {
+            // The same days as post's own projection of the window.
+            let window_days = match post_window.as_str() {
+                "all" => None,
+                "six_months" => Some(183),
+                "one_month" => Some(30),
+                "three_days" => Some(3),
+                other => {
+                    return Err(SearchError::EventDecodeFailed {
+                        topic: "profile.v1.events".to_owned(),
+                        reason: format!("unknown post_window {other:?}"),
+                    });
+                }
+            };
+            Decoded::Ready(SourceEvent::Profile(ProfileEvent::PostWindowChanged {
+                profile_id,
+                window_days,
+                occurred_at: ms_to_dt(occurred_at_ms),
+            }))
+        }
         ProfileWireEvent::Unknown => Decoded::Ignore,
-    }
+    })
 }
 
 fn ms_to_revision(ms: i64) -> u64 {
@@ -338,6 +363,24 @@ mod tests {
             }
             other => panic!("expected discoverability, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_post_window_maps_to_days_and_an_unknown_one_is_refused() {
+        let event = |window: &str| {
+            format!(r#"{{"type":"ProfileTabSettingsChanged","profile_id":"prof-1","post_window":"{window}","show_likes":true,"show_saved":false,"show_reposts":true,"show_places":true,"occurred_at_ms":1700000000000}}"#)
+        };
+        for (window, days) in [("all", None), ("six_months", Some(183)), ("one_month", Some(30)), ("three_days", Some(3))] {
+            match decode_profile(event(window).as_bytes()).unwrap() {
+                Decoded::Ready(SourceEvent::Profile(ProfileEvent::PostWindowChanged { profile_id, window_days, .. })) => {
+                    assert_eq!(profile_id, "prof-1");
+                    assert_eq!(window_days, days, "{window}");
+                }
+                other => panic!("expected a post window, got {other:?}"),
+            }
+        }
+        // A newer profile's window: dead-lettered for replay, not guessed.
+        assert!(decode_profile(event("one_week").as_bytes()).is_err());
     }
 
     #[test]

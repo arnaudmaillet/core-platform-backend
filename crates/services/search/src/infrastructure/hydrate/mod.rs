@@ -153,6 +153,9 @@ fn post_event(view: post_api::PostView, revision: u64) -> SourceEvent {
         // Thumbnail derivation from `attachments` is deferred (display-only).
         thumbnail_key: String::new(),
         created_at: ms_to_dt(view.created_at_ms),
+        // Kept, not dropped, past its author's window: widening the window
+        // brings it back without a re-index (#664).
+        visible_until: (view.visible_until_ms > 0).then(|| ms_to_dt(view.visible_until_ms)),
         revision,
     };
     SourceEvent::Post(PostEvent::Published(snapshot))

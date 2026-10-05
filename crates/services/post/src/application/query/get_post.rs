@@ -60,6 +60,10 @@ impl<R: PostRepository> QueryHandler<GetPostQuery> for GetPostHandler<R> {
                 }
                 post.mark_outside_window();
             }
+            // The mesh also learns when it leaves the window (search keeps it).
+            if let (Some(days), Viewer::Internal) = (days, &query.viewer) {
+                post.show_visible_until(post.created_at() + chrono::Duration::days(i64::from(days)));
+            }
         }
         // The author's location sharing applies to everyone else, the mesh
         // included (fail closed: a store error fails the read).
