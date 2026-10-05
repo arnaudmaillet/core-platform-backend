@@ -3,10 +3,8 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::{
-    application::port::{
-        author_visible_to, window_start, AudienceGate, AuthorLocationStore, AuthorWindowStore, PostRepository,
-    },
-    domain::{aggregate::Post, value_object::{PostId, Viewer}},
+    application::port::{window_start, AudienceGate, AuthorLocationStore, AuthorWindowStore, PostRepository},
+    domain::{aggregate::Post, value_object::{ContentAccess, LocationAudience, PostId, ProfileId, Viewer}},
     error::PostError,
 };
 
@@ -46,7 +44,19 @@ impl<R: PostRepository> QueryHandler<GetPostQuery> for GetPostHandler<R> {
                 query.viewer.may_see_rated(post.profile_id(), post.status(), post.moderation().restriction, query.mature)
             })
             .ok_or_else(not_found)?;
-        if !author_visible_to(self.audience.as_ref(), &query.viewer, post.profile_id()).await? {
+        // One check gives both the content access and how the reader
+        // relates to the author (its location audience, #657). The author
+        // and the mesh skip it.
+        let access = if query.viewer.sees_every_post_of(post.profile_id()) {
+            None
+        } else {
+            let viewers: &[ProfileId] = match &query.viewer {
+                Viewer::Profiles(ids) => ids,
+                Viewer::Anonymous | Viewer::Internal => &[],
+            };
+            Some(self.audience.access_with_relation(viewers, post.profile_id()).await?)
+        };
+        if access.is_some_and(|a| a.content != ContentAccess::Visible) {
             return Err(not_found());
         }
         // The author's post window hides older posts from clients other than
@@ -66,10 +76,17 @@ impl<R: PostRepository> QueryHandler<GetPostQuery> for GetPostHandler<R> {
             }
         }
         // The author's location sharing applies to everyone else, the mesh
-        // included (fail closed: a store error fails the read).
+        // included (fail closed: a store error fails the read). Its audience
+        // (#657) takes only a reader who follows / is mutual with the author:
+        // never the mesh, which reads for no one in particular.
         if let Some(point) = post.location().filter(|_| !query.viewer.is_author(post.profile_id())) {
             let sharing = self.locations.get(post.profile_id()).await?;
-            post.show_location(sharing.shown(point));
+            let in_audience = match (sharing.audience, access) {
+                (LocationAudience::Everyone, _) => true,
+                (audience, Some(a)) => audience.admits(a.follows, a.mutual),
+                (_, None) => false,
+            };
+            post.show_location(sharing.shown(point).filter(|_| in_audience));
         }
         Ok(post)
     }

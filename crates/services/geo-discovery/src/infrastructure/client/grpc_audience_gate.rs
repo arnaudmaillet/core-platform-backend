@@ -11,7 +11,7 @@ use tonic::transport::Channel;
 use uuid::Uuid;
 
 use crate::application::port::AudienceGate;
-use crate::domain::value_object::ContentAccess;
+use crate::domain::value_object::{AuthorAccess, ContentAccess};
 use crate::error::GeoDiscoveryError;
 
 const MAX_VIEWERS_PER_CALL: usize = 20;
@@ -52,10 +52,10 @@ impl AudienceGate for GrpcAudienceGate {
         &self,
         viewers: &[String],
         authors: &[Uuid],
-    ) -> Result<HashMap<Uuid, ContentAccess>, GeoDiscoveryError> {
+    ) -> Result<HashMap<Uuid, AuthorAccess>, GeoDiscoveryError> {
         let viewer_chunks: Vec<&[String]> =
             if viewers.is_empty() { vec![&[]] } else { viewers.chunks(MAX_VIEWERS_PER_CALL).collect() };
-        let mut answers: HashMap<Uuid, ContentAccess> = HashMap::new();
+        let mut answers: HashMap<Uuid, AuthorAccess> = HashMap::new();
         for v in &viewer_chunks {
             for t in authors.chunks(MAX_TARGETS_PER_CALL) {
                 let response = self
@@ -70,8 +70,13 @@ impl AudienceGate for GrpcAudienceGate {
                     .into_inner();
                 for target in response.targets {
                     let Ok(author) = Uuid::parse_str(&target.target_profile_id) else { continue };
+                    // Any viewer chunk following (or mutual with) the author counts.
                     let current = answers.get(&author).copied();
-                    answers.insert(author, fold(current, from_proto(target.access)));
+                    answers.insert(author, AuthorAccess {
+                        content: fold(current.map(|c| c.content), from_proto(target.access)),
+                        follows: current.is_some_and(|c| c.follows) || target.follows,
+                        mutual:  current.is_some_and(|c| c.mutual) || target.mutual,
+                    });
                 }
             }
         }

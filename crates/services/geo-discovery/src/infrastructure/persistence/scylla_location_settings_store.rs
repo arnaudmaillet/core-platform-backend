@@ -9,7 +9,7 @@ use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStora
 use uuid::Uuid;
 
 use crate::application::port::LocationSettingsStore;
-use crate::domain::value_object::LocationSharing;
+use crate::domain::value_object::{LocationAudience, LocationSharing};
 use crate::error::GeoDiscoveryError;
 
 /// Scylla adapter for [`LocationSettingsStore`] (`geo_discovery.location_settings`).
@@ -44,13 +44,13 @@ fn row_err(ctx: &'static str, e: impl ToString) -> GeoDiscoveryError {
 impl LocationSettingsStore for ScyllaLocationSettingsStore {
     async fn set(&self, author_id: Uuid, sharing: LocationSharing) -> Result<(), GeoDiscoveryError> {
         let stmt = self.stmt(
-            "INSERT INTO geo_discovery.location_settings (author_id, ghost, city) VALUES (?, ?, ?)",
+            "INSERT INTO geo_discovery.location_settings (author_id, ghost, city, audience) VALUES (?, ?, ?, ?)",
             ScyllaProfileKind::Strict,
             "strict",
         );
         self.client
             .session
-            .execute_unpaged(stmt, (author_id, sharing.ghost, sharing.city))
+            .execute_unpaged(stmt, (author_id, sharing.ghost, sharing.city, sharing.audience.as_tinyint()))
             .await
             .map_err(scylla_err)?;
         Ok(())
@@ -62,12 +62,13 @@ impl LocationSettingsStore for ScyllaLocationSettingsStore {
             author_id: Uuid,
             ghost:     Option<bool>,
             city:      Option<bool>,
+            audience:  Option<i8>,
         }
         let mut out = HashMap::new();
         // Bounded IN lists: a page of pins has a few hundred authors at most.
         for chunk in author_ids.chunks(100) {
             let stmt = self.stmt(
-                "SELECT author_id, ghost, city FROM geo_discovery.location_settings WHERE author_id IN ?",
+                "SELECT author_id, ghost, city, audience FROM geo_discovery.location_settings WHERE author_id IN ?",
                 ScyllaProfileKind::Fast,
                 "fast",
             );
@@ -81,7 +82,11 @@ impl LocationSettingsStore for ScyllaLocationSettingsStore {
                 .map_err(|e| row_err("location_settings:rows", e))?;
             for row in rows.rows::<Row>().map_err(|e| row_err("location_settings:iter", e))? {
                 let row = row.map_err(|e| row_err("location_settings:deser", e))?;
-                let sharing = LocationSharing { ghost: row.ghost.unwrap_or(false), city: row.city.unwrap_or(false) };
+                let sharing = LocationSharing {
+                    ghost:    row.ghost.unwrap_or(false),
+                    city:     row.city.unwrap_or(false),
+                    audience: LocationAudience::from_tinyint(row.audience),
+                };
                 if !sharing.is_default() {
                     out.insert(row.author_id, sharing);
                 }

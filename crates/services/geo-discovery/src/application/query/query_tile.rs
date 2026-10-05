@@ -162,6 +162,8 @@ where
             pins.retain_mut(|p| match p.author_id.and_then(|a| sharing.get(&a)) {
                 None => true,
                 Some(s) if s.ghost => false,
+                // Shared precisely (with a restricted audience: Phase 3).
+                Some(s) if !s.city => true,
                 Some(_) if resolution != H3Resolution::R5 => false,
                 Some(_) => match city_point(p.lat, p.lng) {
                     Some((lat, lng)) => {
@@ -173,12 +175,14 @@ where
             });
         }
 
-        // ── Phase 3: the reader's audience (one bulk CheckAccess; fail closed).
+        // ── Phase 3: the reader's audience (one bulk CheckAccess; fail closed),
+        //   then each author's location audience (#657).
         //   A pin without a recorded author is unverifiable: dropped for a client.
         if let Some(visible) = visible_authors(
             self.audience.as_ref(),
             &q.viewer,
             pins.iter().filter_map(|p| p.author_id),
+            &sharing,
         )
         .await?
         {

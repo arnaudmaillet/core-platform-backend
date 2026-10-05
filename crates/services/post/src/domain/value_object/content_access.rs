@@ -8,3 +8,13 @@ pub enum ContentAccess {
     /// A block either way, or a hidden author: nothing.
     Hidden,
 }
+
+/// The access check's whole answer for one author: the content access, and
+/// whether the reader follows it / is mutual with it (an author's location
+/// audience, #657).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthorAccess {
+    pub content: ContentAccess,
+    pub follows: bool,
+    pub mutual:  bool,
+}

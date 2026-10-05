@@ -15,6 +15,48 @@ pub struct LocationSharing {
     /// City level: others see the centre of the post's ~87 km² cell (H3 R5,
     /// the map's coarse band) — never the point itself.
     pub city: bool,
+    /// Who sees the location at all.
+    pub audience: LocationAudience,
+}
+
+/// Who sees where an author's posts were made (#657). Outside it, a reader
+/// sees the post without its location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LocationAudience {
+    #[default]
+    Everyone,
+    /// Readers following the author.
+    Followers,
+    /// Readers the author follows back.
+    Mutuals,
+}
+
+impl LocationAudience {
+    pub fn as_tinyint(self) -> i8 {
+        match self {
+            Self::Everyone => 0,
+            Self::Followers => 1,
+            Self::Mutuals => 2,
+        }
+    }
+
+    /// The stored value; anything unknown (or absent) is everyone.
+    pub fn from_tinyint(v: Option<i8>) -> Self {
+        match v {
+            Some(1) => Self::Followers,
+            Some(2) => Self::Mutuals,
+            _ => Self::Everyone,
+        }
+    }
+
+    /// Does it take a reader who `follows` the author / is `mutual` with it?
+    pub fn admits(self, follows: bool, mutual: bool) -> bool {
+        match self {
+            Self::Everyone => true,
+            Self::Followers => follows,
+            Self::Mutuals => mutual,
+        }
+    }
 }
 
 impl LocationSharing {
@@ -48,13 +90,13 @@ mod tests {
     #[test]
     fn ghost_shows_nothing_whatever_the_precision() {
         for city in [false, true] {
-            assert_eq!(LocationSharing { ghost: true, city }.shown(paris()), None);
+            assert_eq!(LocationSharing { ghost: true, city, ..LocationSharing::default() }.shown(paris()), None);
         }
     }
 
     #[test]
     fn city_level_shows_one_centre_for_nearby_points_never_the_point() {
-        let city = LocationSharing { ghost: false, city: true };
+        let city = LocationSharing { city: true, ..LocationSharing::default() };
         let a = city.shown(paris()).unwrap();
         // ~300 m away, same city cell.
         let b = city.shown(GeoPoint::new(48.8590, 2.3550).unwrap()).unwrap();

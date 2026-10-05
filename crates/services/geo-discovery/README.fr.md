@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 2973220d20910d3f496476f9e057672175a86b8f1beffd76431c442a293e6ba9
+  source_sha256: 5b338c7d5ed0311690ebe7048be24d07589f3edd171d2a66b556e4c3516749a3
   translated_at: 2026-10-05
   status: complete
 ---
@@ -232,7 +232,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 |---|---|---|---|
 | `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
 | `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | suppression de la carte : suppression → définitive ; `remove_content` / `visibility_limit` / `age_gate` sur un post → masqué ; une réversion plus récente → restauré (gardé par version ; événements au niveau de l'acteur et autres ignorés) | DLQ `{topic}.dlq` |
-| `profile.v1.events` | `geo-discovery-location-settings` | partage de localisation des auteurs (#657) depuis `ProfileLocationSettingsChanged` → `geo_discovery.location_settings` ; chaque requête de carte l'applique pour tout lecteur sauf l'auteur (mesh compris) : les pins et cartes d'un **fantôme** quittent la carte ; ceux d'un auteur au **niveau ville** n'apparaissent qu'à la bande R5, au centre de la cellule R5, et ses cartes indiquent la cellule R7 de la ville. Autres événements profile ignorés | DLQ `{topic}.dlq` |
+| `profile.v1.events` | `geo-discovery-location-settings` | partage de localisation des auteurs (#657) depuis `ProfileLocationSettingsChanged` → `geo_discovery.location_settings` ; chaque requête de carte l'applique pour tout lecteur sauf l'auteur (mesh compris) : les pins et cartes d'un **fantôme** quittent la carte ; ceux d'un auteur au **niveau ville** n'apparaissent qu'à la bande R5, au centre de la cellule R5, et ses cartes indiquent la cellule R7 de la ville ; un auteur dont l'**audience** est abonnés / mutuels ne reste que sur la carte d'un lecteur qui le suit / lui est mutuel (`follows` / `mutual` de `CheckAccess`, dans le même appel groupé) — jamais celle du mesh (NEARBY ne lit pour personne) ni d'un lecteur anonyme. Autres événements profile ignorés | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |
 

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::domain::value_object::{ContentAccess, ProfileId, Viewer};
+use crate::domain::value_object::{AuthorAccess, ContentAccess, ProfileId, Viewer};
 use crate::error::PostError;
 
 /// The audience check, owned by social-graph (`CheckAccess`): what a reader's
@@ -10,6 +10,12 @@ pub trait AudienceGate: Send + Sync + 'static {
     /// `viewers` are the reader's profiles (empty when anonymous). Errors are
     /// `AccessCheckUnavailable`; callers fail closed.
     async fn access(&self, viewers: &[ProfileId], author: &ProfileId) -> Result<ContentAccess, PostError>;
+
+    /// [`access`](Self::access), plus whether the reader follows the author /
+    /// is mutual with it (#657). One call. The default knows no relation.
+    async fn access_with_relation(&self, viewers: &[ProfileId], author: &ProfileId) -> Result<AuthorAccess, PostError> {
+        Ok(AuthorAccess { content: self.access(viewers, author).await?, follows: false, mutual: false })
+    }
 
     /// May `author` mention `mentioned`? Their "who can mention me" setting
     /// (#656, social-graph `CheckInteraction`, a block either way refuses).
