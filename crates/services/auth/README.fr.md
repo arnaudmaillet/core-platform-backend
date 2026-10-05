@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 9ceb00b89adba0ece21f35ef6a8f8ed95d75474e350c7f84793a7fb4bc1f9b13
+  source_sha256: 2d471fef808f189e554600f21c73581bc03ec3bb998d61aa479582ef3e4a2efa
   translated_at: 2026-10-05
   status: complete
 ---
@@ -180,6 +180,17 @@ l'API Admin de Keycloak (`reset-password`, un client confidentiel à service acc
 `password_changed` ; celle de l'appelant reste). Nouveaux mots de passe : 8 à 128 caractères et
 différents de l'actuel (`AUT-VAL-024/025/026`), puis la politique du realm (`AUT-5006`, sa règle dans
 le message). Sans client admin configuré, les RPC d'identifiants répondent `UNAVAILABLE` (`AUT-5005`).
+
+**Changer son e-mail ou son téléphone (#651).** `ChangeContact(challenge_id, code)` (edge
+**authenticated**, membres, derrière le step-up ci-dessous) : le titulaire envoie d'abord un code à la
+nouvelle adresse avec `StartVerification`, puis le prouve ici. Tout ce qui le connecte suit, dans cet ordre
+— l'e-mail de l'utilisateur IdP d'un compte à mot de passe (API Admin de Keycloak ; son nom de connexion
+aussi quand c'était l'e-mail ; l'adresse d'un autre utilisateur IdP donne `AUT-6006`), le compte
+(`account.ChangeEmail` / `ChangePhone`, mesh ; l'adresse d'un autre compte donne `AUT-6006` /
+`AUT-6007`), et le lien de connexion par code (`urn:core-platform:email|phone`, re-clé dans
+`subject_links` : la nouvelle adresse connecte, l'ancienne non). Les liens Apple / Google gardent leur
+propre e-mail. L'e-mail enregistré avant est prévenu (un e-mail, jamais un SMS : un changement de
+téléphone prévient l'e-mail) ; les codes SMS gardent leur liste de pays et leurs budgets.
 
 **Step-up.** Un jeton émis juste après une preuve d'identifiant — `Login`, ou `VerifyCredentials`
 (re-prouver le mot de passe ; un code MFA est refusé avec `AUT-5007` tant que l'enrôlement n'existe

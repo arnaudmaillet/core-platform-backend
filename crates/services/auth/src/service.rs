@@ -59,6 +59,9 @@ impl Service for AuthService {
         // The signed-in holder's credentials (never a guest's: there is none).
         authenticated("/auth.v1.AuthService/ChangePassword"),
         authenticated("/auth.v1.AuthService/VerifyCredentials"),
+        // The holder's own email / phone (#651): a code to the new address,
+        // and a recent credential proof (checked in the handler).
+        authenticated("/auth.v1.AuthService/ChangeContact"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

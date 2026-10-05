@@ -11,3 +11,4 @@ pub mod persistence_roundtrip;
 pub mod refresh_reuse;
 pub mod outbox_relay;
 pub mod verification_codes;
+mod contact_change;

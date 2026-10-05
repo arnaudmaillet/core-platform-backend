@@ -51,6 +51,8 @@ fn default_expires_in() -> u64 {
 #[derive(Deserialize)]
 struct UserRepresentation {
     username: String,
+    #[serde(default)]
+    email: Option<String>,
 }
 
 /// Keycloak's error body (`{"error": "...", "error_description": "..."}`).
@@ -187,6 +189,47 @@ impl CredentialAdmin for KeycloakCredentialAdmin {
             s => Err(self.admin_failure(s)),
         }
     }
+
+    async fn set_email(&self, subject: &IdpSubject, email: &str) -> Result<(), AuthError> {
+        let token = self.service_token().await?;
+        let response = self
+            .http
+            .get(self.user_url(subject))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|_| AuthError::IdpUnavailable)?;
+        let user = match response.status() {
+            s if s.is_success() => response
+                .json::<UserRepresentation>()
+                .await
+                .map_err(|e| AuthError::ClaimsNormalizationFailed(format!("admin user: {e}")))?,
+            // Gone from the IdP: no password sign-in to keep in step.
+            StatusCode::NOT_FOUND => return Ok(()),
+            s => return Err(self.admin_failure(s)),
+        };
+        // The login name follows when it was the email (a realm that signs in
+        // by email address).
+        let mut update = serde_json::json!({ "email": email, "emailVerified": true });
+        if user.email.as_deref().is_some_and(|old| old.eq_ignore_ascii_case(&user.username)) {
+            update["username"] = serde_json::json!(email);
+        }
+        let response = self
+            .http
+            .put(self.user_url(subject))
+            .bearer_auth(token)
+            .json(&update)
+            .send()
+            .await
+            .map_err(|_| AuthError::IdpUnavailable)?;
+        match response.status() {
+            s if s.is_success() => Ok(()),
+            // Another IdP user has that email (or login name).
+            StatusCode::CONFLICT => Err(AuthError::EmailAlreadyRegistered),
+            StatusCode::NOT_FOUND => Ok(()),
+            s => Err(self.admin_failure(s)),
+        }
+    }
 }
 
 /// [`CredentialAdmin`] when no admin client is configured: changing a password
@@ -204,6 +247,10 @@ impl CredentialAdmin for UnconfiguredCredentialAdmin {
     }
 
     async fn delete_user(&self, _subject: &IdpSubject) -> Result<(), AuthError> {
+        Err(AuthError::CredentialManagementUnavailable)
+    }
+
+    async fn set_email(&self, _subject: &IdpSubject, _email: &str) -> Result<(), AuthError> {
         Err(AuthError::CredentialManagementUnavailable)
     }
 }
@@ -227,6 +274,7 @@ mod tests {
         grants: Arc<AtomicUsize>,
         last_password: Arc<Mutex<Option<String>>>,
         deleted: Arc<Mutex<Vec<String>>>,
+        last_update: Arc<Mutex<Option<serde_json::Value>>>,
     }
 
     async fn delete(State(fake): State<Fake>, Path(id): Path<String>) -> AxumStatus {
@@ -245,11 +293,24 @@ mod tests {
     }
 
     async fn user(Path(id): Path<String>) -> Result<Json<serde_json::Value>, AxumStatus> {
-        if id == "u-1" {
-            Ok(Json(serde_json::json!({ "id": "u-1", "username": "alice" })))
-        } else {
-            Err(AxumStatus::NOT_FOUND)
+        match id.as_str() {
+            "u-1" => Ok(Json(serde_json::json!({ "id": "u-1", "username": "alice", "email": "alice@old.example" }))),
+            // A realm that signs in by email: the login name is the address.
+            "u-2" => Ok(Json(serde_json::json!({ "id": "u-2", "username": "bob@old.example", "email": "bob@old.example" }))),
+            _ => Err(AxumStatus::NOT_FOUND),
         }
+    }
+
+    async fn update_user(
+        State(fake): State<Fake>,
+        Path(_id): Path<String>,
+        Json(body): Json<serde_json::Value>,
+    ) -> AxumStatus {
+        if body["email"] == "taken@example.com" {
+            return AxumStatus::CONFLICT;
+        }
+        *fake.last_update.lock().unwrap() = Some(body);
+        AxumStatus::NO_CONTENT
     }
 
     async fn reset(
@@ -274,7 +335,7 @@ mod tests {
     async fn serve(fake: Fake) -> String {
         let app = Router::new()
             .route("/realms/r/protocol/openid-connect/token", post(token))
-            .route("/admin/realms/r/users/{id}", get(user).delete(delete))
+            .route("/admin/realms/r/users/{id}", get(user).put(update_user).delete(delete))
             .route("/admin/realms/r/users/{id}/reset-password", put(reset))
             .with_state(fake);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -321,6 +382,29 @@ mod tests {
 
         assert_eq!(fake.last_password.lock().unwrap().as_deref(), Some("correct horse battery"));
         assert_eq!(fake.grants.load(Ordering::SeqCst), 1, "the service token is cached");
+    }
+
+    #[tokio::test]
+    async fn the_email_follows_and_the_login_name_too_when_it_was_the_email() {
+        let fake = Fake::default();
+        let base = serve(fake.clone()).await;
+        let admin = admin(&base);
+
+        admin.set_email(&subject("u-1"), "alice@new.example").await.unwrap();
+        let update = fake.last_update.lock().unwrap().clone().unwrap();
+        assert_eq!(update["email"], "alice@new.example");
+        assert_eq!(update["emailVerified"], true);
+        assert!(update.get("username").is_none(), "a chosen login name stays");
+
+        admin.set_email(&subject("u-2"), "bob@new.example").await.unwrap();
+        let update = fake.last_update.lock().unwrap().clone().unwrap();
+        assert_eq!(update["username"], "bob@new.example", "signs in by the new address");
+
+        assert!(matches!(
+            admin.set_email(&subject("u-1"), "taken@example.com").await.unwrap_err(),
+            AuthError::EmailAlreadyRegistered
+        ));
+        admin.set_email(&subject("ghost"), "x@example.com").await.expect("gone: nothing to keep in step");
     }
 
     #[tokio::test]

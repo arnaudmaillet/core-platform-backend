@@ -91,6 +91,14 @@ service AuthService {
     // PERMISSION_DENIED "step_up_required…". The refresh token is unchanged.
     rpc VerifyCredentials(VerifyCredentialsRequest) returns (VerifyCredentialsResponse);
 
+    // Change the caller's email or phone (#651) to the address a
+    // StartVerification code proved (send the code there first). Needs a recent
+    // credential proof (VerifyCredentials), like any takeover-prone action.
+    // Everything that signs the holder in follows: the account, the password
+    // account's IdP email, the passwordless code sign-in. The address on file
+    // before is told. Another account's address: AUT-6006 / AUT-6007.
+    rpc ChangeContact(ChangeContactRequest) returns (ChangeContactResponse);
+
     // ── Introspection & device management ─────────────────────────────────────
 
     // INTERNAL. Server-side token introspection returning the normalized

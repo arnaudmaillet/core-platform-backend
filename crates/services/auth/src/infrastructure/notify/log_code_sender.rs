@@ -29,6 +29,16 @@ impl CodeSender for LogCodeSender {
         tracing::warn!(channel = channel.as_str(), destination, "lockout notice (log sender — local only)");
         Ok(())
     }
+
+    async fn send_contact_changed_notice(
+        &self,
+        changed: VerificationChannel,
+        email: &str,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        tracing::warn!(changed = changed.as_str(), email, "contact-changed notice (log sender — local only)");
+        Ok(())
+    }
 }
 
 /// No transport configured: codes cannot be sent (FAILED_PRECONDITION).

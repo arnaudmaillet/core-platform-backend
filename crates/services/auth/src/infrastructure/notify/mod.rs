@@ -56,4 +56,16 @@ impl CodeSender for ChannelCodeSender {
             _ => Ok(()),
         }
     }
+
+    async fn send_contact_changed_notice(
+        &self,
+        changed: VerificationChannel,
+        email: &str,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        match &self.email {
+            Some(sender) => sender.send_contact_changed_notice(changed, email, locale).await,
+            None => Ok(()),
+        }
+    }
 }

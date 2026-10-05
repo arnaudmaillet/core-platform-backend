@@ -17,9 +17,9 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    AccountErasure, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler, LogoutAllSessionsHandler,
-    LogoutHandler, MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler, StartGuestSessionHandler,
-    VerificationCodes, VerifyCredentialsHandler,
+    AccountErasure, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
+    LogoutAllSessionsHandler, LogoutHandler, MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler,
+    StartGuestSessionHandler, VerificationCodes, VerifyCredentialsHandler,
 };
 use crate::application::port::{
     AccountDirectory, CredentialAdmin, EventPublisher, FederatedTokenVerifier, GuestRegistry,
@@ -209,6 +209,15 @@ impl App {
             verify_credentials,
         )
         .with_sign_up(sign_up)
+        .with_change_contact(Arc::new(ChangeContactHandler::new(
+            Arc::clone(&deps.codes),
+            Arc::clone(&deps.directory),
+            Arc::clone(&deps.links),
+            Arc::clone(&deps.credentials),
+            Arc::clone(&deps.sessions),
+            Arc::clone(&deps.cache),
+            Arc::clone(&deps.publisher),
+        )))
         .with_codes(deps.codes)
         .with_federated_nonces(deps.nonces)
     }

@@ -143,4 +143,16 @@ pub trait CodeSender: Send + Sync + 'static {
     ) -> Result<(), AuthError> {
         Ok(())
     }
+
+    /// Tells the holder at `email` that the account's `changed` address (its
+    /// email, or its phone) was just changed, so a takeover is visible to the
+    /// real owner (#651). Email only, like the lockout notice.
+    async fn send_contact_changed_notice(
+        &self,
+        _changed: VerificationChannel,
+        _email: &str,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        Ok(())
+    }
 }

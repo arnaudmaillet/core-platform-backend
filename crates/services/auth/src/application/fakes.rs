@@ -90,6 +90,10 @@ pub struct StubAccountDirectory {
     emails: Mutex<HashMap<String, super::port::EmailHolder>>,
     /// Every account provisioned, in order.
     provisioned: Mutex<Vec<super::port::NewAccount>>,
+    /// account → its email / phone (#651).
+    contacts: Mutex<HashMap<AccountId, super::port::ContactDetails>>,
+    /// When set, `change_contact` fails as if another account won a race.
+    refuse_contact_changes: std::sync::atomic::AtomicBool,
 }
 
 impl Default for StubAccountDirectory {
@@ -108,7 +112,23 @@ impl StubAccountDirectory {
             refuse_resume: std::sync::atomic::AtomicBool::new(false),
             emails: Mutex::new(HashMap::new()),
             provisioned: Mutex::new(Vec::new()),
+            contacts: Mutex::new(HashMap::new()),
+            refuse_contact_changes: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Every later `change_contact` fails (`EmailAlreadyRegistered`).
+    pub fn refuse_contact_changes(&self) {
+        self.refuse_contact_changes.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Sets an account's email / phone as `account` holds them.
+    pub fn with_contact(&self, account_id: AccountId, contact: super::port::ContactDetails) {
+        self.contacts.lock().unwrap().insert(account_id, contact);
+    }
+
+    pub fn contact_of(&self, account_id: &AccountId) -> super::port::ContactDetails {
+        self.contacts.lock().unwrap().get(account_id).cloned().unwrap_or_default()
     }
 
     /// The accounts provisioned so far.
@@ -252,6 +272,37 @@ impl AccountDirectory for StubAccountDirectory {
         Ok(self.emails.lock().unwrap().get(phone).cloned())
     }
 
+    async fn contact(&self, account_id: &AccountId) -> Result<super::port::ContactDetails, AuthError> {
+        Ok(self.contact_of(account_id))
+    }
+
+    async fn change_contact(
+        &self,
+        account_id: &AccountId,
+        channel: super::port::VerificationChannel,
+        destination: &str,
+    ) -> Result<(), AuthError> {
+        if self.refuse_contact_changes.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AuthError::EmailAlreadyRegistered);
+        }
+        let key = destination.to_lowercase();
+        if let Some(holder) = self.emails.lock().unwrap().get(&key)
+            && holder.account_id != *account_id
+        {
+            return Err(match channel {
+                super::port::VerificationChannel::Email => AuthError::EmailAlreadyRegistered,
+                super::port::VerificationChannel::Sms => AuthError::PhoneAlreadyRegistered,
+            });
+        }
+        let mut contacts = self.contacts.lock().unwrap();
+        let contact = contacts.entry(*account_id).or_default();
+        match channel {
+            super::port::VerificationChannel::Email => contact.email = Some(destination.to_owned()),
+            super::port::VerificationChannel::Sms => contact.phone = Some(destination.to_owned()),
+        }
+        Ok(())
+    }
+
     async fn resume_deactivated(&self, account_id: &AccountId) -> Result<(), AuthError> {
         if self.refuse_resume.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(AuthError::AccountNotActive { current: "not_resumable".into() });
@@ -332,6 +383,11 @@ impl SubjectLinkRepository for InMemorySubjectLinkRepository {
 
     async fn find_by_account(&self, account_id: &AccountId) -> Result<Vec<SubjectLink>, AuthError> {
         Ok(self.links.lock().unwrap().values().filter(|l| l.account_id() == *account_id).cloned().collect())
+    }
+
+    async fn delete(&self, subject: &IdpSubject) -> Result<(), AuthError> {
+        self.links.lock().unwrap().remove(subject);
+        Ok(())
     }
 
     async fn save(&self, link: &SubjectLink) -> Result<(), AuthError> {
@@ -626,12 +682,19 @@ pub struct StubCredentialAdmin {
     refuse: Mutex<Option<String>>,
     deleted: Mutex<Vec<IdpSubject>>,
     idp_down: std::sync::atomic::AtomicBool,
+    /// The emails set, per subject (#651).
+    emails: Mutex<Vec<(IdpSubject, String)>>,
 }
 
 impl StubCredentialAdmin {
     /// The passwords set so far, per subject.
     pub fn passwords_set(&self) -> Vec<(IdpSubject, String)> {
         self.set.lock().unwrap().clone()
+    }
+
+    /// The emails set so far, per subject.
+    pub fn emails_set(&self) -> Vec<(IdpSubject, String)> {
+        self.emails.lock().unwrap().clone()
     }
 
     /// Refuse every new password as the IdP policy would.
@@ -669,6 +732,11 @@ impl CredentialAdmin for StubCredentialAdmin {
             return Err(AuthError::IdpUnavailable);
         }
         self.deleted.lock().unwrap().push(subject.clone());
+        Ok(())
+    }
+
+    async fn set_email(&self, subject: &IdpSubject, email: &str) -> Result<(), AuthError> {
+        self.emails.lock().unwrap().push((subject.clone(), email.to_owned()));
         Ok(())
     }
 }
@@ -946,6 +1014,8 @@ impl super::port::VerificationStore for InMemoryVerificationStore {
 pub struct RecordingCodeSender {
     sent: Mutex<Vec<(String, String, Option<String>)>>,
     notices: Mutex<Vec<(String, Option<String>)>>,
+    /// (changed channel, email told) of every contact-changed notice (#651).
+    contact_notices: Mutex<Vec<(super::port::VerificationChannel, String)>>,
     failing: std::sync::atomic::AtomicBool,
 }
 
@@ -961,6 +1031,11 @@ impl RecordingCodeSender {
 
     pub fn recover(&self) {
         self.failing.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The (changed channel, email told) of every contact-changed notice.
+    pub fn contact_notices(&self) -> Vec<(super::port::VerificationChannel, String)> {
+        self.contact_notices.lock().unwrap().clone()
     }
 
     /// The (destination, locale) of every lockout notice sent.
@@ -992,6 +1067,16 @@ impl super::port::CodeSender for RecordingCodeSender {
         locale: Option<&str>,
     ) -> Result<(), AuthError> {
         self.notices.lock().unwrap().push((destination.to_owned(), locale.map(str::to_owned)));
+        Ok(())
+    }
+
+    async fn send_contact_changed_notice(
+        &self,
+        changed: super::port::VerificationChannel,
+        email: &str,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        self.contact_notices.lock().unwrap().push((changed, email.to_owned()));
         Ok(())
     }
 }

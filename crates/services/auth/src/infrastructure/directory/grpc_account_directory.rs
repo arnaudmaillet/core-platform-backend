@@ -2,7 +2,8 @@ use account_api::account_service_client::AccountServiceClient;
 use account_api::{
     AccountStatus, AgeBracket as ProtoAgeBracket, CreateAccountRequest, GetAccountByEmailRequest,
     GetAccountByIdRequest, GetAccountByIdentityIdRequest, GetAccountByPhoneRequest,
-    ResumeDeactivatedAccountRequest, UpdateConsentsRequest, VerifyEmailRequest, VerifyPhoneRequest,
+    ChangeEmailRequest, ChangePhoneRequest, ResumeDeactivatedAccountRequest, UpdateConsentsRequest,
+    VerifyEmailRequest, VerifyPhoneRequest,
 };
 use async_trait::async_trait;
 use tonic::transport::Channel;
@@ -10,7 +11,8 @@ use tonic::Code;
 use tracing::instrument;
 
 use crate::application::port::{
-    AccountActivation, AccountDirectory, AccountSnapshot, EmailHolder, NewAccount,
+    AccountActivation, AccountDirectory, AccountSnapshot, ContactDetails, EmailHolder, NewAccount,
+    VerificationChannel,
 };
 use crate::domain::value_object::{AccountId, AgeBracket, IdpSubject, Permission};
 use crate::error::AuthError;
@@ -208,6 +210,49 @@ impl AccountDirectory for GrpcAccountDirectory {
             Err(status) if status.code() == Code::FailedPrecondition => Ok(None),
             Err(_) => Err(AuthError::AccountDirectoryUnavailable),
         }
+    }
+
+    #[instrument(name = "auth.directory.contact", skip(self))]
+    async fn contact(&self, account_id: &AccountId) -> Result<ContactDetails, AuthError> {
+        let view = self
+            .client
+            .clone()
+            .get_account_by_id(GetAccountByIdRequest { account_id: account_id.as_str() })
+            .await
+            .map_err(|_| AuthError::AccountDirectoryUnavailable)?
+            .into_inner();
+        Ok(ContactDetails {
+            email: Some(view.email).filter(|e| !e.is_empty()),
+            phone: Some(view.phone).filter(|p| !p.is_empty()),
+        })
+    }
+
+    #[instrument(name = "auth.directory.change_contact", skip(self, destination))]
+    async fn change_contact(
+        &self,
+        account_id: &AccountId,
+        channel: VerificationChannel,
+        destination: &str,
+    ) -> Result<(), AuthError> {
+        let mut client = self.client.clone();
+        let changed = match channel {
+            VerificationChannel::Email => client
+                .change_email(ChangeEmailRequest { account_id: account_id.as_str(), email: destination.to_owned() })
+                .await
+                .map(|_| ()),
+            VerificationChannel::Sms => client
+                .change_phone(ChangePhoneRequest { account_id: account_id.as_str(), phone: destination.to_owned() })
+                .await
+                .map(|_| ()),
+        };
+        changed.map_err(|status| match error_code(&status) {
+            Some("ACC-1003") => AuthError::EmailAlreadyRegistered,
+            Some("ACC-1004") => AuthError::PhoneAlreadyRegistered,
+            _ if status.code() == Code::FailedPrecondition => {
+                AuthError::AccountNotActive { current: status.message().to_owned() }
+            }
+            _ => AuthError::AccountDirectoryUnavailable,
+        })
     }
 
     #[instrument(name = "auth.directory.find_by_email", skip(self, email))]

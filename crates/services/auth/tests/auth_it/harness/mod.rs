@@ -74,6 +74,8 @@ impl IdentityProvider for StubIdp {
 pub struct StubCredentials {
     pub set: Mutex<Vec<(String, String)>>,
     pub deleted: Mutex<Vec<String>>,
+    /// (subject, email) of every IdP email set (#651).
+    pub emails: Mutex<Vec<(String, String)>>,
 }
 
 #[async_trait]
@@ -91,12 +93,24 @@ impl CredentialAdmin for StubCredentials {
         self.deleted.lock().unwrap().push(subject.subject().to_owned());
         Ok(())
     }
+
+    async fn set_email(&self, subject: &IdpSubject, email: &str) -> Result<(), AuthError> {
+        self.emails.lock().unwrap().push((subject.subject().to_owned(), email.to_owned()));
+        Ok(())
+    }
 }
 
 /// `account` stub: provisions a stable account id per subject and reports every
-/// account active with a fixed permission set.
-struct StubDirectory {
+/// account active with a fixed permission set; contacts are kept per account.
+pub struct StubDirectory {
     accounts: Mutex<HashMap<IdpSubject, AccountId>>,
+    pub contacts: Mutex<HashMap<AccountId, auth::application::port::ContactDetails>>,
+}
+
+impl StubDirectory {
+    pub fn new() -> Self {
+        Self { accounts: Mutex::new(HashMap::new()), contacts: Mutex::new(HashMap::new()) }
+    }
 }
 
 #[async_trait]
@@ -131,6 +145,25 @@ impl AccountDirectory for StubDirectory {
     async fn find_by_phone(&self, _phone: &str) -> Result<Option<auth::application::port::EmailHolder>, AuthError> {
         Ok(None)
     }
+
+    async fn contact(&self, account_id: &AccountId) -> Result<auth::application::port::ContactDetails, AuthError> {
+        Ok(self.contacts.lock().unwrap().get(account_id).cloned().unwrap_or_default())
+    }
+
+    async fn change_contact(
+        &self,
+        account_id: &AccountId,
+        channel: auth::application::port::VerificationChannel,
+        destination: &str,
+    ) -> Result<(), AuthError> {
+        let mut contacts = self.contacts.lock().unwrap();
+        let contact = contacts.entry(*account_id).or_default();
+        match channel {
+            auth::application::port::VerificationChannel::Email => contact.email = Some(destination.to_owned()),
+            auth::application::port::VerificationChannel::Sms => contact.phone = Some(destination.to_owned()),
+        }
+        Ok(())
+    }
 }
 
 /// `profile` stub: every account owns exactly one profile, derived
@@ -152,6 +185,8 @@ pub struct Harness {
     pub handler: AuthServiceHandler,
     pub pool: PgPool,
     pub credentials: Arc<StubCredentials>,
+    /// The `account` stub (contacts, #651).
+    pub directory: Arc<StubDirectory>,
     /// The live Redis, for adapter-level scenarios (one-time codes).
     pub redis: redis_storage::RedisClient,
 }
@@ -193,10 +228,11 @@ impl Harness {
         .expect("it: minter");
 
         let credentials = Arc::new(StubCredentials::default());
+        let directory = Arc::new(StubDirectory::new());
         let deps = AppDeps {
             idp: Arc::new(StubIdp),
             credentials: credentials.clone(),
-            directory: Arc::new(StubDirectory { accounts: Mutex::new(HashMap::new()) }),
+            directory: directory.clone(),
             profiles: Arc::new(StubProfiles),
             links: Arc::new(PgSubjectLinkRepository::new(tx.clone())),
             sessions: Arc::new(PgSessionRepository::new(tx.clone())),
@@ -224,7 +260,7 @@ impl Harness {
             ),
         };
 
-        Self { handler: App::compose(deps), pool, credentials, redis }
+        Self { handler: App::compose(deps), pool, credentials, directory, redis }
     }
 
     // ── RPC helpers ──────────────────────────────────────────────────────────

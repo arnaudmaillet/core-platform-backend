@@ -217,6 +217,17 @@ impl VerificationCodes {
         Self { store, sender, policy }
     }
 
+    /// Tells the holder at `email` that the account's `changed` address was
+    /// just changed (#651), through the code transports.
+    pub async fn notify_contact_changed(
+        &self,
+        changed: VerificationChannel,
+        email: &str,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        self.sender.send_contact_changed_notice(changed, email, locale).await
+    }
+
     pub async fn start(&self, cmd: StartVerificationCommand) -> Result<StartedVerification, AuthError> {
         ensure_valid(&cmd)?;
         let (destination, sms_country) = match cmd.channel {

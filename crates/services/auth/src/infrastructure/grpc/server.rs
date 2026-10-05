@@ -67,6 +67,13 @@ impl AuthService for AuthServiceHandler {
         self.introspect(request).await
     }
 
+    async fn change_contact(
+        &self,
+        request: Request<proto::ChangeContactRequest>,
+    ) -> Result<Response<proto::ChangeContactResponse>, Status> {
+        self.change_contact(request).await
+    }
+
     async fn change_password(
         &self,
         request: Request<proto::ChangePasswordRequest>,
