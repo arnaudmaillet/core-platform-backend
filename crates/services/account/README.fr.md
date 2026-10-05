@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 67b97bb2f78145db6db7d863b5ab82325229f7c42cc8f0a02831888553166339
+  source_sha256: 4f540157242d0a5d38c97ed4fa15445250035712f6471f94d4e8ab0cf6b5d6f9
   translated_at: 2026-10-05
   status: complete
 ---
@@ -187,8 +187,10 @@ construction d'un export est reconstruite. Les comptes en attente viennent d'un 
 0005). Les sources sont les RPC **mesh uniquement** des autres services (`MeshExportPeers`, chaque page,
 chaque message converti en JSON via le jeu de descripteurs du service) : par profil son profil, ses posts,
 commentaires (`ListCommentsByAuthor`), réactions (`ListReactionsByProfile`), graphe social et conversations
-(`ListConversationsByMember` + `GetHistory` : une conversation à deux en entier ; dans un groupe ou un canal,
-ses propres messages, ceux des autres en placeholders `{"from": "another member"}`) ; pour le compte, ses
+(`ListConversationsByMember` + `GetHistory` : une conversation directe en entier ; dans un groupe ou un canal,
+ses propres messages, ceux des autres en placeholders `{"from": "another member"}` — « directe » est le
+type de la conversation, jamais la taille de ses membres, et tant que chat n'en a pas (#656) toute
+conversation est protégée) ; pour le compte, ses
 médias (`ListAssetsByOwner`, liens valables 7 jours). Le serveur lance la passe toutes les
 `ACCOUNT_EXPORT_INTERVAL_SECS` quand le stockage est configuré (`ACCOUNT_EXPORT_BUCKET`,
 core-platform-infra#28).

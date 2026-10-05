@@ -48,6 +48,10 @@ pub struct ConversationExport {
     pub conversation_id: String,
     /// Its membership row (role, joined at), as the chat service gives it.
     pub membership: serde_json::Value,
+    /// A direct (one-to-one) conversation by its kind, exported in full. Never
+    /// inferred from the roster: a group that shrank to two still holds the
+    /// departed members' words, and a two-member channel is still a channel.
+    pub direct: bool,
 }
 
 /// One message of a conversation: who sent it, when, and the whole of it.

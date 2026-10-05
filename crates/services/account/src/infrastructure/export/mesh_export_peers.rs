@@ -334,6 +334,9 @@ impl ExportPeers for MeshExportPeers {
             conversations.extend(page.memberships.iter().map(|m| ConversationExport {
                 conversation_id: m.conversation_id.clone(),
                 membership: self.chat_d.json("chat.v1.MembershipView", m),
+                // chat has no direct kind yet (groups and channels only): every
+                // conversation is shielded until one exists (#656).
+                direct: false,
             }));
             match page_token(page.next_page_token) {
                 Some(next) => token = next,
