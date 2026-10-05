@@ -62,7 +62,30 @@ impl StorageKey {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Where a quarantined object lives: under `quarantine/`, a prefix the CDN's
+    /// origin access is not granted — a known public URL stops resolving.
+    pub fn quarantined(&self) -> Self {
+        Self(format!("{QUARANTINE_PREFIX}{}", self.0))
+    }
+
+    /// The key a quarantined object is restored to (`self` if not quarantined).
+    pub fn released(&self) -> Self {
+        Self(self.0.strip_prefix(QUARANTINE_PREFIX).unwrap_or(&self.0).to_owned())
+    }
+
+    /// The content-addressed tree this object belongs to (`{kind}/{hash}/`):
+    /// every rendition of a hash, and a video's whole HLS output.
+    pub fn tree_prefix(&self) -> String {
+        match self.0.split('/').collect::<Vec<_>>().as_slice() {
+            [kind, hash, _, ..] => format!("{kind}/{hash}/"),
+            _ => self.0.clone(),
+        }
+    }
 }
+
+/// The prefix quarantined objects are moved under.
+pub const QUARANTINE_PREFIX: &str = "quarantine/";
 
 impl fmt::Debug for StorageKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

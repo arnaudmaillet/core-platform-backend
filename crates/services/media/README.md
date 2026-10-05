@@ -72,6 +72,18 @@ is a *new asset* = a *new hash* = a *new URL*, so **cache invalidation is a
 takedown-only operation** — never an edit-path concern. Private media uses
 short-lived signed URLs minted per-request *after* the edge authorizes the viewer.
 
+**Takedowns reach the origin.** Because a public URL never expires, a quarantine
+cannot rely on `ResolveDelivery` alone (a URL handed out before keeps working). It is
+saved first (no new URL), then **every object of the asset's trees** (`{kind}/{hash}/…`:
+renditions, a video's whole HLS output) and its original upload **move under
+`quarantine/`** — a prefix the CDN's origin access is not granted — and the CDN is
+purged last. A restore moves them back *before* reinstating the asset. Each step is
+idempotent, so a redelivered event redoes only what is left. Identical bytes share
+keys: when another asset with the same bytes is still delivered, the shared objects
+stay (logged), unless the taken-down asset is under a **legal hold**, which always
+moves them. A delete erases public and quarantined copies alike (the legal hold
+still blocks it first).
+
 > **Invariants** (and where enforced): no message carries a `bytes` payload
 > (proto review + `media-api` contract rule); asset state transitions are guarded
 > in the domain; optimistic lock on the asset row (`ConcurrentModification`);

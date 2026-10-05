@@ -39,14 +39,33 @@ async fn a_takedown_then_restore_round_trips_delivery() {
     let h = Harness::start().await;
     let asset_id = h.upload_and_process().await;
 
-    // Moderation quarantine revokes delivery.
+    let keys: Vec<_> =
+        h.get(asset_id).await.unwrap().renditions().iter().map(|r| r.storage_key().clone()).collect();
+    assert!(!keys.is_empty());
+    for key in &keys {
+        assert!(h.store.object_size(key.as_str()).await.unwrap().is_some(), "published: {key}");
+    }
+
+    // Moderation quarantine revokes delivery — at the origin too: a public URL
+    // handed out before no longer resolves; the bytes wait under quarantine/.
     h.apply_moderation(asset_id, ModerationAction::Quarantine).await;
     assert_eq!(h.get(asset_id).await.unwrap().state(), AssetState::Quarantined);
     assert!(h.resolve(asset_id, None).await.degraded);
+    for key in &keys {
+        assert!(h.store.object_size(key.as_str()).await.unwrap().is_none(), "gone from the public key: {key}");
+        assert!(h.store.object_size(key.quarantined().as_str()).await.unwrap().is_some(), "kept: {key}");
+    }
+    // A redelivered takedown is harmless.
+    h.apply_moderation(asset_id, ModerationAction::Quarantine).await;
+    assert!(h.store.object_size(keys[0].quarantined().as_str()).await.unwrap().is_some());
 
-    // Reversal restores it to deliverable.
+    // Reversal restores it to deliverable, bytes back at their public keys.
     h.apply_moderation(asset_id, ModerationAction::Restore).await;
     let restored = h.get(asset_id).await.unwrap();
     assert_eq!(restored.state(), AssetState::Ready);
     assert!(!h.resolve(asset_id, Some(DeliveryVisibility::Public)).await.degraded);
+    for key in &keys {
+        assert!(h.store.object_size(key.as_str()).await.unwrap().is_some(), "restored: {key}");
+        assert!(h.store.object_size(key.quarantined().as_str()).await.unwrap().is_none());
+    }
 }

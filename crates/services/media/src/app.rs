@@ -131,6 +131,7 @@ impl App {
         ));
         let apply_moderation = Arc::new(ApplyModerationHandler::new(
             Arc::clone(&deps.assets),
+            Arc::clone(&deps.store),
             Arc::clone(&deps.cdn),
             Arc::clone(&deps.cache),
             Arc::clone(&deps.publisher),

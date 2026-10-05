@@ -187,13 +187,13 @@ impl Harness {
         );
         let delete = DeleteAssetHandler::new(
             assets.clone(),
-            object_store,
+            object_store.clone(),
             cdn.clone(),
             cache.clone(),
             publisher.clone(),
         );
         let moderation =
-            ApplyModerationHandler::new(assets.clone(), cdn.clone(), cache.clone(), publisher);
+            ApplyModerationHandler::new(assets.clone(), object_store, cdn.clone(), cache.clone(), publisher);
         let get = GetAssetHandler::new(assets.clone());
         let resolve = ResolveDeliveryHandler::new(assets, cache, cdn);
 
@@ -324,8 +324,11 @@ impl Harness {
     }
 
     /// Drives a fresh asset all the way to READY, returning its id.
+    /// Uploads and processes an image with bytes of its own: content-addressed
+    /// keys are shared by identical bytes, so concurrent scenarios must not share.
     pub async fn upload_and_process(&self) -> AssetId {
-        let bytes = Self::sample_jpeg(1200, 800);
+        let seed = Uuid::now_v7().as_bytes()[15];
+        let bytes = Self::sample_jpeg(1200 + u32::from(seed), 800);
         let out = self.issue_ticket(bytes.len() as u64, None, false).await.unwrap();
         let url = out.upload.unwrap().presigned.url;
         assert!(self.put_to_url(&url, bytes).await, "direct upload to MinIO failed");

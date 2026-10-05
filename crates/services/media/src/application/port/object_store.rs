@@ -44,4 +44,11 @@ pub trait ObjectStore: Send + Sync + 'static {
 
     /// Deletes an object. Idempotent: deleting an absent key is `Ok`.
     async fn delete(&self, key: &StorageKey) -> Result<(), MediaError>;
+
+    /// Every key under `prefix`.
+    async fn list(&self, prefix: &str) -> Result<Vec<StorageKey>, MediaError>;
+
+    /// Moves `from` to `to` (server-side copy, then delete). Idempotent: an
+    /// absent `from` (already moved) is `Ok`.
+    async fn relocate(&self, from: &StorageKey, to: &StorageKey) -> Result<(), MediaError>;
 }

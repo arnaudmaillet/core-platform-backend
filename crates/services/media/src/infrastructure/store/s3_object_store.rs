@@ -54,4 +54,18 @@ impl ObjectStore for S3ObjectStore {
     async fn delete(&self, key: &StorageKey) -> Result<(), MediaError> {
         self.client.delete(key.as_str()).await
     }
+
+    async fn list(&self, prefix: &str) -> Result<Vec<StorageKey>, MediaError> {
+        Ok(self.client.list_keys(prefix).await?.into_iter().map(StorageKey::from_raw).collect())
+    }
+
+    async fn relocate(&self, from: &StorageKey, to: &StorageKey) -> Result<(), MediaError> {
+        // Copy through the service (rusty-s3 has no CopyObject), then delete: a
+        // retry after a crash between the two re-copies the same bytes.
+        let Some((bytes, content_type)) = self.client.get_object(from.as_str()).await? else {
+            return Ok(());
+        };
+        self.client.put_bytes(to.as_str(), bytes, &content_type).await?;
+        self.client.delete(from.as_str()).await
+    }
 }
