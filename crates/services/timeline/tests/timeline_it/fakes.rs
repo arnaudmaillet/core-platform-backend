@@ -54,11 +54,6 @@ impl FakeSocialGraph {
         self.private.lock().unwrap().insert(author);
     }
 
-    /// Number of `list_all_followers` calls observed so far.
-    pub fn followers_calls(&self) -> usize {
-        self.followers_calls.load(Ordering::SeqCst)
-    }
-
     /// Number of `list_all_following` calls observed so far.
     pub fn following_calls(&self) -> usize {
         self.following_calls.load(Ordering::SeqCst)
