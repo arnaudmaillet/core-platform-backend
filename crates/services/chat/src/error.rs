@@ -46,6 +46,14 @@ pub enum ChatError {
     #[error("conversation {conversation_id} is not public")]
     ConversationNotPublic { conversation_id: String },
 
+    /// A private conversation the caller may not see (no membership, no
+    /// invitation). Its `Display`, HTTP status and user-facing message are
+    /// **deliberately identical** to [`ChatError::ConversationNotFound`], so the
+    /// edge cannot be used to probe whether a private conversation exists; only
+    /// the code (`CHT-1009`, logged server-side) tells the two apart.
+    #[error("conversation {conversation_id} not found")]
+    ConversationConcealed { conversation_id: String },
+
     // ── CHT-2xxx: Domain validation ───────────────────────────────────────────
     #[error("unknown conversation kind: '{kind}'")]
     UnknownConversationKind { kind: String },
@@ -111,6 +119,7 @@ impl AppError for ChatError {
             Self::AlreadyMember { .. }              => "CHT-1006",
             Self::NotAMember { .. }                 => "CHT-1007",
             Self::ConversationNotPublic { .. }      => "CHT-1008",
+            Self::ConversationConcealed { .. }      => "CHT-1009",
 
             Self::UnknownConversationKind { .. } => "CHT-2001",
             Self::UnknownVisibility { .. }       => "CHT-2002",
@@ -139,7 +148,8 @@ impl AppError for ChatError {
             Self::Redis(e)      => e.http_status(),
             Self::Validation(e) => e.http_status(),
 
-            Self::ConversationNotFound { .. } => StatusCode::NOT_FOUND,
+            Self::ConversationNotFound { .. }
+            | Self::ConversationConcealed { .. } => StatusCode::NOT_FOUND,
 
             Self::ConversationAlreadyPublic { .. }
             | Self::ConversationAlreadyPrivate { .. }
@@ -195,6 +205,7 @@ impl AppError for ChatError {
             | Self::DomainViolation { .. } => Severity::Medium,
 
             Self::ConversationNotFound { .. }
+            | Self::ConversationConcealed { .. }
             | Self::ConversationAlreadyPublic { .. }
             | Self::ConversationAlreadyPrivate { .. }
             | Self::NotAuthorized { .. }
@@ -232,7 +243,7 @@ impl AppError for ChatError {
             | Self::StreamSendFailed { .. } =>
                 "An internal error occurred. Please try again later.",
 
-            Self::ConversationNotFound { .. } =>
+            Self::ConversationNotFound { .. } | Self::ConversationConcealed { .. } =>
                 "The conversation was not found.",
 
             Self::ConversationAlreadyPublic { .. } =>

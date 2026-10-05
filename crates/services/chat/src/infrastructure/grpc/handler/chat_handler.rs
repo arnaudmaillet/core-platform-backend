@@ -15,8 +15,8 @@ use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
 use crate::application::command::{
-    CreateConversationCommand, JoinAsMemberCommand, MarkReadCommand, SendMessageCommand,
-    SubscribeCommand, ToggleVisibilityCommand, UnsubscribeCommand,
+    CreateConversationCommand, InviteMemberCommand, JoinAsMemberCommand, MarkReadCommand,
+    SendMessageCommand, SubscribeCommand, ToggleVisibilityCommand, UnsubscribeCommand,
 };
 use crate::application::port::{
     ConversationRepository, MemberRepository, MessageSummary, PresenceSettingsStore, PresenceStore,
@@ -162,6 +162,21 @@ where
         let cmd = JoinAsMemberCommand {
             conversation_id: req.conversation_id,
             profile_id:      req.profile_id,
+        };
+        self.dispatch_command(cmd).await
+    }
+
+    async fn invite_member(
+        &self,
+        request: Request<proto::InviteMemberRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        // The inviter is the acting identity; the invitee is just a target.
+        edge::require_profile(&request, &request.get_ref().inviter_id)?;
+        let req = request.into_inner();
+        let cmd = InviteMemberCommand {
+            conversation_id: req.conversation_id,
+            inviter_id:      req.inviter_id,
+            invitee_id:      req.invitee_id,
         };
         self.dispatch_command(cmd).await
     }
@@ -727,6 +742,13 @@ where
         self.join_as_member(request).await
     }
 
+    async fn invite_member(
+        &self,
+        request: Request<proto::InviteMemberRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.invite_member(request).await
+    }
+
     async fn subscribe(
         &self,
         request: Request<proto::SubscribeRequest>,
@@ -907,5 +929,23 @@ pub fn cqrs_to_status(err: cqrs::error::CqrsError) -> Status {
             use error::AppError as _;
             status_from_app(boxed.http_status().as_u16(), boxed.is_retryable(), boxed.to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A refused private join must be byte-identical on the wire to a missing
+    /// conversation: same gRPC code, same message.
+    #[test]
+    fn concealed_conversation_maps_exactly_like_not_found() {
+        let id = ConversationId::new().as_str();
+        let concealed = chat_err_to_status(ChatError::ConversationConcealed { conversation_id: id.clone() });
+        let missing   = chat_err_to_status(ChatError::ConversationNotFound { conversation_id: id });
+
+        assert_eq!(concealed.code(), tonic::Code::NotFound);
+        assert_eq!(concealed.code(), missing.code());
+        assert_eq!(concealed.message(), missing.message());
     }
 }

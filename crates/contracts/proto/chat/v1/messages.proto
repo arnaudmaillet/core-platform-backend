@@ -85,6 +85,12 @@ message JoinAsMemberRequest {
     string profile_id      = 2;
 }
 
+message InviteMemberRequest {
+    string conversation_id = 1;
+    string inviter_id      = 2; // must be an owner/admin of the conversation
+    string invitee_id      = 3;
+}
+
 message SubscribeRequest {
     string conversation_id = 1;
     string subscriber_id   = 2;

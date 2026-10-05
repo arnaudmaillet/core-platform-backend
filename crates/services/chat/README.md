@@ -87,7 +87,9 @@ New-message reads for guests never hit Scylla at all; they arrive over the broad
 > **Invariants** (and where enforced): `StreamConversation` requires roster membership
 > (`PERMISSION_DENIED` otherwise) — enforced at the gRPC boundary; `StreamPublic` requires
 > `visibility == Public` (`FAILED_PRECONDITION` otherwise); the audience stream is *structurally*
-> incapable of carrying presence/typing/receipts; the 500-member group cap is a domain-layer invariant.
+> incapable of carrying presence/typing/receipts; the 500-member group cap is a domain-layer invariant;
+> joining a private conversation requires a pending invitation (`NOT_FOUND` otherwise, see below) —
+> domain-layer invariant.
 
 ---
 
@@ -140,7 +142,8 @@ service ChatService {
   // Lifecycle / membership
   rpc CreateConversation (CreateConversationRequest) returns (CreateConversationResponse);
   rpc ToggleVisibility   (ToggleVisibilityRequest)   returns (CommandResponse);
-  rpc JoinAsMember       (JoinAsMemberRequest)       returns (CommandResponse);
+  rpc JoinAsMember       (JoinAsMemberRequest)       returns (CommandResponse); // private ⇒ invitation required
+  rpc InviteMember       (InviteMemberRequest)       returns (CommandResponse); // owner/admin only
   rpc Subscribe          (SubscribeRequest)          returns (CommandResponse);
   rpc Unsubscribe        (UnsubscribeRequest)        returns (CommandResponse);
   // Messaging
@@ -168,6 +171,17 @@ service ChatService {
 otherwise); `StreamPublic` requires `visibility == Public` (`FAILED_PRECONDITION` otherwise); the
 audience stream is structurally incapable of carrying presence/typing/receipts. `Heartbeat` and
 `SendTyping` also require roster membership (a non-member cannot inject Member-Plane signals).
+
+**Joining a private conversation.** `JoinAsMember` is open-join on a **public** conversation only.
+On a **private** one (group or channel) it requires a pending invitation for the caller, issued by an
+owner/admin through `InviteMember` (a plain member gets `PERMISSION_DENIED`). The invitation lives in
+`chat.invitations_by_conversation`, expires after **7 days** (table TTL; re-inviting refreshes it) and
+is **consumed** by the join. Without one, the join fails `NOT_FOUND` with `CHT-1009`, whose gRPC code and
+message are identical to `CHT-1001` (conversation not found): an outsider cannot tell a private
+conversation from a missing one. An outsider calling `InviteMember` on a private conversation gets the
+same answer. The rule is a domain invariant (`Conversation::admit_joiner` / `Conversation::invite`); the
+caller stays bound to its own profile at the edge (`edge::require_profile` on `profile_id` /
+`inviter_id`). No event is emitted for an invitation yet, so the invitee learns of it out of band.
 
 **Presence settings (#661).** A member who turned **activity status** off (profile discovery settings)
 announces no presence: no online/offline event, no heartbeat. One who turned **read receipts** off
@@ -206,6 +220,9 @@ shared `error` crate:
 | `CHT-3xxx` | events |
 | `CHT-4xxx` | streaming |
 | `CHT-9xxx` | identifiers |
+
+`CHT-1009` (private conversation the caller may not see) is deliberately rendered exactly like
+`CHT-1001` on the wire (`NOT_FOUND`, same message); the distinct code exists only in server logs.
 
 ---
 
@@ -334,7 +351,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Deployment, Migrations & Rollback
 
-- **Migrations:** apply `crates/services/chat/migrations/0001…0006.cql` against the `chat` keyspace
+- **Migrations:** apply `crates/services/chat/migrations/0001…0008.cql` against the `chat` keyspace
   **before** first start / before rolling a new binary.
 - **Stateful gotchas:** `CHAT_MESSAGE_BUCKET_HOURS` and `CHAT_AUDIENCE_SHARD_COUNT` must be **uniform
   cluster-wide**, and `CHAT_MESSAGE_BUCKET_HOURS` must **never change after data exists** — divergent

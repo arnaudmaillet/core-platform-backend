@@ -201,6 +201,68 @@ impl TestHarness {
             .expect("valid conversation id")
     }
 
+    /// Creates a `Group` (born `Private`); the owner is its sole roster member.
+    pub async fn create_private_group(&self, owner: &ProfileId) -> ConversationId {
+        let resp = ChatService::create_conversation(
+            &self.handler,
+            Request::new(proto::CreateConversationRequest { kind: 0, owner_id: owner.as_str() }),
+        )
+        .await
+        .expect("create_conversation");
+        ConversationId::try_from(resp.into_inner().conversation_id.as_str())
+            .expect("valid conversation id")
+    }
+
+    /// `JoinAsMember` for `profile`, returning the raw RPC outcome.
+    pub async fn join(&self, conv: &ConversationId, profile: &ProfileId) -> Result<(), Status> {
+        ChatService::join_as_member(
+            &self.handler,
+            Request::new(proto::JoinAsMemberRequest {
+                conversation_id: conv.as_str(),
+                profile_id:      profile.as_str(),
+            }),
+        )
+        .await
+        .map(drop)
+    }
+
+    /// `InviteMember` of `invitee` by `inviter`, returning the raw RPC outcome.
+    pub async fn invite(
+        &self,
+        conv:    &ConversationId,
+        inviter: &ProfileId,
+        invitee: &ProfileId,
+    ) -> Result<(), Status> {
+        ChatService::invite_member(
+            &self.handler,
+            Request::new(proto::InviteMemberRequest {
+                conversation_id: conv.as_str(),
+                inviter_id:      inviter.as_str(),
+                invitee_id:      invitee.as_str(),
+            }),
+        )
+        .await
+        .map(drop)
+    }
+
+    /// The roster's profile ids, as seen by `requester` (who must be a member).
+    pub async fn roster(&self, conv: &ConversationId, requester: &ProfileId) -> Vec<String> {
+        ChatService::list_members(
+            &self.handler,
+            Request::new(proto::ListMembersRequest {
+                conversation_id: conv.as_str(),
+                requester_id:    requester.as_str(),
+            }),
+        )
+        .await
+        .expect("list_members")
+        .into_inner()
+        .members
+        .into_iter()
+        .map(|m| m.profile_id)
+        .collect()
+    }
+
     /// Sends a text message and returns its server-minted id.
     pub async fn send_text(&self, conv: &ConversationId, sender: &ProfileId, body: &str) -> MessageId {
         let resp = ChatService::send_message(

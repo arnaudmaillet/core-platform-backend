@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: a52bf3a7daf639818dc1beb72de8509a44b7f4cd0483a1150f16ee7d27d0c60d
-  translated_at: 2026-06-28
+  source_sha256: 972d86dff10f559c537be2e0fe5199fbe712c2330cf0dffaa097984916e22441
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -114,7 +114,10 @@ pas la modération, et n'écrit l'état d'aucun autre service.
 déclenche le démantèlement par le `VisibilityWorker`, consommant `chat.conversation.unpublished`
 (DLQ `chat.conversation.unpublished.dlq`) pour démonter l'état du plan audience.
 
-**Appartenance.** Join/leave émettent `chat.member.joined` / `chat.member.left`.
+**Appartenance.** Join/leave émettent `chat.member.joined` / `chat.member.left`. Une conversation
+publique est en accès libre ; une conversation privée n'admet qu'un profil détenteur d'une **invitation**
+en attente (émise par un owner/admin, consommée par l'adhésion, TTL de 7 jours). Un demandeur non invité
+est refusé comme si la conversation n'existait pas (`CHT-1009`, rendu comme `CHT-1001`).
 
 ---
 

@@ -8,7 +8,12 @@ service ChatService {
     // ── Lifecycle / membership ──────────────────────────────────────────────
     rpc CreateConversation (CreateConversationRequest) returns (CreateConversationResponse);
     rpc ToggleVisibility   (ToggleVisibilityRequest)   returns (CommandResponse);
+    // Joining a PRIVATE conversation requires a pending invitation (issued by
+    // an owner/admin via InviteMember); without one the call fails NOT_FOUND,
+    // exactly as for a conversation that does not exist. Public: open join.
     rpc JoinAsMember       (JoinAsMemberRequest)       returns (CommandResponse);
+    // Owner/admin invites a profile to join (expires after 7 days; consumed on join).
+    rpc InviteMember       (InviteMemberRequest)       returns (CommandResponse);
     rpc Subscribe          (SubscribeRequest)          returns (CommandResponse);
     rpc Unsubscribe        (UnsubscribeRequest)        returns (CommandResponse);
 

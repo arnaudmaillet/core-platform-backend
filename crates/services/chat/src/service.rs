@@ -57,6 +57,7 @@ impl Service for ChatService {
         authenticated("/chat.v1.ChatService/CreateConversation"),
         authenticated("/chat.v1.ChatService/ToggleVisibility"),
         authenticated("/chat.v1.ChatService/JoinAsMember"),
+        authenticated("/chat.v1.ChatService/InviteMember"),
         authenticated("/chat.v1.ChatService/Subscribe"),
         authenticated("/chat.v1.ChatService/Unsubscribe"),
         authenticated("/chat.v1.ChatService/SendMessage"),
