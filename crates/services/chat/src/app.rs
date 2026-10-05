@@ -197,7 +197,8 @@ impl App {
                 max_page_size:     config.max_page_size,
             })?
             .register::<ListMembersQuery, _>(ListMembersHandler {
-                member_repo: Arc::clone(&member_repo),
+                conversation_repo: Arc::clone(&conversation_repo),
+                member_repo:       Arc::clone(&member_repo),
             })?
             .register::<ListSubscriptionsQuery, _>(ListSubscriptionsHandler {
                 subscription_repo: Arc::clone(&subscription_repo),
@@ -283,9 +284,10 @@ fn build_command_bus<EP: EventPublisher>(
             publisher:         Arc::clone(&publisher),
         })?
         .register::<SendMessageCommand, _>(SendMessageHandler {
-            member_repo:  Arc::clone(member_repo),
-            message_repo: Arc::clone(message_repo),
-            publisher:    Arc::clone(&publisher),
+            conversation_repo: Arc::clone(conversation_repo),
+            member_repo:       Arc::clone(member_repo),
+            message_repo:      Arc::clone(message_repo),
+            publisher:         Arc::clone(&publisher),
         })?
         .register::<ToggleVisibilityCommand, _>(ToggleVisibilityHandler {
             conversation_repo: Arc::clone(conversation_repo),
@@ -305,11 +307,15 @@ fn build_command_bus<EP: EventPublisher>(
         })?
         .register::<SubscribeCommand, _>(SubscribeHandler {
             conversation_repo: Arc::clone(conversation_repo),
+            member_repo:       Arc::clone(member_repo),
             subscription_repo: Arc::clone(subscription_repo),
         })?
         .register::<UnsubscribeCommand, _>(UnsubscribeHandler {
             subscription_repo: Arc::clone(subscription_repo),
         })?
-        .register::<MarkReadCommand, _>(MarkReadHandler { member_repo: Arc::clone(member_repo) })?
+        .register::<MarkReadCommand, _>(MarkReadHandler {
+            conversation_repo: Arc::clone(conversation_repo),
+            member_repo:       Arc::clone(member_repo),
+        })?
         .build())
 }

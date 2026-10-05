@@ -11,7 +11,9 @@ use crate::error::ChatError;
 ///
 /// `make_public = true` attaches the Audience Plane and stamps the public-since
 /// watermark; `false` detaches it. Authorization requires an administering role
-/// (owner/admin); the aggregate enforces the monotone transition guard.
+/// (owner/admin); the aggregate enforces the monotone transition guard. A
+/// non-member actor gets [`ChatError::ConversationConcealed`] on a private
+/// conversation and [`ChatError::NotAMember`] on a public one.
 pub struct ToggleVisibilityCommand {
     pub conversation_id: String,
     pub actor_id:        String,
@@ -69,15 +71,11 @@ where
                 conversation_id: conversation_id.as_str(),
             })?;
 
-        // Authorization: the actor must be an administering member.
-        let actor = self
-            .member_repo
-            .find(&conversation_id, &actor_id)
-            .await?
-            .ok_or_else(|| ChatError::NotAMember {
-                profile_id:      actor_id.as_str(),
-                conversation_id: conversation_id.as_str(),
-            })?;
+        // Authorization: the actor must be an administering member. A
+        // non-member of a private conversation must not learn that it exists.
+        let Some(actor) = self.member_repo.find(&conversation_id, &actor_id).await? else {
+            return Err(conversation.deny_outsider(actor_id));
+        };
 
         if !actor.can_administer() {
             return Err(ChatError::NotAuthorized {
@@ -99,5 +97,56 @@ where
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::command::fakes::{
+        FakeConversations, FakeMembers, FakePublisher, Fixture,
+    };
+    use crate::domain::value_object::Role;
+
+    async fn toggle(f: &Fixture, actor: ProfileId, make_public: bool) -> Result<(), ChatError> {
+        let handler: ToggleVisibilityHandler<FakeConversations, FakeMembers, FakePublisher> =
+            ToggleVisibilityHandler {
+                conversation_repo: Arc::clone(&f.conversations),
+                member_repo:       Arc::clone(&f.members),
+                publisher:         Arc::clone(&f.publisher),
+            };
+        handler
+            .handle(Envelope::new(uuid::Uuid::now_v7(), ToggleVisibilityCommand {
+                conversation_id: f.conversation_id.as_str(),
+                actor_id:        actor.as_str(),
+                make_public,
+            }))
+            .await
+    }
+
+    #[tokio::test]
+    async fn outsider_toggling_a_private_conversation_is_concealed() {
+        let f = Fixture::private_group();
+        let err = toggle(&f, Fixture::profile(), true).await.unwrap_err();
+        assert!(matches!(err, ChatError::ConversationConcealed { .. }), "{err:?}");
+        assert_eq!(f.publisher.count(), 0);
+    }
+
+    #[tokio::test]
+    async fn outsider_toggling_a_public_conversation_is_not_a_member() {
+        let f = Fixture::public_group();
+        let err = toggle(&f, Fixture::profile(), false).await.unwrap_err();
+        assert!(matches!(err, ChatError::NotAMember { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn plain_member_is_not_authorized_and_owner_toggles() {
+        let f = Fixture::private_group();
+        let member = f.add_member(Role::Member);
+        let err = toggle(&f, member, true).await.unwrap_err();
+        assert!(matches!(err, ChatError::NotAuthorized { .. }), "{err:?}");
+
+        toggle(&f, f.owner, true).await.unwrap();
+        assert_eq!(f.publisher.count(), 1, "ConversationPublished");
     }
 }

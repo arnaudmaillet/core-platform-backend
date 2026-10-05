@@ -3,14 +3,16 @@ use std::sync::Arc;
 use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::port::MemberRepository;
+use crate::application::access::deny_non_member;
+use crate::application::port::{ConversationRepository, MemberRepository};
 use crate::domain::value_object::{ConversationId, MessageId, ProfileId};
 use crate::error::ChatError;
 
 /// Advances a member's read-receipt horizon to `message_id`.
 ///
 /// Read-receipts are a Member-Plane-only concept (O(members)); a non-member
-/// (audience) cannot mark read. The horizon is monotone — a stale acknowledgement
+/// (audience) cannot mark read — and, on a private conversation, is answered as
+/// if it did not exist (see [`deny_non_member`]). The horizon is monotone — a stale acknowledgement
 /// is a no-op via [`Participant::mark_read`](crate::domain::aggregate::Participant::mark_read).
 pub struct MarkReadCommand {
     pub conversation_id: String,
@@ -40,12 +42,14 @@ impl Validate for MarkReadCommand {
     }
 }
 
-pub struct MarkReadHandler<MR> {
-    pub member_repo: Arc<MR>,
+pub struct MarkReadHandler<CR, MR> {
+    pub conversation_repo: Arc<CR>,
+    pub member_repo:       Arc<MR>,
 }
 
-impl<MR> CommandHandler<MarkReadCommand> for MarkReadHandler<MR>
+impl<CR, MR> CommandHandler<MarkReadCommand> for MarkReadHandler<CR, MR>
 where
+    CR: ConversationRepository,
     MR: MemberRepository,
 {
     type Error = ChatError;
@@ -57,14 +61,9 @@ where
         let member_id       = ProfileId::try_from(cmd.member_id.as_str())?;
         let message_id      = MessageId::try_from(cmd.message_id.as_str())?;
 
-        let mut member = self
-            .member_repo
-            .find(&conversation_id, &member_id)
-            .await?
-            .ok_or_else(|| ChatError::NotAMember {
-                profile_id:      member_id.as_str(),
-                conversation_id: conversation_id.as_str(),
-            })?;
+        let Some(mut member) = self.member_repo.find(&conversation_id, &member_id).await? else {
+            return Err(deny_non_member(&*self.conversation_repo, &conversation_id, member_id).await);
+        };
 
         // Monotone advance; persist the resulting (possibly unchanged) horizon.
         member.mark_read(message_id);
@@ -75,5 +74,43 @@ where
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::command::fakes::{FakeConversations, FakeMembers, Fixture};
+
+    async fn mark_read(f: &Fixture, member: ProfileId) -> Result<(), ChatError> {
+        let handler: MarkReadHandler<FakeConversations, FakeMembers> = MarkReadHandler {
+            conversation_repo: Arc::clone(&f.conversations),
+            member_repo:       Arc::clone(&f.members),
+        };
+        handler
+            .handle(Envelope::new(uuid::Uuid::now_v7(), MarkReadCommand {
+                conversation_id: f.conversation_id.as_str(),
+                member_id:       member.as_str(),
+                message_id:      MessageId::new().as_str(),
+            }))
+            .await
+    }
+
+    #[tokio::test]
+    async fn outsider_of_a_private_conversation_is_concealed() {
+        let err = mark_read(&Fixture::private_group(), Fixture::profile()).await.unwrap_err();
+        assert!(matches!(err, ChatError::ConversationConcealed { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn outsider_of_a_public_conversation_is_not_a_member() {
+        let err = mark_read(&Fixture::public_group(), Fixture::profile()).await.unwrap_err();
+        assert!(matches!(err, ChatError::NotAMember { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn member_marks_read() {
+        let f = Fixture::private_group();
+        mark_read(&f, f.owner).await.unwrap();
     }
 }

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: 972d86dff10f559c537be2e0fe5199fbe712c2330cf0dffaa097984916e22441
+  source_sha256: b30e591fb8855570bac64657bf63f290d2dade4f69fc91192f1cccb3057f32e8
   translated_at: 2026-10-05
   status: complete
 ---
@@ -95,7 +95,7 @@ pas la modération, et n'écrit l'état d'aucun autre service.
 
 | # | Invariant | Imposé à | En cas de violation |
 |---|---|---|---|
-| I1 | Seuls les membres peuvent écrire/lire le plan membre | frontière gRPC | `CHT-3xxx`/`PERMISSION_DENIED` |
+| I1 | Seuls les membres peuvent écrire/lire le plan membre | application + frontière gRPC | `CHT-1007`/`PERMISSION_DENIED` (publique) ; `CHT-1009`/`NOT_FOUND` (privée) |
 | I2 | Le plan membre et le plan audience restent distincts (shadowing) | domaine | `CHT-2xxx` |
 | I3 | La dépublication démantèle entièrement le plan audience | application (`VisibilityWorker`) | `CHT-4xxx` |
 | I4 | Les messages sont ajoutés au bon bucket de conversation | domaine | `CHT-9xxx` |
@@ -117,7 +117,9 @@ déclenche le démantèlement par le `VisibilityWorker`, consommant `chat.conver
 **Appartenance.** Join/leave émettent `chat.member.joined` / `chat.member.left`. Une conversation
 publique est en accès libre ; une conversation privée n'admet qu'un profil détenteur d'une **invitation**
 en attente (émise par un owner/admin, consommée par l'adhésion, TTL de 7 jours). Un demandeur non invité
-est refusé comme si la conversation n'existait pas (`CHT-1009`, rendu comme `CHT-1001`).
+est refusé comme si la conversation n'existait pas (`CHT-1009`, rendu comme `CHT-1001`). Le même
+masquage s'applique à toute autre RPC qu'un tiers vise sur une conversation privée : aucune ne permet
+d'en sonder l'existence.
 
 ---
 

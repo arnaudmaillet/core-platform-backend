@@ -73,14 +73,7 @@ where
 
         let Some(inviter) = self.member_repo.find(&conversation_id, &inviter_id).await? else {
             // An outsider must not learn that a private conversation exists.
-            return Err(if conversation.visibility().is_public() {
-                ChatError::NotAMember {
-                    profile_id:      inviter_id.as_str(),
-                    conversation_id: conversation_id.as_str(),
-                }
-            } else {
-                conversation.concealed()
-            });
+            return Err(conversation.deny_outsider(inviter_id));
         };
 
         // Authority first (owner/admin), so a plain member cannot use the

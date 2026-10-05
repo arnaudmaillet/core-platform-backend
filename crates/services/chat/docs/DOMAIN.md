@@ -84,7 +84,7 @@ moderation, and doesn't write any other service's state.
 
 | # | Invariant | Enforced at | On violation |
 |---|---|---|---|
-| I1 | Only members may write/read the member plane | gRPC boundary | `CHT-3xxx`/`PERMISSION_DENIED` |
+| I1 | Only members may write/read the member plane | application + gRPC boundary | `CHT-1007`/`PERMISSION_DENIED` (public); `CHT-1009`/`NOT_FOUND` (private) |
 | I2 | Member plane and audience plane are kept distinct (shadowing) | domain | `CHT-2xxx` |
 | I3 | Unpublish tears down the audience plane completely | application (`VisibilityWorker`) | `CHT-4xxx` |
 | I4 | Messages are appended to the correct conversation bucket | domain | `CHT-9xxx` |
@@ -106,7 +106,8 @@ unpublishing triggers the `VisibilityWorker` teardown, consuming `chat.conversat
 **Membership.** Join/leave emit `chat.member.joined` / `chat.member.left`. A public conversation is
 open-join; a private one admits only a profile holding a pending **invitation** (issued by an
 owner/admin, consumed by the join, 7-day TTL). A non-invited joiner is refused as if the conversation
-did not exist (`CHT-1009`, rendered like `CHT-1001`).
+did not exist (`CHT-1009`, rendered like `CHT-1001`). The same concealment applies to every other RPC
+an outsider aims at a private conversation, so none of them can probe for its existence.
 
 ---
 

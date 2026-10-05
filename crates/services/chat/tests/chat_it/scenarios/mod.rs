@@ -7,3 +7,4 @@ mod stream_leak_raii;
 mod visibility_teardown;
 mod presence_settings;
 mod private_join;
+mod private_concealment;

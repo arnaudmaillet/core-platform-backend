@@ -3,7 +3,10 @@ use std::sync::Arc;
 use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::port::{EventPublisher, MemberRepository, MessageRepository};
+use crate::application::access::deny_non_member;
+use crate::application::port::{
+    ConversationRepository, EventPublisher, MemberRepository, MessageRepository,
+};
 use crate::domain::aggregate::Message;
 use crate::domain::event::{MessageEvent, MessageSentEvent};
 use crate::domain::value_object::{
@@ -16,7 +19,9 @@ use crate::error::ChatError;
 /// The member write path is intentionally lean: a single authorization read
 /// (roster membership) followed by the durable write and the fan-out event. The
 /// conversation aggregate is not loaded here — membership implies existence — to
-/// keep the hot write path to one read + one write.
+/// keep the hot write path to one read + one write. Only a **rejected** sender
+/// costs a conversation read, to answer like a missing conversation when it is
+/// private (see [`deny_non_member`]).
 pub struct SendMessageCommand {
     pub message_id:      String,
     pub conversation_id: String,
@@ -49,14 +54,16 @@ impl Validate for SendMessageCommand {
     }
 }
 
-pub struct SendMessageHandler<MR, MSG, EP> {
-    pub member_repo:  Arc<MR>,
-    pub message_repo: Arc<MSG>,
-    pub publisher:    Arc<EP>,
+pub struct SendMessageHandler<CR, MR, MSG, EP> {
+    pub conversation_repo: Arc<CR>,
+    pub member_repo:       Arc<MR>,
+    pub message_repo:      Arc<MSG>,
+    pub publisher:         Arc<EP>,
 }
 
-impl<MR, MSG, EP> CommandHandler<SendMessageCommand> for SendMessageHandler<MR, MSG, EP>
+impl<CR, MR, MSG, EP> CommandHandler<SendMessageCommand> for SendMessageHandler<CR, MR, MSG, EP>
 where
+    CR:  ConversationRepository,
     MR:  MemberRepository,
     MSG: MessageRepository,
     EP:  EventPublisher,
@@ -73,14 +80,9 @@ where
 
         // Authorization: only roster members may write. Audience roles are never
         // in the roster, so this single read enforces read-only for guests.
-        let member = self
-            .member_repo
-            .find(&conversation_id, &sender_id)
-            .await?
-            .ok_or_else(|| ChatError::NotAMember {
-                profile_id:      sender_id.as_str(),
-                conversation_id: conversation_id.as_str(),
-            })?;
+        let Some(member) = self.member_repo.find(&conversation_id, &sender_id).await? else {
+            return Err(deny_non_member(&*self.conversation_repo, &conversation_id, sender_id).await);
+        };
 
         if !member.can_write() {
             return Err(ChatError::NotAuthorized {
@@ -123,5 +125,70 @@ where
         self.publisher.publish_message(&event).await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::command::fakes::{
+        FakeConversations, FakeMembers, FakeMessages, FakePublisher, Fixture,
+    };
+
+    async fn send(
+        f: &Fixture,
+        conversation_id: ConversationId,
+        sender: ProfileId,
+        messages: &Arc<FakeMessages>,
+    ) -> Result<(), ChatError> {
+        let handler: SendMessageHandler<FakeConversations, FakeMembers, FakeMessages, FakePublisher> =
+            SendMessageHandler {
+                conversation_repo: Arc::clone(&f.conversations),
+                member_repo:       Arc::clone(&f.members),
+                message_repo:      Arc::clone(messages),
+                publisher:         Arc::clone(&f.publisher),
+            };
+        handler
+            .handle(Envelope::new(uuid::Uuid::now_v7(), SendMessageCommand {
+                message_id:      MessageId::new().as_str(),
+                conversation_id: conversation_id.as_str(),
+                sender_id:       sender.as_str(),
+                content_type:    ContentType::Text.as_tinyint() as i32,
+                body:            "hello".to_owned(),
+                media_ref:       None,
+                reply_to:        None,
+            }))
+            .await
+    }
+
+    #[tokio::test]
+    async fn outsider_of_a_private_conversation_answers_like_a_missing_one() {
+        let f = Fixture::private_group();
+        let messages = Arc::default();
+        let outsider = Fixture::profile();
+
+        let err = send(&f, f.conversation_id, outsider, &messages).await.unwrap_err();
+        assert!(matches!(err, ChatError::ConversationConcealed { .. }), "{err:?}");
+
+        let err = send(&f, ConversationId::new(), outsider, &messages).await.unwrap_err();
+        assert!(matches!(err, ChatError::ConversationNotFound { .. }), "{err:?}");
+        assert_eq!(messages.inserts(), 0);
+    }
+
+    #[tokio::test]
+    async fn outsider_of_a_public_conversation_is_not_a_member() {
+        let f = Fixture::public_group();
+        let messages = Arc::default();
+        let err = send(&f, f.conversation_id, Fixture::profile(), &messages).await.unwrap_err();
+        assert!(matches!(err, ChatError::NotAMember { .. }), "{err:?}");
+        assert_eq!(messages.inserts(), 0);
+    }
+
+    #[tokio::test]
+    async fn member_sends() {
+        let f = Fixture::private_group();
+        let messages = Arc::default();
+        send(&f, f.conversation_id, f.owner, &messages).await.unwrap();
+        assert_eq!(messages.inserts(), 1);
     }
 }
