@@ -165,6 +165,7 @@ mod tests {
             grant: AuthnGrant::Password { username: "user".into(), password: "old-password".into() },
             device: DeviceFingerprint::default(),
             guest_refresh_token: None,
+            client_ip: None,
         };
         fx.login_handler().handle(Envelope::new(Uuid::now_v7(), cmd), t0()).await.unwrap()
     }

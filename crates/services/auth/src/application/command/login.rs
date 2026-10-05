@@ -26,6 +26,9 @@ pub struct LoginCommand {
     pub device: DeviceFingerprint,
     /// The guest session this device was using: it ends on success.
     pub guest_refresh_token: Option<String>,
+    /// The caller's address as the transport saw it — what code lockouts key
+    /// on. Never the client-written `device` IP.
+    pub client_ip: Option<String>,
 }
 
 impl Validate for LoginCommand {
@@ -185,7 +188,7 @@ impl LoginHandler {
                     .codes
                     .as_ref()
                     .ok_or_else(|| AuthError::VerificationChannelUnavailable { channel: "email".into() })?;
-                let proven = codes.verify(&challenge_id, &code, cmd.device.ip_address()).await?;
+                let proven = codes.verify(&challenge_id, &code, cmd.client_ip.as_deref()).await?;
                 let issuer = match proven.channel {
                     VerificationChannel::Email => EMAIL_CODE_ISSUER,
                     VerificationChannel::Sms => PHONE_CODE_ISSUER,
@@ -278,6 +281,7 @@ mod tests {
                 },
                 device: DeviceFingerprint::default(),
                 guest_refresh_token: None,
+                client_ip: None,
             },
         )
     }
@@ -386,6 +390,7 @@ mod tests {
                 },
                 device: DeviceFingerprint::default(),
                 guest_refresh_token: None,
+                client_ip: None,
             },
         );
         let err = fx.login_handler().handle(env, t0()).await.unwrap_err();

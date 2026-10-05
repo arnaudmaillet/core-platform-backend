@@ -183,8 +183,9 @@ impl AuthServiceHandler {
                 analytics: consent.analytics,
             },
             home_country: Some(req.home_country).filter(|c| !c.is_empty()),
-            device: device_from_proto(req.device, client_ip),
+            device: device_from_proto(req.device, client_ip.clone()),
             guest_refresh_token: Some(req.guest_refresh_token).filter(|t| !t.is_empty()),
+            client_ip,
         };
         let outcome = handler
             .handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now())
@@ -296,8 +297,9 @@ impl AuthServiceHandler {
         let grant = grant_from_proto(req.credential)?;
         let cmd = LoginCommand {
             grant,
-            device: device_from_proto(req.device, client_ip),
+            device: device_from_proto(req.device, client_ip.clone()),
             guest_refresh_token: Some(req.guest_refresh_token).filter(|t| !t.is_empty()),
+            client_ip,
         };
 
         let issued = self

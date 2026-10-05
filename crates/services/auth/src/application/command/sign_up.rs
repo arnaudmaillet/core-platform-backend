@@ -65,6 +65,9 @@ pub struct SignUpCommand {
     pub home_country:        Option<String>,
     pub device:              DeviceFingerprint,
     pub guest_refresh_token: Option<String>,
+    /// The caller's address as the transport saw it — what code lockouts key
+    /// on. Never the client-written `device` IP.
+    pub client_ip: Option<String>,
 }
 
 impl Validate for SignUpCommand {
@@ -216,7 +219,7 @@ impl SignUpHandler {
         let correlation_id = envelope.correlation_id;
 
         // 1. Who this is: per the provider, or per the code sent to the address.
-        let identity = self.prove(&cmd.credential, cmd.device.ip_address()).await?;
+        let identity = self.prove(&cmd.credential, cmd.client_ip.as_deref()).await?;
         let subject = identity.subject.clone();
 
         // 2. This very identity already has an account: sign in instead.
@@ -396,6 +399,7 @@ mod tests {
             home_country: Some("fr".into()),
             device: DeviceFingerprint::default(),
             guest_refresh_token: guest,
+            client_ip: None,
         })
     }
 
@@ -546,6 +550,7 @@ mod tests {
                 },
                 device: DeviceFingerprint::default(),
                 guest_refresh_token: guest,
+                client_ip: None,
             })
         };
         let handler = fx.login_handler().with_federated(Arc::clone(&verifier) as _, Arc::clone(&fx.guests) as _);
@@ -625,6 +630,7 @@ mod tests {
                     grant: AuthnGrant::Code { challenge_id: next.challenge_id, code },
                     device: DeviceFingerprint::default(),
                     guest_refresh_token: None,
+                    client_ip: None,
                 }),
                 t0(),
             )
@@ -641,6 +647,7 @@ mod tests {
                     grant: AuthnGrant::Code { challenge_id: stranger.challenge_id, code },
                     device: DeviceFingerprint::default(),
                     guest_refresh_token: None,
+                    client_ip: None,
                 }),
                 t0(),
             )
