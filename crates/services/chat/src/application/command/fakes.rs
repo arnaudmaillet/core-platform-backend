@@ -1,6 +1,7 @@
 //! In-memory port fakes for the command-handler unit tests (no Scylla/Kafka).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -111,11 +112,16 @@ impl MemberRepository for FakeMembers {
 }
 
 #[derive(Default)]
-pub struct FakeInvitations(Mutex<HashMap<(ConversationId, ProfileId), Invitation>>);
+pub struct FakeInvitations(Mutex<HashMap<(ConversationId, ProfileId), Invitation>>, AtomicBool);
 
 impl FakeInvitations {
     pub fn has(&self, c: &ConversationId, p: &ProfileId) -> bool {
         self.0.lock().unwrap().contains_key(&(*c, *p))
+    }
+
+    /// Makes every subsequent `delete` fail (storage fault on consume).
+    pub fn fail_deletes(&self) {
+        self.1.store(true, Ordering::SeqCst);
     }
 }
 
@@ -131,6 +137,12 @@ impl InvitationRepository for FakeInvitations {
     }
 
     async fn delete(&self, c: &ConversationId, p: &ProfileId) -> Result<(), ChatError> {
+        if self.1.load(Ordering::SeqCst) {
+            return Err(ChatError::DomainViolation {
+                field:   "invitation.delete".to_owned(),
+                message: "injected fault".to_owned(),
+            });
+        }
         self.0.lock().unwrap().remove(&(*c, *p));
         Ok(())
     }

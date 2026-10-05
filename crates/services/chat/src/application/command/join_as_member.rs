@@ -90,11 +90,19 @@ where
         self.member_repo.insert(&conversation_id, &participant).await?;
         self.conversation_repo.update(&conversation).await?;
 
-        // Consume the invitation only once the member row is durable. If this
-        // delete fails the join still stands (a retry answers AlreadyMember) and
-        // the leftover row ages out with the table TTL.
-        if invitation.is_some() {
-            self.invitation_repo.delete(&conversation_id, &profile_id).await?;
+        // Consume the invitation only once the member row is durable. Best
+        // effort: the join already stands (a retry answers AlreadyMember), so a
+        // failed delete must not abort before MemberJoined is published — the
+        // leftover row ages out with the table TTL.
+        if invitation.is_some()
+            && let Err(e) = self.invitation_repo.delete(&conversation_id, &profile_id).await
+        {
+            tracing::warn!(
+                conversation_id = %conversation_id.as_str(),
+                profile_id      = %profile_id.as_str(),
+                error           = %e,
+                "invitation not consumed after join; it will expire with the table TTL",
+            );
         }
 
         for event in conversation.take_events() {
@@ -186,6 +194,19 @@ mod tests {
         f.members.remove(&f.conversation_id, &invitee);
         let err = handler(&f).handle(join(&f.conversation_id, invitee)).await.unwrap_err();
         assert!(matches!(err, ChatError::ConversationConcealed { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_invitation_delete_still_publishes_member_joined() {
+        let f = Fixture::private_group();
+        let invitee = Fixture::profile();
+        f.invite(invitee);
+        f.invitations.fail_deletes();
+
+        handler(&f).handle(join(&f.conversation_id, invitee)).await.unwrap();
+
+        assert!(f.members.has(&f.conversation_id, &invitee));
+        assert_eq!(f.publisher.count(), 1, "MemberJoined must not be lost to a failed delete");
     }
 
     #[tokio::test]
