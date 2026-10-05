@@ -26,7 +26,8 @@ use crate::application::command::record_share::{RecordShareCommand, RecordShareH
 use crate::application::command::record_view::{RecordViewCommand, RecordViewHandler};
 use crate::application::command::remove_reaction::{RemoveReactionCommand, RemoveReactionHandler};
 use crate::application::command::upsert_reaction::{UpsertReactionCommand, UpsertReactionHandler};
-use crate::application::port::{EngagementEventPublisher, ScoreStore};
+use crate::application::port::{EngagementEventPublisher, ReactionLedger, ScoreStore};
+use crate::application::query::list_reactions_by_profile::{ListReactionsByProfileHandler, ListReactionsByProfileQuery};
 use crate::application::query::get_post_engagement::{
     GetPostEngagementHandler, GetPostEngagementQuery,
 };
@@ -59,6 +60,9 @@ pub struct App {
     /// readiness loop can probe it (see [`crate::service`]). ScyllaDB is only the
     /// async write-behind ledger and is not part of the serving readiness gate.
     pub redis:       RedisClient,
+    /// The durable ledger when the write-behind path is on, for the opt-in
+    /// profile-index backfill (#653).
+    pub ledger:      Option<Arc<ScyllaReactionLedger>>,
 }
 
 impl App {
@@ -76,6 +80,15 @@ impl App {
         let dirty_tracker = DirtyPostTracker::new();
         let score_store =
             Arc::new(RedisScoreStore::new(redis_client.clone(), dirty_tracker.clone()));
+
+        // ── Durable ledger (with the write-behind path only) ─────────────────
+        let ledger = match &kafka {
+            Some(_) => {
+                let scylla_client = Arc::new(ScyllaSessionBuilder::new(scylla).build().await?);
+                Some(Arc::new(ScyllaReactionLedger::new(scylla_client)))
+            }
+            None => None,
+        };
 
         // ── CQRS buses ───────────────────────────────────────────────────────
         let command_bus = Arc::new(
@@ -100,6 +113,9 @@ impl App {
 
         let query_bus = Arc::new(
             QueryBusBuilder::new()
+                .register::<ListReactionsByProfileQuery, _>(ListReactionsByProfileHandler {
+                    ledger: ledger.clone().map(|l| l as Arc<dyn ReactionLedger>),
+                })?
                 .register::<GetPostEngagementQuery, _>(GetPostEngagementHandler {
                     score_store: Arc::clone(&score_store),
                 })?
@@ -107,9 +123,7 @@ impl App {
         );
 
         // ── Write-behind workers (Kafka path) ────────────────────────────────
-        if let Some(kafka_client) = kafka {
-            let scylla_client = Arc::new(ScyllaSessionBuilder::new(scylla).build().await?);
-            let ledger = Arc::new(ScyllaReactionLedger::new(scylla_client));
+        if let (Some(kafka_client), Some(ledger)) = (kafka, ledger.clone()) {
 
             tokio::spawn(
                 ReactionWriteBehindWorker::new(
@@ -144,6 +158,7 @@ impl App {
             query_bus,
             score_store: score_store as Arc<dyn ScoreStore>,
             redis: redis_client,
+            ledger,
         })
     }
 }

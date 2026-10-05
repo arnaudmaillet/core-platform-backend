@@ -36,6 +36,11 @@ pub enum EngagementError {
     #[error("counter flush failed for post {post_id}: {message}")]
     CounterFlushFailed { post_id: String, message: String },
 
+    /// The durable ledger (ScyllaDB) is not wired: this instance runs without
+    /// the write-behind path.
+    #[error("the reaction ledger is unavailable on this instance")]
+    LedgerUnavailable,
+
     // ── ENG-9xxx: ID parsing / domain violations ──────────────────────────────
     #[error("invalid post ID: '{0}'")]
     InvalidPostId(String),
@@ -63,6 +68,7 @@ impl AppError for EngagementError {
 
             Self::ScriptReturnInvalid         => "ENG-5001",
             Self::CounterFlushFailed { .. }   => "ENG-5002",
+            Self::LedgerUnavailable           => "ENG-5003",
 
             Self::InvalidPostId(_)            => "ENG-9001",
             Self::InvalidProfileId(_)         => "ENG-9002",
@@ -87,6 +93,8 @@ impl AppError for EngagementError {
             Self::EventPublishFailed { .. }
             | Self::ScriptReturnInvalid
             | Self::CounterFlushFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+
+            Self::LedgerUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -97,7 +105,8 @@ impl AppError for EngagementError {
 
             Self::EventPublishFailed { .. }
             | Self::ScriptReturnInvalid
-            | Self::CounterFlushFailed { .. } => Severity::High,
+            | Self::CounterFlushFailed { .. }
+            | Self::LedgerUnavailable => Severity::High,
 
             Self::Validation(e) => e.severity(),
 
@@ -134,7 +143,8 @@ impl AppError for EngagementError {
             | Self::Redis(_)
             | Self::EventPublishFailed { .. }
             | Self::ScriptReturnInvalid
-            | Self::CounterFlushFailed { .. } =>
+            | Self::CounterFlushFailed { .. }
+            | Self::LedgerUnavailable =>
                 "An internal error occurred. Please try again later.",
 
             Self::ReactionNotFound { .. } =>

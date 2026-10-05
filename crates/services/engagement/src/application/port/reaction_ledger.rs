@@ -4,6 +4,14 @@ use crate::domain::value_object::{PostId, ProfileId, ReactionKind};
 use crate::error::EngagementError;
 use crate::infrastructure::persistence::model::ReactionRow;
 
+/// One reaction of a profile (#653).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileReaction {
+    pub post_id:        PostId,
+    pub kind:           ReactionKind,
+    pub reacted_at_ms:  i64,
+}
+
 /// Port for the ScyllaDB durable reaction ledger.
 ///
 /// Write operations are called exclusively from background workers (not on the
@@ -27,6 +35,20 @@ pub trait ReactionLedger: Send + Sync + 'static {
         post_id:    &PostId,
         profile_id: &ProfileId,
     ) -> Result<(), EngagementError>;
+
+    /// A profile's reactions, by post id (#653: the GDPR export), from
+    /// `reactions_by_profile`: up to `limit` after the post `after`.
+    async fn list_by_profile(
+        &self,
+        profile_id: &ProfileId,
+        limit:      i32,
+        after:      Option<&PostId>,
+    ) -> Result<Vec<ProfileReaction>, EngagementError>;
+
+    /// Indexes every reaction of `post_reactions` by its profile (reactions
+    /// from before `reactions_by_profile` existed). Idempotent; returns the
+    /// rows written.
+    async fn backfill_profile_index(&self) -> Result<u64, EngagementError>;
 
     /// Scans all reactions for `post_id`. Used during cold-start Redis reconstruction.
     async fn scan_for_recovery(

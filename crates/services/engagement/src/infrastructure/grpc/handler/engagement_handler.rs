@@ -10,8 +10,9 @@ use crate::application::command::{
     remove_reaction::RemoveReactionCommand,
     upsert_reaction::UpsertReactionCommand,
 };
-use crate::application::port::PostEngagementSnapshot;
+use crate::application::port::{PostEngagementSnapshot, ProfileReaction};
 use crate::application::query::get_post_engagement::GetPostEngagementQuery;
+use crate::application::query::list_reactions_by_profile::ListReactionsByProfileQuery;
 use crate::domain::value_object::ReactionKind;
 
 // ── Proto inclusion ───────────────────────────────────────────────────────────
@@ -120,6 +121,40 @@ where
 
         Ok(Response::new(snapshot_to_proto(req.post_id, snapshot)))
     }
+
+    /// Mesh only (#653): a profile's reactions for the GDPR export.
+    pub async fn list_reactions_by_profile(
+        &self,
+        request: Request<proto::ListReactionsByProfileRequest>,
+    ) -> Result<Response<proto::ListReactionsByProfileResponse>, Status> {
+        let req = request.into_inner();
+        let limit = req.limit.clamp(1, 500);
+        let query = ListReactionsByProfileQuery {
+            profile_id: req.profile_id,
+            limit,
+            after:      Some(req.page_token).filter(|t| !t.is_empty()),
+        };
+        let reactions: Vec<ProfileReaction> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        let next_page_token = match reactions.last() {
+            Some(last) if reactions.len() == limit as usize => last.post_id.as_str(),
+            _ => String::new(),
+        };
+        Ok(Response::new(proto::ListReactionsByProfileResponse {
+            reactions: reactions
+                .into_iter()
+                .map(|r| proto::ProfileReactionView {
+                    post_id:       r.post_id.as_str(),
+                    kind:          kind_to_proto(r.kind),
+                    reacted_at_ms: r.reacted_at_ms,
+                })
+                .collect(),
+            next_page_token,
+        }))
+    }
 }
 
 // ── Proto trait implementation ────────────────────────────────────────────────
@@ -130,6 +165,13 @@ where
     CB: CommandBus + Send + Sync + 'static,
     QB: QueryBus + Send + Sync + 'static,
 {
+    async fn list_reactions_by_profile(
+        &self,
+        request: Request<proto::ListReactionsByProfileRequest>,
+    ) -> Result<Response<proto::ListReactionsByProfileResponse>, Status> {
+        self.list_reactions_by_profile(request).await
+    }
+
     async fn upsert_reaction(
         &self,
         request: Request<proto::UpsertReactionRequest>,
