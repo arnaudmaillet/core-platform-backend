@@ -27,14 +27,17 @@ use crate::application::port::{
 };
 use crate::error::AuthError;
 
-/// Code lifetime, attempts, the per-address send budget, and the per-address
-/// failure ceiling.
+/// Code lifetime, attempts, the per-address send budget, and the failure
+/// ceilings.
 ///
-/// The ceiling bounds online guessing against one address: with 5 sends an hour
+/// The ceilings bound online guessing against one address: with 5 sends an hour
 /// and 5 tries a code, an attacker would otherwise get 25 guesses an hour on a
-/// million codes, every hour. After `max_failures` wrong codes within
-/// `failure_window` (across challenges), the address gets no new code and even
-/// a right one is refused until the window ends.
+/// million codes, every hour. Wrong codes count per address **and client IP**:
+/// after `max_failures_per_ip` within `failure_window` (across challenges), that
+/// IP gets no new code for the address and even a right one is refused — the
+/// guesser locks itself out, not the owner on another network. Only
+/// `max_failures` wrong codes for the address from anywhere (a distributed
+/// attack) lock it for everyone.
 ///
 /// SMS also needs the number's country in `sms_countries` (ISO 3166-1 alpha-2)
 /// and room in two budgets per UTC day: `sms_country_daily_budget` for that
@@ -48,6 +51,7 @@ pub struct VerificationPolicy {
     pub per_day:          u32,
     pub resend:           Duration,
     pub max_failures:     u32,
+    pub max_failures_per_ip: u32,
     pub failure_window:   Duration,
     pub sms_countries:    BTreeSet<String>,
     pub sms_daily_budget: u32,
@@ -85,7 +89,8 @@ impl Default for VerificationPolicy {
             per_hour: 5,
             per_day: 20,
             resend: Duration::seconds(30),
-            max_failures: 15,
+            max_failures: 50,
+            max_failures_per_ip: 15,
             failure_window: Duration::hours(24),
             sms_countries: SMS_LAUNCH_COUNTRIES.iter().map(|c| (*c).to_owned()).collect(),
             sms_daily_budget: DEFAULT_SMS_DAILY_BUDGET,
@@ -99,6 +104,9 @@ pub struct StartVerificationCommand {
     pub channel:     VerificationChannel,
     pub destination: String,
     pub locale:      Option<String>,
+    /// The caller's address as the transport saw it (never a request field);
+    /// `None` when unknown.
+    pub client_ip:   Option<String>,
 }
 
 impl Validate for StartVerificationCommand {
@@ -186,6 +194,17 @@ fn destination_key(channel: VerificationChannel, destination: &str) -> String {
         .collect()
 }
 
+/// The failure-count key of an address seen from one client IP (hashed; an
+/// unknown IP is its own bucket).
+fn ip_failure_key(destination_key: &str, client_ip: Option<&str>) -> String {
+    let ip: String = Sha256::digest(client_ip.unwrap_or("unknown").as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("{destination_key}:{ip}")
+}
+
 /// Sends and checks one-time codes.
 pub struct VerificationCodes {
     store:  Arc<dyn VerificationStore>,
@@ -222,10 +241,10 @@ impl VerificationCodes {
         };
 
         let key = destination_key(cmd.channel, &destination);
-        // A locked address gets no new code until its failure window ends.
-        let (failures, window_left) = self.store.failures(&key).await?;
-        if failures >= self.policy.max_failures {
-            return Err(AuthError::VerificationRateLimited { retry_after_secs: window_left.max(1) });
+        // A locked address (from everywhere, or from this IP) gets no new code
+        // until its failure window ends.
+        if let Some(retry_after_secs) = self.locked(&key, cmd.client_ip.as_deref()).await? {
+            return Err(AuthError::VerificationRateLimited { retry_after_secs });
         }
         let limits =
             SendLimits { per_hour: self.policy.per_hour, per_day: self.policy.per_day, resend: self.policy.resend };
@@ -286,26 +305,47 @@ impl VerificationCodes {
         })
     }
 
+    /// Seconds until `key` is unlocked for `client_ip`, if it is locked: for
+    /// everyone (`max_failures`), or for that IP (`max_failures_per_ip`).
+    async fn locked(&self, key: &str, client_ip: Option<&str>) -> Result<Option<i64>, AuthError> {
+        let (failures, window_left) = self.store.failures(key).await?;
+        if failures >= self.policy.max_failures {
+            return Ok(Some(window_left.max(1)));
+        }
+        let (from_ip, window_left) = self.store.failures(&ip_failure_key(key, client_ip)).await?;
+        Ok((from_ip >= self.policy.max_failures_per_ip).then_some(window_left.max(1)))
+    }
+
     /// The address a code proves, consuming the challenge. Any failure is the
     /// same [`AuthError::VerificationCodeInvalid`]; a wrong code counts against
-    /// the address, and a locked address is refused even with the right code.
-    pub async fn verify(&self, challenge_id: &str, code: &str) -> Result<VerifiedDestination, AuthError> {
+    /// the address and against it from `client_ip`, and a locked address is
+    /// refused even with the right code.
+    pub async fn verify(
+        &self,
+        challenge_id: &str,
+        code: &str,
+        client_ip: Option<&str>,
+    ) -> Result<VerifiedDestination, AuthError> {
         if challenge_id.trim().is_empty() || code.trim().is_empty() {
             return Err(AuthError::VerificationCodeInvalid);
         }
         match self.store.consume(challenge_id.trim(), &code_hash(challenge_id.trim(), code)).await? {
             ConsumeOutcome::Verified { destination, destination_key } => {
-                let (failures, _) = self.store.failures(&destination_key).await?;
-                if failures >= self.policy.max_failures {
+                if self.locked(&destination_key, client_ip).await?.is_some() {
                     tracing::warn!("a right code for a locked address was refused");
                     return Err(AuthError::VerificationCodeInvalid);
                 }
                 Ok(destination)
             }
             ConsumeOutcome::Miss { destination_key } => {
-                let failures = self.store.record_failure(&destination_key, self.policy.failure_window).await?;
+                let window = self.policy.failure_window;
+                let from_ip = self.store.record_failure(&ip_failure_key(&destination_key, client_ip), window).await?;
+                let failures = self.store.record_failure(&destination_key, window).await?;
+                if from_ip == self.policy.max_failures_per_ip {
+                    tracing::warn!("an address reached its code failure ceiling from one IP: locked for that IP");
+                }
                 if failures == self.policy.max_failures {
-                    tracing::warn!("an address reached its code failure ceiling and is locked");
+                    tracing::warn!("an address reached its code failure ceiling from everywhere: locked for everyone");
                 }
                 Err(AuthError::VerificationCodeInvalid)
             }
@@ -320,7 +360,7 @@ mod tests {
     use crate::application::fakes::{InMemoryVerificationStore, RecordingCodeSender};
 
     fn codes(sender: Arc<RecordingCodeSender>, store: Arc<InMemoryVerificationStore>) -> VerificationCodes {
-        VerificationCodes::new(store, sender, VerificationPolicy { per_hour: 2, max_failures: 7, ..VerificationPolicy::default() })
+        VerificationCodes::new(store, sender, VerificationPolicy { per_hour: 2, max_failures: 7, max_failures_per_ip: 7, ..VerificationPolicy::default() })
     }
 
     fn email(destination: &str) -> StartVerificationCommand {
@@ -328,11 +368,12 @@ mod tests {
             channel: VerificationChannel::Email,
             destination: destination.into(),
             locale: Some("fr-FR".into()),
+            client_ip: None,
         }
     }
 
     fn sms(destination: &str) -> StartVerificationCommand {
-        StartVerificationCommand { channel: VerificationChannel::Sms, destination: destination.into(), locale: None }
+        StartVerificationCommand { channel: VerificationChannel::Sms, destination: destination.into(), locale: None, client_ip: None }
     }
 
     #[test]
@@ -440,11 +481,11 @@ mod tests {
         assert_eq!(code.len(), 6);
         assert_eq!(locale.as_deref(), Some("fr-FR"));
 
-        assert!(matches!(codes.verify(&started.challenge_id, "000000x").await, Err(AuthError::VerificationCodeInvalid)));
-        let proven = codes.verify(&started.challenge_id, &code).await.unwrap();
+        assert!(matches!(codes.verify(&started.challenge_id, "000000x", None).await, Err(AuthError::VerificationCodeInvalid)));
+        let proven = codes.verify(&started.challenge_id, &code, None).await.unwrap();
         assert_eq!(proven.destination, "ada@example.com");
         // Single use.
-        assert!(matches!(codes.verify(&started.challenge_id, &code).await, Err(AuthError::VerificationCodeInvalid)));
+        assert!(matches!(codes.verify(&started.challenge_id, &code, None).await, Err(AuthError::VerificationCodeInvalid)));
     }
 
     #[tokio::test]
@@ -455,9 +496,9 @@ mod tests {
         let (_, code, _) = sender.last().unwrap();
         let wrong = if code == "000000" { "111111" } else { "000000" };
         for _ in 0..5 {
-            assert!(codes.verify(&started.challenge_id, wrong).await.is_err());
+            assert!(codes.verify(&started.challenge_id, wrong, None).await.is_err());
         }
-        assert!(matches!(codes.verify(&started.challenge_id, &code).await, Err(AuthError::VerificationCodeInvalid)));
+        assert!(matches!(codes.verify(&started.challenge_id, &code, None).await, Err(AuthError::VerificationCodeInvalid)));
     }
 
     #[tokio::test]
@@ -488,27 +529,66 @@ mod tests {
         let codes = VerificationCodes::new(
             Arc::clone(&store) as _,
             Arc::clone(&sender) as _,
-            VerificationPolicy { per_hour: 10, max_failures: 7, ..VerificationPolicy::default() },
+            VerificationPolicy { per_hour: 10, max_failures: 7, max_failures_per_ip: 7, ..VerificationPolicy::default() },
         );
         // 5 wrong on the first challenge, 2 on the second: 7 = the ceiling.
         let first = codes.start(email("tim@example.com")).await.unwrap();
         let (_, code1, _) = sender.last().unwrap();
         let wrong = |c: &str| if c == "000000" { "111111".to_owned() } else { "000000".to_owned() };
         for _ in 0..5 {
-            let _ = codes.verify(&first.challenge_id, &wrong(&code1)).await;
+            let _ = codes.verify(&first.challenge_id, &wrong(&code1), None).await;
         }
         let second = codes.start(email("tim@example.com")).await.unwrap();
         let (_, code2, _) = sender.last().unwrap();
         for _ in 0..2 {
-            let _ = codes.verify(&second.challenge_id, &wrong(&code2)).await;
+            let _ = codes.verify(&second.challenge_id, &wrong(&code2), None).await;
         }
         // The right code is refused now, and no new code is sent.
-        assert!(matches!(codes.verify(&second.challenge_id, &code2).await, Err(AuthError::VerificationCodeInvalid)));
+        assert!(matches!(codes.verify(&second.challenge_id, &code2, None).await, Err(AuthError::VerificationCodeInvalid)));
         assert!(matches!(
             codes.start(email("tim@example.com")).await,
             Err(AuthError::VerificationRateLimited { .. })
         ));
         // Another address is unaffected.
         assert!(codes.start(email("una@example.com")).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_guesser_locks_itself_out_not_the_owner_until_the_address_wide_ceiling() {
+        let (sender, store) = (Arc::new(RecordingCodeSender::default()), Arc::new(InMemoryVerificationStore::default()));
+        let codes = VerificationCodes::new(
+            Arc::clone(&store) as _,
+            Arc::clone(&sender) as _,
+            VerificationPolicy { per_hour: 100, per_day: 100, max_failures: 8, max_failures_per_ip: 3, ..VerificationPolicy::default() },
+        );
+        let from = |ip: &str| StartVerificationCommand {
+            channel: VerificationChannel::Email,
+            destination: "owner@example.com".into(),
+            locale: None,
+            client_ip: Some(ip.into()),
+        };
+        let wrong = |c: &str| if c == "000000" { "111111".to_owned() } else { "000000".to_owned() };
+
+        // The attacker burns 3 wrong codes from its IP: locked out there.
+        let attack = codes.start(from("6.6.6.6")).await.unwrap();
+        let (_, code, _) = sender.last().unwrap();
+        for _ in 0..3 {
+            let _ = codes.verify(&attack.challenge_id, &wrong(&code), Some("6.6.6.6")).await;
+        }
+        assert!(matches!(codes.start(from("6.6.6.6")).await, Err(AuthError::VerificationRateLimited { .. })));
+
+        // The owner, on another network, still signs in.
+        let owner = codes.start(from("203.0.113.9")).await.unwrap();
+        let (_, code, _) = sender.last().unwrap();
+        assert!(codes.verify(&owner.challenge_id, &code, Some("203.0.113.9")).await.is_ok());
+
+        // A distributed attack (8 wrong codes from many IPs) locks it for everyone.
+        for n in 0..5 {
+            let ip = format!("198.51.100.{n}");
+            let c = codes.start(from(&ip)).await.unwrap();
+            let (_, code, _) = sender.last().unwrap();
+            let _ = codes.verify(&c.challenge_id, &wrong(&code), Some(&ip)).await;
+        }
+        assert!(matches!(codes.start(from("203.0.113.9")).await, Err(AuthError::VerificationRateLimited { .. })));
     }
 }

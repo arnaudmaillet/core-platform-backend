@@ -185,7 +185,7 @@ impl LoginHandler {
                     .codes
                     .as_ref()
                     .ok_or_else(|| AuthError::VerificationChannelUnavailable { channel: "email".into() })?;
-                let proven = codes.verify(&challenge_id, &code).await?;
+                let proven = codes.verify(&challenge_id, &code, cmd.device.ip_address()).await?;
                 let issuer = match proven.channel {
                     VerificationChannel::Email => EMAIL_CODE_ISSUER,
                     VerificationChannel::Sms => PHONE_CODE_ISSUER,

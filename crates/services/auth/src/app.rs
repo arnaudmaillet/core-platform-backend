@@ -331,7 +331,7 @@ impl App {
             policy: config.policy,
         };
 
-        Ok(App { handler: App::compose(deps), pool, redis, jwks_json, relay })
+        Ok(App { handler: App::compose(deps).with_trusted_proxy_hops(config.trusted_proxy_hops), pool, redis, jwks_json, relay })
     }
 }
 

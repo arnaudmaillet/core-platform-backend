@@ -31,7 +31,7 @@ impl Outbox {
 }
 
 fn start(to: &str) -> StartVerificationCommand {
-    StartVerificationCommand { channel: VerificationChannel::Email, destination: to.into(), locale: None }
+    StartVerificationCommand { channel: VerificationChannel::Email, destination: to.into(), locale: None, client_ip: None }
 }
 
 #[tokio::test]
@@ -41,16 +41,16 @@ async fn codes_prove_an_address_once_and_sends_are_budgeted() {
     let codes = VerificationCodes::new(
         Arc::new(RedisVerificationStore::new(h.redis.clone())),
         Arc::clone(&outbox) as _,
-        VerificationPolicy { per_hour: 3, resend: chrono::Duration::seconds(1), max_failures: 6, ..VerificationPolicy::default() },
+        VerificationPolicy { per_hour: 3, resend: chrono::Duration::seconds(1), max_failures: 6, max_failures_per_ip: 6, ..VerificationPolicy::default() },
     );
     let address = format!("it.{}@example.com", uuid::Uuid::now_v7().simple());
 
     // Right code once; then spent.
     let started = codes.start(start(&address)).await.unwrap();
     let code = outbox.last();
-    let proven = codes.verify(&started.challenge_id, &code).await.unwrap();
+    let proven = codes.verify(&started.challenge_id, &code, None).await.unwrap();
     assert_eq!(proven.destination, address);
-    assert!(matches!(codes.verify(&started.challenge_id, &code).await, Err(AuthError::VerificationCodeInvalid)));
+    assert!(matches!(codes.verify(&started.challenge_id, &code, None).await, Err(AuthError::VerificationCodeInvalid)));
 
     // Resend cooldown, then wrong codes burn the challenge (5 attempts).
     assert!(matches!(codes.start(start(&address)).await, Err(AuthError::VerificationRateLimited { .. })));
@@ -59,9 +59,9 @@ async fn codes_prove_an_address_once_and_sends_are_budgeted() {
     let code = outbox.last();
     let wrong = if code == "000000" { "111111" } else { "000000" };
     for _ in 0..5 {
-        assert!(codes.verify(&second.challenge_id, wrong).await.is_err());
+        assert!(codes.verify(&second.challenge_id, wrong, None).await.is_err());
     }
-    assert!(matches!(codes.verify(&second.challenge_id, &code).await, Err(AuthError::VerificationCodeInvalid)));
+    assert!(matches!(codes.verify(&second.challenge_id, &code, None).await, Err(AuthError::VerificationCodeInvalid)));
 
     // The hourly budget (3): the third send is the last one.
     tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
@@ -77,14 +77,14 @@ async fn codes_prove_an_address_once_and_sends_are_budgeted() {
     let code = outbox.last();
     let wrong = if code == "000000" { "111111" } else { "000000" };
     for _ in 0..5 {
-        let _ = codes.verify(&third.challenge_id, wrong).await;
+        let _ = codes.verify(&third.challenge_id, wrong, None).await;
     }
     tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
     let fourth = codes.start(start(&locked)).await.unwrap();
     let code = outbox.last();
     let wrong = if code == "000000" { "111111" } else { "000000" };
-    let _ = codes.verify(&fourth.challenge_id, wrong).await; // the 6th failure
-    assert!(matches!(codes.verify(&fourth.challenge_id, &code).await, Err(AuthError::VerificationCodeInvalid)), "a right code is refused once locked");
+    let _ = codes.verify(&fourth.challenge_id, wrong, None).await; // the 6th failure
+    assert!(matches!(codes.verify(&fourth.challenge_id, &code, None).await, Err(AuthError::VerificationCodeInvalid)), "a right code is refused once locked");
     tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
     assert!(matches!(codes.start(start(&locked)).await, Err(AuthError::VerificationRateLimited { retry_after_secs }) if retry_after_secs > 3_600));
 }
@@ -129,6 +129,7 @@ async fn sms_spend_a_country_budget_then_the_services_and_failures_are_refunded(
         channel: VerificationChannel::Sms,
         destination: "+33 6 12 34 56 78".into(),
         locale: None,
+        client_ip: None,
     };
     assert!(matches!(codes.start(sms).await, Err(AuthError::SmsBudgetExhausted)));
     assert!(outbox.0.lock().unwrap().is_empty());

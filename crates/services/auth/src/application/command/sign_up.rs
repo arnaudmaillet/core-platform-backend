@@ -165,7 +165,7 @@ impl SignUpHandler {
         self
     }
 
-    async fn prove(&self, credential: &SignUpCredential) -> Result<Proven, AuthError> {
+    async fn prove(&self, credential: &SignUpCredential, client_ip: Option<&str>) -> Result<Proven, AuthError> {
         match credential {
             SignUpCredential::IdToken { provider, id_token, nonce } => {
                 let identity = self.verifier.verify(*provider, id_token, nonce).await?;
@@ -183,7 +183,7 @@ impl SignUpHandler {
                     .codes
                     .as_ref()
                     .ok_or_else(|| AuthError::VerificationChannelUnavailable { channel: "email".into() })?;
-                let proven = codes.verify(challenge_id, code).await?;
+                let proven = codes.verify(challenge_id, code, client_ip).await?;
                 Ok(match proven.channel {
                     VerificationChannel::Email => Proven {
                         subject: IdpSubject::new(EMAIL_CODE_ISSUER, proven.destination.clone())?,
@@ -216,7 +216,7 @@ impl SignUpHandler {
         let correlation_id = envelope.correlation_id;
 
         // 1. Who this is: per the provider, or per the code sent to the address.
-        let identity = self.prove(&cmd.credential).await?;
+        let identity = self.prove(&cmd.credential, cmd.device.ip_address()).await?;
         let subject = identity.subject.clone();
 
         // 2. This very identity already has an account: sign in instead.
@@ -588,6 +588,7 @@ mod tests {
             channel: VerificationChannel::Email,
             destination: to.into(),
             locale: None,
+            client_ip: None,
         };
         let by_code = |challenge_id: String, code: String| {
             let mut env = sign_up("unused", adult_dob(), None);
@@ -667,6 +668,7 @@ mod tests {
             channel: VerificationChannel::Sms,
             destination: number.into(),
             locale: None,
+            client_ip: None,
         };
         let sign_up_with = |challenge_id: String, code: String| {
             let mut env = sign_up("unused", adult_dob(), None);
