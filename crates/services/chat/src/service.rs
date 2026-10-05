@@ -62,6 +62,7 @@ impl Service for ChatService {
         authenticated("/chat.v1.ChatService/RespondToMessageRequest"),
         authenticated("/chat.v1.ChatService/ToggleVisibility"),
         authenticated("/chat.v1.ChatService/JoinAsMember"),
+        authenticated("/chat.v1.ChatService/LeaveConversation"),
         authenticated("/chat.v1.ChatService/InviteMember"),
         authenticated("/chat.v1.ChatService/Subscribe"),
         authenticated("/chat.v1.ChatService/Unsubscribe"),
@@ -177,6 +178,7 @@ mod tests {
             "/chat.v1.ChatService/OpenDirectConversation",
             "/chat.v1.ChatService/RespondToMessageRequest",
             "/chat.v1.ChatService/ListInbox",
+            "/chat.v1.ChatService/LeaveConversation",
         ] {
             assert!(ChatService::EDGE_POLICY.iter().any(|rule| rule.method == method), "{method}");
         }
@@ -184,7 +186,8 @@ mod tests {
 
     #[test]
     fn listing_by_member_is_mesh_only() {
-        let method = "/chat.v1.ChatService/ListConversationsByMember";
-        assert!(ChatService::EDGE_POLICY.iter().all(|rule| rule.method != method));
+        for method in ["/chat.v1.ChatService/ListConversationsByMember", "/chat.v1.ChatService/GetFormerMemberHistory"] {
+            assert!(ChatService::EDGE_POLICY.iter().all(|rule| rule.method != method), "{method}");
+        }
     }
 }

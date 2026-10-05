@@ -4,7 +4,7 @@ pub mod list_inbox;
 pub mod list_members;
 pub mod list_subscriptions;
 
-pub use get_history::{GetHistoryHandler, GetHistoryQuery, MessagePage};
+pub use get_history::{FormerMemberHistoryQuery, GetHistoryHandler, GetHistoryQuery, MessagePage};
 pub use list_conversations_by_member::{ListConversationsByMemberHandler, ListConversationsByMemberQuery, MemberConversation};
 pub use list_inbox::{InboxItem, InboxPage, ListInboxHandler, ListInboxQuery};
 pub use list_members::{ListMembersHandler, ListMembersQuery, MemberView};

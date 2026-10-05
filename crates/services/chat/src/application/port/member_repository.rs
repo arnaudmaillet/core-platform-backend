@@ -40,15 +40,31 @@ pub trait MemberRepository: Send + Sync + 'static {
         conversation_id: &ConversationId,
     ) -> Result<Vec<Participant>, ChatError>;
 
-    /// Removes a participant from the roster.
+    /// `participant` leaves at `at` (#656): off the roster, its membership
+    /// kept with `left_at` (one logged batch).
+    async fn leave(
+        &self,
+        conversation_id: &ConversationId,
+        participant:     &Participant,
+        at:              chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), ChatError>;
+
+    /// `member_id`'s membership of `conversation_id`, current or ended.
+    async fn find_membership(
+        &self,
+        member_id:       &ProfileId,
+        conversation_id: &ConversationId,
+    ) -> Result<Option<Membership>, ChatError>;
+
+    /// Removes a participant from the roster, membership and all.
     async fn delete(
         &self,
         conversation_id: &ConversationId,
         member_id:       &ProfileId,
     ) -> Result<(), ChatError>;
 
-    /// The conversations `member_id` is a member of (#653: the GDPR export),
-    /// up to `limit` after the conversation `after`, by id.
+    /// The conversations `member_id` is or was a member of (#653: the GDPR
+    /// export), up to `limit` after the conversation `after`, by id.
     async fn list_by_member(
         &self,
         member_id: &ProfileId,
@@ -67,4 +83,6 @@ pub struct Membership {
     pub conversation_id: ConversationId,
     pub role:            Role,
     pub joined_at:       chrono::DateTime<chrono::Utc>,
+    /// When the profile left (#656); `None` while a member.
+    pub left_at:         Option<chrono::DateTime<chrono::Utc>>,
 }

@@ -40,7 +40,8 @@ impl MemberRepository for ScyllaMemberRepository {
              VALUES (?, ?, ?, ?, ?)",
         );
         batch.append_statement(
-            "INSERT INTO chat.conversations_by_member (member_id, conversation_id, role, joined_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO chat.conversations_by_member (member_id, conversation_id, role, joined_at, left_at) \
+             VALUES (?, ?, ?, ?, null)",
         );
         let values = (
             (
@@ -138,6 +139,49 @@ impl MemberRepository for ScyllaMemberRepository {
         rows.into_iter().map(participant_from_row).collect()
     }
 
+    async fn leave(
+        &self,
+        conversation_id: &ConversationId,
+        p:               &Participant,
+        at:              chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), ChatError> {
+        let mut batch = strict_batch(&self.client);
+        batch.append_statement("DELETE FROM chat.members_by_conversation WHERE conversation_id = ? AND member_id = ?");
+        batch.append_statement(
+            "INSERT INTO chat.conversations_by_member (member_id, conversation_id, role, joined_at, left_at) \
+             VALUES (?, ?, ?, ?, ?)",
+        );
+        let values = (
+            (conversation_id.as_uuid(), p.profile_id().as_uuid()),
+            (p.profile_id().as_uuid(), conversation_id.as_uuid(), p.role().as_tinyint(), to_cql(p.joined_at()), to_cql(at)),
+        );
+        self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn find_membership(
+        &self,
+        member_id:       &ProfileId,
+        conversation_id: &ConversationId,
+    ) -> Result<Option<Membership>, ChatError> {
+        let stmt = strict(
+            &self.client,
+            "SELECT conversation_id, role, joined_at, left_at FROM chat.conversations_by_member \
+             WHERE member_id = ? AND conversation_id = ?",
+        );
+        let row = self
+            .client
+            .session
+            .execute_unpaged(stmt, (member_id.as_uuid(), conversation_id.as_uuid()))
+            .await
+            .map_err(scylla_err)?
+            .into_rows_result()
+            .map_err(|e| row_err("member.find_membership:rows", e))?
+            .maybe_first_row::<MembershipRow>()
+            .map_err(|e| row_err("member.find_membership:deser", e))?;
+        row.map(membership_from_row).transpose()
+    }
+
     async fn delete(
         &self,
         conversation_id: &ConversationId,
@@ -163,7 +207,7 @@ impl MemberRepository for ScyllaMemberRepository {
             Some(after) => {
                 let stmt = fast(
                     &self.client,
-                    "SELECT conversation_id, role, joined_at FROM chat.conversations_by_member \
+                    "SELECT conversation_id, role, joined_at, left_at FROM chat.conversations_by_member \
                      WHERE member_id = ? AND conversation_id > ? LIMIT ?",
                 );
                 self.client.session.execute_unpaged(stmt, (member_id.as_uuid(), after.as_uuid(), limit)).await
@@ -171,7 +215,7 @@ impl MemberRepository for ScyllaMemberRepository {
             None => {
                 let stmt = fast(
                     &self.client,
-                    "SELECT conversation_id, role, joined_at FROM chat.conversations_by_member WHERE member_id = ? LIMIT ?",
+                    "SELECT conversation_id, role, joined_at, left_at FROM chat.conversations_by_member WHERE member_id = ? LIMIT ?",
                 );
                 self.client.session.execute_unpaged(stmt, (member_id.as_uuid(), limit)).await
             }
@@ -180,16 +224,9 @@ impl MemberRepository for ScyllaMemberRepository {
         result
             .into_rows_result()
             .map_err(|e| row_err("member.list_by_member:rows", e))?
-            .rows::<(uuid::Uuid, i8, scylla::value::CqlTimestamp)>()
+            .rows::<MembershipRow>()
             .map_err(|e| row_err("member.list_by_member:iter", e))?
-            .map(|row| {
-                let (conversation_id, role, joined_at) = row.map_err(|e| row_err("member.list_by_member:deser", e))?;
-                Ok(Membership {
-                    conversation_id: ConversationId::from_uuid(conversation_id),
-                    role: Role::try_from(role)?,
-                    joined_at: to_utc(joined_at),
-                })
-            })
+            .map(|row| membership_from_row(row.map_err(|e| row_err("member.list_by_member:deser", e))?))
             .collect()
     }
 
@@ -214,7 +251,8 @@ impl MemberRepository for ScyllaMemberRepository {
             for (conversation_id, member_id, role, joined_at) in rows {
                 let stmt = strict(
                     &self.client,
-                    "INSERT INTO chat.conversations_by_member (member_id, conversation_id, role, joined_at) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO chat.conversations_by_member (member_id, conversation_id, role, joined_at, left_at) \
+                     VALUES (?, ?, ?, ?, null)",
                 );
                 self.client
                     .session
@@ -233,6 +271,18 @@ impl MemberRepository for ScyllaMemberRepository {
 
 /// Rows per page when scanning the rosters to backfill the member index.
 const BACKFILL_PAGE_SIZE: i32 = 500;
+
+/// A `conversations_by_member` row: `(conversation_id, role, joined_at, left_at)`.
+type MembershipRow = (uuid::Uuid, i8, scylla::value::CqlTimestamp, Option<scylla::value::CqlTimestamp>);
+
+fn membership_from_row((conversation_id, role, joined_at, left_at): MembershipRow) -> Result<Membership, ChatError> {
+    Ok(Membership {
+        conversation_id: ConversationId::from_uuid(conversation_id),
+        role:            Role::try_from(role)?,
+        joined_at:       to_utc(joined_at),
+        left_at:         left_at.map(to_utc),
+    })
+}
 
 fn participant_from_row(row: MemberRow) -> Result<Participant, ChatError> {
     Ok(Participant::reconstitute(

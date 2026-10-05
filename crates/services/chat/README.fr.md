@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3a8aff3593db6a9a5f34196734c610ef8d86293352cc13caac6f7348ea453245
+  source_sha256: 3ded5c376782eb0af625c3c13539bbd9ae43cf560c22d033f3cb6aa1d0f33405
   translated_at: 2026-10-05
   status: complete
 ---
@@ -164,6 +164,7 @@ service ChatService {
   rpc RespondToMessageRequest (RespondToMessageRequestRequest) returns (CommandResponse);                // #656
   rpc ToggleVisibility   (ToggleVisibilityRequest)   returns (CommandResponse);
   rpc JoinAsMember       (JoinAsMemberRequest)       returns (CommandResponse); // private ⇒ invitation required
+  rpc LeaveConversation  (LeaveConversationRequest)  returns (CommandResponse); // #656: not the owner, not a DM
   rpc InviteMember       (InviteMemberRequest)       returns (CommandResponse); // owner/admin only
   rpc Subscribe          (SubscribeRequest)          returns (CommandResponse);
   rpc Unsubscribe        (UnsubscribeRequest)        returns (CommandResponse);
@@ -179,6 +180,7 @@ service ChatService {
   rpc ListSubscriptions (ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
   rpc ListInbox         (ListInboxRequest)         returns (ListInboxResponse);       // #656
   rpc ListConversationsByMember (ListConversationsByMemberRequest) returns (ListConversationsByMemberResponse); // mesh only
+  rpc GetFormerMemberHistory    (GetFormerMemberHistoryRequest)    returns (GetHistoryResponse);                // mesh only
   // Real-time streams
   rpc StreamConversation (StreamConversationRequest) returns (stream StreamConversationResponse); // members
   rpc StreamPublic       (StreamPublicRequest)       returns (stream StreamPublicResponse);       // audience
@@ -188,10 +190,20 @@ service ChatService {
 **Les conversations d'un profil (#653).** `ListConversationsByMember(member_id, limit, page_token)` est
 **mesh uniquement** (jamais sur l'edge) : l'export de données RGPD liste les conversations dont un profil
 est membre (id, rôle, joined_at, type ; paginé par id de conversation), puis lit l'historique de chacune en tant
-que ce membre (`GetHistory`). Elle lit `chat.conversations_by_member`, l'inverse du roster, écrite et
-supprimée avec `members_by_conversation` dans un même LOGGED BATCH. Les appartenances antérieures à cette
-table sont indexées par un backfill optionnel et idempotent au démarrage
-(`CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER=true`).
+que ce membre (`GetHistory`). Elle lit `chat.conversations_by_member`, l'inverse du roster, écrite avec
+`members_by_conversation` dans un même LOGGED BATCH. Les appartenances antérieures à cette table sont
+indexées par un backfill optionnel et idempotent au démarrage (`CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER=true`).
+
+**Quitter (#656).** `LeaveConversation(conversation_id, profile_id)` retire un membre du roster d'un groupe
+ou d'un canal et de sa boîte de réception (`MemberLeft`). Le propriétaire ne peut pas partir (`CHT-9004` :
+une conversation en a toujours un, et le transfert de propriété n'existe pas encore), et nul ne quitte une
+conversation directe. L'appartenance est **conservée** avec `left_at` (migration 0012 ; rejoindre l'efface),
+si bien que l'export liste encore les conversations qu'un profil a quittées (`MembershipView.left_at_ms`).
+Il les lit par `GetFormerMemberHistory(conversation_id, member_id)`, **mesh uniquement** :
+- les messages du membre en entier ;
+- ceux des autres réduits à leur date (`sender_id` vide, sans contenu), et ceux des autres qui sont
+  retenus pas du tout ;
+- pour un ancien membre, rien après son départ.
 
 > **Contrat de sérialisation / enum :** les valeurs d'enum proto sont **basées sur 0 et égales au
 > `tinyint` du domaine** (`CONVERSATION_KIND_GROUP=0`, `…CHANNEL=1`, `…DIRECT=2` ; `VISIBILITY_PRIVATE=0`,
@@ -478,7 +490,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Déploiement, migrations & rollback
 
-- **Migrations :** appliquer `crates/services/chat/migrations/0001…0011.cql` sur le keyspace `chat`
+- **Migrations :** appliquer `crates/services/chat/migrations/0001…0012.cql` sur le keyspace `chat`
   **avant** le premier démarrage / avant de déployer un nouveau binaire.
 - **Pièges liés à l'état :** `CHAT_MESSAGE_BUCKET_HOURS` et `CHAT_AUDIENCE_SHARD_COUNT` doivent être
   **uniformes sur tout le cluster**, et `CHAT_MESSAGE_BUCKET_HOURS` ne doit **jamais changer une fois que

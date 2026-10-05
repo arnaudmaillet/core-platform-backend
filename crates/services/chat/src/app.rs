@@ -25,7 +25,7 @@ use transport::kafka::producer::KafkaProducerBuilder;
 use crate::application::command::{
     CreateConversationCommand, CreateConversationHandler, DirectConversations, DirectMessaging, InboxProjector,
     InviteMemberCommand,
-    InviteMemberHandler, JoinAsMemberCommand, JoinAsMemberHandler,
+    InviteMemberHandler, JoinAsMemberCommand, JoinAsMemberHandler, LeaveConversationCommand, LeaveConversationHandler,
     MarkReadCommand, MarkReadHandler, SendMessageHandler, SendMessages, SubscribeCommand,
     SubscribeHandler, ToggleVisibilityCommand, ToggleVisibilityHandler, UnsubscribeCommand,
     UnsubscribeHandler,
@@ -35,7 +35,7 @@ use crate::application::port::{
     PresenceSettingsStore, PresenceStore, ReceiptStore, RoutingRegistry,
 };
 use crate::application::query::{
-    GetHistoryHandler, GetHistoryQuery, ListInboxHandler, ListInboxQuery, ListMembersHandler, ListMembersQuery,
+    FormerMemberHistoryQuery, GetHistoryHandler, GetHistoryQuery, ListInboxHandler, ListInboxQuery, ListMembersHandler, ListMembersQuery,
     ListConversationsByMemberHandler, ListConversationsByMemberQuery, ListSubscriptionsHandler, ListSubscriptionsQuery,
 };
 use crate::infrastructure::cache::{
@@ -210,6 +210,12 @@ impl App {
                 message_repo:      Arc::clone(&message_repo),
                 max_page_size:     config.max_page_size,
             })?
+            .register::<FormerMemberHistoryQuery, _>(GetHistoryHandler {
+                conversation_repo: Arc::clone(&conversation_repo),
+                member_repo:       Arc::clone(&member_repo),
+                message_repo:      Arc::clone(&message_repo),
+                max_page_size:     config.max_page_size,
+            })?
             .register::<ListMembersQuery, _>(ListMembersHandler {
                 conversation_repo: Arc::clone(&conversation_repo),
                 member_repo:       Arc::clone(&member_repo),
@@ -353,6 +359,11 @@ fn build_commands<EP: EventPublisher>(
             conversation_repo: Arc::clone(conversation_repo),
             member_repo:       Arc::clone(member_repo),
             invitation_repo:   Arc::clone(invitation_repo),
+            publisher:         Arc::clone(&publisher),
+        })?
+        .register::<LeaveConversationCommand, _>(LeaveConversationHandler {
+            conversation_repo: Arc::clone(conversation_repo),
+            member_repo:       Arc::clone(member_repo),
             publisher:         Arc::clone(&publisher),
         })?
         .register::<InviteMemberCommand, _>(InviteMemberHandler {

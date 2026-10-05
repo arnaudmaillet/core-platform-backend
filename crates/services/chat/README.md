@@ -147,6 +147,7 @@ service ChatService {
   rpc RespondToMessageRequest (RespondToMessageRequestRequest) returns (CommandResponse);                // #656
   rpc ToggleVisibility   (ToggleVisibilityRequest)   returns (CommandResponse);
   rpc JoinAsMember       (JoinAsMemberRequest)       returns (CommandResponse); // private ⇒ invitation required
+  rpc LeaveConversation  (LeaveConversationRequest)  returns (CommandResponse); // #656: not the owner, not a DM
   rpc InviteMember       (InviteMemberRequest)       returns (CommandResponse); // owner/admin only
   rpc Subscribe          (SubscribeRequest)          returns (CommandResponse);
   rpc Unsubscribe        (UnsubscribeRequest)        returns (CommandResponse);
@@ -162,6 +163,7 @@ service ChatService {
   rpc ListSubscriptions (ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
   rpc ListInbox         (ListInboxRequest)         returns (ListInboxResponse);       // #656
   rpc ListConversationsByMember (ListConversationsByMemberRequest) returns (ListConversationsByMemberResponse); // mesh only
+  rpc GetFormerMemberHistory    (GetFormerMemberHistoryRequest)    returns (GetHistoryResponse);                // mesh only
   // Real-time streams
   rpc StreamConversation (StreamConversationRequest) returns (stream StreamConversationResponse); // members
   rpc StreamPublic       (StreamPublicRequest)       returns (stream StreamPublicResponse);       // audience
@@ -171,9 +173,20 @@ service ChatService {
 **A profile's conversations (#653).** `ListConversationsByMember(member_id, limit, page_token)` is
 **mesh only** (never on the edge): the GDPR data export lists the conversations a profile is a member of
 (id, role, joined_at, kind; paged by conversation id), then reads each one's history as that member
-(`GetHistory`). It reads `chat.conversations_by_member`, the reverse of the roster, written and deleted
-with `members_by_conversation` in one LOGGED BATCH. Memberships from before that table existed are
-indexed by an opt-in, idempotent backfill at startup (`CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER=true`).
+(`GetHistory`). It reads `chat.conversations_by_member`, the reverse of the roster, written with
+`members_by_conversation` in one LOGGED BATCH. Memberships from before that table existed are indexed by
+an opt-in, idempotent backfill at startup (`CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER=true`).
+
+**Leaving (#656).** `LeaveConversation(conversation_id, profile_id)` takes a member off a group's or
+channel's roster and out of its inbox (`MemberLeft`). The owner may not leave (`CHT-9004`: a
+conversation always has one, and ownership transfer does not exist yet), and nobody leaves a direct
+conversation. The membership is **kept** with `left_at` (migration 0012; rejoining clears it), so the
+export still lists the conversations a profile left (`MembershipView.left_at_ms`). It reads them with
+`GetFormerMemberHistory(conversation_id, member_id)`, which is **mesh only**:
+- the member's own messages in full;
+- everyone else's reduced to their time (empty `sender_id`, no content), withheld ones from others not
+  at all;
+- for a former member, nothing after its departure.
 
 > **Wire / enum contract:** proto enum values are **0-based and equal the domain `tinyint`**
 > (`CONVERSATION_KIND_GROUP=0`, `…CHANNEL=1`, `…DIRECT=2`; `VISIBILITY_PRIVATE=0`, `…PUBLIC=1`; `ROLE_OWNER=0…GUEST=4`;
@@ -449,7 +462,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Deployment, Migrations & Rollback
 
-- **Migrations:** apply `crates/services/chat/migrations/0001…0011.cql` against the `chat` keyspace
+- **Migrations:** apply `crates/services/chat/migrations/0001…0012.cql` against the `chat` keyspace
   **before** first start / before rolling a new binary.
 - **Stateful gotchas:** `CHAT_MESSAGE_BUCKET_HOURS` and `CHAT_AUDIENCE_SHARD_COUNT` must be **uniform
   cluster-wide**, and `CHAT_MESSAGE_BUCKET_HOURS` must **never change after data exists** — divergent

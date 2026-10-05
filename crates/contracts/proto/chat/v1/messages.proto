@@ -62,6 +62,13 @@ message CreateConversationResponse {
     string conversation_id = 1;
 }
 
+// A member leaves a group or channel (#656). The owner may not (CHT-9004);
+// nobody leaves a direct conversation.
+message LeaveConversationRequest {
+    string conversation_id = 1;
+    string profile_id      = 2;
+}
+
 // The direct conversation between the caller's profile and `peer_id`
 // (#656), opened if need be — one per pair, whoever opens it.
 message OpenDirectConversationRequest {
@@ -225,6 +232,20 @@ message MembershipView {
     int64                     joined_at_ms    = 3;
     // The conversation's kind: the GDPR export shows a DIRECT one in full.
     ConversationKind          kind            = 4;
+    // When the profile left (#656); 0 while a member. Read a left
+    // conversation with GetFormerMemberHistory.
+    int64                     left_at_ms      = 5;
+}
+
+// The member's view of a conversation it is or was a member of, for the GDPR
+// data export (mesh only): its own messages in full; everyone else's reduced
+// to created_at_ms (sender_id and content empty); a former member's up to
+// its departure only.
+message GetFormerMemberHistoryRequest {
+    string conversation_id = 1;
+    string member_id       = 2;
+    int32  limit           = 3;
+    string page_token      = 4;
 }
 message ListConversationsByMemberResponse {
     repeated MembershipView memberships     = 1;
