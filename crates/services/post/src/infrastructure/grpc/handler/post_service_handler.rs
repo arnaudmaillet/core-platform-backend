@@ -193,7 +193,10 @@ where
         let viewer = viewer_of(&request);
         let mature = mature_of(&request);
         let req    = request.into_inner();
-        let query  = GetPostQuery { post_id: req.post_id, viewer, mature };
+        // On the author's behalf: the mesh only; an edge caller's field is
+        // dropped here, before the query.
+        let as_author = (viewer == Viewer::Internal).then_some(req.as_author_id).filter(|a| !a.is_empty());
+        let query  = GetPostQuery { post_id: req.post_id, viewer, mature, as_author };
         let post: Post = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))

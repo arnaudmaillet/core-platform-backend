@@ -77,3 +77,33 @@ async fn the_location_audience_hides_the_place_from_everyone_else() {
     let author = Viewer::Profiles(vec![author_pid]);
     assert_eq!(location(h.get_as(&post_id, author).await.unwrap()), Some(PARIS), "the author");
 }
+
+/// The GDPR export (#653) reads the author's own posts over the mesh on their
+/// behalf: their own point, whatever their sharing. Only the mesh, and only
+/// for the post's author: a client claiming it, or the mesh naming someone
+/// else, still gets the shared view.
+#[tokio::test]
+async fn the_mesh_reads_the_authors_own_location_on_their_behalf_only() {
+    use post::domain::value_object::LocationAudience;
+
+    let h = TestHarness::start().await;
+    let author_id = harness::random_id();
+    let author_pid = ProfileId::try_from(author_id.as_str()).unwrap();
+    let post_id = harness::random_id();
+    h.create_at(&post_id, &author_id, PARIS.0, PARIS.1).await;
+    h.publish(&post_id, &author_id).await;
+    let location = |post: harness::Post| post.location().map(|g| (g.lat(), g.lng()));
+    let shared = LocationSharing { ghost: true, city: true, audience: LocationAudience::Mutuals };
+    h.locations.set(&author_pid, shared).await.unwrap();
+
+    let own = h.get_on_behalf(&post_id, Viewer::Internal, &author_id).await.unwrap();
+    assert_eq!(location(own), Some(PARIS), "the export: the author's own point");
+
+    let someone_else = harness::random_id();
+    let other = h.get_on_behalf(&post_id, Viewer::Internal, &someone_else).await.unwrap();
+    assert_eq!(location(other), None, "not that post's author");
+
+    let stranger = Viewer::Profiles(vec![ProfileId::try_from(harness::random_id().as_str()).unwrap()]);
+    let claimed = h.get_on_behalf(&post_id, stranger, &author_id).await.unwrap();
+    assert_eq!(location(claimed), None, "an edge reader claiming it changes nothing");
+}

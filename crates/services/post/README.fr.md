@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 31b7d0dedbcb390c97d2fb713f49312c2567f845659ec36b2a3088a6dce66ba3
+  source_sha256: 347fedef754cb297efb96f8c33a41335831c2cfb1755dc8c5a1079655b0f113c
   translated_at: 2026-10-05
   status: complete
 ---
@@ -184,7 +184,9 @@ magasin fait échouer la lecture plutôt que de montrer le point. Son **audience
 #657) ne montre la localisation qu'à un lecteur qui suit l'auteur / lui est mutuel — ce que dit le même
 appel `CheckAccess` qui décide de la visibilité du post (`follows` / `mutual`). Tout autre lecteur, un
 lecteur anonyme et le mesh (qui ne lit pour personne en particulier) reçoivent le post sans sa
-localisation.
+localisation. L'export RGPD lit les posts du titulaire via le mesh avec `GetPostRequest.as_author_id`
+égal au titulaire : son propre point, quel que soit son partage — pris en compte depuis le mesh
+seulement et pour l'auteur du post seulement (le champ d'un appelant edge est écarté avant la requête).
 
 ### Contrat d'erreur (`PST-xxxx`)
 

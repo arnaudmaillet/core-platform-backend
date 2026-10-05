@@ -68,7 +68,7 @@ impl SubjectResolver for GrpcSubjectResolver {
         let author_profile = match entity_type {
             EntityType::Profile => entity_id.to_owned(),
             EntityType::Post => {
-                match self.posts.clone().get_post(GetPostRequest { post_id: entity_id.to_owned() }).await {
+                match self.posts.clone().get_post(GetPostRequest { post_id: entity_id.to_owned(), ..Default::default() }).await {
                     Ok(r) => r.into_inner().profile_id,
                     Err(status) => return not_found_or_unavailable(status),
                 }

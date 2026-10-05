@@ -200,7 +200,10 @@ impl ExportPeers for MeshExportPeers {
         }
         let mut posts = Vec::with_capacity(ids.len());
         for post_id in ids {
-            match self.post.clone().get_post(post_api::GetPostRequest { post_id }).await {
+            // On the holder's behalf: their own locations, whatever their
+            // sharing (#657).
+            let request = post_api::GetPostRequest { post_id, as_author_id: profile_id.to_owned() };
+            match self.post.clone().get_post(request).await {
                 Ok(view) => posts.push(self.post_d.json("post.v1.PostView", &view.into_inner())),
                 Err(status) if status.code() == Code::NotFound => {}
                 Err(status) => return Err(rpc("post")(status)),
