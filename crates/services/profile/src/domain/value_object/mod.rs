@@ -42,4 +42,4 @@ pub use comment_filters::CommentFilters;
 pub use discovery_settings::DiscoverySettings;
 pub use feed_settings::{FeedSettings, SensitiveContent};
 pub use tab_settings::{PostWindow, TabSettings};
-pub use location_settings::{LocationPrecision, LocationSettings};
+pub use location_settings::{LocationAudience, LocationPrecision, LocationSettings};

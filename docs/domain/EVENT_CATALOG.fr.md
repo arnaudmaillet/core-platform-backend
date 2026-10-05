@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 4180e70826713e3d6c537000fa687acafe39efac64d3922c222a18f6b8ed0849
+  source_sha256: 3f35ca8f1052d03c06d3023d0c51440895792fdc7f5172270aff146e085ac9b4
   translated_at: 2026-10-05
   status: complete
 ---
@@ -121,7 +121,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `profile_hidden` / `profile_restored` / `profile_deleted` | une transition de visibilité/cycle de vie | action propriétaire ou modération | read-models (démantèlement/restauration) ; `social-graph` (projection d'audience : masqué) |
 | `profile_visibility_changed` | le propriétaire a rendu le profil privé ou public | `SetVisibility` | `social-graph` (projection d'audience : privé → contenu réservé aux abonnés, via `CheckAccess`) |
 | `profile_interaction_settings_changed` | le propriétaire a changé qui peut commenter / mentionner / écrire (tout le monde, abonnés, mutuels, personne), les téléchargements et les compteurs de likes | `SetInteractionSettings`, ou la création du profil d'un titulaire de 13 à 17 ans (défauts ados) | `social-graph` (projection lue par `CheckInteraction`, que comment appelle avant d'écrire) |
-| `profile_location_settings_changed` | le propriétaire a activé / désactivé le mode fantôme ou changé la précision de localisation (précise / ville) | `SetLocationSettings`, ou la création du profil d'un titulaire de 13 à 17 ans (défaut ado : fantôme) | `geo-discovery` (projection appliquée à chaque surface de carte : les posts d'un fantôme quittent la carte des autres ; le niveau ville ne les montre qu'à la bande grossière, au centre de la cellule) |
+| `profile_location_settings_changed` | le propriétaire a activé / désactivé le mode fantôme, ou changé la précision de localisation (précise / ville), son audience (`audience` : tout le monde / abonnés / mutuels, #657) ou la préférence des nouveaux posts (`on_new_posts`) | `SetLocationSettings`, ou la création du profil d'un titulaire de 13 à 17 ans (défaut ado : fantôme, mutuels, pas de localisation sur les nouveaux posts) | `geo-discovery` (projection appliquée à chaque surface de carte : les posts d'un fantôme quittent la carte des autres ; le niveau ville ne les montre qu'à la bande grossière, au centre de la cellule) |
 
 ## Contenu — `post.v1.events` (producteur : `post`)
 

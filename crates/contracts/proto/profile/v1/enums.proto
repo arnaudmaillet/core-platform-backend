@@ -71,6 +71,17 @@ enum LocationPrecision {
     LOCATION_PRECISION_CITY        = 2;
 }
 
+// Who sees where a profile's posts were made (#657): on the map and on the
+// post itself. On a set request, UNSPECIFIED keeps the stored audience.
+enum LocationAudience {
+    LOCATION_AUDIENCE_UNSPECIFIED = 0;
+    LOCATION_AUDIENCE_EVERYONE    = 1;
+    // Profiles that follow the owner.
+    LOCATION_AUDIENCE_FOLLOWERS   = 2;
+    // Profiles the owner follows back.
+    LOCATION_AUDIENCE_MUTUALS     = 3;
+}
+
 // How far back others see a profile's posts.
 enum PostWindow {
     POST_WINDOW_UNSPECIFIED = 0;

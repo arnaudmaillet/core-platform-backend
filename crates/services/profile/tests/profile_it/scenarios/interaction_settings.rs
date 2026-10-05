@@ -47,22 +47,35 @@ async fn interaction_settings_round_trip_and_are_announced() {
 #[tokio::test]
 async fn location_settings_round_trip_owner_only_and_are_announced() {
     use profile::application::command::SetLocationSettingsCommand;
-    use profile::domain::value_object::{LocationPrecision, LocationSettings, Viewer};
+    use profile::domain::value_object::{LocationAudience, LocationPrecision, LocationSettings, Viewer};
 
     let h = TestHarness::start().await;
     let (account, handle) = (harness::random_account_id(), harness::random_handle());
     h.create(&account, &handle, "Alice").await;
     let profile = h.get_by_handle(&handle).await.expect("created");
 
-    let ghost = LocationSettings { ghost: true, precision: LocationPrecision::City };
+    let set = |audience, on_new_posts| SetLocationSettingsCommand {
+        profile_id: profile.id.clone(),
+        ghost: true,
+        precision: LocationPrecision::City,
+        audience,
+        on_new_posts,
+    };
     h.command_bus
-        .dispatch(Envelope::new(
-            Uuid::now_v7(),
-            SetLocationSettingsCommand { profile_id: profile.id.clone(), settings: ghost },
-        ))
+        .dispatch(Envelope::new(Uuid::now_v7(), set(Some(LocationAudience::Followers), Some(false))))
         .await
         .expect("set");
+    let ghost = LocationSettings {
+        ghost: true,
+        precision: LocationPrecision::City,
+        audience: LocationAudience::Followers,
+        on_new_posts: false,
+    };
+    assert_eq!(h.get_by_id(&profile.id).await.unwrap().location, Some(ghost));
 
+    // An older client sets ghost and precision only: the audience and the
+    // new-posts preference stay as stored (#657).
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), set(None, None))).await.expect("set");
     assert_eq!(h.get_by_id(&profile.id).await.unwrap().location, Some(ghost));
     // Owner-only: nobody else learns that the profile ghosts the map.
     let other = Viewer::Account(harness::random_account_id());

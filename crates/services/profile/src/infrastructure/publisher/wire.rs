@@ -88,6 +88,10 @@ pub enum ProfileEventWire {
         profile_id: String,
         ghost: bool,
         precision: String,
+        /// `everyone` | `followers` | `mutuals` (#657): who sees the location.
+        audience: String,
+        /// The app adds the location to new posts by default.
+        on_new_posts: bool,
         occurred_at_ms: i64,
     },
     /// Activity status, read receipts and how people can find the profile.
@@ -259,6 +263,8 @@ impl From<&DomainEvent> for ProfileEventWire {
                 profile_id: e.profile_id.to_string(),
                 ghost: e.settings.ghost,
                 precision: e.settings.precision.as_str().to_owned(),
+                audience: e.settings.audience.as_str().to_owned(),
+                on_new_posts: e.settings.on_new_posts,
                 occurred_at_ms: e.occurred_at.timestamp_millis(),
             },
         }
