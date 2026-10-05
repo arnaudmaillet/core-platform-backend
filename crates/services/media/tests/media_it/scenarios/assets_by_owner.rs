@@ -21,9 +21,19 @@ async fn an_accounts_assets_list_by_id_with_working_downloads() {
     assert!(bytes.status().is_success(), "the signed URL serves the original");
     assert!(!bytes.bytes().await.unwrap().is_empty());
 
-    // Paged by id; a deleted asset leaves the listing.
-    let page = h.list_by_owner(1, Some(expected[0]), chrono::Duration::hours(1)).await.unwrap();
-    assert_eq!(page.first().map(|o| o.asset.id()), Some(expected[1]));
+    // Paged by id: one asset a page from the first, the second comes later
+    // (the harness owner is shared — other scenarios' assets may sit between).
+    let mut after = expected[0];
+    let next = loop {
+        let page = h.list_by_owner(1, Some(after), chrono::Duration::hours(1)).await.unwrap();
+        let id = page.first().expect("the second is still ahead").asset.id();
+        assert!(id.as_uuid() > after.as_uuid(), "strictly after the cursor");
+        if id == expected[1] {
+            break id;
+        }
+        after = id;
+    };
+    assert_eq!(next, expected[1]);
     h.delete(first).await.expect("delete");
     let after = h.list_by_owner(10, None, chrono::Duration::hours(1)).await.unwrap();
     assert!(after.iter().all(|o| o.asset.id() != first));
