@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8f2fb7fc0fa3f5f43b4f12a48f5ce24bb699b226117aaef4b1f1d2016c84902c
+  source_sha256: 838df10053b2b47568fe9b565b27784d2f6ccf967899c593a404033ff98200c9
   translated_at: 2026-10-05
   status: complete
 ---
@@ -135,8 +135,9 @@ service CommentService {
 transport (`edge::viewer`). Pour tout appelant hors mesh, un **read gate** décide avec un `GetPost`
 (post) et un `CheckAccess` (social-graph) par appel (auteur du post + chaque auteur de commentaire de
 la page) :
-- le **post** doit être lisible : publié et non retiré par la modération (son auteur le voit quoi
-  qu'il arrive), et son auteur `VISIBLE` pour le lecteur (pas un auteur privé qu'il ne suit pas, pas
+- le **post** doit être lisible : publié, non retiré par la modération et dans la fenêtre
+  d'historique de son auteur (#664 : non marqué `outside_window` ; son auteur le voit quoi qu'il
+  arrive), et son auteur `VISIBLE` pour le lecteur (pas un auteur privé qu'il ne suit pas, pas
   de blocage dans un sens ou l'autre, pas masqué). Sinon `GetComment` renvoie `CMT-1001` et les
   listes sont vides ;
 - les commentaires d'un post **soumis à une limite d'âge** ne sont pas lisibles par un client anonyme, un

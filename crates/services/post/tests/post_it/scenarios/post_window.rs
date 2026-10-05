@@ -27,8 +27,12 @@ async fn posts_older_than_the_window_are_hidden_from_visitors_only() {
 
     // The author and the mesh still see everything: hidden, not deleted.
     assert_eq!(h.list_as(&author_id, author.clone()).await.len(), 3);
-    assert!(h.get_as(&year_old, author).await.is_ok());
+    let as_author = h.get_as(&year_old, author).await.expect("the author's own");
+    assert!(!as_author.outside_window(), "nothing is withheld from the author");
     assert_eq!(h.list(&author_id).await.len(), 3);
+    // The mesh reads it marked, so comment and search withhold it from clients.
+    assert!(h.get(&month_old).await.expect("mesh read").outside_window());
+    assert!(!h.get(&recent).await.expect("mesh read").outside_window());
 
     // Six months brings the month-old post back; all posts brings everything.
     h.windows.set(&author_pid, Some(183)).await.unwrap();

@@ -55,6 +55,10 @@ message PostView {
     // The post's own reuse permission (#669); unset = the author's default.
     optional bool           allow_remix         = 16;
     optional bool           allow_sound_reuse   = 17;
+    // Mesh reads only: older than its author's post window (#664). Clients
+    // other than the author get NOT_FOUND instead, so a mesh caller serving
+    // clients (comments, search) must withhold the post too.
+    bool                    outside_window      = 18;
 }
 
 message PostSummary {

@@ -44,6 +44,9 @@ pub struct Post {
     /// The post's own remix / original-sound reuse permission (#669); `None`
     /// follows its author's default.
     reuse:          ReuseOverrides,
+    /// Read path only: older than its author's post window (#664). Set for a
+    /// mesh read, which still gets the post; never stored.
+    outside_window: bool,
     pending_events: Vec<DomainEvent>,
 }
 
@@ -81,6 +84,7 @@ impl Post {
             deleted_at: None,
             moderation: ModerationState::default(),
             reuse: ReuseOverrides::default(),
+            outside_window: false,
             pending_events: Vec::new(),
         })
     }
@@ -120,6 +124,7 @@ impl Post {
             deleted_at,
             moderation,
             reuse: ReuseOverrides::default(),
+            outside_window: false,
             pending_events: Vec::new(),
         }
     }
@@ -287,6 +292,13 @@ impl Post {
     pub fn show_location(&mut self, shown: Option<GeoPoint>) {
         self.location = shown;
     }
+
+    /// Marks the post as older than its author's post window (#664), for a
+    /// mesh reader that must withhold it from clients (read path only).
+    pub fn mark_outside_window(&mut self) {
+        self.outside_window = true;
+    }
+    pub fn outside_window(&self) -> bool { self.outside_window }
     pub fn created_at(&self)   -> DateTime<Utc>      { self.created_at }
     pub fn updated_at(&self)   -> DateTime<Utc>      { self.updated_at }
     pub fn published_at(&self) -> Option<DateTime<Utc>> { self.published_at }

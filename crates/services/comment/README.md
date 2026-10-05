@@ -119,8 +119,8 @@ service CommentService {
 **Viewer-aware reads.** `GetComment` / `ListTopLevel` / `ListReplies` take the reader from the
 transport (`edge::viewer`). For anyone but a mesh caller, a **read gate** decides with one post
 `GetPost` and one social-graph `CheckAccess` per call (post author + every comment author on the page):
-- the **post** must be readable: published and not removed by moderation (its author sees it
-  regardless), and its author `VISIBLE` to the reader (not a private author they don't follow, not
+- the **post** must be readable: published, not removed by moderation and within its author's post
+  window (#664: not marked `outside_window`; its author sees it regardless), and its author `VISIBLE` to the reader (not a private author they don't follow, not
   blocked either way, not hidden). Otherwise `GetComment` is `CMT-1001` and the lists are empty;
 - an **age-gated** post's comments are not readable by an anonymous client, a guest or a 13–17 reader
   (`CMT-1001` / empty lists), like the post itself;

@@ -50,11 +50,15 @@ impl<R: PostRepository> QueryHandler<GetPostQuery> for GetPostHandler<R> {
             return Err(not_found());
         }
         // The author's post window hides older posts from clients other than
-        // the author (#664); the mesh reads them as stored.
-        if !query.viewer.sees_every_post_of(post.profile_id()) {
+        // the author (#664). The mesh still reads them, marked, so a service
+        // serving clients (comment, search) withholds them too.
+        if !query.viewer.is_author(post.profile_id()) {
             let days = self.windows.get(post.profile_id()).await?;
             if window_start(days, chrono::Utc::now()).is_some_and(|start| post.created_at() < start) {
-                return Err(not_found());
+                if query.viewer != Viewer::Internal {
+                    return Err(not_found());
+                }
+                post.mark_outside_window();
             }
         }
         // The author's location sharing applies to everyone else, the mesh

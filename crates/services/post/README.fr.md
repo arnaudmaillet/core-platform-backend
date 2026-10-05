@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8d375540251665e1517c5646fd03bc3933d7b17e82fe465c7fe654fe7efd2faf
+  source_sha256: 3a73764dded6f8142617141312085934b9e63eac33bb98f41bae46ab353b98bc
   translated_at: 2026-10-05
   status: complete
 ---
@@ -161,7 +161,9 @@ panne échoue fermé avec `PST-5001` (`UNAVAILABLE`), jamais en servant le post.
 **Fenêtre d'historique des posts (#664).** Un auteur peut ne montrer aux visiteurs que ses posts récents
 (6 mois, 1 mois, 3 jours). Pour tout client autre que l'auteur, `ListPostsByProfile` s'arrête au premier post
 plus ancien (la liste va du plus récent au plus ancien ; pas de jeton suivant) et `GetPost` répond `PST-1001`
-pour un tel post ; l'auteur et les appelants du mesh voient tous les posts. Rien n'est supprimé. La fenêtre
+pour un tel post ; l'auteur et les appelants du mesh voient tous les posts. Un `GetPost` du mesh marque
+un tel post `outside_window`, pour qu'un service qui sert des clients le retienne aussi (comment masque ses
+commentaires). Rien n'est supprimé. La fenêtre
 vient du `ProfileTabSettingsChanged` de profile, projeté dans `post.author_post_windows` par le consommateur
 des réglages d'auteur ci-dessous.
 
