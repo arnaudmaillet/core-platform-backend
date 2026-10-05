@@ -26,6 +26,20 @@ where
         self.create_account(request).await
     }
 
+    async fn change_email(
+        &self,
+        request: Request<proto::ChangeEmailRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.change_email(request).await
+    }
+
+    async fn change_phone(
+        &self,
+        request: Request<proto::ChangePhoneRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.change_phone(request).await
+    }
+
     async fn verify_email(
         &self,
         request: Request<proto::VerifyEmailRequest>,

@@ -104,6 +104,17 @@ message VerifyPhoneRequest {
     string account_id = 1;
 }
 
+message ChangeEmailRequest {
+    string account_id = 1;
+    string email      = 2;
+}
+
+message ChangePhoneRequest {
+    string account_id = 1;
+    // E.164 (e.g. +33612345678).
+    string phone      = 2;
+}
+
 message ChangePasswordRequest {
     string account_id       = 1;
     // New Argon2id hash — plaintext must never cross the gRPC boundary.

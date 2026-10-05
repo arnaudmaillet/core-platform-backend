@@ -113,6 +113,8 @@ service AccountService {
   rpc CreateAccount (CreateAccountRequest) returns (CommandResponse);
   rpc VerifyEmail (VerifyEmailRequest) returns (CommandResponse);   // mesh only: auth, after a proof (verified id_token or code)
   rpc VerifyPhone (VerifyPhoneRequest) returns (CommandResponse);   // mesh only: auth, after an SMS code
+  rpc ChangeEmail (ChangeEmailRequest) returns (CommandResponse);   // mesh only: auth, after a code to the new address (#651)
+  rpc ChangePhone (ChangePhoneRequest) returns (CommandResponse);   // mesh only: idem, by SMS — both set + verify at once; ACC-1003/1004 if taken
   rpc ChangePassword (ChangePasswordRequest) returns (CommandResponse);
   rpc EnrollMfa (EnrollMfaRequest) returns (CommandResponse);
   rpc RevokeMfa (RevokeMfaRequest) returns (CommandResponse);

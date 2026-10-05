@@ -32,6 +32,13 @@ service AccountService {
     // after the holder proved the number (a one-time SMS code).
     rpc VerifyPhone(VerifyPhoneRequest) returns (CommandResponse);
 
+    // Replace the account's email / phone with one its holder just proved
+    // (#651): set and verified at once. Mesh only: auth calls them after a
+    // one-time code sent to the new address. Another account's address:
+    // ACC-1003 / ACC-1004.
+    rpc ChangeEmail(ChangeEmailRequest) returns (CommandResponse);
+    rpc ChangePhone(ChangePhoneRequest) returns (CommandResponse);
+
     // ── Credentials ───────────────────────────────────────────────────────────
 
     // Replace the stored Argon2id password hash.
