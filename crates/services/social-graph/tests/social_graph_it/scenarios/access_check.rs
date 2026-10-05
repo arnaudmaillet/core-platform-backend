@@ -45,3 +45,27 @@ async fn private_profiles_open_to_followers_and_blocks_close_everything() {
     h.audience(&owner, AudienceFact::Hidden(false)).await;
     assert_eq!(h.access(&[follower], &owner).await, ContentAccess::Visible);
 }
+
+/// How the reader relates to the author (#657: an author's location audience),
+/// over the real follow table.
+#[tokio::test]
+async fn the_answer_says_who_follows_and_who_is_mutual() {
+    use social_graph::domain::access::Relationship;
+    let h = TestHarness::start().await;
+    let (author, follower, mutual, stranger) =
+        (harness::random_profile(), harness::random_profile(), harness::random_profile(), harness::random_profile());
+    h.follow(&follower, &author).await;
+    h.follow(&mutual, &author).await;
+    h.follow(&author, &mutual).await;
+
+    let rel = |r: Relationship| (r.follows, r.mutual);
+    assert_eq!(rel(h.answer(&[stranger], &author).await.relation), (false, false));
+    assert_eq!(rel(h.answer(&[follower], &author).await.relation), (true, false));
+    assert_eq!(rel(h.answer(&[mutual], &author).await.relation), (true, true));
+    assert_eq!(rel(h.answer(&[stranger, mutual], &author).await.relation), (true, true), "any own profile");
+    assert_eq!(rel(h.answer(&[], &author).await.relation), (false, false), "anonymous");
+    assert_eq!(rel(h.answer(&[author], &author).await.relation), (true, true), "oneself");
+    // Followed back by someone who does not follow: not mutual.
+    h.follow(&author, &stranger).await;
+    assert_eq!(rel(h.answer(&[stranger], &author).await.relation), (false, false));
+}

@@ -46,6 +46,8 @@ pub enum ContentAccess {
 pub struct AccessFacts {
     /// `(viewer, target)` pairs where the viewer follows the target.
     pub follows: HashSet<(ProfileId, ProfileId)>,
+    /// `(target, viewer)` pairs where the target follows the viewer back.
+    pub followed_back: HashSet<(ProfileId, ProfileId)>,
     /// `(blocker, blockee)` pairs between a viewer and a target, either way.
     pub blocks:  HashSet<(ProfileId, ProfileId)>,
     /// Targets whose owner made them private.
@@ -77,6 +79,27 @@ impl AccessFacts {
         }
         ContentAccess::Visible
     }
+
+    /// How `viewers` relate to `target` (#657: an author's location audience).
+    /// One's own profile counts as both.
+    pub fn relation(&self, viewers: &[ProfileId], target: &ProfileId) -> Relationship {
+        if viewers.contains(target) {
+            return Relationship { follows: true, mutual: true };
+        }
+        let follows = |v: &ProfileId| self.follows.contains(&(*v, *target));
+        Relationship {
+            follows: viewers.iter().any(follows),
+            mutual:  viewers.iter().any(|v| follows(v) && self.followed_back.contains(&(*target, *v))),
+        }
+    }
+}
+
+/// Whether some viewer profile follows the target, and whether some viewer
+/// profile and the target follow each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Relationship {
+    pub follows: bool,
+    pub mutual:  bool,
 }
 
 #[cfg(test)]
@@ -128,5 +151,19 @@ mod tests {
         assert_eq!(facts.access(&[], &target), ContentAccess::Hidden);
         assert_eq!(facts.access(&[id()], &target), ContentAccess::Hidden);
         assert_eq!(facts.access(&[target], &target), ContentAccess::Visible);
+    }
+
+    #[test]
+    fn the_relation_needs_one_profile_following_and_followed_back() {
+        let (a, b, target) = (id(), id(), id());
+        let mut facts = AccessFacts::default();
+        facts.follows.insert((a, target));
+        facts.followed_back.insert((target, b));
+        let r = facts.relation(&[a, b], &target);
+        assert_eq!((r.follows, r.mutual), (true, false), "a follows, b is followed back: no single mutual");
+        facts.followed_back.insert((target, a));
+        assert!(facts.relation(&[a], &target).mutual);
+        assert!(facts.relation(&[target], &target).mutual, "oneself");
+        assert_eq!(facts.relation(&[], &target), Relationship::default());
     }
 }

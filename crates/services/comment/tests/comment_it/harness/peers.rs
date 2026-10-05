@@ -110,7 +110,7 @@ impl SocialGraphService for GraphServer {
                         _ => 2,
                     })
                     .unwrap_or(social_graph_api::ContentAccess::Visible);
-                social_graph_api::TargetAccess { target_profile_id: target.clone(), access: answer as i32 }
+                social_graph_api::TargetAccess { target_profile_id: target.clone(), access: answer as i32, ..Default::default() }
             })
             .collect();
         Ok(Response::new(social_graph_api::CheckAccessResponse { targets }))

@@ -138,6 +138,11 @@ message CheckAccessRequest {
 message TargetAccess {
     string        target_profile_id = 1;
     ContentAccess access            = 2;
+    // Some viewer profile follows the target (#657: an author's location
+    // audience). One's own profile counts. False for an anonymous reader.
+    bool          follows           = 3;
+    // Some viewer profile and the target follow each other.
+    bool          mutual            = 4;
 }
 
 message CheckAccessResponse {

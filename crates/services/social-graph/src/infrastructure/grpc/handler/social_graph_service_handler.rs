@@ -594,18 +594,20 @@ where
             viewer_profile_ids: req.viewer_profile_ids,
             target_profile_ids: req.target_profile_ids,
         };
-        let access: Vec<(crate::domain::value_object::ProfileId, ContentAccess)> = self
+        let answers: Vec<crate::application::query::TargetAnswer> = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
 
         Ok(Response::new(proto::CheckAccessResponse {
-            targets: access
+            targets: answers
                 .into_iter()
-                .map(|(target, access)| proto::TargetAccess {
-                    target_profile_id: target.as_str(),
-                    access:            content_access_to_proto(access) as i32,
+                .map(|answer| proto::TargetAccess {
+                    target_profile_id: answer.target.as_str(),
+                    access:            content_access_to_proto(answer.access) as i32,
+                    follows:           answer.relation.follows,
+                    mutual:            answer.relation.mutual,
                 })
                 .collect(),
         }))

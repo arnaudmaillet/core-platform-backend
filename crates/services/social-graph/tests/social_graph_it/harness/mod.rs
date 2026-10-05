@@ -124,17 +124,26 @@ impl TestHarness {
 
     /// What `viewers` may see of `target`, through `CheckAccess`.
     pub async fn access(&self, viewers: &[ProfileId], target: &ProfileId) -> ContentAccess {
+        self.answer(viewers, target).await.access
+    }
+
+    /// The whole CheckAccess answer for one target: access and relation.
+    pub async fn answer(
+        &self,
+        viewers: &[ProfileId],
+        target: &ProfileId,
+    ) -> social_graph::application::query::TargetAnswer {
         let query = CheckAccessQuery {
             viewer_profile_ids: viewers.iter().map(ProfileId::as_str).collect(),
             target_profile_ids: vec![target.as_str()],
         };
-        let result: Vec<(ProfileId, ContentAccess)> = self
+        let result: Vec<social_graph::application::query::TargetAnswer> = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .expect("check_access");
         assert_eq!(result.len(), 1);
-        result[0].1
+        result[0]
     }
 
     /// Returns the follower ids of `target` as `viewer` sees them.

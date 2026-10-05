@@ -794,12 +794,18 @@ impl SocialGraphRepository for ScyllaSocialGraphRepository {
                     .collect::<Result<Vec<_>, _>>()
             }
         };
-        let (follows, blocked_by_viewer, blocked_by_target) = tokio::join!(
+        let (follows, followed_back, blocked_by_viewer, blocked_by_target) = tokio::join!(
             pairs(
                 "SELECT follower_id AS a, followee_id AS b FROM social_graph.follow_status \
                  WHERE follower_id IN ? AND followee_id IN ?",
                 &viewer_ids,
                 &target_ids,
+            ),
+            pairs(
+                "SELECT follower_id AS a, followee_id AS b FROM social_graph.follow_status \
+                 WHERE follower_id IN ? AND followee_id IN ?",
+                &target_ids,
+                &viewer_ids,
             ),
             pairs(
                 "SELECT blocker_id AS a, blockee_id AS b FROM social_graph.blocks \
@@ -815,6 +821,7 @@ impl SocialGraphRepository for ScyllaSocialGraphRepository {
             ),
         );
         facts.follows.extend(follows?);
+        facts.followed_back.extend(followed_back?);
         facts.blocks.extend(blocked_by_viewer?);
         facts.blocks.extend(blocked_by_target?);
         Ok(facts)
