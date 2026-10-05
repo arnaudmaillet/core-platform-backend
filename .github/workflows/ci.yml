@@ -44,6 +44,12 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
+  # Registry hiccups are not the PR's fault (2026-10-04: a crates.io index
+  # fetch hit `curl [28] Connection timed out after 30002 ms` and failed an
+  # integration job). Defaults are 3 retries / 30 s; widen both. The explicit
+  # `cargo fetch` step below also takes the download off the build step.
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_TIMEOUT: "60"
 
 jobs:
   test:
@@ -52,9 +58,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build deps (protoc, librdkafka toolchain)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake zlib1g-dev
+        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake zlib1g-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: cargo fetch (retried)
+        run: for i in 1 2 3; do cargo fetch && exit 0; echo "::warning::cargo fetch failed (attempt $i/3)"; sleep $((i * 15)); done; exit 1
       - name: cargo test --workspace
         run: cargo test --workspace --quiet
 
@@ -64,11 +72,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build deps (protoc, librdkafka toolchain)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake zlib1g-dev
+        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake zlib1g-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: cargo fetch (retried)
+        run: for i in 1 2 3; do cargo fetch && exit 0; echo "::warning::cargo fetch failed (attempt $i/3)"; sleep $((i * 15)); done; exit 1
       # Bare -D warnings: the tree was clippy-cleaned 2026-07-05 (53 sites —
       # auto-fixes, real refactors, and documented targeted #[allow]s for the
       # structural lints). Keep it clean; add targeted allows in code, not here.
@@ -113,7 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build deps (protoc, librdkafka toolchain)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake zlib1g-dev
+        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake zlib1g-dev
       # OpenSearch containers refuse to start below this (search/media suites).
       - name: Raise vm.max_map_count for OpenSearch
         run: sudo sysctl -w vm.max_map_count=262144
@@ -123,14 +133,20 @@ jobs:
           # One cache shared across the matrix (first finisher saves; the rest
           # restore) — the compiled dep graph is common to every suite.
           shared-key: integration
+      - name: cargo fetch (retried)
+        run: for i in 1 2 3; do cargo fetch && exit 0; echo "::warning::cargo fetch failed (attempt $i/3)"; sleep $((i * 15)); done; exit 1
       # The postgres storage suite predates test-support's containers: it
       # expects an externally supplied DATABASE_URL (the #545 gating). Give it
       # one; every other suite boots its own backends.
       - name: Provide DATABASE_URL for the raw postgres suite
         if: matrix.suite.pkg == 'postgres'
         run: |
+          for i in 1 2 3 4; do docker pull --quiet postgres:16 && break; [ "$i" = 4 ] && exit 1; sleep $((i * 5)); done
           docker run -d --name ci-pg -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16
           for i in $(seq 1 30); do docker exec ci-pg pg_isready -U postgres && break; sleep 1; done
           echo "DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres" >> "$GITHUB_ENV"
+      # Backend images are pulled by test-support itself, with retries
+      # (`containers::ensure_image`): the list is whatever the suite boots, so
+      # there is no second image list to keep in sync here.
       - name: cargo test -p ${{ matrix.suite.pkg }} --features ${{ matrix.suite.feature }}
         run: cargo test -p ${{ matrix.suite.pkg }} --features ${{ matrix.suite.feature }}
