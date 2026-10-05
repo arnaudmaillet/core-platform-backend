@@ -8,6 +8,13 @@ repository.workspace = true
 description = "Account microservice — complete lifecycle management for physical persons on the platform."
 
 [dependencies]
+# The GDPR data export's archive (#653): a ZIP of JSON files, deflated.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# The archive goes to a private S3 bucket (static keys, like media).
+rusty-s3 = { workspace = true }
+reqwest  = { workspace = true }
+url      = { workspace = true }
+serde_json = { workspace = true }
 account-api = { workspace = true }
 # ── Shared platform infrastructure ────────────────────────────────────────────
 error            = { workspace = true }

@@ -648,6 +648,8 @@ where
             anonymized_at: view.anonymized_at.map(dt_to_ts),
             data_export_requested_at: view.data_export_requested_at.map(dt_to_ts),
             data_export_completed_at: view.data_export_completed_at.map(dt_to_ts),
+            data_export_url: view.data_export_url.unwrap_or_default(),
+            data_export_expires_at: view.data_export_expires_at.map(dt_to_ts),
         })
     }
 

@@ -7,6 +7,7 @@ pub mod email_changed;
 pub mod email_verified;
 pub mod consents_updated;
 pub mod date_of_birth_set;
+pub mod gdpr_data_export_completed;
 pub mod gdpr_data_export_requested;
 pub mod gdpr_deletion_cancelled;
 pub mod gdpr_deletion_requested;
@@ -27,6 +28,7 @@ pub use email_changed::EmailChanged;
 pub use email_verified::EmailVerified;
 pub use consents_updated::{ConsentChange, ConsentsUpdated};
 pub use date_of_birth_set::DateOfBirthSet;
+pub use gdpr_data_export_completed::GdprDataExportCompleted;
 pub use gdpr_data_export_requested::GdprDataExportRequested;
 pub use gdpr_deletion_cancelled::GdprDeletionCancelled;
 pub use gdpr_deletion_requested::GdprDeletionRequested;
@@ -63,6 +65,7 @@ pub enum DomainEvent {
     KycStatusChanged(KycStatusChanged),
     GdprDeletionRequested(GdprDeletionRequested),
     GdprDataExportRequested(GdprDataExportRequested),
+    GdprDataExportCompleted(GdprDataExportCompleted),
     ConsentsUpdated(ConsentsUpdated),
     GdprDeletionCancelled(GdprDeletionCancelled),
     DateOfBirthSet(DateOfBirthSet),
@@ -87,6 +90,7 @@ impl DomainEvent {
             Self::KycStatusChanged(_)        => "account.kyc_status_changed",
             Self::GdprDeletionRequested(_)   => "account.gdpr_deletion_requested",
             Self::GdprDataExportRequested(_) => "account.gdpr_data_export_requested",
+            Self::GdprDataExportCompleted(_) => "account.gdpr_data_export_completed",
             Self::ConsentsUpdated(_)         => "account.consents_updated",
             Self::GdprDeletionCancelled(_)   => "account.gdpr_deletion_cancelled",
             Self::DateOfBirthSet(_)          => "account.date_of_birth_set",

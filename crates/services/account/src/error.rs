@@ -26,6 +26,7 @@ use thiserror::Error;
 /// | ACC-7002 | AccountAlreadyAnonymized   | 422  | Low      | No        |
 /// | ACC-7003 | NoPendingGdprDeletion      | 422  | Low      | No        |
 /// | ACC-7004 | GdprGracePeriodOver        | 422  | Low      | No        |
+/// | ACC-7005 | DataExportUnavailable      | 503  | Medium   | **Yes**   |
 /// | ACC-8001 | RoleAlreadyAssigned        | 409  | Low      | No        |
 /// | ACC-8002 | RoleNotAssigned            | 422  | Low      | No        |
 /// | ACC-9001 | DomainViolation            | 422  | Medium   | No        |
@@ -121,6 +122,11 @@ pub enum AccountError {
     #[error("the deletion grace period is over")]
     GdprGracePeriodOver,
 
+    /// A GDPR data export could not be built or stored now (a source service
+    /// or the export store is unreachable); the export pass retries.
+    #[error("the data export is unavailable right now: {reason}")]
+    DataExportUnavailable { reason: String },
+
     // ── Roles (ACC-8xxx) ──────────────────────────────────────────────────────
 
     #[error("role '{0}' is already assigned to this account")]
@@ -191,6 +197,7 @@ impl AppError for AccountError {
             AccountError::AccountAlreadyAnonymized         => "ACC-7002",
             AccountError::NoPendingGdprDeletion            => "ACC-7003",
             AccountError::GdprGracePeriodOver              => "ACC-7004",
+            AccountError::DataExportUnavailable { .. }     => "ACC-7005",
 
             AccountError::RoleAlreadyAssigned(_)           => "ACC-8001",
             AccountError::RoleNotAssigned(_)               => "ACC-8002",
@@ -227,6 +234,8 @@ impl AppError for AccountError {
 
             AccountError::EventPublishFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
 
+            AccountError::DataExportUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         }
     }
@@ -251,6 +260,7 @@ impl AppError for AccountError {
         match self {
             AccountError::Storage(e)             => e.is_retryable(),
             AccountError::ConcurrentModification => true,
+            AccountError::DataExportUnavailable { .. } => true,
             _                                    => false,
         }
     }
@@ -286,6 +296,7 @@ impl AppError for AccountError {
             AccountError::AccountAlreadyAnonymized         => "This account has already been anonymized.",
             AccountError::NoPendingGdprDeletion            => "No deletion is pending for this account.",
             AccountError::GdprGracePeriodOver              => "This account's deletion can no longer be cancelled.",
+            AccountError::DataExportUnavailable { .. }     => "Your data export is being prepared; please check again later.",
             AccountError::RoleAlreadyAssigned(_)           => "This role is already assigned to the account.",
             AccountError::RoleNotAssigned(_)               => "This role is not assigned to the account.",
             _                                              => "A domain constraint was violated.",

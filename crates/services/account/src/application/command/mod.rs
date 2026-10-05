@@ -8,6 +8,7 @@ pub mod change_password;
 pub mod create_account;
 pub mod deactivate_account;
 pub mod enroll_mfa;
+pub mod export_due_data;
 pub mod reactivate_account;
 pub mod recovery_codes;
 pub mod record_failed_login;
@@ -33,6 +34,7 @@ pub use change_password::{ChangePasswordCommand, ChangePasswordHandler};
 pub use create_account::{CreateAccountCommand, CreateAccountHandler};
 pub use deactivate_account::{DeactivateAccountCommand, DeactivateAccountHandler};
 pub use enroll_mfa::{EnrollMfaCommand, EnrollMfaHandler};
+pub use export_due_data::{ExportDueData, ExportPass, EXPORT_LINK_TTL_DAYS};
 pub use reactivate_account::{ReactivateAccountCommand, ReactivateAccountHandler};
 pub use recovery_codes::{
     ConsumeRecoveryCodeCommand, ConsumeRecoveryCodeHandler, ReplaceRecoveryCodesCommand, ReplaceRecoveryCodesHandler,

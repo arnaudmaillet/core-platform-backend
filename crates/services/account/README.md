@@ -156,6 +156,19 @@ service AccountService {
 **Security at the boundary:** passwords stored as Argon2id only (plaintext never accepted); secret fields
 suppress `Display`/`Debug` and carry `#[serde(skip)]`.
 
+**GDPR data export (#653, Art. 15/20).** `RequestDataExport` marks the export pending; the **export
+pass** (`ExportDueData`) then builds, per pending account, a ZIP of JSON files — the holder's own
+account record (contact details, consents, sign-in settings; **no** password hash, MFA material or
+internal fields), the other services' files (`ExportSources`: profiles, posts, comments, reactions, the
+social graph, conversations, media links), a `README.txt` — stores it privately
+(`exports/<account>/<id>.zip`, `S3ExportStore`: static keys, `ACCOUNT_EXPORT_*`) and records a **signed
+link valid 7 days** on the GDPR record (`data_export_url` / `data_export_expires_at`, shown to the holder
+and to auth; hidden while a newer request is pending). `GdprDataExportCompleted` (without the link — it
+is a credential) lets auth email it. A failing source leaves the export pending (never a partial
+archive) and the pass retries it (`ACC-7005`); the save is version-checked, so a request made while an
+export was being built is built anew. Pending accounts come from a partial index (migration 0005). The
+server starts the pass once its mesh sources are wired (next #653 change).
+
 **MFA is auth's (#649); account only keeps it.** Every MFA RPC is **mesh only**: the holder enrolls and
 disables two-step sign-in through auth, after a step-up. auth encrypts the TOTP seed with its own key
 (AES-256-GCM; account stores the ciphertext and never reads it), hashes each backup code, and checks
@@ -195,7 +208,7 @@ Stable codes are `ACC-1xxx` (lifecycle) … `ACC-9xxx` (identifiers), via the sh
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `ConsentsUpdated`, `DateOfBirthSet` | `account_id` | `profile` (suspend/deactivate/delete → mask; activate → restore) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet` | `account_id` | `profile` (suspend/deactivate/delete → mask; activate → restore) |
 
 **Consumes:** none — `account` is a pure event producer.
 
