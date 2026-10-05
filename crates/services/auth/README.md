@@ -74,7 +74,8 @@ proves each install is a genuine copy of **our** app on a real Apple device: it 
 embedded; fingerprint pinned by a test), the nonce binding it to the challenge, the key id, the
 **app id** (`AUTH_APP_ATTEST_APP_IDS`, `<team id>.<bundle id>` — from configuration, never in
 code), a zero counter and an accepted **environment** (`AUTH_APP_ATTEST_ENVIRONMENTS`). Guest
-sessions are then also counted per attested key (`AUTH_APP_ATTEST_GUESTS_PER_DEVICE_PER_DAY`, 5),
+sessions are then also counted per attested key (`AUTH_APP_ATTEST_GUESTS_PER_DEVICE_PER_DAY`, 5 — per
+*key*: an app can rotate its key, Apple throttling attestations per device, so it is a speed bump),
 and the key is recorded on the guest (`guest_principals.attest_key_id`). Rolled out by
 `AUTH_APP_ATTEST_MODE`: `off` (default), `observe` (checked and logged, never refused), `enforce` (no
 attestation → `PERMISSION_DENIED` `AUT-1006`; an invalid one → `AUT-1007`; over the device quota →

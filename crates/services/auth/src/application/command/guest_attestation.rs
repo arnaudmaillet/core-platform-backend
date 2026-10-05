@@ -5,7 +5,9 @@
 //! genuine copy of **our** app on a real Apple device: it asks for a one-time
 //! challenge (`StartDeviceAttestation`), attests a fresh Secure Enclave key for
 //! it, and presents the attestation with `StartGuestSession`. Guest sessions are
-//! then also counted per attested key.
+//! then also counted per attested key — not per device: an app can rotate its
+//! key (Apple throttles attestations per device), so this is a speed bump; a
+//! once-per-device rule would need assertions on one key per install.
 //!
 //! Rolled out by `AUTH_APP_ATTEST_MODE`: `off` (nothing checked), `observe`
 //! (checked and logged, never refused — to measure before enforcing), `enforce`
@@ -125,9 +127,11 @@ impl GuestAttestation {
         if self.mode == AttestMode::Off {
             return Ok(None);
         }
-        let Some(proof) = proof else {
+        let Some(mut proof) = proof else {
             return self.refuse(AuthError::DeviceAttestationRequired, "no attestation");
         };
+        // One spelling of the challenge for the lookup and the nonce check.
+        proof.challenge = proof.challenge.trim().to_owned();
         // Single use: a consumed challenge can't vouch for a second session.
         if !self.challenges.consume(&challenge_hash(&proof.challenge)).await? {
             return self.refuse(

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: dd555c73baa7b56a15e96f041a69474cb1cfa493388b1ebeaa6a82cb3693aebe
+  source_sha256: a78a5e773902328e655a720a3704ad0767a4f87df6d4f60187eb08574b3b12b9
   translated_at: 2026-10-05
   status: complete
 ---
@@ -90,7 +90,8 @@ certificats jusqu'à l'Apple App Attestation Root CA (publique, embarquée ; emp
 test), le nonce qui la lie au défi, l'id de clé, l'**app id** (`AUTH_APP_ATTEST_APP_IDS`,
 `<team id>.<bundle id>` — issu de la configuration, jamais du code), un compteur à zéro et un
 **environnement** accepté (`AUTH_APP_ATTEST_ENVIRONMENTS`). Les sessions invité sont ensuite aussi
-comptées par clé attestée (`AUTH_APP_ATTEST_GUESTS_PER_DEVICE_PER_DAY`, 5), et la clé est enregistrée
+comptées par clé attestée (`AUTH_APP_ATTEST_GUESTS_PER_DEVICE_PER_DAY`, 5 — par *clé* : une app peut
+renouveler sa clé, Apple limitant les attestations par appareil, c'est donc un ralentisseur), et la clé est enregistrée
 sur l'invité (`guest_principals.attest_key_id`). Déploiement par `AUTH_APP_ATTEST_MODE` : `off` (par
 défaut), `observe` (vérifié et journalisé, jamais refusé), `enforce` (sans attestation →
 `PERMISSION_DENIED` `AUT-1006` ; invalide → `AUT-1007` ; au-delà du quota par appareil →
