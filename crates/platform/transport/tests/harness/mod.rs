@@ -35,8 +35,8 @@ use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::{Offset, TopicPartitionList};
-use testcontainers::ContainerAsync;
 use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, ContainerRequest};
 use testcontainers_modules::kafka::apache::{KAFKA_PORT, Kafka};
 use tokio::sync::OnceCell;
 use tokio::time::{Instant, sleep};
@@ -74,7 +74,9 @@ static BROKER: OnceCell<ContainerAsync<Kafka>> = OnceCell::const_new();
 async fn bootstrap_servers() -> String {
     let container = BROKER
         .get_or_init(|| async {
-            Kafka::default()
+            let broker: ContainerRequest<Kafka> = Kafka::default().into();
+            test_support::containers::ensure_image(&broker.descriptor()).await;
+            broker
                 .start()
                 .await
                 .expect("failed to start the Kafka test container")

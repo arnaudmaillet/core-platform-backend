@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 6dcc8a6539033be5042f58ff3f7444f4add7b7c9377aefaa2f6efbe0f994e897
-  translated_at: 2026-10-04
+  source_sha256: 23f35611a7c37440ad0802aac4fe79697d1e53629304a089205a591cf699bf9b
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -41,7 +41,7 @@ namespacing qui donne l'isolation parallèle vit dans le harnais de chaque servi
 
 ## 📐 Architecture & décisions clés
 
-Les cinq piliers (extraits de la suite gold-standard `chat`) :
+Les six piliers (extraits de la suite gold-standard `chat`) :
 
 - **Un jeu de conteneurs par binaire de test** — chaque backend boote paresseusement via un
   `tokio::sync::OnceCell` et est partagé par chaque scénario du binaire ; Kafka/Postgres ne bootent que
@@ -59,6 +59,11 @@ Les cinq piliers (extraits de la suite gold-standard `chat`) :
 - **Isolation par namespacing, pas teardown** — les scénarios génèrent des clés UUID fraîches pour que la
   suite tourne en parallèle contre les conteneurs partagés (la discipline vit dans chaque harnais ; ce
   crate fournit l'infra).
+- **Un hoquet de registry ne fait pas échouer une suite** — avant chaque boot, `ensure_image` vérifie le
+  store d'images local et, si l'image manque, la `docker pull` en 4 tentatives avec backoff linéaire (un
+  flux coupé ou un timeout de Docker Hub faisait échouer tout le job CI). Une image en cache coûte un
+  `docker image inspect` local ; une erreur permanente (tag inconnu, accès refusé) n'est pas retentée et
+  remonte via testcontainers exactement comme avant.
 
 ---
 
@@ -72,6 +77,7 @@ pub async fn redis_endpoint() -> String;
 pub async fn kafka_brokers() -> String;
 pub async fn ensure_topics(brokers: &str, topics: &[&str]);
 pub async fn postgres_ready(migrations_dir: &str) -> String;                 // boot + migrate once
+pub async fn ensure_image(descriptor: &str);                                  // pull-if-missing, retried (boot calls it)
 pub const OWNER_LABEL: &str = "core-platform.test-support.pid";              // on every container; value = PID
 
 // migrate.rs — idempotent runners (single-node adaptation)
@@ -114,7 +120,8 @@ await_until("message visible to guest", Duration::from_secs(5), || async {
 
 Aucun — pas de variables d'environnement ni de features cargo. Les endpoints sont découverts depuis les
 conteneurs bootés (ports mappés par l'OS) ; les seuls prérequis runtime sont un **daemon Docker en cours
-d'exécution** et la **CLI `docker` dans le `PATH`** (le reaper de fin de process l'invoque — voir Piège 5).
+d'exécution** et la **CLI `docker` dans le `PATH`** (le reaper de fin de process et le pré-pull d'images l'invoquent — voir
+Piège 5).
 
 ---
 

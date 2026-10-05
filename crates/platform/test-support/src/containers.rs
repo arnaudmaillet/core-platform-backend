@@ -109,11 +109,95 @@ async fn boot<I: Image>(
         // a fresh container. Park until the process dies.
         std::future::pending::<()>().await;
     }
+    let request: ContainerRequest<I> = request.into();
+    ensure_image(&request.descriptor()).await;
     request
         .with_label(OWNER_LABEL, std::process::id().to_string())
         .start()
         .await
         .unwrap_or_else(|e| panic!("failed to start the {backend} test container: {e:?}"))
+}
+
+/// Pull attempts [`ensure_image`] makes before handing over to testcontainers.
+const PULL_ATTEMPTS: u32 = 4;
+/// Linear backoff step between pull attempts (5s, 10s, 15s).
+const PULL_BACKOFF: Duration = Duration::from_secs(5);
+
+/// `docker pull` stderr fragments that mean retrying is pointless.
+const PERMANENT_PULL_ERRORS: &[&str] = &[
+    "not found",
+    "manifest unknown",
+    "denied",
+    "unauthorized",
+    NO_DOCKER_CLI,
+];
+/// [`docker`]'s error when the CLI itself can't be spawned.
+const NO_DOCKER_CLI: &str = "could not run the docker CLI";
+
+/// Makes sure `descriptor` (`name:tag[@digest]`) is in the local image store,
+/// pulling it with retries if not, so a registry hiccup doesn't fail a suite.
+///
+/// testcontainers pulls a missing image exactly once and turns any transport
+/// error into a boot failure — CI lost whole suites to a Docker Hub stream cut
+/// mid-pull (`PullImage { .. "bytes remaining on stream" }`, 2026-10-04) and to
+/// timeouts. Pulling here first, with backoff, absorbs those. Docker keeps the
+/// layers that did complete, so a retry resumes rather than restarts.
+///
+/// An image that is already present costs one local `docker image inspect` —
+/// no registry round-trip, so offline runs on a warm cache are unchanged. This
+/// never fails: on a permanent error (unknown image, denied, no `docker`
+/// CLI) or after the last attempt, it falls through to testcontainers' own
+/// pull, whose error the caller reports exactly as before.
+///
+/// [`boot`] calls it for every backend; a harness that starts its own
+/// containers (e.g. transport's Kafka) can call it before `start()`.
+pub async fn ensure_image(descriptor: &str) {
+    if docker(&["image", "inspect", "--format", "{{.Id}}", descriptor])
+        .await
+        .is_ok()
+    {
+        return;
+    }
+    for attempt in 1..=PULL_ATTEMPTS {
+        match docker(&["pull", "--quiet", descriptor]).await {
+            Ok(()) => return,
+            Err(e) => {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "test-support: pulling {descriptor} failed (attempt {attempt}/{PULL_ATTEMPTS}): {e}"
+                );
+                // A missing image or tag, an auth wall, or no CLI won't heal
+                // on retry: hand it straight to testcontainers to report.
+                if PERMANENT_PULL_ERRORS.iter().any(|p| e.contains(p)) {
+                    return;
+                }
+                if attempt < PULL_ATTEMPTS {
+                    tokio::time::sleep(PULL_BACKOFF * attempt).await;
+                }
+            }
+        }
+    }
+}
+
+/// Runs `docker <args>` off the async runtime; `Err` carries stderr (or the
+/// spawn error) for the retry notice.
+async fn docker(args: &[&str]) -> Result<(), String> {
+    let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("docker")
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .output()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{NO_DOCKER_CLI}: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
+    }
 }
 
 /// Runs [`reap`] at normal exit (`atexit`) and on SIGINT/SIGTERM/SIGQUIT.

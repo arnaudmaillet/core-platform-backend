@@ -61,6 +61,8 @@ integration-kafka = []
 # broker that boots in ~1-2s with no ZooKeeper — the same fast-boot / isolation profile.
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["kafka"] }
+# `ensure_image`: pre-pulls the broker image with retries (registry-hiccup guard).
+test-support = { workspace = true }
 # Unique per-test topic / consumer-group namespacing (v7 = time-ordered, collision-free).
 uuid = { workspace = true }
 # Implementing a fake QuotaBackend in the traffic-layer tests.

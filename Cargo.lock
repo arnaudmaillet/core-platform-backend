@@ -6965,6 +6965,7 @@ dependencies = [
  "resilience",
  "serde",
  "serde_json",
+ "test-support",
  "testcontainers",
  "testcontainers-modules",
  "thiserror 2.0.18",

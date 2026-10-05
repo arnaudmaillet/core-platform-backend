@@ -29,7 +29,7 @@ parallel isolation lives in each service's harness, not here.
 
 ## 📐 Architecture & key decisions
 
-The five pillars (extracted from the `chat` gold-standard suite):
+The six pillars (extracted from the `chat` gold-standard suite):
 
 - **One container set per test binary** — each backend boots lazily through a `tokio::sync::OnceCell`
   and is shared by every scenario in the binary; Kafka/Postgres boot only when a scenario first asks.
@@ -45,6 +45,11 @@ The five pillars (extracted from the `chat` gold-standard suite):
 - **Isolation by namespacing, not teardown** — scenarios mint fresh UUID keys so the suite runs in
   parallel against the shared containers (the discipline lives in each harness; this crate provides the
   infra).
+- **Registry hiccups don't fail a suite** — before each boot, `ensure_image` checks the local image
+  store and, if the image is missing, `docker pull`s it with 4 attempts and linear backoff (a cut
+  stream or timeout from Docker Hub used to fail the whole CI job). A cached image costs one local
+  `docker image inspect`; a permanent error (unknown tag, denied) is not retried and surfaces through
+  testcontainers exactly as before.
 
 ---
 
@@ -58,6 +63,7 @@ pub async fn redis_endpoint() -> String;
 pub async fn kafka_brokers() -> String;
 pub async fn ensure_topics(brokers: &str, topics: &[&str]);
 pub async fn postgres_ready(migrations_dir: &str) -> String;                 // boot + migrate once
+pub async fn ensure_image(descriptor: &str);                                  // pull-if-missing, retried (boot calls it)
 pub const OWNER_LABEL: &str = "core-platform.test-support.pid";              // on every container; value = PID
 
 // migrate.rs — idempotent runners (single-node adaptation)
@@ -99,7 +105,7 @@ await_until("message visible to guest", Duration::from_secs(5), || async {
 
 None — no environment variables and no cargo features. Endpoints are discovered from the booted
 containers (OS-mapped ports); the only runtime prerequisites are a **running Docker daemon** and the
-**`docker` CLI on `PATH`** (the exit-time reaper shells out to it — see Gotcha 5).
+**`docker` CLI on `PATH`** (the exit-time reaper and the image pre-pull shell out to it — see Gotcha 5).
 
 ---
 
