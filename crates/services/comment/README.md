@@ -50,6 +50,7 @@ gRPC CommentService ─► CommandBus ─► CreateComment ─► Comment::creat
 |---|---|---|---|
 | `comment.comments` | `comment_id` | — | source-of-truth point reads & mutations (LCS) |
 | `comment.comments_by_post` | `post_id` | `parent_id, created_at DESC, comment_id` | feed pagination, no ALLOW FILTERING (TWCS) |
+| `comment.comments_by_author` | `author_id` | `created_at DESC, comment_id DESC` | a profile's own comments (pointers into `comments`), for the GDPR export (#653) |
 
 **Nil-UUID sentinel:** top-level comments store `parent_id = 0000…0000` (lexicographically smallest),
 making the top-level scan a valid clustering prefix; replies use their actual parent `comment_id`.
@@ -109,12 +110,20 @@ service CommentService {
   rpc GetComment    (GetCommentRequest)    returns (CommentView);
   rpc ListTopLevel  (ListTopLevelRequest)  returns (ListCommentsResponse);
   rpc ListReplies   (ListRepliesRequest)   returns (ListCommentsResponse);
+  rpc ListCommentsByAuthor (ListCommentsByAuthorRequest) returns (ListCommentsResponse); // mesh only
 }
 ```
 
 > **Wire contract:** a reply's `parent_id` must always be the **top-level** `comment_id` (never another
 > reply) — the flat-tree allows exactly one nesting level. Pagination cursors are `created_at DESC`;
 > inserts after the cursor are never returned (monotonically stable pages).
+
+**A profile's own comments (#653).** `ListCommentsByAuthor(author_id)` is **mesh only** (never on the
+edge): the GDPR data export reads a profile's comments, newest first, as `comments` holds them now — a
+tombstone as a tombstone, a purged comment gone. It pages through `comments_by_author` (written with
+every comment, deleted with a purge) and point-reads each comment. Comments written before that table
+existed are indexed by an opt-in, idempotent backfill at startup (`COMMENT_BACKFILL_AUTHOR_INDEX=true`:
+a paged scan of `comments`; turn it off once it logged `comments_by_author backfill done`).
 
 **Viewer-aware reads.** `GetComment` / `ListTopLevel` / `ListReplies` take the reader from the
 transport (`edge::viewer`). For anyone but a mesh caller, a **read gate** decides with one post
@@ -238,6 +247,7 @@ async fn main() -> anyhow::Result<()> {
 | `COMMENT_OFFENSIVE_TERMS_FILE` | No | unset | One offensive term per line (`#` comments) for the offensive-comment filter (#660). Unset or unreadable: that filter hides nothing (logged); hidden words still apply. |
 | `COMMENT_POST_GRPC_ENDPOINT` / `COMMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Yes** (prod) | `http://localhost:50056` / `:50053` | Mesh endpoints of the read gate (`GetPost`, `CheckAccess`). Non-mesh reads fail closed (`CMT-5001`) without them. |
 | `COMMENT_GATE_RPC_TIMEOUT_MS` / `COMMENT_GATE_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Deadlines for those calls. |
+| `COMMENT_BACKFILL_AUTHOR_INDEX` | No | unset | `true`: index every existing comment by author at startup (once; idempotent) — #653. |
 
 > Full `SCYLLA_*` / `KAFKA_*` tuning lives in the shared storage/transport crates.
 

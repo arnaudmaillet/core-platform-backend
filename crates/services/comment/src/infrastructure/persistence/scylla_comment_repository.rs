@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, TimeZone, Utc};
 use scylla::observability::history::HistoryListener;
+use scylla::response::PagingState;
 use scylla::statement::unprepared::Statement;
 use scylla::value::CqlTimestamp;
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
@@ -140,6 +141,31 @@ fn encode_page_token(created_at_ms: i64) -> String {
     URL_SAFE_NO_PAD.encode(json)
 }
 
+/// Rows per page when scanning `comment.comments` to backfill the author index.
+const BACKFILL_PAGE_SIZE: i32 = 500;
+
+/// `(created_at_ms, comment_id)` of the last comment of a by-author page.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AuthorCursor {
+    created_at_ms: i64,
+    comment_id:    Uuid,
+}
+
+fn decode_author_cursor(page_token: Option<&str>) -> Result<Option<(i64, Uuid)>, CommentError> {
+    page_token
+        .map(|t| {
+            let bytes = URL_SAFE_NO_PAD.decode(t).map_err(|_| token_err("invalid base64 encoding"))?;
+            let cursor: AuthorCursor =
+                serde_json::from_slice(&bytes).map_err(|_| token_err("invalid page token format"))?;
+            Ok((cursor.created_at_ms, cursor.comment_id))
+        })
+        .transpose()
+}
+
+fn encode_author_cursor(created_at_ms: i64, comment_id: Uuid) -> String {
+    URL_SAFE_NO_PAD.encode(serde_json::to_vec(&AuthorCursor { created_at_ms, comment_id }).unwrap_or_default())
+}
+
 // ── Repository ────────────────────────────────────────────────────────────────
 
 pub struct ScyllaCommentRepository {
@@ -164,6 +190,25 @@ impl ScyllaCommentRepository {
             Arc::clone(&self.client.history_listener) as Arc<dyn HistoryListener>,
         );
         s
+    }
+
+    /// One `comments_by_author` row (an upsert: idempotent).
+    async fn index_by_author(
+        &self,
+        author_id:     Uuid,
+        created_at_ms: i64,
+        comment_id:    Uuid,
+        post_id:       Uuid,
+    ) -> Result<(), CommentError> {
+        let stmt = self.strict_stmt(
+            "INSERT INTO comment.comments_by_author (author_id, created_at, comment_id, post_id) VALUES (?, ?, ?, ?)",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt, (author_id, CqlTimestamp(created_at_ms), comment_id, post_id))
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
     }
 
     fn fast_stmt(&self, cql: &str) -> Statement {
@@ -253,6 +298,14 @@ impl CommentRepository for ScyllaCommentRepository {
             )
             .await
             .map_err(scylla_err)?;
+
+        self.index_by_author(
+            comment.author_id().as_uuid(),
+            comment.created_at().timestamp_millis(),
+            comment.id().as_uuid(),
+            comment.post_id().as_uuid(),
+        )
+        .await?;
 
         if comment.held() {
             self.set_held(comment, true).await?;
@@ -405,6 +458,18 @@ impl CommentRepository for ScyllaCommentRepository {
             .await
             .map_err(scylla_err)?;
 
+        let stmt_author = self.strict_stmt(
+            "DELETE FROM comment.comments_by_author WHERE author_id = ? AND created_at = ? AND comment_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(
+                stmt_author,
+                (comment.author_id().as_uuid(), dt_ms(comment.created_at()), comment.id().as_uuid()),
+            )
+            .await
+            .map_err(scylla_err)?;
+
         let stmt_feed = self.strict_stmt(
             "DELETE FROM comment.comments_by_post \
              WHERE post_id = ? AND parent_id = ? AND created_at = ? AND comment_id = ?",
@@ -424,6 +489,86 @@ impl CommentRepository for ScyllaCommentRepository {
             .map_err(scylla_err)?;
 
         Ok(())
+    }
+
+    // ── list_by_author ────────────────────────────────────────────────────────
+
+    async fn list_by_author(
+        &self,
+        author_id:  &ProfileId,
+        limit:      i32,
+        page_token: Option<&str>,
+    ) -> Result<(Vec<Comment>, Option<String>), CommentError> {
+        let limit = limit.clamp(1, 100);
+        let cursor = decode_author_cursor(page_token)?;
+        let result = match cursor {
+            Some((created_at_ms, comment_id)) => {
+                let stmt = self.fast_stmt(
+                    "SELECT created_at, comment_id FROM comment.comments_by_author \
+                     WHERE author_id = ? AND (created_at, comment_id) < (?, ?) LIMIT ?",
+                );
+                self.client
+                    .session
+                    .execute_unpaged(stmt, (author_id.as_uuid(), CqlTimestamp(created_at_ms), comment_id, limit))
+                    .await
+            }
+            None => {
+                let stmt = self.fast_stmt(
+                    "SELECT created_at, comment_id FROM comment.comments_by_author WHERE author_id = ? LIMIT ?",
+                );
+                self.client.session.execute_unpaged(stmt, (author_id.as_uuid(), limit)).await
+            }
+        }
+        .map_err(scylla_err)?;
+        let pointers = result
+            .into_rows_result()
+            .map_err(|e| row_err("list_by_author:rows", e))?
+            .rows::<(CqlTimestamp, Uuid)>()
+            .map_err(|e| row_err("list_by_author:iter", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| row_err("list_by_author:deser", e))?;
+
+        let next = (pointers.len() == limit as usize)
+            .then(|| pointers.last().map(|(at, id)| encode_author_cursor(at.0, *id)))
+            .flatten();
+        let mut comments = Vec::with_capacity(pointers.len());
+        for (_, comment_id) in pointers {
+            // A pointer whose comment was purged meanwhile is skipped.
+            if let Some(comment) = self.find_by_id(&CommentId::from_uuid(comment_id)).await? {
+                comments.push(comment);
+            }
+        }
+        Ok((comments, next))
+    }
+
+    async fn backfill_author_index(&self) -> Result<u64, CommentError> {
+        let mut stmt = self.fast_stmt("SELECT author_id, created_at, comment_id, post_id FROM comment.comments");
+        stmt.set_page_size(BACKFILL_PAGE_SIZE);
+        let mut paging = PagingState::start();
+        let mut written = 0u64;
+        loop {
+            let (result, next) = self
+                .client
+                .session
+                .execute_single_page(stmt.clone(), (), paging)
+                .await
+                .map_err(scylla_err)?;
+            let rows = result
+                .into_rows_result()
+                .map_err(|e| row_err("backfill_author_index:rows", e))?
+                .rows::<(Uuid, CqlTimestamp, Uuid, Uuid)>()
+                .map_err(|e| row_err("backfill_author_index:iter", e))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| row_err("backfill_author_index:deser", e))?;
+            for (author_id, created_at, comment_id, post_id) in rows {
+                self.index_by_author(author_id, created_at.0, comment_id, post_id).await?;
+                written += 1;
+            }
+            match next.into_paging_control_flow() {
+                std::ops::ControlFlow::Continue(state) => paging = state,
+                std::ops::ControlFlow::Break(()) => return Ok(written),
+            }
+        }
     }
 
     // ── list_top_level ────────────────────────────────────────────────────────

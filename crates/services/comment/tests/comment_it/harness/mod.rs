@@ -178,6 +178,9 @@ pub struct TestHarness {
     pub published:   Arc<RecordingPublisher>,
     /// The post owners' comment filters (the `profile.v1.events` projection).
     pub filters:     Arc<dyn CommentFilterStore>,
+    /// The repository and its client, for index-level scenarios (#653).
+    pub repository:  Arc<comment::infrastructure::persistence::ScyllaCommentRepository>,
+    pub scylla:      Arc<scylla_storage::ScyllaClient>,
 }
 
 impl TestHarness {
@@ -216,7 +219,15 @@ impl TestHarness {
             .await
             .expect("integration: build comment app");
 
-        Self { command_bus: app.command_bus, query_bus: app.query_bus, gate, published, filters: app.filter_store }
+        Self {
+            command_bus: app.command_bus,
+            query_bus: app.query_bus,
+            gate,
+            published,
+            filters: app.filter_store,
+            repository: app.repository,
+            scylla: app.scylla,
+        }
     }
 
     /// Creates a comment (top-level when `parent` is `None`, else a reply) authored

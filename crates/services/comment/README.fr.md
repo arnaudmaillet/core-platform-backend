@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 4b8157f3c851a1a8ebb0416038169b2da2a36551c0a78643f2610591842f9085
+  source_sha256: f5d82bc8292e19ccb0f6516fab4f39a6049050e80d520eb23c2abaf8747e2038
   translated_at: 2026-10-05
   status: complete
 ---
@@ -62,6 +62,7 @@ gRPC CommentService ─► CommandBus ─► CreateComment ─► Comment::creat
 |---|---|---|---|
 | `comment.comments` | `comment_id` | — | source-of-truth point reads & mutations (LCS) |
 | `comment.comments_by_post` | `post_id` | `parent_id, created_at DESC, comment_id` | feed pagination, no ALLOW FILTERING (TWCS) |
+| `comment.comments_by_author` | `author_id` | `created_at DESC, comment_id DESC` | les commentaires d'un profil (pointeurs vers `comments`), pour l'export RGPD (#653) |
 
 **Sentinelle nil-UUID :** les commentaires de premier niveau stockent `parent_id = 0000…0000`
 (lexicographiquement le plus petit), faisant du scan de premier niveau un préfixe de clustering valide ;
@@ -123,6 +124,7 @@ service CommentService {
   rpc GetComment    (GetCommentRequest)    returns (CommentView);
   rpc ListTopLevel  (ListTopLevelRequest)  returns (ListCommentsResponse);
   rpc ListReplies   (ListRepliesRequest)   returns (ListCommentsResponse);
+  rpc ListCommentsByAuthor (ListCommentsByAuthorRequest) returns (ListCommentsResponse); // mesh uniquement
 }
 ```
 
@@ -130,6 +132,14 @@ service CommentService {
 > **premier niveau** (jamais une autre réponse) — le flat-tree autorise exactement un niveau de nesting.
 > Les curseurs de pagination sont `created_at DESC` ; les inserts après le curseur ne sont jamais renvoyés
 > (pages stables de façon monotone).
+
+**Les commentaires d'un profil (#653).** `ListCommentsByAuthor(author_id)` est **mesh uniquement**
+(jamais sur l'edge) : l'export de données RGPD lit les commentaires d'un profil, du plus récent au plus
+ancien, tels que `comments` les contient — un tombstone comme tombstone, un commentaire purgé absent. Elle
+pagine `comments_by_author` (écrite à chaque commentaire, supprimée avec une purge) et relit chaque
+commentaire. Les commentaires écrits avant cette table sont indexés par un backfill optionnel et
+idempotent au démarrage (`COMMENT_BACKFILL_AUTHOR_INDEX=true` : un parcours paginé de `comments` ; le
+désactiver une fois `comments_by_author backfill done` journalisé).
 
 **Lectures selon le lecteur.** `GetComment` / `ListTopLevel` / `ListReplies` prennent le lecteur du
 transport (`edge::viewer`). Pour tout appelant hors mesh, un **read gate** décide avec un `GetPost`
@@ -258,6 +268,7 @@ async fn main() -> anyhow::Result<()> {
 | `COMMENT_OFFENSIVE_TERMS_FILE` | Non | non défini | Un terme offensant par ligne (commentaires `#`) pour le filtre de commentaires offensants (#660). Non défini ou illisible : ce filtre ne masque rien (journalisé) ; les mots masqués s'appliquent toujours. |
 | `COMMENT_POST_GRPC_ENDPOINT` / `COMMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Oui** (prod) | `http://localhost:50056` / `:50053` | Endpoints mesh du read gate (`GetPost`, `CheckAccess`). Sans eux, les lectures hors mesh échouent fermé (`CMT-5001`). |
 | `COMMENT_GATE_RPC_TIMEOUT_MS` / `COMMENT_GATE_CONNECT_TIMEOUT_MS` | Non | `1000` / `1000` | Délais de ces appels. |
+| `COMMENT_BACKFILL_AUTHOR_INDEX` | Non | non défini | `true` : indexe chaque commentaire existant par auteur au démarrage (une fois ; idempotent) — #653. |
 
 > Le réglage complet `SCYLLA_*` / `KAFKA_*` vit dans les crates partagés storage/transport.
 
