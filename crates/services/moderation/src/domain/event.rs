@@ -74,7 +74,12 @@ pub struct EnforcementReversed {
 pub struct AppealResolved {
     pub appeal_id: AppealId,
     pub decision_id: DecisionId,
+    /// The appellant (the sanctioned account, or the reporter).
     pub actor_id: ActorId,
+    /// Filed by a reporter (DSA Art. 20(1) notifier), not the sanctioned
+    /// account: no enforcement follows from it. Absent from older events.
+    #[serde(default)]
+    pub by_reporter: bool,
     pub overturned: bool,
     pub occurred_at: DateTime<Utc>,
     pub correlation_id: Uuid,

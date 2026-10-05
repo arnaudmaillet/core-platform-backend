@@ -117,6 +117,7 @@ impl App {
             Arc::clone(&deps.decisions),
             Arc::clone(&deps.appeals),
             Arc::clone(&deps.cases),
+            Arc::clone(&deps.reports),
         ));
         let resolve_appeal = Arc::new(ResolveAppealHandler::new(
             Arc::clone(&deps.appeals),

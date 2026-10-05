@@ -15,6 +15,42 @@ pub fn appealable_until(decided_at: DateTime<Utc>) -> DateTime<Utc> {
     decided_at + APPEAL_WINDOW
 }
 
+/// Who appeals a decision (DSA Art. 20(1) gives the complaint to both).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Appellant {
+    /// The account the decision was taken against.
+    Sanctioned,
+    /// A member who reported the content and disagrees with the outcome (a
+    /// dismissal, or an action they find too light). An overturn sends the case
+    /// back to review; it never reverses an enforcement.
+    Reporter,
+}
+
+impl Appellant {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Sanctioned => "sanctioned",
+            Self::Reporter => "reporter",
+        }
+    }
+}
+
+impl TryFrom<&str> for Appellant {
+    type Error = ModerationError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "sanctioned" => Ok(Self::Sanctioned),
+            "reporter" => Ok(Self::Reporter),
+            other => Err(ModerationError::DomainViolation {
+                field: "appeal.appellant".into(),
+                message: format!("unknown appellant '{other}'"),
+            }),
+        }
+    }
+}
+
 /// The **Appeal** aggregate — a challenge to a [`Decision`].
 ///
 /// Whether a category is appealable at all is checked by the application layer
@@ -28,7 +64,9 @@ pub fn appealable_until(decided_at: DateTime<Utc>) -> DateTime<Utc> {
 pub struct Appeal {
     id: AppealId,
     decision_id: DecisionId,
+    /// The appellant's account.
     actor_id: ActorId,
+    appellant: Appellant,
     statement: String,
     status: AppealStatus,
     filed_at: DateTime<Utc>,
@@ -47,6 +85,7 @@ impl Appeal {
     pub fn file(
         decision_id: DecisionId,
         actor_id: ActorId,
+        appellant: Appellant,
         statement: impl Into<String>,
         filed_at: DateTime<Utc>,
     ) -> Result<Self, ModerationError> {
@@ -61,6 +100,7 @@ impl Appeal {
             id: AppealId::new(),
             decision_id,
             actor_id,
+            appellant,
             statement,
             status: AppealStatus::Filed,
             filed_at,
@@ -76,6 +116,7 @@ impl Appeal {
         id: AppealId,
         decision_id: DecisionId,
         actor_id: ActorId,
+        appellant: Appellant,
         statement: String,
         status: AppealStatus,
         filed_at: DateTime<Utc>,
@@ -86,6 +127,7 @@ impl Appeal {
             id,
             decision_id,
             actor_id,
+            appellant,
             statement,
             status,
             filed_at,
@@ -107,6 +149,10 @@ impl Appeal {
 
     pub fn actor_id(&self) -> ActorId {
         self.actor_id
+    }
+
+    pub fn appellant(&self) -> Appellant {
+        self.appellant
     }
 
     pub fn statement(&self) -> &str {
@@ -166,6 +212,7 @@ impl Appeal {
             appeal_id: self.id,
             decision_id: self.decision_id,
             actor_id: self.actor_id,
+            by_reporter: self.appellant == Appellant::Reporter,
             overturned: overturn,
             occurred_at: now,
             correlation_id,
@@ -205,6 +252,7 @@ mod tests {
         Appeal::file(
             DecisionId::new(),
             ActorId::from_uuid(Uuid::from_u128(1)),
+            Appellant::Sanctioned,
             "this was not harassment",
             t0(),
         )
@@ -214,7 +262,7 @@ mod tests {
     #[test]
     fn file_requires_statement() {
         assert!(matches!(
-            Appeal::file(DecisionId::new(), ActorId::from_uuid(Uuid::nil()), "   ", t0()).unwrap_err(),
+            Appeal::file(DecisionId::new(), ActorId::from_uuid(Uuid::nil()), Appellant::Sanctioned, "   ", t0()).unwrap_err(),
             ModerationError::DomainViolation { .. }
         ));
     }

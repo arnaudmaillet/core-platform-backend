@@ -93,6 +93,17 @@ impl InMemoryDecisionRepository {
     pub fn count(&self) -> usize {
         self.decisions.lock().unwrap().len()
     }
+
+    /// The latest decision on `subject` at or after `since`.
+    pub fn latest_on_since(&self, subject: &SubjectRef, since: DateTime<Utc>) -> Option<DecisionId> {
+        self.decisions
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|d| same_subject(d.subject(), subject) && d.decided_at() >= since)
+            .max_by_key(|d| d.decided_at())
+            .map(Decision::id)
+    }
 }
 
 #[async_trait]
@@ -113,11 +124,12 @@ impl DecisionRepository for InMemoryDecisionRepository {
 pub struct InMemoryReportRepository {
     reports: Mutex<HashMap<ReportId, Report>>,
     cases: Arc<InMemoryCaseRepository>,
+    decisions: Arc<InMemoryDecisionRepository>,
 }
 
 impl InMemoryReportRepository {
-    pub fn new(cases: Arc<InMemoryCaseRepository>) -> Self {
-        Self { reports: Mutex::new(HashMap::new()), cases }
+    pub fn new(cases: Arc<InMemoryCaseRepository>, decisions: Arc<InMemoryDecisionRepository>) -> Self {
+        Self { reports: Mutex::new(HashMap::new()), cases, decisions }
     }
 
     pub fn count(&self) -> usize {
@@ -151,17 +163,40 @@ impl ReportRepository for InMemoryReportRepository {
             .collect();
         mine.sort_by_key(|r| std::cmp::Reverse(key(r)));
         mine.truncate(limit);
-        let mut filed = Vec::with_capacity(mine.len());
+        let mut filed: Vec<FiledReport> = Vec::with_capacity(mine.len());
         for report in mine {
             let case_status = self
                 .cases
                 .find_by_id(&CaseId::for_subject(report.subject()))
                 .await?
                 .map(|c| c.status());
-            filed.push(FiledReport { report, case_status });
+            let decision_id = case_status
+                .filter(CaseStatus::is_resolved)
+                .and_then(|_| self.decisions.latest_on_since(report.subject(), report.reported_at()));
+            filed.push(FiledReport { report, case_status, decision_id });
         }
         Ok(filed)
     }
+
+    async fn reported_before(
+        &self,
+        kind: ReporterKind,
+        reporter_id: &ActorId,
+        subject: &SubjectRef,
+        by: DateTime<Utc>,
+    ) -> Result<bool, ModerationError> {
+        Ok(self.reports.lock().unwrap().values().any(|r| {
+            r.reporter_kind() == kind
+                && r.reporter_id() == *reporter_id
+                && same_subject(r.subject(), subject)
+                && r.reported_at() <= by
+        }))
+    }
+}
+
+/// The same content of the same account (the surface it was seen on aside).
+fn same_subject(a: &SubjectRef, b: &SubjectRef) -> bool {
+    a.entity_type() == b.entity_type() && a.entity_id() == b.entity_id() && a.actor_id() == b.actor_id()
 }
 
 // ─── EnforcementRepository ─────────────────────────────────────────────────────
@@ -584,10 +619,11 @@ pub struct Fixture {
 impl Fixture {
     pub fn new() -> Self {
         let cases = Arc::new(InMemoryCaseRepository::new());
+        let decisions = Arc::new(InMemoryDecisionRepository::new());
         Self {
-            reports: Arc::new(InMemoryReportRepository::new(Arc::clone(&cases))),
+            reports: Arc::new(InMemoryReportRepository::new(Arc::clone(&cases), Arc::clone(&decisions))),
             cases,
-            decisions: Arc::new(InMemoryDecisionRepository::new()),
+            decisions,
             enforcements: Arc::new(InMemoryEnforcementRepository::new()),
             penalties: Arc::new(InMemoryPenaltyRepository::new()),
             appeals: Arc::new(InMemoryAppealRepository::new()),
@@ -659,6 +695,7 @@ impl Fixture {
             Arc::clone(&self.decisions) as _,
             Arc::clone(&self.appeals) as _,
             Arc::clone(&self.cases) as _,
+            Arc::clone(&self.reports) as _,
         )
     }
 

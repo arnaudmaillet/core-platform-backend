@@ -124,6 +124,11 @@ pub struct ReportCursor {
 pub struct FiledReport {
     pub report: Report,
     pub case_status: Option<CaseStatus>,
+    /// The decision the report's case was last decided with (the latest on its
+    /// subject since the report — a re-review after a reporter's appeal, or an
+    /// overturn, supersedes the first), once decided: the key a reporter
+    /// appeals.
+    pub decision_id: Option<DecisionId>,
 }
 
 /// Persistence for the [`Report`] aggregate — the reporter's own record of what
@@ -143,4 +148,14 @@ pub trait ReportRepository: Send + Sync + 'static {
         after: Option<ReportCursor>,
         limit: usize,
     ) -> Result<Vec<FiledReport>, ModerationError>;
+
+    /// Did this reporter report `subject` (same entity and account) at or
+    /// before `by`? What makes them a complainant of the decision taken then.
+    async fn reported_before(
+        &self,
+        kind: ReporterKind,
+        reporter_id: &ActorId,
+        subject: &SubjectRef,
+        by: DateTime<Utc>,
+    ) -> Result<bool, ModerationError>;
 }

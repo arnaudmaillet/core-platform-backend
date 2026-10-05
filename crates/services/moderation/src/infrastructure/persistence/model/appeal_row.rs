@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::domain::aggregate::Appeal;
+use crate::domain::aggregate::{Appeal, Appellant};
 use crate::domain::value_object::{ActorId, AppealId, AppealStatus, DecisionId};
 use crate::error::ModerationError;
 
@@ -16,6 +16,7 @@ pub struct AppealRow {
     pub filed_at: DateTime<Utc>,
     pub resolved_at: Option<DateTime<Utc>>,
     pub outcome: Option<String>,
+    pub appellant: String,
 }
 
 impl TryFrom<AppealRow> for Appeal {
@@ -26,6 +27,7 @@ impl TryFrom<AppealRow> for Appeal {
             AppealId::from_uuid(row.id),
             DecisionId::from_uuid(row.decision_id),
             ActorId::from_uuid(row.actor_id),
+            Appellant::try_from(row.appellant.as_str())?,
             row.statement,
             AppealStatus::try_from(row.status.as_str())?,
             row.filed_at,

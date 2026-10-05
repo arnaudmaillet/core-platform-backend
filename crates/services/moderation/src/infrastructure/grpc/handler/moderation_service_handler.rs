@@ -441,6 +441,7 @@ fn report_view(r: &MyReport) -> proto::ReportView {
         reason: report.reason().to_owned(),
         status: report_status_to_proto(r.status),
         reported_at: Some(to_ts(report.reported_at())),
+        decision_id: r.filed.decision_id.map(|d| d.as_str()).unwrap_or_default(),
     }
 }
 
@@ -461,6 +462,7 @@ fn appeal_view(a: &Appeal) -> proto::AppealView {
         filed_at: Some(to_ts(a.filed_at())),
         resolved_at: a.resolved_at().map(to_ts),
         outcome: a.outcome().unwrap_or_default().to_owned(),
+        by_reporter: a.appellant() == crate::domain::aggregate::Appellant::Reporter,
     }
 }
 

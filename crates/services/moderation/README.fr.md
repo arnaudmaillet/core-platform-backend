@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 81f42e75c5f1b1b73f5c27fc8827ba83c21cdb47b4efd75d17be3ac6ad6e22a9
+  source_sha256: 91b274c0875b67c2b7f68df85139c9ee3a68e9976d0c93ac9182f370d38aadc7
   translated_at: 2026-10-05
   status: complete
 ---
@@ -161,6 +161,15 @@ rpc GetEnforcementState   (..) returns (..);   // edge : son propre état unique
 > décision), et `ListMyAppeals` (edge `authenticated`, le requérant est le jeton, du plus récent au plus ancien, paginé
 > comme `ListMyReports`) renvoie le `status` de chaque recours et, une fois tranché, `resolved_at` et les motifs du
 > modérateur (`outcome`, tiré de `ResolveAppeal.rationale`, obligatoire).
+>
+> **Le recours de l'auteur d'un signalement (DSA art. 20(1)).** Le notifiant est aussi un plaignant : un **membre** qui
+> a signalé le contenu avant la décision peut la contester (`FileAppeal` avec son propre compte en `actor_id` ; vérifié
+> dans `reports`). Son signalement mène à la décision : `ReportView.decision_id`, la décision la plus récente sur son
+> sujet depuis le signalement, une fois son dossier tranché (grossier : toujours pas quelle sanction). Son recours est le
+> sien (`by_reporter`), à côté de celui du compte sanctionné, avec la même fenêtre, le même dédoublonnage et les mêmes
+> lectures. Il n'annule jamais rien : maintenu, la décision tient ; **infirmé, le dossier repart en revue** (`triaged`,
+> son signalement de nouveau `UNDER_REVIEW`) pour une nouvelle décision, l'ancienne et sa mesure restant en place d'ici
+> là. Les recours des invités attendent la question du mode invité (#681).
 >
 > **Signalements clients (`SubmitReport`).** Tout le monde peut signaler (DSA art. 16) : la RPC est ouverte à toute
 > session client, membre **ou invité** (edge `member_or_guest`). L'**auteur du signalement** est le jeton vérifié (le

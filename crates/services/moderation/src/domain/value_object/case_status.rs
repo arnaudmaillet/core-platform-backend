@@ -43,6 +43,11 @@ impl CaseStatus {
                 | (Actioned, Appealed)
                 | (Appealed, Actioned)
                 | (Appealed, Dismissed)
+                // A reporter's appeal overturned: back to review for a new
+                // decision (DSA Art. 20).
+                | (Actioned, Triaged)
+                | (Dismissed, Triaged)
+                | (Appealed, Triaged)
         )
     }
 
@@ -50,6 +55,12 @@ impl CaseStatus {
     /// `Actioned` case, so it is *not* considered fully terminal here).
     pub fn is_resolved(&self) -> bool {
         matches!(self, Self::Actioned | Self::Dismissed)
+    }
+
+    /// Decided, or decided and under the sanctioned account's appeal: what a
+    /// reporter's overturned appeal sends back to review.
+    pub fn is_resolved_or_appealed(&self) -> bool {
+        self.is_resolved() || matches!(self, Self::Appealed)
     }
 }
 

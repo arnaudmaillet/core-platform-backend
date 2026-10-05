@@ -23,6 +23,9 @@ pub struct FiledReportRow {
     pub reported_at: DateTime<Utc>,
     /// `NULL` when the report's case is not persisted.
     pub case_status: Option<String>,
+    /// The latest decision on the subject since the report, once the case is
+    /// decided.
+    pub decision_id: Option<Uuid>,
 }
 
 impl TryFrom<FiledReportRow> for FiledReport {
@@ -40,6 +43,7 @@ impl TryFrom<FiledReportRow> for FiledReport {
             row.reported_at,
         );
         let case_status = row.case_status.as_deref().map(CaseStatus::try_from).transpose()?;
-        Ok(FiledReport { report, case_status })
+        let decision_id = row.decision_id.map(crate::domain::value_object::DecisionId::from_uuid);
+        Ok(FiledReport { report, case_status, decision_id })
     }
 }

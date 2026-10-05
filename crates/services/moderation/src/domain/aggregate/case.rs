@@ -224,6 +224,15 @@ impl Case {
         Ok(())
     }
 
+    /// A reporter's appeal was overturned: the case goes back to review, for a
+    /// reviewer to decide anew (the earlier decision and its enforcement stand
+    /// until then).
+    pub fn reopen_for_review(&mut self) -> Result<(), ModerationError> {
+        self.transition_to(CaseStatus::Triaged)?;
+        self.touch();
+        Ok(())
+    }
+
     /// Drains accumulated events for the unit-of-work to publish.
     pub fn drain_events(&mut self) -> Vec<DomainEvent> {
         std::mem::take(&mut self.pending_events)
