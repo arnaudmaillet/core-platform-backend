@@ -125,7 +125,7 @@ rpc ListMyReports (..) returns (..);   // the caller's reports + outcome (DSA Ar
 // Ops console — case / queue / appeal lifecycle.
 rpc OpenCase   (..) returns (..);   rpc AssignCase (..) returns (..);
 rpc DecideCase (..) returns (..);   rpc ListQueue  (..) returns (..);
-rpc FileAppeal (..) returns (..);   rpc ResolveAppeal (..) returns (..);
+rpc FileAppeal (..) returns (..);   rpc ResolveAppeal (..) returns (..);   rpc ListMyAppeals (..) returns (..);
 
 // Compliance / back-office.
 rpc GetStatementOfReasons (..) returns (..);   // DSA SoR; edge: the sanctioned account only
@@ -141,6 +141,15 @@ rpc GetEnforcementState   (..) returns (..);   // edge: own state only; DISCOURA
 > `GetStatementOfReasons` and `FileAppeal`. Both answer `NOT_FOUND` for a decision about another account — on the edge
 > for the statement, everywhere for an appeal (only the sanctioned account appeals). Mesh reads of a statement stay
 > unfiltered (back-office).
+>
+> **Following an appeal (DSA Art. 20).** A decision is appealable for **183 days** (Art. 20(1): six months at least):
+> the statement carries `appealable_until` (unset for a non-appealable category), and `FileAppeal` past it answers
+> `MOD-5003` (`FAILED_PRECONDITION`). There is **one appeal per decision and appellant** (unique `(decision_id,
+> actor_id)`): filing again — or concurrently — returns the stored appeal, whatever its state. The appellant follows
+> it (Art. 20(4)–(5)): their statement carries `appeal` (their appeal of that decision), and `ListMyAppeals` (edge
+> `authenticated`, the appellant is the token, newest first, paged like `ListMyReports`) returns each appeal's
+> `status` and, once resolved, `resolved_at` and the reviewer's reasons (`outcome`, from `ResolveAppeal.rationale`,
+> required).
 >
 > **Client reports (`SubmitReport`).** Anyone may report (DSA Art. 16), so the RPC is open to every client
 > session, member **or guest** (edge `member_or_guest`). The **reporter** is the verified token (a member's account,
@@ -162,7 +171,7 @@ rpc GetEnforcementState   (..) returns (..);   // edge: own state only; DISCOURA
 > Coarse on purpose: a reporter never learns which sanction hit the reported account. Member and guest ids are
 > kept apart (`reporter_kind`).
 >
-> **Authorization (deployment requirement):** the mutating ops RPCs (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) are **privileged** — they ban/suspend/remove. The service does not self-authorize the caller; mutating RPCs **must** be restricted to authenticated reviewer principals at the edge (gateway authz / `auth-context` permission gate, e.g. `moderation:decide`) before exposure. `Screen`, `SubmitReport`, `ListMyReports`, `FileAppeal`, `GetStatementOfReasons` and `GetEnforcementState` are caller-facing; the rest are reviewer-only.
+> **Authorization (deployment requirement):** the mutating ops RPCs (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) are **privileged** — they ban/suspend/remove. The service does not self-authorize the caller; mutating RPCs **must** be restricted to authenticated reviewer principals at the edge (gateway authz / `auth-context` permission gate, e.g. `moderation:decide`) before exposure. `Screen`, `SubmitReport`, `ListMyReports`, `FileAppeal`, `ListMyAppeals`, `GetStatementOfReasons` and `GetEnforcementState` are caller-facing; the rest are reviewer-only.
 
 ### Rust ports (hexagonal contract) *(Phase 3)*
 

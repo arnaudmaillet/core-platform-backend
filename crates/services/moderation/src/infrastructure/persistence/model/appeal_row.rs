@@ -15,6 +15,7 @@ pub struct AppealRow {
     pub status: String,
     pub filed_at: DateTime<Utc>,
     pub resolved_at: Option<DateTime<Utc>>,
+    pub outcome: Option<String>,
 }
 
 impl TryFrom<AppealRow> for Appeal {
@@ -29,6 +30,7 @@ impl TryFrom<AppealRow> for Appeal {
             AppealStatus::try_from(row.status.as_str())?,
             row.filed_at,
             row.resolved_at,
+            row.outcome,
         ))
     }
 }

@@ -96,6 +96,9 @@ message AppealView {
     string                      statement    = 4; // the appellant's argument
     google.protobuf.Timestamp   filed_at     = 5;
     google.protobuf.Timestamp   resolved_at  = 6;
+    // The reviewer's reasons once resolved (UPHELD / OVERTURNED), told to the
+    // appellant (DSA Art. 20(4)–(5)); empty before.
+    string                      outcome      = 7;
 }
 
 // ── Screen · Plane C (the narrow, fail-closed pre-publish gate) ───────────────
@@ -181,6 +184,20 @@ message FileAppealResponse {
     AppealView  appeal = 1;
 }
 
+message ListMyAppealsRequest {
+    // Default 20, capped at 50.
+    int32   page_size   = 1;
+    // Opaque cursor from a previous response; empty for the first page.
+    string  page_token  = 2;
+}
+
+message ListMyAppealsResponse {
+    // Newest first.
+    repeated AppealView appeals         = 1;
+    // Empty on the last page.
+    string              next_page_token = 2;
+}
+
 message ResolveAppealRequest {
     string  appeal_id   = 1;
     // True ⇒ overturn (records a reversal decision); false ⇒ uphold.
@@ -212,6 +229,13 @@ message StatementOfReasons {
     // Whether the affected user was in scope of EU territorial obligations.
     bool                        territorial_eu = 9;
     google.protobuf.Timestamp   decided_at    = 10;
+    // Until when the decision may be appealed (DSA Art. 20(1): six months at
+    // least); unset when its category is not appealable. Past it, FileAppeal
+    // answers MOD-5003.
+    google.protobuf.Timestamp   appealable_until = 11;
+    // On the client edge: the caller's appeal of this decision, if they filed
+    // one (its status and, once resolved, its outcome).
+    AppealView                  appeal        = 12;
 }
 
 message GetStatementOfReasonsRequest {

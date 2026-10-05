@@ -62,6 +62,9 @@ impl Service for ModerationService {
         authenticated("/moderation.v1.ModerationService/GetEnforcementState"),
         authenticated("/moderation.v1.ModerationService/GetStatementOfReasons"),
         authenticated("/moderation.v1.ModerationService/FileAppeal"),
+        // DSA Art. 20(4)–(5): the appellant follows their appeals (their own:
+        // the appellant is the token).
+        authenticated("/moderation.v1.ModerationService/ListMyAppeals"),
         // DSA Art. 16: anyone may report, guests included (reporter = the token),
         // and is told what became of the report.
         member_or_guest("/moderation.v1.ModerationService/SubmitReport"),

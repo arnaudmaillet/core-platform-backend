@@ -7,6 +7,7 @@ use crate::application::port::{
     AppealRepository, CaseRepository, DecisionRepository, EnforcementProjection,
     EnforcementRepository, EventPublisher,
 };
+use crate::domain::aggregate::appeal::appealable_until;
 use crate::domain::aggregate::{Appeal, Decision, DecisionAuthor, DecisionParams};
 use crate::domain::value_object::{ActionType, ActorId, AppealId, CaseId, DecisionId};
 use crate::error::ModerationError;
@@ -57,8 +58,22 @@ impl FileAppealHandler {
             return Err(ModerationError::NotAppealable);
         }
 
+        // Already appealed: the same appeal, whatever its state (idempotent, like
+        // SubmitReport) — never a second one, never a case transition again.
+        if let Some(existing) = self.appeals.find_for(&cmd.decision_id, &cmd.actor_id).await? {
+            return Ok(existing);
+        }
+        // DSA Art. 20(1): at least six months from the decision.
+        if now > appealable_until(decision.decided_at()) {
+            return Err(ModerationError::AppealWindowClosed);
+        }
+
         let appeal = Appeal::file(cmd.decision_id, cmd.actor_id, cmd.statement, now)?;
-        self.appeals.save(&appeal).await?;
+        let stored = self.appeals.file(&appeal).await?;
+        if stored.id() != appeal.id() {
+            // A concurrent file of the same appeal won the race.
+            return Ok(stored);
+        }
 
         // Move the subject's case into the Appealed state (best-effort: the case may
         // have been opened on a different surface or already cleaned up).
@@ -132,7 +147,7 @@ impl ResolveAppealHandler {
             .await?
             .ok_or(ModerationError::DecisionNotFound { id: appeal.decision_id().as_str() })?;
 
-        appeal.resolve(cmd.overturn, now, correlation_id)?;
+        appeal.resolve(cmd.overturn, cmd.rationale.clone(), now, correlation_id)?;
         self.appeals.save(&appeal).await?;
 
         let mut reversal = None;
@@ -303,5 +318,53 @@ mod tests {
         );
         let err = fx.file_appeal_handler().handle(file, t0()).await.unwrap_err();
         assert!(matches!(err, ModerationError::NotAppealable));
+    }
+
+    #[tokio::test]
+    async fn a_second_appeal_on_the_same_decision_returns_the_first() {
+        let fx = Fixture::new();
+        let decision_id = actioned_decision(&fx, PolicyCategory::Harassment).await;
+        let file = |statement: &str| {
+            Envelope::new(
+                Uuid::now_v7(),
+                FileAppealCommand { decision_id, actor_id: subject().actor_id(), statement: statement.into() },
+            )
+        };
+        let first = fx.file_appeal_handler().handle(file("unfair"), t0()).await.unwrap();
+        let again = fx.file_appeal_handler().handle(file("really unfair"), t0()).await.unwrap();
+        assert_eq!(again.id(), first.id());
+        assert_eq!(again.statement(), "unfair", "the first stands");
+
+        // Even once resolved: told the outcome, not a new appeal.
+        let resolve = Envelope::new(
+            Uuid::now_v7(),
+            ResolveAppealCommand {
+                appeal_id: first.id(),
+                overturn: false,
+                rationale: "the decision stands".into(),
+                reviewer_id: "rev-2".into(),
+            },
+        );
+        fx.resolve_appeal_handler().handle(resolve, t0()).await.unwrap();
+        let after = fx.file_appeal_handler().handle(file("one more"), t0()).await.unwrap();
+        assert_eq!(after.id(), first.id());
+        assert_eq!(after.outcome(), Some("the decision stands"));
+    }
+
+    #[tokio::test]
+    async fn an_appeal_after_the_window_is_refused() {
+        let fx = Fixture::new();
+        let decision_id = actioned_decision(&fx, PolicyCategory::Harassment).await;
+        let file = Envelope::new(
+            Uuid::now_v7(),
+            FileAppealCommand { decision_id, actor_id: subject().actor_id(), statement: "late".into() },
+        );
+        let late = t0() + crate::domain::aggregate::appeal::APPEAL_WINDOW + chrono::Duration::seconds(1);
+        let err = fx.file_appeal_handler().handle(file.clone(), late).await.unwrap_err();
+        assert!(matches!(err, ModerationError::AppealWindowClosed));
+
+        // On its last day it is still accepted.
+        let last_day = t0() + crate::domain::aggregate::appeal::APPEAL_WINDOW;
+        fx.file_appeal_handler().handle(file, last_day).await.expect("within the window");
     }
 }

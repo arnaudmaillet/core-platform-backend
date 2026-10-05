@@ -25,7 +25,8 @@ use crate::application::port::{
     AccountDirectory, AppealRepository, CaseRepository, ClassifierGateway, DecisionRepository,
     EnforcementProjection, EnforcementRepository, EventPublisher, PenaltyRepository, ScreenCorpus, ReportRateLimiter, ReportRepository, SubjectResolver};
 use crate::application::query::{
-    GetEnforcementStateHandler, GetStatementOfReasonsHandler, ListMyReportsHandler, ListQueueHandler,
+    GetEnforcementStateHandler, GetStatementOfReasonsHandler, ListMyAppealsHandler, ListMyReportsHandler,
+    ListQueueHandler,
 };
 use crate::application::ModerationPolicy;
 use crate::config::ModerationConfig;
@@ -126,7 +127,7 @@ impl App {
             Arc::clone(&deps.publisher),
         ));
         let statement_of_reasons =
-            Arc::new(GetStatementOfReasonsHandler::new(Arc::clone(&deps.decisions)));
+            Arc::new(GetStatementOfReasonsHandler::new(Arc::clone(&deps.decisions), Arc::clone(&deps.appeals)));
         let enforcement_state = Arc::new(GetEnforcementStateHandler::new(
             Arc::clone(&deps.projection),
             Arc::clone(&deps.enforcements),
@@ -142,6 +143,7 @@ impl App {
             )),
         ));
         let list_my_reports = Arc::new(ListMyReportsHandler::new(Arc::clone(&deps.reports)));
+        let list_my_appeals = Arc::new(ListMyAppealsHandler::new(Arc::clone(&deps.appeals)));
 
         ModerationServiceHandler::new(
             screen,
@@ -155,6 +157,7 @@ impl App {
             enforcement_state,
             submit_report,
             list_my_reports,
+            list_my_appeals,
         )
     }
 
@@ -513,7 +516,43 @@ mod tests {
         };
         let status = handler.file_appeal(appeal(&stranger)).await.unwrap_err();
         assert_eq!(status.code(), Code::NotFound, "only the sanctioned account appeals");
-        handler.file_appeal(appeal(&owner)).await.expect("the owner appeals");
+        let filed = handler.file_appeal(appeal(&owner)).await.expect("the owner appeals").into_inner().appeal.unwrap();
+        // Filing again: the same appeal, not a second one.
+        let again = handler.file_appeal(appeal(&owner)).await.unwrap().into_inner().appeal.unwrap();
+        assert_eq!(again.appeal_id, filed.appeal_id);
+
+        // The statement now carries the deadline and the owner's appeal.
+        let statement = handler.get_statement_of_reasons(sor(&owner)).await.unwrap().into_inner().statement.unwrap();
+        assert!(statement.appealable_until.is_some());
+        assert_eq!(statement.appeal.map(|a| a.appeal_id), Some(filed.appeal_id.clone()));
+
+        // DSA Art. 20(4): the owner follows it; nobody else sees it.
+        let mine = |sub: &str| {
+            let mut request = Request::new(proto::ListMyAppealsRequest { page_size: 0, page_token: String::new() });
+            request.extensions_mut().insert(principal(sub, None));
+            request
+        };
+        let listed = handler.list_my_appeals(mine(&owner)).await.unwrap().into_inner();
+        assert_eq!(listed.appeals.len(), 1);
+        assert_eq!(listed.appeals[0].status, proto::AppealStatus::Filed as i32);
+        assert!(handler.list_my_appeals(mine(&stranger)).await.unwrap().into_inner().appeals.is_empty());
+        // Without a token there is no "me".
+        let anonymous = Request::new(proto::ListMyAppealsRequest { page_size: 0, page_token: String::new() });
+        assert_eq!(handler.list_my_appeals(anonymous).await.unwrap_err().code(), Code::Unauthenticated);
+
+        // Resolved: the status and the reviewer's reasons reach the owner.
+        handler
+            .resolve_appeal(Request::new(proto::ResolveAppealRequest {
+                appeal_id: filed.appeal_id.clone(),
+                overturn: false,
+                rationale: "the decision stands".into(),
+                reviewer_id: "rev-2".into(),
+            }))
+            .await
+            .unwrap();
+        let listed = handler.list_my_appeals(mine(&owner)).await.unwrap().into_inner();
+        assert_eq!(listed.appeals[0].status, proto::AppealStatus::Upheld as i32);
+        assert_eq!(listed.appeals[0].outcome, "the decision stands");
     }
 
     /// DSA Art. 16(5): the reporter sees what became of each report.

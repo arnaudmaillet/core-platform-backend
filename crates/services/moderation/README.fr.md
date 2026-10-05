@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 24e1744a57e0e468c6bc590069fa24f48bdd8b994ff1ee055927253c845c4742
-  translated_at: 2026-10-04
+  source_sha256: 81f42e75c5f1b1b73f5c27fc8827ba83c21cdb47b4efd75d17be3ac6ad6e22a9
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -136,7 +136,7 @@ rpc ListMyReports (..) returns (..);   // les signalements de l'appelant + leur 
 // Console d'opérations — cycle de vie dossier / file / appel.
 rpc OpenCase   (..) returns (..);   rpc AssignCase (..) returns (..);
 rpc DecideCase (..) returns (..);   rpc ListQueue  (..) returns (..);
-rpc FileAppeal (..) returns (..);   rpc ResolveAppeal (..) returns (..);
+rpc FileAppeal (..) returns (..);   rpc ResolveAppeal (..) returns (..);   rpc ListMyAppeals (..) returns (..);
 
 // Conformité / back-office.
 rpc GetStatementOfReasons (..) returns (..);   // DSA SoR ; edge : le compte sanctionné uniquement
@@ -152,6 +152,15 @@ rpc GetEnforcementState   (..) returns (..);   // edge : son propre état unique
 > de `FileAppeal`. Les deux répondent `NOT_FOUND` pour une décision visant un autre compte — en périphérie pour
 > l'exposé des motifs, partout pour un recours (seul le compte sanctionné fait recours). Les lectures mesh d'un exposé
 > des motifs restent non filtrées (back-office).
+>
+> **Suivre un recours (DSA art. 20).** Une décision est contestable pendant **183 jours** (art. 20(1) : six mois au
+> moins) : l'exposé des motifs porte `appealable_until` (absent pour une catégorie non contestable), et `FileAppeal`
+> au-delà répond `MOD-5003` (`FAILED_PRECONDITION`). Il y a **un recours par décision et par requérant** (unicité
+> `(decision_id, actor_id)`) : déposer de nouveau — ou en concurrence — renvoie le recours enregistré, quel que soit son
+> état. Le requérant le suit (art. 20(4)–(5)) : son exposé des motifs porte `appeal` (son recours contre cette
+> décision), et `ListMyAppeals` (edge `authenticated`, le requérant est le jeton, du plus récent au plus ancien, paginé
+> comme `ListMyReports`) renvoie le `status` de chaque recours et, une fois tranché, `resolved_at` et les motifs du
+> modérateur (`outcome`, tiré de `ResolveAppeal.rationale`, obligatoire).
 >
 > **Signalements clients (`SubmitReport`).** Tout le monde peut signaler (DSA art. 16) : la RPC est ouverte à toute
 > session client, membre **ou invité** (edge `member_or_guest`). L'**auteur du signalement** est le jeton vérifié (le
@@ -175,7 +184,7 @@ rpc GetEnforcementState   (..) returns (..);   // edge : son propre état unique
 > (y compris annulé en recours) ⇒ `NO_VIOLATION`. Volontairement grossier : l'auteur n'apprend jamais quelle sanction
 > a frappé le compte signalé. Les ids membre et invité restent distincts (`reporter_kind`).
 >
-> **Autorisation (exigence de déploiement) :** les RPC d'opérations mutatives (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) sont **privilégiées** — elles bannissent/suspendent/suppriment. Le service n'autorise pas lui-même l'appelant ; les RPC mutatives **doivent** être restreintes à des principaux modérateurs authentifiés en périphérie (autorisation gateway / contrôle de permission `auth-context`, ex. `moderation:decide`) avant exposition. `Screen`, `SubmitReport`, `ListMyReports`, `FileAppeal`, `GetStatementOfReasons` et `GetEnforcementState` sont orientées appelant ; le reste est réservé aux modérateurs.
+> **Autorisation (exigence de déploiement) :** les RPC d'opérations mutatives (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) sont **privilégiées** — elles bannissent/suspendent/suppriment. Le service n'autorise pas lui-même l'appelant ; les RPC mutatives **doivent** être restreintes à des principaux modérateurs authentifiés en périphérie (autorisation gateway / contrôle de permission `auth-context`, ex. `moderation:decide`) avant exposition. `Screen`, `SubmitReport`, `ListMyReports`, `FileAppeal`, `ListMyAppeals`, `GetStatementOfReasons` et `GetEnforcementState` sont orientées appelant ; le reste est réservé aux modérateurs.
 
 ### Ports Rust (contrat hexagonal) *(Phase 3)*
 
