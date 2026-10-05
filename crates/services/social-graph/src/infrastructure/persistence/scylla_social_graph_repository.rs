@@ -213,6 +213,9 @@ impl ScyllaSocialGraphRepository {
     }
 }
 
+/// Pending follow requests are counted up to this (the count reads "1000+").
+pub const MAX_PENDING_COUNT: u64 = 1000;
+
 #[async_trait]
 impl SocialGraphRepository for ScyllaSocialGraphRepository {
     // ── load_relation ─────────────────────────────────────────────────────────
@@ -377,19 +380,19 @@ impl SocialGraphRepository for ScyllaSocialGraphRepository {
     }
 
     async fn count_follow_requests(&self, target_id: &ProfileId) -> Result<u64, SocialGraphError> {
-        // One partition (the owner's inbox): pending requests are few.
-        let stmt = self.fast_stmt("SELECT COUNT(*) FROM social_graph.follow_requests WHERE target_id = ?");
-        let (count,): (i64,) = self
+        // Bounded, not a full-partition COUNT: a very popular private profile
+        // reads at most MAX_PENDING_COUNT rows per inbox open.
+        let stmt = self.fast_stmt("SELECT requester_id FROM social_graph.follow_requests WHERE target_id = ? LIMIT ?");
+        let rows = self
             .client
             .session
-            .execute_unpaged(stmt, (target_id.as_uuid(),))
+            .execute_unpaged(stmt, (target_id.as_uuid(), MAX_PENDING_COUNT as i32))
             .await
             .map_err(scylla_err)?
             .into_rows_result()
             .map_err(|e| row_err("count_follow_requests:rows", e))?
-            .single_row::<(i64,)>()
-            .map_err(|e| row_err("count_follow_requests:row", e))?;
-        Ok(count.max(0) as u64)
+            .rows_num();
+        Ok(rows as u64)
     }
 
     // ── persist_follow ────────────────────────────────────────────────────────
