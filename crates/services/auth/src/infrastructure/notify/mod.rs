@@ -93,4 +93,17 @@ impl CodeSender for ChannelCodeSender {
             None => Ok(()),
         }
     }
+
+    async fn send_export_ready_notice(
+        &self,
+        email: &str,
+        link: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        match &self.email {
+            Some(sender) => sender.send_export_ready_notice(email, link, expires_at, locale).await,
+            None => Ok(()),
+        }
+    }
 }

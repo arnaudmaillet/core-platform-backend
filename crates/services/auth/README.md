@@ -149,6 +149,16 @@ is refunded. Once either is spent, SMS codes answer `UNAVAILABLE` `AUT-5016` unt
 (email keeps working) and auth logs an `error` (alert on it). Size it against the SNS monthly
 spend limit (≈ limit / 30 / price per SMS), so SNS's own limit is never what stops SMS for the month.
 
+### Data export ready (GDPR Art. 15/20, #653)
+
+When `account` delivers a holder's data export it publishes `gdpr_data_export_completed` — without the
+link, which is a credential. auth's account-event consumer (the same `auth-account-events` group as
+erasure) then reads the GDPR record (`GetGdprRecord`: `account` signs the link on read) and emails it to
+the account's address ("Your data export is ready", the link and its last day, FR/EN; the log sender
+never logs the link). No link to hand out any more (a newer request, expired) or no email on file (a
+phone-only account, which sees the link in the app): nothing is sent. A directory or send failure is
+retried by `run_consumer`.
+
 ### Account erasure (GDPR Art. 17)
 
 When `account` deletes an account at the end of its grace period it publishes `account_deleted`;

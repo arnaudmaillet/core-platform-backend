@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 1f13043dcaf2725aa141a62ad785e0f6a491c546aba91172c8c2ba2b7a300cf4
+  source_sha256: 4ce40be949f9fb3e44cd590736bb272c36f011d947fed5dc49fbad08b2d57c52
   translated_at: 2026-10-05
   status: complete
 ---
@@ -170,6 +170,16 @@ remboursé. Dès que l'un est épuisé, les codes SMS répondent `UNAVAILABLE` `
 suivant (l'e-mail continue de fonctionner) et auth journalise une `error` (à alerter). Dimensionnez-le d'après la limite de
 dépense mensuelle SNS (≈ limite / 30 / prix d'un SMS), pour que la limite de SNS ne soit jamais ce
 qui coupe les SMS pour le mois.
+
+### Export de données prêt (RGPD art. 15/20, #653)
+
+Quand `account` livre l'export de données d'un titulaire, il publie `gdpr_data_export_completed` — sans le
+lien, qui est un secret. Le consommateur d'événements account d'auth (le même groupe `auth-account-events`
+que l'effacement) lit alors le dossier RGPD (`GetGdprRecord` : `account` signe le lien à la lecture) et
+l'envoie par e-mail à l'adresse du compte (« Ton export de données est prêt », le lien et son dernier jour,
+FR/EN ; l'expéditeur de log ne journalise jamais le lien). Plus de lien à remettre (une demande plus
+récente, expiré) ou pas d'e-mail enregistré (un compte par téléphone, qui voit le lien dans l'app) : rien
+n'est envoyé. Un échec de l'annuaire ou de l'envoi est réessayé par `run_consumer`.
 
 ### Effacement de compte (RGPD art. 17)
 

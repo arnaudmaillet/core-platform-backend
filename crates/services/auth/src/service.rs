@@ -132,7 +132,7 @@ impl Service for AuthService {
         // GDPR erasure: account_deleted → auth deletes what it holds about the
         // account. Only with a broker (local runs without one skip it).
         if std::env::var("KAFKA_BROKERS").is_ok_and(|b| !b.trim().is_empty()) {
-            spawn_account_event_consumer(Arc::clone(&app.erasure));
+            spawn_account_event_consumer(Arc::clone(&app.erasure), Arc::clone(&app.export_ready));
         }
 
         Ok(Self { app })
@@ -161,7 +161,10 @@ const CONSUMER_RESPAWN_BACKOFF: std::time::Duration = std::time::Duration::from_
 
 /// The supervised account-event consumer: rebuilt and restarted after a backoff
 /// whenever the runner returns (stream end, broker or dead-letter failure).
-fn spawn_account_event_consumer(erasure: Arc<crate::application::command::AccountErasure>) {
+fn spawn_account_event_consumer(
+    erasure: Arc<crate::application::command::AccountErasure>,
+    exports: Arc<crate::application::command::ExportReadyNotifier>,
+) {
     use transport::kafka::config::{ConsumerConfig, ProducerConfig};
     use transport::kafka::consumer::KafkaConsumerBuilder;
     use transport::kafka::producer::KafkaProducerBuilder;
@@ -183,7 +186,7 @@ fn spawn_account_event_consumer(erasure: Arc<crate::application::command::Accoun
                 });
             match built {
                 Ok((consumer, producer)) => {
-                    run_account_event_consumer(consumer, Arc::clone(&erasure), producer).await;
+                    run_account_event_consumer(consumer, Arc::clone(&erasure), Arc::clone(&exports), producer).await;
                     tracing::warn!("account event consumer exited; respawning after backoff");
                 }
                 Err(error) => tracing::error!(%error, "failed to build the account event consumer; retrying"),

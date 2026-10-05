@@ -99,6 +99,8 @@ pub struct StubAccountDirectory {
     refuse_contact_changes: std::sync::atomic::AtomicBool,
     /// account → (sealed seed, unused backup-code hashes) (#649).
     mfa: Mutex<HashMap<AccountId, StoredMfa>>,
+    /// account → its delivered export's (link, expiry) (#653).
+    export_links: Mutex<HashMap<AccountId, (String, DateTime<Utc>)>>,
 }
 
 impl Default for StubAccountDirectory {
@@ -120,7 +122,13 @@ impl StubAccountDirectory {
             contacts: Mutex::new(HashMap::new()),
             refuse_contact_changes: std::sync::atomic::AtomicBool::new(false),
             mfa: Mutex::new(HashMap::new()),
+            export_links: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The account's delivered export, as `account` would sign it.
+    pub fn with_export_link(&self, account_id: AccountId, link: &str, expires_at: DateTime<Utc>) {
+        self.export_links.lock().unwrap().insert(account_id, (link.to_owned(), expires_at));
     }
 
     /// Turns two-step sign-in on for a known account: `sealed` as the cipher
@@ -323,6 +331,10 @@ impl AccountDirectory for StubAccountDirectory {
             super::port::VerificationChannel::Sms => contact.phone = Some(destination.to_owned()),
         }
         Ok(())
+    }
+
+    async fn export_link(&self, account_id: &AccountId) -> Result<Option<(String, DateTime<Utc>)>, AuthError> {
+        Ok(self.export_links.lock().unwrap().get(account_id).cloned())
     }
 
     async fn mfa_secret(&self, account_id: &AccountId) -> Result<super::port::MfaSecret, AuthError> {
@@ -1244,6 +1256,8 @@ pub struct RecordingCodeSender {
     login_notices: Mutex<Vec<LoginNotice>>,
     /// (email told, change) of every two-step change notice (#649).
     mfa_notices: Mutex<Vec<(String, super::port::MfaChange)>>,
+    /// (email told, link) of every export-ready notice (#653).
+    export_notices: Mutex<Vec<(String, String)>>,
     failing: std::sync::atomic::AtomicBool,
 }
 
@@ -1262,6 +1276,11 @@ impl RecordingCodeSender {
 
     pub fn recover(&self) {
         self.failing.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The (email told, link) of every export-ready notice.
+    pub fn export_notices(&self) -> Vec<(String, String)> {
+        self.export_notices.lock().unwrap().clone()
     }
 
     /// The (email told, change) of every two-step change notice.
@@ -1339,6 +1358,17 @@ impl super::port::CodeSender for RecordingCodeSender {
         _locale: Option<&str>,
     ) -> Result<(), AuthError> {
         self.mfa_notices.lock().unwrap().push((email.to_owned(), change));
+        Ok(())
+    }
+
+    async fn send_export_ready_notice(
+        &self,
+        email: &str,
+        link: &str,
+        _expires_at: DateTime<Utc>,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        self.export_notices.lock().unwrap().push((email.to_owned(), link.to_owned()));
         Ok(())
     }
 }

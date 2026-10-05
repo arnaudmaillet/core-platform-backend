@@ -8,7 +8,8 @@ use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
 use super::code_message::{
-    code_message, contact_changed_notice_message, lockout_notice_message, mfa_changed_notice_message,
+    code_message, contact_changed_notice_message, export_ready_notice_message, lockout_notice_message,
+    mfa_changed_notice_message,
     new_login_notice_message,
 };
 use crate::application::port::{CodeSender, MfaChange, VerificationChannel};
@@ -102,6 +103,17 @@ impl CodeSender for SmtpCodeSender {
         locale: Option<&str>,
     ) -> Result<(), AuthError> {
         let (subject, body) = mfa_changed_notice_message(change, locale);
+        self.mail(email, subject, body).await
+    }
+
+    async fn send_export_ready_notice(
+        &self,
+        email: &str,
+        link: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        let (subject, body) = export_ready_notice_message(link, expires_at, locale);
         self.mail(email, subject, body).await
     }
 }

@@ -60,6 +60,18 @@ impl CodeSender for LogCodeSender {
         tracing::warn!(email, ?change, "two-step sign-in change notice (log sender — local only)");
         Ok(())
     }
+
+    async fn send_export_ready_notice(
+        &self,
+        email: &str,
+        _link: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        // The link is a credential: never logged.
+        tracing::warn!(email, %expires_at, "data export ready notice (log sender — local only)");
+        Ok(())
+    }
 }
 
 /// No transport configured: codes cannot be sent (FAILED_PRECONDITION).

@@ -3,6 +3,7 @@ pub mod change_password;
 mod credentials;
 pub mod federated_nonce;
 pub mod erase_account;
+pub mod export_ready;
 pub mod guest_attestation;
 pub mod guest_retention;
 pub mod login;
@@ -22,6 +23,7 @@ pub use change_password::{ChangePasswordCommand, ChangePasswordHandler, ChangePa
 pub use credentials::STEP_UP_WINDOW_SECS;
 pub use federated_nonce::{FederatedNonces, NonceBoundVerifier, StartedFederatedSignIn, FEDERATED_NONCE_TTL_SECS};
 pub use erase_account::AccountErasure;
+pub use export_ready::{ExportReadyNotifier, ExportReadyOutcome};
 pub use guest_attestation::{
     AttestMode, AttestationProof, AttestedDevice, DeviceAttestationVerifier, DeviceQuota, GuestAttestation,
     StartedDeviceAttestation,
