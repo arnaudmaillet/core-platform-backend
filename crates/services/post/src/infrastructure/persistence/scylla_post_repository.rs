@@ -5,7 +5,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, TimeZone, Utc};
 use scylla::observability::history::HistoryListener;
 use scylla::statement::unprepared::Statement;
-use scylla::value::CqlTimestamp;
+use scylla::value::{CqlTimestamp, MaybeUnset};
+use scylla::SerializeRow;
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
 
 use crate::application::port::{PostRepository, PostSummary};
@@ -46,6 +47,32 @@ fn token_err(field: &'static str, msg: &'static str) -> PostError {
 }
 
 // ── Repository ────────────────────────────────────────────────────────────────
+
+/// The `post.posts` INSERT row (more values than a tuple binds).
+#[derive(SerializeRow)]
+#[scylla(flavor = "enforce_order")]
+struct PostInsert<'a> {
+    post_id:           uuid::Uuid,
+    profile_id:        uuid::Uuid,
+    kind:              i8,
+    status:            i8,
+    caption:           &'a str,
+    attachments:       &'a str,
+    parent_id:         Option<uuid::Uuid>,
+    root_id:           Option<uuid::Uuid>,
+    created_at:        CqlTimestamp,
+    updated_at:        CqlTimestamp,
+    published_at:      Option<CqlTimestamp>,
+    deleted_at:        Option<CqlTimestamp>,
+    audio_id:          Option<uuid::Uuid>,
+    audio_kind:        Option<i8>,
+    lat:               Option<f64>,
+    lng:               Option<f64>,
+    /// Unset (not null) when the post follows its author's default, so the
+    /// INSERT writes no tombstone.
+    allow_remix:       MaybeUnset<bool>,
+    allow_sound_reuse: MaybeUnset<bool>,
+}
 
 pub struct ScyllaPostRepository {
     client: Arc<ScyllaClient>,
@@ -209,51 +236,41 @@ impl PostRepository for ScyllaPostRepository {
     async fn insert(&self, post: &Post) -> Result<(), PostError> {
         let attachments_json = Self::ser_attachments(post)?;
 
+        // One INSERT, the post's own reuse permissions (#669) included: past
+        // 16 values a tuple no longer binds, hence the row struct.
         let stmt_posts = self.strict_stmt(
             "INSERT INTO post.posts \
              (post_id, profile_id, kind, status, caption, attachments, \
               parent_id, root_id, created_at, updated_at, published_at, deleted_at, \
-              audio_id, audio_kind, lat, lng) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              audio_id, audio_kind, lat, lng, allow_remix, allow_sound_reuse) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         );
+        let reuse = post.reuse();
+        let row = PostInsert {
+            post_id:           post.id().as_uuid(),
+            profile_id:        post.profile_id().as_uuid(),
+            kind:              post.kind().as_tinyint(),
+            status:            post.status().as_tinyint(),
+            caption:           post.caption().as_str(),
+            attachments:       attachments_json.as_str(),
+            parent_id:         post.parent_id().map(PostId::as_uuid),
+            root_id:           post.root_id().map(PostId::as_uuid),
+            created_at:        Self::dt_ms(post.created_at()),
+            updated_at:        Self::dt_ms(post.updated_at()),
+            published_at:      post.published_at().map(Self::dt_ms),
+            deleted_at:        post.deleted_at().map(Self::dt_ms),
+            audio_id:          post.audio_ref().map(|a| a.audio_id.as_uuid()),
+            audio_kind:        post.audio_ref().map(|a| a.audio_kind.as_tinyint()),
+            lat:               post.location().map(|g| g.lat()),
+            lng:               post.location().map(|g| g.lng()),
+            allow_remix:       MaybeUnset::from_option(reuse.allow_remix),
+            allow_sound_reuse: MaybeUnset::from_option(reuse.allow_sound_reuse),
+        };
         self.client
             .session
-            .execute_unpaged(
-                stmt_posts,
-                (
-                    post.id().as_uuid(),
-                    post.profile_id().as_uuid(),
-                    post.kind().as_tinyint(),
-                    post.status().as_tinyint(),
-                    post.caption().as_str(),
-                    attachments_json.as_str(),
-                    post.parent_id().map(PostId::as_uuid),
-                    post.root_id().map(PostId::as_uuid),
-                    Self::dt_ms(post.created_at()),
-                    Self::dt_ms(post.updated_at()),
-                    post.published_at().map(Self::dt_ms),
-                    post.deleted_at().map(Self::dt_ms),
-                    post.audio_ref().map(|a| a.audio_id.as_uuid()),
-                    post.audio_ref().map(|a| a.audio_kind.as_tinyint()),
-                    post.location().map(|g| g.lat()),
-                    post.location().map(|g| g.lng()),
-                ),
-            )
+            .execute_unpaged(stmt_posts, row)
             .await
             .map_err(scylla_err)?;
-
-        // The post's own reuse permissions (#669), only when it sets any.
-        let reuse = post.reuse();
-        if reuse.allow_remix.is_some() || reuse.allow_sound_reuse.is_some() {
-            let stmt_reuse = self.strict_stmt(
-                "UPDATE post.posts SET allow_remix = ?, allow_sound_reuse = ? WHERE post_id = ?",
-            );
-            self.client
-                .session
-                .execute_unpaged(stmt_reuse, (reuse.allow_remix, reuse.allow_sound_reuse, post.id().as_uuid()))
-                .await
-                .map_err(scylla_err)?;
-        }
 
         let stmt_index = self.strict_stmt(
             "INSERT INTO post.posts_by_profile \
