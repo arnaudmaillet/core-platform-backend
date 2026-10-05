@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use scylla::observability::history::HistoryListener;
+use scylla::statement::batch::{Batch, BatchType};
 use scylla::statement::unprepared::Statement;
 use scylla_storage::{ProfileKind, ScyllaClient, ScyllaStorageError};
 
@@ -50,4 +51,15 @@ fn profiled(client: &ScyllaClient, cql: &str, kind: ProfileKind, label: &str) ->
     ));
     stmt.set_history_listener(Arc::clone(&client.history_listener) as Arc<dyn HistoryListener>);
     stmt
+}
+
+/// An empty **logged** batch on the Strict profile: its statements apply
+/// together even if the coordinator dies mid-write (a table and its index).
+pub(crate) fn strict_batch(client: &ScyllaClient) -> Batch {
+    let mut batch = Batch::new(BatchType::Logged);
+    batch.set_execution_profile_handle(Some(
+        client.profiles.get(ProfileKind::Strict).clone().into_handle_with_label("strict-batch".to_string()),
+    ));
+    batch.set_history_listener(Arc::clone(&client.history_listener) as Arc<dyn HistoryListener>);
+    batch
 }

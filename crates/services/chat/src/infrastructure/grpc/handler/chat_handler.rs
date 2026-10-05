@@ -20,11 +20,12 @@ use crate::application::command::{
     SendMessageCommand, SubscribeCommand, ToggleVisibilityCommand, UnsubscribeCommand,
 };
 use crate::application::port::{
+    Membership,
     ConversationRepository, MemberRepository, MessageSummary, PresenceSettingsStore, PresenceStore,
     ReceiptStore, RoutingRegistry,
 };
 use crate::application::query::{
-    GetHistoryQuery, ListMembersQuery, ListSubscriptionsQuery, MemberView as QueryMemberView,
+    GetHistoryQuery, ListConversationsByMemberQuery, ListMembersQuery, ListSubscriptionsQuery, MemberView as QueryMemberView,
 };
 use crate::domain::value_object::{ContentType, ConversationId, MessageId, ProfileId};
 use crate::error::ChatError;
@@ -440,6 +441,37 @@ where
         }))
     }
 
+    /// Mesh only (#653): the conversations a profile is a member of, for the
+    /// GDPR export.
+    async fn list_conversations_by_member(
+        &self,
+        request: Request<proto::ListConversationsByMemberRequest>,
+    ) -> Result<Response<proto::ListConversationsByMemberResponse>, Status> {
+        let req = request.into_inner();
+        let limit = req.limit.clamp(1, 500);
+        let query = ListConversationsByMemberQuery { member_id: req.member_id, limit, after: non_empty(req.page_token) };
+        let memberships: Vec<Membership> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        let next_page_token = match memberships.last() {
+            Some(last) if memberships.len() == limit as usize => last.conversation_id.as_uuid().to_string(),
+            _ => String::new(),
+        };
+        Ok(Response::new(proto::ListConversationsByMemberResponse {
+            memberships: memberships
+                .into_iter()
+                .map(|m| proto::MembershipView {
+                    conversation_id: m.conversation_id.as_uuid().to_string(),
+                    role:            m.role.as_tinyint() as i32,
+                    joined_at_ms:    m.joined_at.timestamp_millis(),
+                })
+                .collect(),
+            next_page_token,
+        }))
+    }
+
     // ── Streaming ─────────────────────────────────────────────────────────────
 
     async fn stream_conversation(
@@ -822,6 +854,13 @@ where
         request: Request<proto::ListSubscriptionsRequest>,
     ) -> Result<Response<proto::ListSubscriptionsResponse>, Status> {
         self.list_subscriptions(request).await
+    }
+
+    async fn list_conversations_by_member(
+        &self,
+        request: Request<proto::ListConversationsByMemberRequest>,
+    ) -> Result<Response<proto::ListConversationsByMemberResponse>, Status> {
+        self.list_conversations_by_member(request).await
     }
 
     async fn stream_conversation(

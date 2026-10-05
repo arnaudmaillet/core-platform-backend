@@ -153,6 +153,23 @@ message ListSubscriptionsResponse {
     string          next_page_token  = 2;
 }
 
+message ListConversationsByMemberRequest {
+    string member_id  = 1;
+    int32  limit      = 2;
+    // The `next_page_token` of the previous page (empty: the first).
+    string page_token = 3;
+}
+message MembershipView {
+    string                    conversation_id = 1;
+    Role                      role            = 2;
+    int64                     joined_at_ms    = 3;
+}
+message ListConversationsByMemberResponse {
+    repeated MembershipView memberships     = 1;
+    // Empty on the last page.
+    string                  next_page_token = 2;
+}
+
 // ── Streaming ───────────────────────────────────────────────────────────────
 
 message StreamConversationRequest {

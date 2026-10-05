@@ -29,6 +29,10 @@ service ChatService {
     rpc GetHistory        (GetHistoryRequest)        returns (GetHistoryResponse);
     rpc ListMembers       (ListMembersRequest)       returns (ListMembersResponse);
     rpc ListSubscriptions (ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
+    // The conversations a profile is a member of (member plane), paged by
+    // conversation id. Mesh only (never on the edge): the GDPR data export
+    // (#653) then reads each one's history as that member (GetHistory).
+    rpc ListConversationsByMember (ListConversationsByMemberRequest) returns (ListConversationsByMemberResponse);
 
     // ── Real-time streams ───────────────────────────────────────────────────
     // Member Plane: full duplex context — messages + presence + typing + receipts.

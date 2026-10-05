@@ -14,7 +14,7 @@ pub use conversation_repository::ConversationRepository;
 pub use event_publisher::EventPublisher;
 pub use hot_tail_cache::HotTailCache;
 pub use invitation_repository::InvitationRepository;
-pub use member_repository::MemberRepository;
+pub use member_repository::{MemberRepository, Membership};
 pub use message_repository::{MessageRepository, MessageSummary};
 pub use presence_settings_store::{PresenceSettings, PresenceSettingsStore};
 pub use presence_store::PresenceStore;

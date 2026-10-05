@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::domain::aggregate::Participant;
-use crate::domain::value_object::{ConversationId, MessageId, ProfileId};
+use crate::domain::value_object::{ConversationId, MessageId, ProfileId, Role};
 use crate::error::ChatError;
 
 /// Persistence port for the bounded Member Plane roster
@@ -46,4 +46,25 @@ pub trait MemberRepository: Send + Sync + 'static {
         conversation_id: &ConversationId,
         member_id:       &ProfileId,
     ) -> Result<(), ChatError>;
+
+    /// The conversations `member_id` is a member of (#653: the GDPR export),
+    /// up to `limit` after the conversation `after`, by id.
+    async fn list_by_member(
+        &self,
+        member_id: &ProfileId,
+        limit:     i32,
+        after:     Option<&ConversationId>,
+    ) -> Result<Vec<Membership>, ChatError>;
+
+    /// Indexes every roster row by its member (memberships from before
+    /// `conversations_by_member` existed). Idempotent; returns rows written.
+    async fn backfill_member_index(&self) -> Result<u64, ChatError>;
+}
+
+/// A profile's membership of one conversation (#653).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Membership {
+    pub conversation_id: ConversationId,
+    pub role:            Role,
+    pub joined_at:       chrono::DateTime<chrono::Utc>,
 }

@@ -9,3 +9,4 @@ mod presence_settings;
 mod private_join;
 mod private_concealment;
 mod stream_public_edge;
+mod conversations_by_member;

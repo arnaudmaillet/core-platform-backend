@@ -105,6 +105,19 @@ impl Service for ChatService {
             .await
             .map_err(|e| anyhow::anyhow!("chat app build: {e}"))?;
 
+        // Memberships from before `conversations_by_member` existed (#653):
+        // opt-in, once, idempotent (`CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER=true`).
+        if std::env::var("CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER").is_ok_and(|v| matches!(v.trim(), "1" | "true" | "yes")) {
+            let members = Arc::clone(&app.member_repo);
+            tokio::spawn(async move {
+                use crate::application::port::MemberRepository;
+                match members.backfill_member_index().await {
+                    Ok(written) => tracing::info!(written, "conversations_by_member backfill done"),
+                    Err(error) => tracing::error!(%error, "conversations_by_member backfill failed"),
+                }
+            });
+        }
+
         Ok(Self { app })
     }
 
@@ -123,5 +136,18 @@ impl Service for ChatService {
         routes.add_service(reflection);
         routes.add_service(ChatServiceServer::new(self.app.handler));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A profile's conversations are the GDPR export's (#653): never on the
+    /// edge.
+    #[test]
+    fn listing_by_member_is_mesh_only() {
+        let method = "/chat.v1.ChatService/ListConversationsByMember";
+        assert!(ChatService::EDGE_POLICY.iter().all(|rule| rule.method != method));
     }
 }

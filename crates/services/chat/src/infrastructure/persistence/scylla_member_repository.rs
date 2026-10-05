@@ -3,12 +3,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use scylla_storage::ScyllaClient;
 
-use crate::application::port::MemberRepository;
+use crate::application::port::{MemberRepository, Membership};
 use crate::domain::aggregate::Participant;
 use crate::domain::value_object::{ConversationId, MessageId, ProfileId, Role};
 use crate::error::ChatError;
 use crate::infrastructure::persistence::model::MemberRow;
-use crate::infrastructure::persistence::statement::{fast, row_err, scylla_err, strict};
+use crate::infrastructure::persistence::statement::{fast, row_err, scylla_err, strict, strict_batch};
 use crate::infrastructure::persistence::time::{to_cql, to_utc};
 
 const MEMBER_COLS: &str = "member_id, role, joined_at, last_read";
@@ -32,26 +32,27 @@ impl MemberRepository for ScyllaMemberRepository {
         conversation_id: &ConversationId,
         p:               &Participant,
     ) -> Result<(), ChatError> {
-        let stmt = strict(
-            &self.client,
+        // The roster and its reverse index together (a logged batch, #653).
+        let mut batch = strict_batch(&self.client);
+        batch.append_statement(
             "INSERT INTO chat.members_by_conversation \
              (conversation_id, member_id, role, joined_at, last_read) \
              VALUES (?, ?, ?, ?, ?)",
         );
-        self.client
-            .session
-            .execute_unpaged(
-                stmt,
-                (
-                    conversation_id.as_uuid(),
-                    p.profile_id().as_uuid(),
-                    p.role().as_tinyint(),
-                    to_cql(p.joined_at()),
-                    p.last_read().map(|m| m.as_uuid()),
-                ),
-            )
-            .await
-            .map_err(scylla_err)?;
+        batch.append_statement(
+            "INSERT INTO chat.conversations_by_member (member_id, conversation_id, role, joined_at) VALUES (?, ?, ?, ?)",
+        );
+        let values = (
+            (
+                conversation_id.as_uuid(),
+                p.profile_id().as_uuid(),
+                p.role().as_tinyint(),
+                to_cql(p.joined_at()),
+                p.last_read().map(|m| m.as_uuid()),
+            ),
+            (p.profile_id().as_uuid(), conversation_id.as_uuid(), p.role().as_tinyint(), to_cql(p.joined_at())),
+        );
+        self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
         Ok(())
     }
 
@@ -142,19 +143,96 @@ impl MemberRepository for ScyllaMemberRepository {
         conversation_id: &ConversationId,
         member_id:       &ProfileId,
     ) -> Result<(), ChatError> {
-        let stmt = strict(
-            &self.client,
-            "DELETE FROM chat.members_by_conversation \
-             WHERE conversation_id = ? AND member_id = ?",
-        );
-        self.client
-            .session
-            .execute_unpaged(stmt, (conversation_id.as_uuid(), member_id.as_uuid()))
-            .await
-            .map_err(scylla_err)?;
+        let mut batch = strict_batch(&self.client);
+        batch.append_statement("DELETE FROM chat.members_by_conversation WHERE conversation_id = ? AND member_id = ?");
+        batch.append_statement("DELETE FROM chat.conversations_by_member WHERE member_id = ? AND conversation_id = ?");
+        let values =
+            ((conversation_id.as_uuid(), member_id.as_uuid()), (member_id.as_uuid(), conversation_id.as_uuid()));
+        self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
         Ok(())
     }
+
+    async fn list_by_member(
+        &self,
+        member_id: &ProfileId,
+        limit:     i32,
+        after:     Option<&ConversationId>,
+    ) -> Result<Vec<Membership>, ChatError> {
+        let limit = limit.clamp(1, 500);
+        let result = match after {
+            Some(after) => {
+                let stmt = fast(
+                    &self.client,
+                    "SELECT conversation_id, role, joined_at FROM chat.conversations_by_member \
+                     WHERE member_id = ? AND conversation_id > ? LIMIT ?",
+                );
+                self.client.session.execute_unpaged(stmt, (member_id.as_uuid(), after.as_uuid(), limit)).await
+            }
+            None => {
+                let stmt = fast(
+                    &self.client,
+                    "SELECT conversation_id, role, joined_at FROM chat.conversations_by_member WHERE member_id = ? LIMIT ?",
+                );
+                self.client.session.execute_unpaged(stmt, (member_id.as_uuid(), limit)).await
+            }
+        }
+        .map_err(scylla_err)?;
+        result
+            .into_rows_result()
+            .map_err(|e| row_err("member.list_by_member:rows", e))?
+            .rows::<(uuid::Uuid, i8, scylla::value::CqlTimestamp)>()
+            .map_err(|e| row_err("member.list_by_member:iter", e))?
+            .map(|row| {
+                let (conversation_id, role, joined_at) = row.map_err(|e| row_err("member.list_by_member:deser", e))?;
+                Ok(Membership {
+                    conversation_id: ConversationId::from_uuid(conversation_id),
+                    role: Role::try_from(role)?,
+                    joined_at: to_utc(joined_at),
+                })
+            })
+            .collect()
+    }
+
+    async fn backfill_member_index(&self) -> Result<u64, ChatError> {
+        let mut scan = fast(
+            &self.client,
+            "SELECT conversation_id, member_id, role, joined_at FROM chat.members_by_conversation",
+        );
+        scan.set_page_size(BACKFILL_PAGE_SIZE);
+        let mut paging = scylla::response::PagingState::start();
+        let mut written = 0u64;
+        loop {
+            let (result, next) =
+                self.client.session.execute_single_page(scan.clone(), (), paging).await.map_err(scylla_err)?;
+            let rows = result
+                .into_rows_result()
+                .map_err(|e| row_err("member.backfill:rows", e))?
+                .rows::<(uuid::Uuid, uuid::Uuid, i8, scylla::value::CqlTimestamp)>()
+                .map_err(|e| row_err("member.backfill:iter", e))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| row_err("member.backfill:deser", e))?;
+            for (conversation_id, member_id, role, joined_at) in rows {
+                let stmt = strict(
+                    &self.client,
+                    "INSERT INTO chat.conversations_by_member (member_id, conversation_id, role, joined_at) VALUES (?, ?, ?, ?)",
+                );
+                self.client
+                    .session
+                    .execute_unpaged(stmt, (member_id, conversation_id, role, joined_at))
+                    .await
+                    .map_err(scylla_err)?;
+                written += 1;
+            }
+            match next.into_paging_control_flow() {
+                std::ops::ControlFlow::Continue(state) => paging = state,
+                std::ops::ControlFlow::Break(()) => return Ok(written),
+            }
+        }
+    }
 }
+
+/// Rows per page when scanning the rosters to backfill the member index.
+const BACKFILL_PAGE_SIZE: i32 = 500;
 
 fn participant_from_row(row: MemberRow) -> Result<Participant, ChatError> {
     Ok(Participant::reconstitute(

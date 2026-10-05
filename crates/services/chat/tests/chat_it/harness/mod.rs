@@ -105,6 +105,9 @@ pub struct TestHarness {
     pub member_registry:   Arc<ConversationBroadcastRegistry>,
     pub audience_registry: Arc<ConversationBroadcastRegistry>,
     pub params:            StreamingParams,
+    /// The roster store and its client, for index-level scenarios (#653).
+    pub member_repo:       Arc<chat::infrastructure::persistence::ScyllaMemberRepository>,
+    pub scylla:            Arc<scylla_storage::ScyllaClient>,
 }
 
 impl TestHarness {
@@ -170,6 +173,8 @@ impl TestHarness {
             member_registry,
             audience_registry,
             params,
+            member_repo,
+            scylla,
             // Storage clients are retained on `App` for the runtime's readiness
             // probes; the harness drives the graph directly and doesn't need them.
             ..
@@ -184,6 +189,8 @@ impl TestHarness {
             member_registry,
             audience_registry,
             params,
+            member_repo,
+            scylla,
         }
     }
 
