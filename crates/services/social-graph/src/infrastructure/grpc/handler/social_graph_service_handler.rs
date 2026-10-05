@@ -11,7 +11,7 @@ use crate::application::command::{
     UnmuteProfileCommand, UnrestrictProfileCommand, WithdrawFollowRequestCommand,
 };
 use crate::application::query::{
-    CheckAccessQuery, CheckInteractionQuery, FollowListPage, GetListPrivacyQuery, GetRelationStatusQuery,
+    CheckAccessQuery, CheckInteractionQuery, FollowListPage, FollowRequestsPage, GetListPrivacyQuery, GetRelationStatusQuery,
     ListBlocksQuery, ListFollowRequestsQuery, ListFollowersQuery, ListFollowingQuery, ListMutesQuery,
     ListRestrictedQuery, MutedProfilesQuery, RestrictedAmongQuery,
 };
@@ -299,14 +299,15 @@ where
             limit:      req.limit.clamp(1, 100) as u32,
             page_token: Some(req.page_token).filter(|s| !s.is_empty()),
         };
-        let (edges, next): (Vec<FollowEdge>, Option<String>) = self
+        let page: FollowRequestsPage = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
         Ok(Response::new(proto::ListFollowRequestsResponse {
-            requests:        edges.into_iter().map(follow_edge_to_proto).collect(),
-            next_page_token: next.unwrap_or_default(),
+            requests:        page.requests.into_iter().map(follow_edge_to_proto).collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+            pending_count:   page.pending.map(|n| n as i64),
         }))
     }
 

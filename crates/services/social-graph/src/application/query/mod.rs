@@ -15,7 +15,7 @@ pub use check_interaction::{CheckInteractionHandler, CheckInteractionQuery};
 pub use get_list_privacy::{GetListPrivacyHandler, GetListPrivacyQuery};
 pub use get_relation_status::{GetRelationStatusQuery, GetRelationStatusHandler};
 pub use list_blocks::{ListBlocksQuery, ListBlocksHandler};
-pub use list_follow_requests::{ListFollowRequestsHandler, ListFollowRequestsQuery};
+pub use list_follow_requests::{FollowRequestsPage, ListFollowRequestsHandler, ListFollowRequestsQuery};
 pub use list_followers::{ListFollowersQuery, ListFollowersHandler};
 pub use list_following::{ListFollowingQuery, ListFollowingHandler};
 pub use mutes::{ListMutesHandler, ListMutesQuery, MutedProfilesHandler, MutedProfilesQuery};

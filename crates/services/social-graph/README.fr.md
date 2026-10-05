@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 36449688e731b7c9075eeb1c39708159edb7b134022f55a4421b8d1d1166f5c2
+  source_sha256: 5df2a5eba74dafd1934ce174f65e304d654a38ed5e6ff64b6152391a037e91d8
   translated_at: 2026-10-05
   status: complete
 ---
@@ -126,7 +126,7 @@ en espace O(1).
 service SocialGraphService {
   // Commands
   rpc Follow(FollowRequest) returns (CommandResponse);   // une cible privée reçoit une demande en attente (CommandResponse.requested)
-  rpc ListFollowRequests(ListFollowRequestsRequest) returns (ListFollowRequestsResponse);   // boîte de réception du propriétaire d'un profil privé
+  rpc ListFollowRequests(ListFollowRequestsRequest) returns (ListFollowRequestsResponse);   // boîte de réception du propriétaire d'un profil privé ; la première page porte pending_count (plafonné à 1000)
   rpc ApproveFollowRequest(AnswerFollowRequestRequest) returns (CommandResponse);   // propriétaire
   rpc DeclineFollowRequest(AnswerFollowRequestRequest) returns (CommandResponse);   // propriétaire
   rpc CancelFollowRequest(CancelFollowRequestRequest) returns (CommandResponse);   // demandeur
