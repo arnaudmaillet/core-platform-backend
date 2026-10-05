@@ -16,8 +16,8 @@ pub struct SetLocationSettingsCommand {
     pub precision:    LocationPrecision,
     pub audience:     Option<LocationAudience>,
     pub on_new_posts: Option<bool>,
-    /// The holder is 13–17 (the edge token's age): their audience is capped
-    /// at mutuals (#657).
+    /// The holder is not known to be 18+ (13–17, or no date of birth on file:
+    /// the edge token's age): their audience is capped at mutuals (#657).
     pub minor:        bool,
 }
 
