@@ -13,4 +13,4 @@ CREATE TABLE IF NOT EXISTS engagement.post_reactions (
   AND compaction  = {'class': 'LeveledCompactionStrategy'}
   AND compression = {'sstable_compression': 'LZ4Compressor'}
   AND gc_grace_seconds = 86400
-  AND comment = 'Engagement reaction ledger. Redis is authoritative for real-time scores; this table provides durability and recovery.';
+  AND comment = 'Engagement reaction ledger. Redis is authoritative for real-time scores, this table provides durability and recovery.';

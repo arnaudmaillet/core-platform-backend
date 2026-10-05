@@ -75,6 +75,20 @@ impl Service for EngagementService {
             .await
             .map_err(|e| anyhow::anyhow!("engagement app build: {e}"))?;
 
+        // Reactions from before `reactions_by_profile` existed (#653): opt-in,
+        // once, idempotent (`ENGAGEMENT_BACKFILL_REACTIONS_BY_PROFILE=true`).
+        if std::env::var("ENGAGEMENT_BACKFILL_REACTIONS_BY_PROFILE").is_ok_and(|v| matches!(v.trim(), "1" | "true" | "yes"))
+            && let Some(ledger) = app.ledger.clone()
+        {
+            tokio::spawn(async move {
+                use crate::application::port::ReactionLedger;
+                match ledger.backfill_profile_index().await {
+                    Ok(written) => tracing::info!(written, "reactions_by_profile backfill done"),
+                    Err(error) => tracing::error!(%error, "reactions_by_profile backfill failed"),
+                }
+            });
+        }
+
         Ok(Self { app })
     }
 
@@ -94,5 +108,17 @@ impl Service for EngagementService {
         routes.add_service(reflection);
         routes.add_service(EngagementServiceServer::new(handler));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A profile's reactions are the GDPR export's (#653): never on the edge.
+    #[test]
+    fn listing_by_profile_is_mesh_only() {
+        let method = "/engagement.v1.EngagementService/ListReactionsByProfile";
+        assert!(EngagementService::EDGE_POLICY.iter().all(|rule| rule.method != method));
     }
 }

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 92da481a836357c7206deb3d63633683a3cf6e29a336eee8e13cd56803fe95d9
-  translated_at: 2026-06-25
+  source_sha256: 5d95eb8e87c38c26bce544e4ecd246ec5e7bbc1ce3e73fcfe69594f943319949
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -63,8 +63,17 @@ READ PATH: GetPostEngagement ─► RedisScoreStore::get_snapshot (4 parallel GE
 **Disposition des clés Redis :** `engagement:r:{post}:{profile}` (HASH, réaction par profil = source du
 swap) ; `engagement:scores:{post}` (HASH, scores pondérés faisant autorité) ;
 `engagement:views/shares/comments:{post}` (compteurs). **ScyllaDB :** `engagement.post_reactions` (ledger
-durable, PK `((post_id), profile_id)`), `engagement.post_interaction_counters` (table de compteurs
-approximative).
+durable, PK `((post_id), profile_id)`), `engagement.reactions_by_profile` (son miroir par profil, PK
+`((profile_id), post_id)`, écrit et supprimé avec lui dans un même LOGGED BATCH),
+`engagement.post_interaction_counters` (table de compteurs approximative).
+
+**Les réactions d'un profil (#653).** `ListReactionsByProfile(profile_id, limit, page_token)` est **mesh
+uniquement** (jamais sur l'edge) : l'export de données RGPD lit à quels posts un profil a réagi, avec
+quelle réaction et quand, paginé par id de post (le jeton est le dernier id de post). Elle lit le ledger,
+donc nécessite le chemin write-behind (Kafka + Scylla) ; sans lui la RPC répond `ENG-5003`
+(`UNAVAILABLE`). Les réactions antérieures à `reactions_by_profile` sont indexées par un backfill
+optionnel et idempotent au démarrage (`ENGAGEMENT_BACKFILL_REACTIONS_BY_PROFILE=true` : un parcours
+paginé de `post_reactions`).
 
 > **Invariants** (et où ils sont imposés) : une réaction active par `(post_id, profile_id)` — imposée
 > atomiquement par le swap Lua ; les swaps concurrents pour la même paire sont sérialisés par le contexte
@@ -119,6 +128,7 @@ service EngagementService {
   rpc RecordView        (RecordViewRequest)        returns (CommandResponse);
   rpc RecordShare       (RecordShareRequest)       returns (CommandResponse);
   rpc GetPostEngagement (GetPostEngagementRequest) returns (PostEngagementView);
+  rpc ListReactionsByProfile (ListReactionsByProfileRequest) returns (ListReactionsByProfileResponse); // mesh only
 }
 ```
 
@@ -225,6 +235,7 @@ async fn main() -> anyhow::Result<()> {
 | `ENGAGEMENT_REACTION_WEIGHT_ROCKET` | `5` | 🚀 score weight |
 | `ENGAGEMENT_REACTION_WEIGHT_CLAP` | `1` | 👏 score weight |
 | `ENGAGEMENT_REACTION_WEIGHT_SAD` | `1` | 😢 score weight |
+| `ENGAGEMENT_BACKFILL_REACTIONS_BY_PROFILE` | non défini | `true` : indexe chaque réaction existante par profil au démarrage (une fois ; idempotent) — #653 |
 
 ### Service + infrastructure héritée
 
@@ -246,8 +257,10 @@ async fn main() -> anyhow::Result<()> {
 ## 🚀 Déploiement, migrations & rollback
 
 - **Migrations :** `0001_create_keyspace.cql` → `0002_create_post_reactions_table.cql` →
-  `0003_create_post_interaction_counters_table.cql` sur `engagement`, appliquées **avant** le premier
-  démarrage.
+  `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` sur
+  `engagement`, appliquées **avant** le premier démarrage. (Le commentaire de table de 0002 contenait un
+  `;`, qui coupait l'instruction pour le lanceur de migrations qui découpe sur `;` ; c'est une virgule
+  désormais — même schéma.)
 - **Durabilité Redis :** activer l'AOF (`appendonly yes`, `appendfsync everysec`) — sans cela, un
   redémarrage perd la fenêtre de flush courante et nécessite une récupération cold-start depuis le ledger
   Scylla.

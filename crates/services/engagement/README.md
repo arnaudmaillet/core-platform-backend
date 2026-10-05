@@ -52,7 +52,15 @@ READ PATH: GetPostEngagement ─► RedisScoreStore::get_snapshot (4 parallel GE
 **Redis key layout:** `engagement:r:{post}:{profile}` (HASH, per-profile reaction = swap source);
 `engagement:scores:{post}` (HASH, authoritative weighted scores); `engagement:views/shares/comments:{post}`
 (counters). **ScyllaDB:** `engagement.post_reactions` (durable ledger, PK `((post_id), profile_id)`),
-`engagement.post_interaction_counters` (approximate counter table).
+`engagement.reactions_by_profile` (its mirror by profile, PK `((profile_id), post_id)`, written and
+deleted with it in one LOGGED BATCH), `engagement.post_interaction_counters` (approximate counter table).
+
+**A profile's reactions (#653).** `ListReactionsByProfile(profile_id, limit, page_token)` is **mesh
+only** (never on the edge): the GDPR data export reads which posts a profile reacted to, with which
+reaction and when, paged by post id (the token is the last post id). It reads the ledger, so it needs
+the write-behind path (Kafka + Scylla); without it the RPC answers `ENG-5003` (`UNAVAILABLE`).
+Reactions from before `reactions_by_profile` existed are indexed by an opt-in, idempotent backfill at
+startup (`ENGAGEMENT_BACKFILL_REACTIONS_BY_PROFILE=true`: a paged scan of `post_reactions`).
 
 > **Invariants** (and where enforced): one active reaction per `(post_id, profile_id)` — enforced
 > atomically by the Lua swap; concurrent swaps for the same pair are serialized by Redis's
@@ -106,6 +114,7 @@ service EngagementService {
   rpc RecordView        (RecordViewRequest)        returns (CommandResponse);
   rpc RecordShare       (RecordShareRequest)       returns (CommandResponse);
   rpc GetPostEngagement (GetPostEngagementRequest) returns (PostEngagementView);
+  rpc ListReactionsByProfile (ListReactionsByProfileRequest) returns (ListReactionsByProfileResponse); // mesh only
 }
 ```
 
@@ -211,6 +220,7 @@ async fn main() -> anyhow::Result<()> {
 | `ENGAGEMENT_REACTION_WEIGHT_ROCKET` | `5` | 🚀 score weight |
 | `ENGAGEMENT_REACTION_WEIGHT_CLAP` | `1` | 👏 score weight |
 | `ENGAGEMENT_REACTION_WEIGHT_SAD` | `1` | 😢 score weight |
+| `ENGAGEMENT_BACKFILL_REACTIONS_BY_PROFILE` | unset | `true`: index every existing reaction by profile at startup (once; idempotent) — #653 |
 
 ### Service + inherited infrastructure
 
@@ -232,7 +242,9 @@ async fn main() -> anyhow::Result<()> {
 ## 🚀 Deployment, Migrations & Rollback
 
 - **Migrations:** `0001_create_keyspace.cql` → `0002_create_post_reactions_table.cql` →
-  `0003_create_post_interaction_counters_table.cql` against `engagement`, applied **before** first start.
+  `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` against
+  `engagement`, applied **before** first start. (0002's table comment held a `;`, which split the
+  statement for the `;`-splitting migration runner; it is a comma now — same schema.)
 - **Redis durability:** enable AOF (`appendonly yes`, `appendfsync everysec`) — without it, a restart
   loses the current flush window and requires cold-start recovery from the Scylla ledger.
 - **Kafka:** pre-create `engagement.reactions` with ≥ 12 partitions.

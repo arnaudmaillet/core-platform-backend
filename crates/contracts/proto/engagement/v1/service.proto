@@ -20,4 +20,8 @@ service EngagementService {
 
     // Returns the full engagement snapshot (scores + counters) from Redis.
     rpc GetPostEngagement (GetPostEngagementRequest) returns (PostEngagementView);
+
+    // A profile's reactions (which posts, which reaction, when), paged by post
+    // id. Mesh only (never on the edge): the GDPR data export (#653).
+    rpc ListReactionsByProfile (ListReactionsByProfileRequest) returns (ListReactionsByProfileResponse);
 }
