@@ -24,7 +24,6 @@ async fn concurrent_follows_keep_followers_and_following_in_agreement() {
     for actor in &actors {
         let bus = Arc::clone(&h.command_bus);
         let actor = *actor;
-        let target = target;
         handles.push(tokio::spawn(harness::dispatch_follow(bus, actor.as_str(), target.as_str())));
     }
     for handle in handles {
@@ -35,7 +34,6 @@ async fn concurrent_follows_keep_followers_and_following_in_agreement() {
     harness::await_until("followers table lists every follower", DEADLINE, || {
         let h = &h;
         let actors = &actors;
-        let target = target;
         async move {
             let followers = h.followers(&target).await;
             followers.len() == actors.len()
