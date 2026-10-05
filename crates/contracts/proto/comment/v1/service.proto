@@ -23,4 +23,8 @@ service CommentService {
 
     // Paginates direct replies to a top-level comment, newest-first.
     rpc ListReplies   (ListRepliesRequest)   returns (ListCommentsResponse);
+
+    // A profile's own comments, newest first, as stored now (deleted ones as
+    // tombstones). Mesh only (never on the edge): the GDPR data export (#653).
+    rpc ListCommentsByAuthor (ListCommentsByAuthorRequest) returns (ListCommentsResponse);
 }

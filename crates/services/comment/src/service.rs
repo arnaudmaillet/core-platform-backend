@@ -76,6 +76,19 @@ impl Service for CommentService {
             .run(),
         );
 
+        // Comments written before `comments_by_author` existed (#653): opt-in,
+        // once, idempotent (`COMMENT_BACKFILL_AUTHOR_INDEX=true`).
+        if std::env::var("COMMENT_BACKFILL_AUTHOR_INDEX").is_ok_and(|v| matches!(v.trim(), "1" | "true" | "yes")) {
+            let repository = Arc::clone(&app.repository);
+            tokio::spawn(async move {
+                use crate::application::port::CommentRepository;
+                match repository.backfill_author_index().await {
+                    Ok(written) => tracing::info!(written, "comments_by_author backfill done"),
+                    Err(error) => tracing::error!(%error, "comments_by_author backfill failed"),
+                }
+            });
+        }
+
         Ok(Self { app })
     }
 
@@ -147,4 +160,18 @@ fn lazy_channel(endpoint_env: &str, default: &str) -> anyhow::Result<tonic::tran
         .timeout(ms("COMMENT_GATE_RPC_TIMEOUT_MS"))
         .connect_timeout(ms("COMMENT_GATE_CONNECT_TIMEOUT_MS"))
         .connect_lazy())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A profile's comments by author are the GDPR export's (#653): never on
+    /// the client edge, whose callers see other profiles' comments only
+    /// through a post.
+    #[test]
+    fn listing_by_author_is_mesh_only() {
+        let method = "/comment.v1.CommentService/ListCommentsByAuthor";
+        assert!(CommentService::EDGE_POLICY.iter().all(|rule| rule.method != method));
+    }
 }

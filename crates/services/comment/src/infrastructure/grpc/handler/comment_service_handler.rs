@@ -11,6 +11,7 @@ use crate::application::command::{
 use crate::application::port::CommentSummary;
 use crate::application::query::{
     get_comment::GetCommentQuery,
+    list_by_author::ListCommentsByAuthorQuery,
     list_replies::ListRepliesQuery,
     list_top_level::ListTopLevelQuery,
 };
@@ -143,6 +144,28 @@ where
         Ok(Response::new(comment_to_proto(comment)))
     }
 
+    /// Mesh only (#653): a profile's own comments for the GDPR export.
+    pub async fn list_comments_by_author(
+        &self,
+        request: Request<proto::ListCommentsByAuthorRequest>,
+    ) -> Result<Response<proto::ListCommentsResponse>, Status> {
+        let req = request.into_inner();
+        let query = ListCommentsByAuthorQuery {
+            author_id:  req.author_id,
+            limit:      req.limit,
+            page_token: Some(req.page_token).filter(|t| !t.is_empty()),
+        };
+        let (comments, next): (Vec<Comment>, Option<String>) = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListCommentsResponse {
+            comments:   comments.into_iter().map(comment_to_proto).collect(),
+            next_token: next.unwrap_or_default(),
+        }))
+    }
+
     pub async fn list_top_level(
         &self,
         request: Request<proto::ListTopLevelRequest>,
@@ -238,6 +261,13 @@ where
         request: Request<proto::ListTopLevelRequest>,
     ) -> Result<Response<proto::ListCommentsResponse>, Status> {
         self.list_top_level(request).await
+    }
+
+    async fn list_comments_by_author(
+        &self,
+        request: Request<proto::ListCommentsByAuthorRequest>,
+    ) -> Result<Response<proto::ListCommentsResponse>, Status> {
+        self.list_comments_by_author(request).await
     }
 
     async fn list_replies(

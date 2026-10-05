@@ -21,6 +21,7 @@ use crate::application::command::delete_comment::{DeleteCommentCommand, DeleteCo
 use crate::application::command::review_held::{ReviewHeldCommentCommand, ReviewHeldCommentHandler};
 use crate::application::port::{CommentEventPublisher, CommentFilterStore, OwnerFilters, ReadGate};
 use crate::application::query::get_comment::{GetCommentHandler, GetCommentQuery};
+use crate::application::query::list_by_author::{ListCommentsByAuthorHandler, ListCommentsByAuthorQuery};
 use crate::application::query::list_replies::{ListRepliesHandler, ListRepliesQuery};
 use crate::application::query::list_top_level::{ListTopLevelHandler, ListTopLevelQuery};
 use crate::domain::comment_filter::TermList;
@@ -45,6 +46,8 @@ pub struct App {
     /// The post owners' comment filters, exposed so the serving binary can
     /// wire its `profile.v1.events` consumer against the same instance.
     pub filter_store: Arc<dyn CommentFilterStore>,
+    /// The repository, for the opt-in author-index backfill (#653).
+    pub repository:  Arc<ScyllaCommentRepository>,
 }
 
 impl App {
@@ -83,6 +86,9 @@ impl App {
 
         let query_bus = Arc::new(
             QueryBusBuilder::new()
+                .register::<ListCommentsByAuthorQuery, _>(ListCommentsByAuthorHandler {
+                    repository: Arc::clone(&repository),
+                })?
                 .register::<GetCommentQuery, _>(GetCommentHandler {
                     repository: Arc::clone(&repository),
                     gate:       Arc::clone(&gate),
@@ -101,6 +107,6 @@ impl App {
                 .build(),
         );
 
-        Ok(Self { command_bus, query_bus, scylla: scylla_client, filter_store })
+        Ok(Self { command_bus, query_bus, scylla: scylla_client, filter_store, repository })
     }
 }

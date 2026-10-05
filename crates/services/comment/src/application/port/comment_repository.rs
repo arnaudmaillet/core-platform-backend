@@ -54,6 +54,21 @@ pub trait CommentRepository: Send + Sync + 'static {
     /// Physical delete: removes rows from both tables.
     async fn purge(&self, comment: &Comment) -> Result<(), CommentError>;
 
+    /// A profile's own comments, newest first, as `comment.comments` holds
+    /// them now (tombstones included, purged ones gone) — from
+    /// `comments_by_author` (#653). Returns `(comments, next_page_token)`.
+    async fn list_by_author(
+        &self,
+        author_id:  &ProfileId,
+        limit:      i32,
+        page_token: Option<&str>,
+    ) -> Result<(Vec<Comment>, Option<String>), CommentError>;
+
+    /// Indexes every comment in `comment.comments` by its author (comments
+    /// written before `comments_by_author` existed). Idempotent; returns the
+    /// rows written.
+    async fn backfill_author_index(&self) -> Result<u64, CommentError>;
+
     /// Paginates top-level comments for a post from `comments_by_post`,
     /// ordered by `created_at DESC`. Returns `(summaries, next_page_token)`.
     async fn list_top_level(
