@@ -334,9 +334,8 @@ impl ExportPeers for MeshExportPeers {
             conversations.extend(page.memberships.iter().map(|m| ConversationExport {
                 conversation_id: m.conversation_id.clone(),
                 membership: self.chat_d.json("chat.v1.MembershipView", m),
-                // chat has no direct kind yet (groups and channels only): every
-                // conversation is shielded until one exists (#656).
-                direct: false,
+                direct: m.kind == chat_api::ConversationKind::Direct as i32,
+                left: m.left_at_ms > 0,
             }));
             match page_token(page.next_page_token) {
                 Some(next) => token = next,
@@ -359,21 +358,36 @@ impl ExportPeers for MeshExportPeers {
         Ok(members.members.into_iter().map(|m| m.profile_id).collect())
     }
 
-    async fn messages(&self, conversation_id: &str, as_member: &str) -> Result<Vec<MessageExport>, AccountError> {
+    async fn messages(&self, conversation: &ConversationExport, as_member: &str) -> Result<Vec<MessageExport>, AccountError> {
+        let conversation_id = &conversation.conversation_id;
         let (mut messages, mut token) = (Vec::new(), String::new());
         loop {
-            let page = self
-                .chat
-                .clone()
-                .get_history(chat_api::GetHistoryRequest {
-                    conversation_id: conversation_id.to_owned(),
-                    requester_id: as_member.to_owned(),
-                    limit: PAGE,
-                    page_token: token,
-                })
-                .await
-                .map_err(rpc("chat"))?
-                .into_inner();
+            // A direct conversation whole; anything else as chat reduces it
+            // for the export (others' messages to their time, up to the
+            // departure for a group the holder left).
+            let page = if conversation.direct {
+                self.chat
+                    .clone()
+                    .get_history(chat_api::GetHistoryRequest {
+                        conversation_id: conversation_id.clone(),
+                        requester_id: as_member.to_owned(),
+                        limit: PAGE,
+                        page_token: token,
+                    })
+                    .await
+            } else {
+                self.chat
+                    .clone()
+                    .get_former_member_history(chat_api::GetFormerMemberHistoryRequest {
+                        conversation_id: conversation_id.clone(),
+                        member_id: as_member.to_owned(),
+                        limit: PAGE,
+                        page_token: token,
+                    })
+                    .await
+            }
+            .map_err(rpc("chat"))?
+            .into_inner();
             messages.extend(page.messages.iter().map(|m| MessageExport {
                 sender_id: m.sender_id.clone(),
                 created_at_ms: m.created_at_ms,

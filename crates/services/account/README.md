@@ -171,9 +171,10 @@ export was being built is built anew. Pending accounts come from a partial index
 sources are the other services' **mesh-only** RPCs (`MeshExportPeers`, every page, each message
 transcoded to JSON through the service's own descriptor set): per profile its profile, posts, comments
 (`ListCommentsByAuthor`), reactions (`ListReactionsByProfile`), social graph, and conversations
-(`ListConversationsByMember` + `GetHistory`: a direct conversation in full; in a group or channel the
-holder's own messages, the others' as `{"from": "another member"}` placeholders — direct is the
-conversation's kind, never its roster size, and until chat has one (#656) every conversation is shielded); for the account its
+(`ListConversationsByMember`, then: a `DIRECT` conversation in full through `GetHistory`; a group or
+channel through chat's mesh-only `GetFormerMemberHistory`, the holder's own messages with the others' as
+`{"from": "another member"}` placeholders — direct is the conversation's kind, never its roster size;
+groups the holder left (#656, `left_at_ms`) are included, up to the departure, without their roster); for the account its
 media (`ListAssetsByOwner`, links valid 7 days). The server runs the pass every
 `ACCOUNT_EXPORT_INTERVAL_SECS` when the store is configured (`ACCOUNT_EXPORT_BUCKET`, core-platform-infra#28).
 

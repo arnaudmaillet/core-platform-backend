@@ -52,6 +52,8 @@ pub struct ConversationExport {
     /// inferred from the roster: a group that shrank to two still holds the
     /// departed members' words, and a two-member channel is still a channel.
     pub direct: bool,
+    /// The profile left it (#656): its own messages up to the departure.
+    pub left: bool,
 }
 
 /// One message of a conversation: who sent it, when, and the whole of it.
@@ -75,10 +77,12 @@ pub trait ExportPeers: Send + Sync + 'static {
     /// `{following, followers, blocks}`.
     async fn social(&self, profile_id: &str) -> Result<serde_json::Value, AccountError>;
     async fn conversations(&self, profile_id: &str) -> Result<Vec<ConversationExport>, AccountError>;
-    /// The member profile ids of a conversation, read as `as_member`.
+    /// The member profile ids of a conversation `as_member` is still in.
     async fn members(&self, conversation_id: &str, as_member: &str) -> Result<Vec<String>, AccountError>;
-    /// Its whole history, read as `as_member`.
-    async fn messages(&self, conversation_id: &str, as_member: &str) -> Result<Vec<MessageExport>, AccountError>;
+    /// Its history as `as_member` sees it for the export: a direct
+    /// conversation whole; elsewhere `as_member`'s own messages, the others'
+    /// reduced to their time by chat — up to the departure, if it left.
+    async fn messages(&self, conversation: &ConversationExport, as_member: &str) -> Result<Vec<MessageExport>, AccountError>;
     /// The account's media, each with a download link valid `ttl`.
     async fn media(&self, account_id: &AccountId, ttl: Duration) -> Result<Vec<serde_json::Value>, AccountError>;
 }
