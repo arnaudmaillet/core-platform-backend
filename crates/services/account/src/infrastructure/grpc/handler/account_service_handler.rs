@@ -32,6 +32,7 @@ use crate::application::command::{
     verify_phone::VerifyPhoneCommand,
 };
 use crate::application::query::{
+    find_profiles_by_contacts::{FindProfilesByContactsQuery, FoundProfile},
     get_account_by_id::{AccountView, GetAccountByIdQuery},
     get_mfa_secret::{GetMfaSecretQuery, MfaSecretView},
     get_account_by_email::GetAccountByEmailQuery,
@@ -607,6 +608,53 @@ where
         self.gdpr_record(req.account_id).await.map(Response::new)
     }
 
+    /// The profiles of the caller's address book (#661). Edge: the caller's
+    /// own account.
+    pub async fn find_profiles_by_contacts(
+        &self,
+        request: Request<proto::FindProfilesByContactsRequest>,
+    ) -> Result<Response<proto::FindProfilesByContactsResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let query = FindProfilesByContactsQuery {
+            account_id:   req.account_id,
+            email_hashes: req.email_sha256,
+            phone_hashes: req.phone_sha256,
+        };
+        let found: Vec<FoundProfile> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(|e| {
+                // The daily budget renews at the next UTC midnight.
+                let mut status = cqrs_error_to_status(e);
+                if status.code() == tonic::Code::ResourceExhausted {
+                    let now = chrono::Utc::now();
+                    let midnight = (now.date_naive() + chrono::Days::new(1)).and_time(chrono::NaiveTime::MIN).and_utc();
+                    if let Ok(value) = (midnight - now).num_seconds().max(1).to_string().parse() {
+                        status.metadata_mut().insert("retry-after-secs", value);
+                    }
+                }
+                status
+            })?;
+        Ok(Response::new(proto::FindProfilesByContactsResponse {
+            profiles: found
+                .into_iter()
+                .map(|f| proto::ContactProfile {
+                    contact_sha256: f.hash,
+                    channel:        match f.channel {
+                        crate::application::port::ContactChannel::Email => proto::ContactChannel::Email,
+                        crate::application::port::ContactChannel::Phone => proto::ContactChannel::Phone,
+                    } as i32,
+                    profile_id:     f.profile.profile_id,
+                    handle:         f.profile.handle,
+                    display_name:   f.profile.display_name,
+                    avatar_url:     f.profile.avatar_url.unwrap_or_default(),
+                })
+                .collect(),
+        }))
+    }
+
     pub async fn update_consents(
         &self,
         request: Request<proto::UpdateConsentsRequest>,
@@ -799,6 +847,7 @@ pub fn cqrs_error_to_status(err: cqrs::error::CqrsError) -> Status {
                 409 if retryable => Status::aborted(msg),
                 409 => Status::already_exists(msg),
                 400 | 422 => Status::failed_precondition(msg),
+                429 => Status::resource_exhausted(msg),
                 503 | 502 => Status::unavailable(msg),
                 _ => Status::internal(msg),
             };

@@ -27,6 +27,8 @@ use thiserror::Error;
 /// | ACC-7003 | NoPendingGdprDeletion      | 422  | Low      | No        |
 /// | ACC-7004 | GdprGracePeriodOver        | 422  | Low      | No        |
 /// | ACC-7005 | DataExportUnavailable      | 503  | Medium   | **Yes**   |
+/// | ACC-7006 | DirectoryUnavailable       | 503  | Medium   | **Yes**   |
+/// | ACC-7007 | ContactLookupQuotaExceeded | 429  | Low      | No        |
 /// | ACC-8001 | RoleAlreadyAssigned        | 409  | Low      | No        |
 /// | ACC-8002 | RoleNotAssigned            | 422  | Low      | No        |
 /// | ACC-9001 | DomainViolation            | 422  | Medium   | No        |
@@ -127,6 +129,15 @@ pub enum AccountError {
     #[error("the data export is unavailable right now: {reason}")]
     DataExportUnavailable { reason: String },
 
+    /// Contact matching (#661) could not read the matched accounts' profiles
+    /// or the blocks between them (profile / social-graph unreachable).
+    #[error("contact matching is unavailable right now: {reason}")]
+    DirectoryUnavailable { reason: String },
+
+    /// The account looked up its daily budget of contact hashes (#661).
+    #[error("the daily contact lookup budget of {limit} hashes is spent")]
+    ContactLookupQuotaExceeded { limit: i64 },
+
     // ── Roles (ACC-8xxx) ──────────────────────────────────────────────────────
 
     #[error("role '{0}' is already assigned to this account")]
@@ -198,6 +209,8 @@ impl AppError for AccountError {
             AccountError::NoPendingGdprDeletion            => "ACC-7003",
             AccountError::GdprGracePeriodOver              => "ACC-7004",
             AccountError::DataExportUnavailable { .. }     => "ACC-7005",
+            AccountError::DirectoryUnavailable { .. }      => "ACC-7006",
+            AccountError::ContactLookupQuotaExceeded { .. } => "ACC-7007",
 
             AccountError::RoleAlreadyAssigned(_)           => "ACC-8001",
             AccountError::RoleNotAssigned(_)               => "ACC-8002",
@@ -234,7 +247,9 @@ impl AppError for AccountError {
 
             AccountError::EventPublishFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
 
-            AccountError::DataExportUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            AccountError::DataExportUnavailable { .. }
+            | AccountError::DirectoryUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            AccountError::ContactLookupQuotaExceeded { .. } => StatusCode::TOO_MANY_REQUESTS,
 
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         }
@@ -260,7 +275,7 @@ impl AppError for AccountError {
         match self {
             AccountError::Storage(e)             => e.is_retryable(),
             AccountError::ConcurrentModification => true,
-            AccountError::DataExportUnavailable { .. } => true,
+            AccountError::DataExportUnavailable { .. } | AccountError::DirectoryUnavailable { .. } => true,
             _                                    => false,
         }
     }
@@ -297,6 +312,8 @@ impl AppError for AccountError {
             AccountError::NoPendingGdprDeletion            => "No deletion is pending for this account.",
             AccountError::GdprGracePeriodOver              => "This account's deletion can no longer be cancelled.",
             AccountError::DataExportUnavailable { .. }     => "Your data export is being prepared; please check again later.",
+            AccountError::DirectoryUnavailable { .. }      => "Finding your contacts is unavailable right now; please try again later.",
+            AccountError::ContactLookupQuotaExceeded { .. } => "You have looked up many contacts today; please try again tomorrow.",
             AccountError::RoleAlreadyAssigned(_)           => "This role is already assigned to the account.",
             AccountError::RoleNotAssigned(_)               => "This role is not assigned to the account.",
             _                                              => "A domain constraint was violated.",

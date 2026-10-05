@@ -62,3 +62,10 @@ enum AgeBracket {
     AGE_BRACKET_16_17       = 2;
     AGE_BRACKET_ADULT       = 3;
 }
+
+// How a contact matched (#661).
+enum ContactChannel {
+    CONTACT_CHANNEL_UNSPECIFIED = 0;
+    CONTACT_CHANNEL_EMAIL       = 1;
+    CONTACT_CHANNEL_PHONE       = 2;
+}

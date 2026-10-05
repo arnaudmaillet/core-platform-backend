@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 0ca541f86bd57d6c7ae8686af78301295ec409c5d277d7b492f42d51ad13f593
+  source_sha256: 67ba951ac2454da4206e69526e4f40cfa0cfc7d815f5d2aedf08584e0ad22982
   translated_at: 2026-10-05
   status: complete
 ---
@@ -157,6 +157,7 @@ service AccountService {
   rpc GetAccountStatus (GetAccountStatusRequest) returns (AccountStatusView); // auth hot path
   rpc SetDateOfBirth (SetDateOfBirthRequest) returns (AccountView);          // une fois, si absente ; âge minimum 13 ans (16 en AU)
   rpc GetGdprRecord (GetGdprRecordRequest) returns (GdprRecordView);          // le sien propre en périphérie
+  rpc FindProfilesByContacts (FindProfilesByContactsRequest) returns (FindProfilesByContactsResponse); // #661, le compte de l'appelant en périphérie
   rpc UpdateConsents (UpdateConsentsRequest) returns (GdprRecordView);         // GDPR Art. 7 consents + history
   rpc ListAccountsByStatus (ListAccountsByStatusRequest) returns (ListAccountsByStatusResponse);
 }
@@ -170,6 +171,24 @@ service AccountService {
 
 **Sécurité à la frontière :** mots de passe stockés en Argon2id uniquement (jamais le clair accepté) ;
 les champs secrets suppriment `Display`/`Debug` et portent `#[serde(skip)]`.
+
+**Retrouver ses contacts (#661).** `FindProfilesByContacts(account_id, email_sha256[], phone_sha256[])`
+reçoit les empreintes SHA-256 des contacts d'un carnet d'adresses — emails en minuscules et sans espaces,
+numéros E.164 — 1000 au plus par appel, et **n'en garde aucune**. Une empreinte correspond à l'email /
+au téléphone **vérifié** d'un compte **actif** : les empreintes sont des colonnes générées
+(`account_contact_sha256`, migration 0007) indexées pour les seuls contacts vérifiés, si bien qu'elles
+suivent chaque écriture. Les profils des comptes trouvés sont lus via le mesh (profile, comme le mesh :
+statut et réglages de découvrabilité) et gardés s'ils sont actifs et trouvables par ce canal
+(`by_email` / `by_phone`), jamais ceux de l'appelant, jamais un profil que les profils de l'appelant
+bloquent ou qui les bloque (`CheckAccess` de social-graph ; une réponse absente compte comme masquée).
+Chaque résultat nomme l'empreinte dont il vient, pour que l'app affiche le contact. Profile ou
+social-graph injoignable ⇒ `ACC-7006` (`UNAVAILABLE`, rejouable). Les empreintes de numéros ne cachent
+rien (un plan de numérotation se hache en quelques minutes) : chaque compte peut chercher **5000
+empreintes par jour UTC** (`contact_lookup_quota`, migration 0008) ; chaque empreinte envoyée compte,
+trouvée ou non, réservée atomiquement avant toute recherche ; au-delà ⇒ `ACC-7007`
+(`RESOURCE_EXHAUSTED`, `retry-after-secs` = jusqu'au prochain minuit UTC). Les numéros stockés sont déjà
+en E.164 (validés à chaque écriture) : la colonne d'empreinte des téléphones n'a pas besoin de
+normalisation.
 
 **Export de données RGPD (#653, art. 15/20).** `RequestDataExport` marque l'export en attente ; la
 **passe d'export** (`ExportDueData`) construit alors, pour chaque compte en attente, un ZIP de fichiers

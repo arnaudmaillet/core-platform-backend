@@ -536,3 +536,67 @@ impl AccountRepository for PgAccountRepository {
         Ok(ids.into_iter().map(AccountId::from_uuid).collect())
     }
 }
+
+/// Contact matching (#661): the generated hash columns, indexed for verified
+/// contacts (migration 0007). Active accounts only.
+#[async_trait]
+impl crate::application::port::ContactIndex for PgAccountRepository {
+    async fn match_contacts(
+        &self,
+        email_hashes: &[Vec<u8>],
+        phone_hashes: &[Vec<u8>],
+    ) -> Result<Vec<crate::application::port::ContactMatch>, AccountError> {
+        use crate::application::port::{ContactChannel, ContactMatch};
+        let rows: Vec<(uuid::Uuid, String, Vec<u8>)> = sqlx::query_as(
+            "SELECT id, 'email', email_sha256 FROM accounts \
+             WHERE email_verified AND status = 'active' AND email_sha256 = ANY($1) \
+             UNION ALL \
+             SELECT id, 'phone', phone_sha256 FROM accounts \
+             WHERE phone_verified AND status = 'active' AND phone_sha256 = ANY($2)",
+        )
+        .bind(email_hashes)
+        .bind(phone_hashes)
+        .fetch_all(self.tx_manager.pool())
+        .await
+        .map_err(|e| AccountError::Storage(StorageError::from(e)))?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, channel, hash)| ContactMatch {
+                account_id: crate::domain::value_object::AccountId::from_uuid(id),
+                channel: if channel == "phone" { ContactChannel::Phone } else { ContactChannel::Email },
+                hash,
+            })
+            .collect())
+    }
+}
+
+/// The daily contact lookup budget (#661, migration 0008): one atomic upsert
+/// that adds `n` only while the day's total stays within the limit.
+#[async_trait]
+impl crate::application::port::ContactLookupQuota for PgAccountRepository {
+    async fn reserve(
+        &self,
+        account_id: &crate::domain::value_object::AccountId,
+        day: chrono::NaiveDate,
+        n: i64,
+        limit: i64,
+    ) -> Result<bool, AccountError> {
+        if n > limit {
+            return Ok(false);
+        }
+        let reserved: Option<(i32,)> = sqlx::query_as(
+            "INSERT INTO contact_lookup_quota AS q (account_id, day, used) VALUES ($1, $2, $3) \
+             ON CONFLICT (account_id, day) DO UPDATE SET used = q.used + EXCLUDED.used \
+             WHERE q.used + EXCLUDED.used <= $4 \
+             RETURNING used",
+        )
+        .bind(account_id.as_uuid())
+        .bind(day)
+        .bind(n as i32)
+        .bind(limit as i32)
+        .fetch_optional(self.tx_manager.pool())
+        .await
+        .map_err(|e| AccountError::Storage(StorageError::from(e)))?;
+        Ok(reserved.is_some())
+    }
+}

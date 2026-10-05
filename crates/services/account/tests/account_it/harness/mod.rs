@@ -38,6 +38,10 @@ pub struct TestHarness {
     /// Direct reads for assertions on tables no query exposes.
     pub pool:        sqlx::PgPool,
     pub repository:  Arc<dyn account::application::port::AccountRepository>,
+    /// The accounts' contacts by hash (#661).
+    pub contacts:    Arc<dyn account::application::port::ContactIndex>,
+    /// Contact matching's daily budget (#661).
+    pub quota:       Arc<dyn account::application::port::ContactLookupQuota>,
 }
 
 impl TestHarness {
@@ -64,7 +68,14 @@ impl TestHarness {
             .await
             .expect("integration: build account app");
 
-        Self { command_bus: app.command_bus, query_bus: app.query_bus, pool, repository: app.repository }
+        Self {
+            command_bus: app.command_bus,
+            query_bus: app.query_bus,
+            pool,
+            repository: app.repository,
+            contacts: app.contacts,
+            quota: app.quota,
+        }
     }
 
     /// Creates an account, expecting success.

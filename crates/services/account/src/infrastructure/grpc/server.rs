@@ -265,4 +265,11 @@ where
     ) -> Result<Response<proto::ListAccountsByStatusResponse>, Status> {
         self.list_accounts_by_status(request).await
     }
+
+    async fn find_profiles_by_contacts(
+        &self,
+        request: Request<proto::FindProfilesByContactsRequest>,
+    ) -> Result<Response<proto::FindProfilesByContactsResponse>, Status> {
+        self.find_profiles_by_contacts(request).await
+    }
 }
