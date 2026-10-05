@@ -269,6 +269,7 @@ async fn main() -> anyhow::Result<()> {
 | `MEDIA_PRESIGN_TTL_SECS` | No | `900` | server-side signed-URL validity |
 | `MEDIA_OBJECT_STORE_TIMEOUT_MS` | No | `10000` | hard timeout on every object-store HTTP call |
 | `MEDIA_CDN_BASE_URL` | No | `…:9000/media` | public, content-addressed delivery origin |
+| `MEDIA_CLOUDFRONT_DISTRIBUTION_ID` | No | — | takedowns (quarantine / delete) purge the asset's renditions from this CloudFront distribution (`CreateInvalidation`, SigV4 with the `MEDIA_S3_*` keys, whose IAM user needs `cloudfront:CreateInvalidation`); a failed purge fails the takedown, which is retried. Unset: takedowns only log (local runs) |
 | `MEDIA_UPLOAD_TICKET_TTL_SECS` | No | `900` | pre-signed upload validity window |
 | `MEDIA_SIGNED_URL_TTL_SECS` | No | `300` | private (signed) delivery URL validity |
 | `MEDIA_DEDUP_ENABLED` | No | `false` | content-hash dedup (off until refcount-purge is hardened) |
@@ -317,8 +318,7 @@ so neither a stuck store nor a stuck moderation gate can wedge a worker.
 `Transcoder` sibling port + ABR ladder is the fast-follow); a real malware-scan
 sidecar (the `MalwareScanner` port ships a pass-through stub); the orphan-GC
 consumer (unbound-after-TTL reaping of abandoned uploads); WebP/AVIF rendition
-encoding (v1 emits JPEG); a real CloudFront `CreateInvalidation` (the gateway logs;
-content-addressed immutability means invalidation only matters on takedown); and
+encoding (v1 emits JPEG); and
 the dedup refcount-aware GDPR purge (dedup ships behind a default-off flag until
 that path has live coverage).
 

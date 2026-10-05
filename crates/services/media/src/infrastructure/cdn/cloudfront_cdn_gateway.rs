@@ -10,6 +10,8 @@ use crate::error::MediaError;
 
 use crate::infrastructure::store::S3Client;
 
+use super::CloudFrontInvalidator;
+
 /// CDN gateway over a content-addressed origin. Public URLs are immutable (no
 /// expiry — an edit is a new asset/hash/URL); signed URLs are minted per request
 /// via the object store.
@@ -18,11 +20,19 @@ pub struct CloudFrontCdnGateway {
     base_url: String,
     store: Arc<S3Client>,
     signed_ttl: Duration,
+    /// Edge purges on takedown; `None` (no distribution configured) logs instead.
+    invalidator: Option<CloudFrontInvalidator>,
 }
 
 impl CloudFrontCdnGateway {
     pub fn new(base_url: String, store: Arc<S3Client>, signed_ttl: Duration) -> Self {
-        Self { base_url, store, signed_ttl }
+        Self { base_url, store, signed_ttl, invalidator: None }
+    }
+
+    /// Purges takedowns from this CloudFront distribution.
+    pub fn with_invalidator(mut self, invalidator: CloudFrontInvalidator) -> Self {
+        self.invalidator = Some(invalidator);
+        self
     }
 }
 
@@ -53,10 +63,17 @@ impl CdnGateway for CloudFrontCdnGateway {
     }
 
     async fn invalidate(&self, keys: &[StorageKey]) -> Result<(), MediaError> {
-        // Takedown-only path. A real CloudFront CreateInvalidation is a Phase-7
-        // ops follow-up; content-addressed immutability means this never fires on
-        // an edit, only on delete/quarantine.
-        tracing::info!(count = keys.len(), "cdn invalidation requested (log stub)");
-        Ok(())
+        // Takedown-only path: content-addressed immutability means this never
+        // fires on an edit, only on delete / quarantine.
+        match &self.invalidator {
+            Some(invalidator) => invalidator.invalidate(keys).await,
+            None => {
+                tracing::warn!(
+                    count = keys.len(),
+                    "cdn invalidation skipped: no CloudFront distribution configured (MEDIA_CLOUDFRONT_DISTRIBUTION_ID)"
+                );
+                Ok(())
+            }
+        }
     }
 }

@@ -30,7 +30,7 @@ use crate::application::query::{GetAssetHandler, ResolveDeliveryHandler};
 use crate::application::MediaPolicy;
 use crate::config::MediaConfig;
 use crate::infrastructure::cache::RedisDeliveryCache;
-use crate::infrastructure::cdn::CloudFrontCdnGateway;
+use crate::infrastructure::cdn::{CloudFrontCdnGateway, CloudFrontInvalidator, CloudFrontInvalidatorConfig};
 use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 use crate::infrastructure::grpc::MediaServiceHandler;
 use crate::infrastructure::persistence::PgAssetRepository;
@@ -149,6 +149,7 @@ impl App {
 
         // Shared S3 client: presigns URLs + does the worker's server-side byte I/O.
         // Its HTTP client carries the object-store hard timeout.
+        let cdn_keys = (config.s3.access_key.clone(), config.s3.secret_key.clone());
         let store = Arc::new(S3Client::new(config.s3)?);
 
         let publisher: Arc<dyn EventPublisher> = match backends.kafka {
@@ -163,15 +164,27 @@ impl App {
         // require the gate to be up at boot.
         let screen_channel = Channel::from_shared(config.screen_endpoint)?.connect_lazy();
 
+        let mut cdn = CloudFrontCdnGateway::new(config.cdn_base_url, Arc::clone(&store), config.policy.signed_url_ttl);
+        match config.cloudfront_distribution_id {
+            Some(distribution_id) => {
+                cdn = cdn.with_invalidator(CloudFrontInvalidator::new(
+                    reqwest::Client::builder().timeout(std::time::Duration::from_secs(10)).build()?,
+                    CloudFrontInvalidatorConfig {
+                        distribution_id,
+                        access_key_id: cdn_keys.0,
+                        secret_access_key: cdn_keys.1,
+                        endpoint: "https://cloudfront.amazonaws.com".into(),
+                    },
+                ));
+            }
+            None => tracing::warn!("MEDIA_CLOUDFRONT_DISTRIBUTION_ID not set: takedowns are not purged from a CDN"),
+        }
+
         let deps = AppDeps {
             assets: Arc::new(PgAssetRepository::new(tx)),
             cache: Arc::new(RedisDeliveryCache::new(redis.clone())),
             store: Arc::new(S3ObjectStore::new(Arc::clone(&store))),
-            cdn: Arc::new(CloudFrontCdnGateway::new(
-                config.cdn_base_url,
-                Arc::clone(&store),
-                config.policy.signed_url_ttl,
-            )),
+            cdn: Arc::new(cdn),
             probe: Arc::new(DispatchingMediaProbe::new(
                 Arc::new(ImageMediaProbe::new(Arc::clone(&store))),
                 Arc::new(VideoMediaProbe::new(Arc::clone(&store))),
