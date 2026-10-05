@@ -8,8 +8,9 @@
 //!   per-address send budget (hourly and daily counters, a resend cooldown
 //!   marker) and its wrong-code count across challenges. The address only
 //!   appears hashed in key names; all four share one slot.
-//! - `auth:{sms-budget}:<YYYYMMDD>` — the SMS sent by the whole service that
-//!   UTC day (kept 2 days).
+//! - `auth:{sms-budget}:<YYYYMMDD>` and `…:<YYYYMMDD>:<country>` — the SMS
+//!   sent that UTC day by the whole service and to one country (kept 2 days,
+//!   one slot so one script checks both).
 
 use async_trait::async_trait;
 use chrono::Duration;
@@ -17,8 +18,8 @@ use fred::interfaces::LuaInterface;
 use redis_storage::{RedisClient, RedisStorageError};
 
 use crate::application::port::{
-    ConsumeOutcome, PendingChallenge, SendAdmission, SendLimits, VerificationChannel, VerificationStore,
-    VerifiedDestination,
+    ConsumeOutcome, PendingChallenge, SendAdmission, SendLimits, SmsBudget, SmsReservation, VerificationChannel,
+    VerificationStore, VerifiedDestination,
 };
 use crate::error::AuthError;
 
@@ -38,8 +39,9 @@ fn failure_key(destination_key: &str) -> String {
     format!("auth:{{otpd:{destination_key}}}:fail")
 }
 
-fn sms_budget_key(day: chrono::NaiveDate) -> String {
-    format!("auth:{{sms-budget}}:{}", day.format("%Y%m%d"))
+fn sms_budget_keys(country: &str) -> Vec<String> {
+    let day = chrono::Utc::now().date_naive().format("%Y%m%d");
+    vec![format!("auth:{{sms-budget}}:{day}:{country}"), format!("auth:{{sms-budget}}:{day}")]
 }
 
 fn cache_err(e: fred::error::Error) -> AuthError {
@@ -69,12 +71,25 @@ redis.call('SET', KEYS[3], '1', 'EX', tonumber(ARGV[3]))
 return 0
 "#;
 
-/// KEYS = the day's SMS counter · ARGV = budget. Returns 1 when admitted.
-/// Refusals are counted too, so the counter reads how hard the budget is hit.
+/// KEYS = the day's country counter, the day's service counter · ARGV =
+/// country budget, service budget. Returns 1 reserved, 2 country spent, 3
+/// service spent. Only a reserved SMS is counted.
 const RESERVE_SMS: &str = r#"
-local n = redis.call('INCR', KEYS[1])
-if n == 1 then redis.call('EXPIRE', KEYS[1], 172800) end
-if n > tonumber(ARGV[1]) then return 0 end
+local country = tonumber(redis.call('GET', KEYS[1]) or '0')
+if country >= tonumber(ARGV[1]) then return 2 end
+local total = tonumber(redis.call('GET', KEYS[2]) or '0')
+if total >= tonumber(ARGV[2]) then return 3 end
+for _, key in ipairs(KEYS) do
+    if redis.call('INCR', key) == 1 then redis.call('EXPIRE', key, 172800) end
+end
+return 1
+"#;
+
+/// KEYS = the day's country counter, the day's service counter.
+const REFUND_SMS: &str = r#"
+for _, key in ipairs(KEYS) do
+    if tonumber(redis.call('GET', key) or '0') > 0 then redis.call('DECR', key) end
+end
 return 1
 "#;
 
@@ -218,12 +233,29 @@ impl VerificationStore for RedisVerificationStore {
         Ok(())
     }
 
-    async fn reserve_sms(&self, daily_budget: u32) -> Result<bool, AuthError> {
-        let admitted: i64 = self
+    async fn reserve_sms(&self, country: &str, budget: SmsBudget) -> Result<SmsReservation, AuthError> {
+        let outcome: i64 = self
             .client
-            .eval(RESERVE_SMS, vec![sms_budget_key(chrono::Utc::now().date_naive())], vec![daily_budget.to_string()])
+            .eval(
+                RESERVE_SMS,
+                sms_budget_keys(country),
+                vec![budget.country_daily.to_string(), budget.daily.to_string()],
+            )
             .await
             .map_err(cache_err)?;
-        Ok(admitted == 1)
+        Ok(match outcome {
+            1 => SmsReservation::Reserved,
+            2 => SmsReservation::CountryExhausted,
+            _ => SmsReservation::Exhausted,
+        })
+    }
+
+    async fn refund_sms(&self, country: &str) -> Result<(), AuthError> {
+        let _: i64 = self
+            .client
+            .eval(REFUND_SMS, sms_budget_keys(country), Vec::<String>::new())
+            .await
+            .map_err(cache_err)?;
+        Ok(())
     }
 }

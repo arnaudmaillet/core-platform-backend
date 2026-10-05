@@ -22,8 +22,8 @@ use validate_core::{FieldViolation, Validate};
 
 use crate::application::ensure_valid;
 use crate::application::port::{
-    CodeSender, ConsumeOutcome, PendingChallenge, SendAdmission, SendLimits, VerificationChannel,
-    VerificationStore, VerifiedDestination,
+    CodeSender, ConsumeOutcome, PendingChallenge, SendAdmission, SendLimits, SmsBudget, SmsReservation,
+    VerificationChannel, VerificationStore, VerifiedDestination,
 };
 use crate::error::AuthError;
 
@@ -37,8 +37,9 @@ use crate::error::AuthError;
 /// a right one is refused until the window ends.
 ///
 /// SMS also needs the number's country in `sms_countries` (ISO 3166-1 alpha-2)
-/// and room in `sms_daily_budget`, the SMS the whole service may send per UTC
-/// day.
+/// and room in two budgets per UTC day: `sms_country_daily_budget` for that
+/// country, then `sms_daily_budget` for the whole service. The country budget
+/// is checked first, so pumping one prefix exhausts that country only.
 #[derive(Debug, Clone)]
 pub struct VerificationPolicy {
     pub ttl:              Duration,
@@ -50,6 +51,7 @@ pub struct VerificationPolicy {
     pub failure_window:   Duration,
     pub sms_countries:    BTreeSet<String>,
     pub sms_daily_budget: u32,
+    pub sms_country_daily_budget: u32,
 }
 
 /// Where SMS codes may go: the launch markets. It MUST equal the SNS protect
@@ -71,6 +73,10 @@ pub const SMS_LAUNCH_COUNTRIES: [&str; 37] = [
 /// limit would stop every SMS until the month ends.
 pub const DEFAULT_SMS_DAILY_BUDGET: u32 = 50;
 
+/// The default SMS budget per UTC day for one destination country: half the
+/// service's, so one attacked prefix leaves the other countries their SMS.
+pub const DEFAULT_SMS_COUNTRY_DAILY_BUDGET: u32 = 25;
+
 impl Default for VerificationPolicy {
     fn default() -> Self {
         Self {
@@ -83,6 +89,7 @@ impl Default for VerificationPolicy {
             failure_window: Duration::hours(24),
             sms_countries: SMS_LAUNCH_COUNTRIES.iter().map(|c| (*c).to_owned()).collect(),
             sms_daily_budget: DEFAULT_SMS_DAILY_BUDGET,
+            sms_country_daily_budget: DEFAULT_SMS_COUNTRY_DAILY_BUDGET,
         }
     }
 }
@@ -193,10 +200,14 @@ impl VerificationCodes {
 
     pub async fn start(&self, cmd: StartVerificationCommand) -> Result<StartedVerification, AuthError> {
         ensure_valid(&cmd)?;
-        let destination = match cmd.channel {
-            VerificationChannel::Email => normalize_email(&cmd.destination).ok_or_else(|| {
-                AuthError::DomainViolation { field: "destination".into(), message: "not an email address".into() }
-            })?,
+        let (destination, sms_country) = match cmd.channel {
+            VerificationChannel::Email => (
+                normalize_email(&cmd.destination).ok_or_else(|| AuthError::DomainViolation {
+                    field: "destination".into(),
+                    message: "not an email address".into(),
+                })?,
+                None,
+            ),
             VerificationChannel::Sms => {
                 let number = normalize_phone(&cmd.destination).ok_or_else(|| AuthError::DomainViolation {
                     field: "destination".into(),
@@ -204,7 +215,7 @@ impl VerificationCodes {
                 })?;
                 // Only from the number's format: telling it apart enumerates nothing.
                 match sms_country(&number) {
-                    Some(country) if self.policy.sms_countries.contains(&country) => number,
+                    Some(country) if self.policy.sms_countries.contains(&country) => (number, Some(country)),
                     _ => return Err(AuthError::SmsDestinationNotSupported),
                 }
             }
@@ -225,12 +236,28 @@ impl VerificationCodes {
             }
         }
         // Last gate, so only an SMS that would go out spends the budget.
-        if cmd.channel == VerificationChannel::Sms && !self.store.reserve_sms(self.policy.sms_daily_budget).await? {
-            tracing::error!(
-                budget = self.policy.sms_daily_budget,
-                "the daily SMS budget is spent: no SMS code until the next UTC day (possible SMS pumping)"
-            );
-            return Err(AuthError::SmsBudgetExhausted);
+        if let Some(country) = &sms_country {
+            let budget =
+                SmsBudget { daily: self.policy.sms_daily_budget, country_daily: self.policy.sms_country_daily_budget };
+            match self.store.reserve_sms(country, budget).await? {
+                SmsReservation::Reserved => {}
+                SmsReservation::CountryExhausted => {
+                    tracing::error!(
+                        country = country.as_str(),
+                        budget = budget.country_daily,
+                        "the daily SMS budget of a country is spent: no SMS code there until the next UTC day \
+                         (possible SMS pumping)"
+                    );
+                    return Err(AuthError::SmsBudgetExhausted);
+                }
+                SmsReservation::Exhausted => {
+                    tracing::error!(
+                        budget = budget.daily,
+                        "the daily SMS budget is spent: no SMS code until the next UTC day (possible SMS pumping)"
+                    );
+                    return Err(AuthError::SmsBudgetExhausted);
+                }
+            }
         }
 
         let challenge_id = Uuid::now_v7().to_string();
@@ -245,6 +272,10 @@ impl VerificationCodes {
         self.store.save(&challenge, self.policy.ttl, self.policy.max_attempts).await?;
         if let Err(e) = self.sender.send(cmd.channel, &destination, &code, cmd.locale.as_deref()).await {
             let _ = self.store.discard(&challenge_id).await;
+            // An SMS that did not go out costs nothing: give its budget back.
+            if let Some(country) = &sms_country {
+                let _ = self.store.refund_sms(country).await;
+            }
             return Err(e);
         }
 
@@ -343,7 +374,7 @@ mod tests {
         let codes = VerificationCodes::new(
             Arc::clone(&store) as _,
             Arc::clone(&sender) as _,
-            VerificationPolicy { sms_daily_budget: 2, ..VerificationPolicy::default() },
+            VerificationPolicy { sms_daily_budget: 2, sms_country_daily_budget: 2, ..VerificationPolicy::default() },
         );
         // Off the allow-list (the US, Jersey under +44), or not a mobile: refused
         // before anything is counted or sent.
@@ -358,6 +389,26 @@ mod tests {
         assert!(matches!(codes.start(sms("+49 170 1234567")).await, Err(AuthError::SmsBudgetExhausted)));
         assert_eq!(sender.last().unwrap().0, "+447400123456");
         assert!(codes.start(email("ada@example.com")).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn one_country_spends_its_own_budget_and_a_failed_sms_is_refunded() {
+        let (sender, store) = (Arc::new(RecordingCodeSender::default()), Arc::new(InMemoryVerificationStore::default()));
+        let codes = VerificationCodes::new(
+            Arc::clone(&store) as _,
+            Arc::clone(&sender) as _,
+            VerificationPolicy { sms_daily_budget: 10, sms_country_daily_budget: 2, ..VerificationPolicy::default() },
+        );
+        // A failed send gives its unit back.
+        sender.fail();
+        assert!(matches!(codes.start(sms("+33 6 12 34 56 01")).await, Err(AuthError::VerificationSendFailed)));
+        sender.recover();
+        assert!(codes.start(sms("+33 6 12 34 56 02")).await.is_ok());
+        assert!(codes.start(sms("+33 6 12 34 56 03")).await.is_ok());
+        // France is spent; Germany is not.
+        assert!(matches!(codes.start(sms("+33 6 12 34 56 04")).await, Err(AuthError::SmsBudgetExhausted)));
+        assert!(codes.start(sms("+49 170 1234567")).await.is_ok());
+        assert_eq!(store.sms_sent_today(), 3, "the refused French SMS is not counted against the service");
     }
 
     #[test]

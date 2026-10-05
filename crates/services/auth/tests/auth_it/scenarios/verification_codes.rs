@@ -90,27 +90,40 @@ async fn codes_prove_an_address_once_and_sends_are_budgeted() {
 }
 
 #[tokio::test]
-async fn sms_spend_a_daily_budget_shared_by_the_whole_service() {
+async fn sms_spend_a_country_budget_then_the_services_and_failures_are_refunded() {
+    use auth::application::port::{SmsBudget, SmsReservation};
     use fred::interfaces::KeysInterface;
 
     let h = Harness::start().await;
-    // This scenario is the only SMS sender of the suite: it owns today's counter.
-    let key = format!("auth:{{sms-budget}}:{}", chrono::Utc::now().format("%Y%m%d"));
-    let _: i64 = h.redis.del(&key).await.unwrap();
+    // This scenario is the only SMS sender of the suite: it owns today's counters.
+    let day = chrono::Utc::now().format("%Y%m%d");
+    let (total, fr, de) = (
+        format!("auth:{{sms-budget}}:{day}"),
+        format!("auth:{{sms-budget}}:{day}:FR"),
+        format!("auth:{{sms-budget}}:{day}:DE"),
+    );
+    let _: i64 = h.redis.del(vec![total.clone(), fr.clone(), de.clone()]).await.unwrap();
 
     let store = RedisVerificationStore::new(h.redis.clone());
-    assert!(store.reserve_sms(2).await.unwrap());
-    assert!(store.reserve_sms(2).await.unwrap());
-    assert!(!store.reserve_sms(2).await.unwrap(), "the third SMS of the day is over budget");
-    let ttl: i64 = h.redis.ttl(&key).await.unwrap();
-    assert!((1..=172_800).contains(&ttl), "the day's counter expires ({ttl})");
+    let budget = SmsBudget { daily: 3, country_daily: 2 };
+    assert_eq!(store.reserve_sms("FR", budget).await.unwrap(), SmsReservation::Reserved);
+    assert_eq!(store.reserve_sms("FR", budget).await.unwrap(), SmsReservation::Reserved);
+    assert_eq!(store.reserve_sms("FR", budget).await.unwrap(), SmsReservation::CountryExhausted);
+    // France's refusal spent nothing of the service's: Germany still gets one.
+    assert_eq!(store.reserve_sms("DE", budget).await.unwrap(), SmsReservation::Reserved);
+    assert_eq!(store.reserve_sms("DE", budget).await.unwrap(), SmsReservation::Exhausted);
+    // A refund frees a unit of both.
+    store.refund_sms("DE").await.unwrap();
+    assert_eq!(store.reserve_sms("DE", budget).await.unwrap(), SmsReservation::Reserved);
+    let ttl: i64 = h.redis.ttl(&total).await.unwrap();
+    assert!((1..=172_800).contains(&ttl), "the day's counters expire ({ttl})");
 
     // Through StartVerification: over budget is AUT-5016, not a send.
     let outbox = Arc::new(Outbox::default());
     let codes = VerificationCodes::new(
         Arc::new(store),
         Arc::clone(&outbox) as _,
-        VerificationPolicy { sms_daily_budget: 2, ..VerificationPolicy::default() },
+        VerificationPolicy { sms_daily_budget: 3, sms_country_daily_budget: 2, ..VerificationPolicy::default() },
     );
     let sms = StartVerificationCommand {
         channel: VerificationChannel::Sms,
@@ -119,5 +132,5 @@ async fn sms_spend_a_daily_budget_shared_by_the_whole_service() {
     };
     assert!(matches!(codes.start(sms).await, Err(AuthError::SmsBudgetExhausted)));
     assert!(outbox.0.lock().unwrap().is_empty());
-    let _: i64 = h.redis.del(&key).await.unwrap();
+    let _: i64 = h.redis.del(vec![total, fr, de]).await.unwrap();
 }

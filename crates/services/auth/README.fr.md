@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 0597f5201f7d9e8a7e26c9375b837ecccc0e36b8ba26fe44a3826eac8321469a
+  source_sha256: c271868c8f37aeb53da19d9ba675889053d33ee2ee639b7dd2f6aa6cc807c2ad
   translated_at: 2026-10-05
   status: complete
 ---
@@ -132,10 +132,12 @@ partagé, ni VoIP) d'un pays de `AUTH_SMS_COUNTRIES` — par défaut les marché
 IS LI NO + GB CH + GP GF MQ RE YT, **exactement** la liste autorisée de la protect configuration SNS
 (core-platform-infra `global/messaging/sms`) ; les territoires qui partagent un indicatif sont résolus
 vers leur propre pays (Jersey sous +44 est `JE`) — sinon `FAILED_PRECONDITION` `AUT-5015`, décidé
-d'après le seul numéro. Chaque SMS compte ensuite dans un **budget quotidien global au service**
-(`AUTH_SMS_DAILY_BUDGET`, 50, par jour UTC, Redis `auth:{sms-budget}:<YYYYMMDD>`) ; une fois épuisé,
-les codes SMS répondent `UNAVAILABLE` `AUT-5016` jusqu'au jour UTC suivant (l'e-mail continue de
-fonctionner) et auth journalise une `error` (à alerter). Dimensionnez-le d'après la limite de
+d'après le seul numéro. Chaque SMS compte ensuite dans deux **budgets quotidiens** (par jour UTC,
+Redis `auth:{sms-budget}:<YYYYMMDD>[:<pays>]`, un seul script) : d'abord celui du **pays** de
+destination (`AUTH_SMS_COUNTRY_DAILY_BUDGET`, 25), pour qu'un pompage sur un indicatif n'épuise que ce
+pays, puis celui du **service** (`AUTH_SMS_DAILY_BUDGET`, 50) ; un SMS que SNS n'a pas pu envoyer est
+remboursé. Dès que l'un est épuisé, les codes SMS répondent `UNAVAILABLE` `AUT-5016` jusqu'au jour UTC
+suivant (l'e-mail continue de fonctionner) et auth journalise une `error` (à alerter). Dimensionnez-le d'après la limite de
 dépense mensuelle SNS (≈ limite / 30 / prix d'un SMS), pour que la limite de SNS ne soit jamais ce
 qui coupe les SMS pour le mois.
 
@@ -254,6 +256,7 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_SNS_REGION` · `AUTH_SNS_ACCESS_KEY_ID` · `AUTH_SNS_SECRET_ACCESS_KEY` · `AUTH_SNS_SENDER_ID` | Amazon SNS pour les codes SMS (un utilisateur IAM autorisé à `sns:Publish` ; sender id alphanumérique facultatif là où les pays l'autorisent). | — |
 | `AUTH_SMS_COUNTRIES` | Pays (ISO 3166-1 alpha-2, séparés par des virgules) vers lesquels les codes SMS peuvent partir ; doit être égal à la liste autorisée de la protect configuration SNS (infra `global/messaging/sms`). Un code inconnu fait échouer le démarrage. | les marchés de lancement (37) |
 | `AUTH_SMS_DAILY_BUDGET` | SMS que le service entier peut envoyer par jour UTC (`0` = aucun) ; au-delà `AUT-5016`. | `50` |
+| `AUTH_SMS_COUNTRY_DAILY_BUDGET` | SMS qu'un pays de destination peut recevoir par jour UTC, vérifié avant celui du service ; au-delà `AUT-5016`. | `25` |
 | `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES` | Durée de vie d'un code, essais par code, codes par adresse par heure / par jour, délai avant renvoi, codes faux par adresse en 24 h avant verrouillage. | `600` · `5` · `5` · `20` · `30` · `15` |
 | Postgres / Redis / Kafka | via les `from_env()` des crates de stockage partagées | — |
 
