@@ -3,7 +3,9 @@ use std::sync::Arc;
 use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::port::{ConversationRepository, InvitationRepository, MemberRepository};
+use crate::application::port::{
+    ConversationRepository, InteractionGate, InvitationRepository, MemberRepository, MessageVerdict,
+};
 use crate::domain::value_object::{ConversationId, ProfileId};
 use crate::error::ChatError;
 
@@ -14,6 +16,12 @@ use crate::error::ChatError;
 /// conversation; it expires after 7 days (table TTL) and re-inviting refreshes
 /// it. A non-member inviter of a private conversation gets the same concealed
 /// "not found" as a non-invited joiner, so neither RPC is an existence oracle.
+///
+/// The invitee's message settings apply (#656): someone who takes messages
+/// from no one is not invited (`CHT-1011`); one who blocks the inviter, or is
+/// blocked, is not either — silently, the inviter sees it sent. An invitation
+/// is the invitee's consent, so a followers / mutuals audience still allows
+/// it. Without a gate configured, invitations are unchecked.
 pub struct InviteMemberCommand {
     pub conversation_id: String,
     pub inviter_id:      String,
@@ -46,6 +54,7 @@ pub struct InviteMemberHandler<CR, MR, IR> {
     pub conversation_repo: Arc<CR>,
     pub member_repo:       Arc<MR>,
     pub invitation_repo:   Arc<IR>,
+    pub gate:              Option<Arc<dyn InteractionGate>>,
 }
 
 impl<CR, MR, IR> CommandHandler<InviteMemberCommand> for InviteMemberHandler<CR, MR, IR>
@@ -87,6 +96,17 @@ where
             });
         }
 
+        if let Some(gate) = &self.gate {
+            match gate.may_message(&inviter_id, &invitee_id).await? {
+                MessageVerdict::Refused => {
+                    return Err(ChatError::MessagingNotAllowed { profile_id: invitee_id.as_str() });
+                }
+                // As if invited: a block is never revealed.
+                MessageVerdict::Silenced => return Ok(()),
+                MessageVerdict::Allowed | MessageVerdict::Request => {}
+            }
+        }
+
         self.invitation_repo.upsert(&conversation_id, &invitation).await
     }
 }
@@ -114,7 +134,27 @@ mod tests {
             conversation_repo: Arc::clone(&f.conversations),
             member_repo:       Arc::clone(&f.members),
             invitation_repo:   Arc::clone(&f.invitations),
+            gate:              None,
         }
+    }
+
+    #[tokio::test]
+    async fn the_invitees_message_settings_apply_and_a_block_stays_hidden() {
+        use crate::application::command::fakes::ScriptedGate;
+        let f = Fixture::private_group();
+        let gate = Arc::new(ScriptedGate::default());
+        let gated = InviteMemberHandler { gate: Some(Arc::clone(&gate) as Arc<dyn InteractionGate>), ..handler(&f) };
+        let (closed, blocker, follower_only) = (Fixture::profile(), Fixture::profile(), Fixture::profile());
+        gate.set(f.owner, closed, MessageVerdict::Refused);
+        gate.set(f.owner, blocker, MessageVerdict::Silenced);
+        gate.set(f.owner, follower_only, MessageVerdict::Request);
+
+        let err = gated.handle(cmd(&f, f.owner, closed)).await.unwrap_err();
+        assert!(matches!(err, ChatError::MessagingNotAllowed { .. }), "{err:?}");
+        gated.handle(cmd(&f, f.owner, blocker)).await.unwrap();
+        assert!(!f.invitations.has(&f.conversation_id, &blocker), "answered as sent, never stored");
+        gated.handle(cmd(&f, f.owner, follower_only)).await.unwrap();
+        assert!(f.invitations.has(&f.conversation_id, &follower_only), "an invitation is consent");
     }
 
     #[tokio::test]

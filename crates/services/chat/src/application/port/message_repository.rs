@@ -17,6 +17,15 @@ pub struct MessageSummary {
     pub media_ref:    Option<String>,
     pub reply_to:     Option<Uuid>,
     pub created_at:   DateTime<Utc>,
+    /// Shown to its sender only (#656).
+    pub withheld:     bool,
+}
+
+impl MessageSummary {
+    /// May `reader` see it? A withheld message is its sender's alone.
+    pub fn visible_to(&self, reader: Uuid) -> bool {
+        !self.withheld || self.sender_id == reader
+    }
 }
 
 /// Persistence port for the time-bucketed message log

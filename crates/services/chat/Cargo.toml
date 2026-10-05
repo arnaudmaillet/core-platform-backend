@@ -9,6 +9,7 @@ description = "Chat microservice — unified Conversation layer (Group mesh + Ch
 
 [dependencies]
 chat-api = { workspace = true }
+social-graph-api = { workspace = true }   # CheckInteraction client (who may message whom, #656)
 error          = { workspace = true }
 validate-core  = { workspace = true }
 validation     = { workspace = true }

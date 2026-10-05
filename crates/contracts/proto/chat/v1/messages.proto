@@ -62,6 +62,29 @@ message CreateConversationResponse {
     string conversation_id = 1;
 }
 
+// The direct conversation between the caller's profile and `peer_id`
+// (#656), opened if need be — one per pair, whoever opens it.
+message OpenDirectConversationRequest {
+    string profile_id = 1;
+    string peer_id    = 2;
+}
+message OpenDirectConversationResponse {
+    string conversation_id = 1;
+    // The peer's settings do not admit the caller: their messages are a
+    // request, waiting for the peer's answer. One message until then; more
+    // fail CHT-1010. A peer who takes messages from no one: CHT-1011.
+    bool   request         = 2;
+}
+
+// The recipient of a message request accepts it (the conversation opens) or
+// declines it (silently: the requester keeps seeing it pending, and may not
+// ask again for 30 days). Replying, or opening the conversation, also accepts.
+message RespondToMessageRequestRequest {
+    string conversation_id = 1;
+    string profile_id      = 2;
+    bool   accept          = 3;
+}
+
 message SendMessageRequest {
     string      conversation_id = 1;
     string      sender_id       = 2;
@@ -163,6 +186,8 @@ message MembershipView {
     string                    conversation_id = 1;
     Role                      role            = 2;
     int64                     joined_at_ms    = 3;
+    // The conversation's kind: the GDPR export shows a DIRECT one in full.
+    ConversationKind          kind            = 4;
 }
 message ListConversationsByMemberResponse {
     repeated MembershipView memberships     = 1;

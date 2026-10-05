@@ -17,4 +17,5 @@ pub struct MessageRow {
     pub body:         Option<String>,
     pub media_ref:    Option<String>,
     pub reply_to:     Option<Uuid>,
+    pub withheld:     Option<bool>,
 }

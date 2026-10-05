@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 0e237af1ebffa2ad225030ba683c19250b9b16d0b5b0c8b53b8707da7cb171b6
+  source_sha256: 18c0ceb67c7f4bdf84aac32217930d7e2bf1ad09dba6f96d6b4fe77d41bd58c1
   translated_at: 2026-10-05
   status: complete
 ---
@@ -138,6 +138,7 @@ pour les invités ne touchent jamais Scylla ; elles arrivent par le plan de diff
 | ScyllaDB (keyspace `chat`) | journal durable messages/membres/abonnements | les écritures + l'historique froid échouent | **Dur** — `UNAVAILABLE` |
 | Redis Cluster | cache hot-tail + routage temps réel shardé + présence | le fan-out temps réel + la présence s'arrêtent ; l'historique reste servi depuis Scylla | **Souple** — chemin durable intact |
 | Kafka | événements domaine + visibilité | événements non émis ; les invités ne sont pas fermés à l'unpublish | **Souple** — `SendMessage` réussit toujours |
+| `social-graph` (`CheckInteraction`, mesh) | qui peut écrire à qui (#656) | conversations directes et invitations refusées | **Fermé par défaut** — `UNAVAILABLE` (`CHT-5001`, rejouable) ; groupes et canaux non touchés |
 
 **Amont — qui dépend de `chat` (rayon d'impact si `chat` tombe) :**
 
@@ -159,6 +160,8 @@ pour les invités ne touchent jamais Scylla ; elles arrivent par le plan de diff
 service ChatService {
   // Lifecycle / membership
   rpc CreateConversation (CreateConversationRequest) returns (CreateConversationResponse);
+  rpc OpenDirectConversation  (OpenDirectConversationRequest)  returns (OpenDirectConversationResponse); // #656
+  rpc RespondToMessageRequest (RespondToMessageRequestRequest) returns (CommandResponse);                // #656
   rpc ToggleVisibility   (ToggleVisibilityRequest)   returns (CommandResponse);
   rpc JoinAsMember       (JoinAsMemberRequest)       returns (CommandResponse); // private ⇒ invitation required
   rpc InviteMember       (InviteMemberRequest)       returns (CommandResponse); // owner/admin only
@@ -183,14 +186,14 @@ service ChatService {
 
 **Les conversations d'un profil (#653).** `ListConversationsByMember(member_id, limit, page_token)` est
 **mesh uniquement** (jamais sur l'edge) : l'export de données RGPD liste les conversations dont un profil
-est membre (id, rôle, joined_at ; paginé par id de conversation), puis lit l'historique de chacune en tant
+est membre (id, rôle, joined_at, type ; paginé par id de conversation), puis lit l'historique de chacune en tant
 que ce membre (`GetHistory`). Elle lit `chat.conversations_by_member`, l'inverse du roster, écrite et
 supprimée avec `members_by_conversation` dans un même LOGGED BATCH. Les appartenances antérieures à cette
 table sont indexées par un backfill optionnel et idempotent au démarrage
 (`CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER=true`).
 
 > **Contrat de sérialisation / enum :** les valeurs d'enum proto sont **basées sur 0 et égales au
-> `tinyint` du domaine** (`CONVERSATION_KIND_GROUP=0`, `…CHANNEL=1` ; `VISIBILITY_PRIVATE=0`,
+> `tinyint` du domaine** (`CONVERSATION_KIND_GROUP=0`, `…CHANNEL=1`, `…DIRECT=2` ; `VISIBILITY_PRIVATE=0`,
 > `…PUBLIC=1` ; `ROLE_OWNER=0…GUEST=4` ; `CONTENT_TYPE_TEXT=0…SYSTEM=2`). Pas de sentinelle
 > `UNSPECIFIED` — la couche gRPC effectue un cast direct, sans décalage d'indice.
 
@@ -240,6 +243,38 @@ projetés depuis `profile.v1.events` (`ProfileDiscoverySettingsChanged`, groupe 
 depuis l'offset le plus ancien) dans `chat.presence_settings` ; s'ils ne peuvent pas être lus, présence et
 accusés sont retenus (échec fermé).
 
+**Messages directs et demandes de messages (#656).** Une conversation `DIRECT` réunit deux profils,
+**unique par paire** (`chat.direct_conversations`, réservée par une LWT : deux ouvertures simultanées
+obtiennent la même), jamais publique, jamais rejointe ni ouverte aux invitations, avec les boucles de
+présence d'un groupe. On l'ouvre par `OpenDirectConversation(profile_id, peer_id)` — `CreateConversation`
+refuse ce type — et les réglages de messages du destinataire décident, via le `CheckInteraction(MESSAGE)`
+de social-graph (mesh uniquement) :
+
+| Verdict du destinataire pour l'ouvreur | Ouverture | Messages de l'ouvreur |
+|---|---|---|
+| autorisé | ouverte (`request = false`) | remis |
+| l'audience l'exclut (abonnés / mutuels), ou une limite temporaire le retient (#669) | une **demande** | **un seul**, en attente dans ses demandes ; les suivants échouent en `CHT-1010` |
+| messages de personne | refus, `PERMISSION_DENIED` (`CHT-1011`) | refusés |
+| un blocage, dans un sens ou l'autre | une demande, jamais traitée | **retenus** : visibles de l'expéditeur seul |
+
+Le destinataire accepte en répondant, en ouvrant lui-même la conversation, ou par
+`RespondToMessageRequest(accept = true)`. Un refus est **silencieux** : le demandeur voit toujours sa
+demande en attente (`CHT-1010` au second message) et ne peut pas redemander pendant **30 jours**. Un
+**expéditeur bloqué voit exactement la même chose** qu'un expéditeur dont la demande est en attente ou a été
+refusée — mêmes réponses, mot pour mot — et ses messages sont retenus : stockés avec `withheld = true`,
+rendus par `GetHistory` à leur seul expéditeur, écartés du flux de tout autre membre, jamais mis en
+cache ni diffusés à une audience, jamais remis, même après un déblocage. Une fois ouverte, une
+conversation le reste quels que soient les réglages ensuite ; un blocage retient de nouveau. Ni
+présence, ni saisie, ni accusé de lecture ne circulent avant la réponse à une demande (`MarkRead` ne
+garde rien). Les transitions d'une demande et son message unique sont des compare-and-set
+(`IF request_state = ?`, `IF request_sent = false`) : deux appuis simultanés n'envoient jamais deux
+messages. `InviteMember` applique aussi les réglages de l'invité : messages de personne ⇒ `CHT-1011` ;
+un blocage ⇒ répondu comme invité, rien n'est stocké ; une audience abonnés / mutuels l'autorise encore
+(une invitation est le consentement de l'invité). `chat.message.sent` porte `withheld` et `request`, pour
+qu'un futur consommateur de notifications push ne remette ni l'un ni l'autre. social-graph injoignable ⇒
+`UNAVAILABLE` (`CHT-5001`) : fermé par défaut. Sans `CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT`, les messages
+directs sont coupés et les invitations non vérifiées.
+
 ### Ports Rust (contrat hexagonal)
 
 ```rust
@@ -269,6 +304,7 @@ le crate partagé `error` :
 | `CHT-2xxx` | validation |
 | `CHT-3xxx` | events |
 | `CHT-4xxx` | streaming |
+| `CHT-5xxx` | peer services (`CHT-5001`: social-graph's interaction check unavailable — retryable) |
 | `CHT-9xxx` | identifiers |
 
 `CHT-1009` (conversation privée que l'appelant ne peut pas voir) est volontairement rendu exactement
@@ -276,6 +312,10 @@ comme `CHT-1001` sur le fil (`NOT_FOUND`, même message) ; le code distinct n'ex
 serveur. Chaque RPC portant sur une conversation le renvoie à un tiers d'une conversation privée : ainsi
 `CHT-1007` (non-membre) et `CHT-1008` (non publique) n'atteignent jamais que des membres ou des tiers
 d'une conversation publique.
+
+Messages directs (#656) : `CHT-1010` (le message unique d'une demande est utilisé — c'est aussi, à
+dessein, la réponse à un expéditeur refusé ou bloqué), `CHT-1011` (le destinataire n'accepte de messages
+de personne ; jamais la réponse à un blocage), `CHT-1012` (aucune demande d'un autre à traiter).
 
 ---
 
@@ -385,6 +425,8 @@ async fn main() -> anyhow::Result<()> {
 | `CHAT_AUDIENCE_SHARD_COUNT` | No | `16` | Number of Audience-Plane sharded channels a public conversation spreads across. **Must be uniform across the fleet.** |
 | `CHAT_PRESENCE_TTL_SECS` | No | `30` | Presence liveness window (also reused as the audience-shard heartbeat TTL). |
 | `CHAT_TYPING_TTL_SECS` | No | `6` | Typing-indicator expiry (short by design). |
+| `CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT` | No | unset | gRPC mesh de social-graph (`CheckInteraction`, #656). Non défini : messages directs coupés (`CHT-5001`), invitations non vérifiées. |
+| `CHAT_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `CHAT_SOCIAL_GRAPH_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Ses délais de requête et de connexion. |
 
 ### Variables d'infrastructure héritées
 
@@ -409,7 +451,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Déploiement, migrations & rollback
 
-- **Migrations :** appliquer `crates/services/chat/migrations/0001…0008.cql` sur le keyspace `chat`
+- **Migrations :** appliquer `crates/services/chat/migrations/0001…0010.cql` sur le keyspace `chat`
   **avant** le premier démarrage / avant de déployer un nouveau binaire.
 - **Pièges liés à l'état :** `CHAT_MESSAGE_BUCKET_HOURS` et `CHAT_AUDIENCE_SHARD_COUNT` doivent être
   **uniformes sur tout le cluster**, et `CHAT_MESSAGE_BUCKET_HOURS` ne doit **jamais changer une fois que

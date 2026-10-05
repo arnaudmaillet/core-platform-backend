@@ -63,6 +63,13 @@ where
         let id       = ConversationId::try_from(cmd.conversation_id.as_str())?;
         let owner_id = ProfileId::try_from(cmd.owner_id.as_str())?;
         let kind     = ConversationKind::try_from(cmd.kind as i8)?;
+        if kind == ConversationKind::Direct {
+            // Unique per pair, with its peer's consent: OpenDirectConversation.
+            return Err(ChatError::DomainViolation {
+                field:   "kind".to_owned(),
+                message: "open a direct conversation with OpenDirectConversation".to_owned(),
+            });
+        }
 
         let conversation = Conversation::create(id, kind, owner_id);
         let owner        = Participant::new(owner_id, Role::Owner)?;

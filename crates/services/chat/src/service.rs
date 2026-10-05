@@ -29,6 +29,8 @@ use tonic_reflection::server::Builder as ReflectionBuilder;
 use transport::kafka::config::client::KafkaClientConfig;
 
 use crate::app::{App, AppConfig, Backends};
+use crate::application::port::InteractionGate;
+use crate::infrastructure::client::GrpcInteractionGate;
 use crate::config::ChatConfig;
 use crate::infrastructure::grpc::handler::{ChatServiceHandler, ChatServiceServer};
 use crate::infrastructure::grpc::server::FILE_DESCRIPTOR_SET;
@@ -56,6 +58,8 @@ impl Service for ChatService {
     // keys the audience shard and gates the member-only "not public" answer.
     const EDGE_POLICY: EdgePolicy = &[
         authenticated("/chat.v1.ChatService/CreateConversation"),
+        authenticated("/chat.v1.ChatService/OpenDirectConversation"),
+        authenticated("/chat.v1.ChatService/RespondToMessageRequest"),
         authenticated("/chat.v1.ChatService/ToggleVisibility"),
         authenticated("/chat.v1.ChatService/JoinAsMember"),
         authenticated("/chat.v1.ChatService/InviteMember"),
@@ -94,9 +98,10 @@ impl Service for ChatService {
         };
 
         let backends = Backends {
-            scylla: ScyllaConfig::from_env(),
-            redis:  RedisConfig::from_env(),
-            kafka:  Some(KafkaClientConfig::from_env()),
+            scylla:           ScyllaConfig::from_env(),
+            redis:            RedisConfig::from_env(),
+            kafka:            Some(KafkaClientConfig::from_env()),
+            interaction_gate: interaction_gate_from_env()?,
         };
 
         // `App::build` errors are `Box<dyn Error>` (not `Send + Sync`), so flatten
@@ -139,12 +144,38 @@ impl Service for ChatService {
     }
 }
 
+/// social-graph's `CheckInteraction`, from `CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT`
+/// (#656). Unset: direct conversations off, invitations unchecked.
+pub(crate) fn interaction_gate_from_env() -> anyhow::Result<Option<Arc<dyn InteractionGate>>> {
+    let Some(endpoint) = std::env::var("CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT").ok().filter(|e| !e.trim().is_empty()) else {
+        tracing::warn!("CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT unset: direct messages off, group invitations unchecked");
+        return Ok(None);
+    };
+    let ms = |var: &str, default: u64| {
+        std::time::Duration::from_millis(std::env::var(var).ok().and_then(|v| v.parse().ok()).unwrap_or(default))
+    };
+    let channel = tonic::transport::Channel::from_shared(endpoint)
+        .map_err(|e| anyhow::anyhow!("invalid CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT: {e}"))?
+        .timeout(ms("CHAT_SOCIAL_GRAPH_RPC_TIMEOUT_MS", 1_000))
+        .connect_timeout(ms("CHAT_SOCIAL_GRAPH_CONNECT_TIMEOUT_MS", 1_000))
+        .connect_lazy();
+    Ok(Some(Arc::new(GrpcInteractionGate::new(channel))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// A profile's conversations are the GDPR export's (#653): never on the
     /// edge.
+    /// Direct messages (#656) are the caller's own profile's.
+    #[test]
+    fn direct_messages_are_on_the_edge_for_members() {
+        for method in ["/chat.v1.ChatService/OpenDirectConversation", "/chat.v1.ChatService/RespondToMessageRequest"] {
+            assert!(ChatService::EDGE_POLICY.iter().any(|rule| rule.method == method), "{method}");
+        }
+    }
+
     #[test]
     fn listing_by_member_is_mesh_only() {
         let method = "/chat.v1.ChatService/ListConversationsByMember";

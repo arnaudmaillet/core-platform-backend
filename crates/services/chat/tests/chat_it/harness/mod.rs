@@ -29,7 +29,10 @@ use scylla_storage::ScyllaConfig;
 use transport::kafka::config::client::KafkaClientConfig;
 
 use chat::app::{App, AppConfig, Backends};
-use chat::application::port::{HotTailCache, PresenceSettingsStore, PresenceStore, RoutingRegistry};
+use chat::application::port::{
+    HotTailCache, InteractionGate, MessageVerdict, PresenceSettingsStore, PresenceStore, RoutingRegistry,
+};
+use chat::error::ChatError;
 use chat::infrastructure::grpc::handler::ChatServiceHandler;
 use chat::infrastructure::streaming::ConversationBroadcastRegistry;
 
@@ -95,6 +98,29 @@ impl Default for HarnessOptions {
     }
 }
 
+/// The interaction gate (#656), scripted per (actor, recipient); everyone
+/// else is allowed — social-graph's answer, without social-graph.
+#[derive(Default)]
+pub struct HarnessGate(std::sync::Mutex<std::collections::HashMap<(ProfileId, ProfileId), MessageVerdict>>);
+
+impl HarnessGate {
+    /// `actor` → `recipient` gets `verdict`; a block (`Silenced`) holds both ways.
+    pub fn set(&self, actor: &ProfileId, recipient: &ProfileId, verdict: MessageVerdict) {
+        let mut verdicts = self.0.lock().unwrap();
+        verdicts.insert((*actor, *recipient), verdict);
+        if verdict == MessageVerdict::Silenced {
+            verdicts.insert((*recipient, *actor), verdict);
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl InteractionGate for HarnessGate {
+    async fn may_message(&self, actor: &ProfileId, recipient: &ProfileId) -> Result<MessageVerdict, ChatError> {
+        Ok(self.0.lock().unwrap().get(&(*actor, *recipient)).copied().unwrap_or(MessageVerdict::Allowed))
+    }
+}
+
 /// A fully-wired chat service bound to ephemeral infra, plus assertion handles.
 pub struct TestHarness {
     pub handler:           ChatServiceHandler<InMemoryCommandBus, InMemoryQueryBus>,
@@ -108,6 +134,8 @@ pub struct TestHarness {
     /// The roster store and its client, for index-level scenarios (#653).
     pub member_repo:       Arc<chat::infrastructure::persistence::ScyllaMemberRepository>,
     pub scylla:            Arc<scylla_storage::ScyllaClient>,
+    /// Who may message whom (#656), scripted.
+    pub gate:              Arc<HarnessGate>,
 }
 
 impl TestHarness {
@@ -139,6 +167,7 @@ impl TestHarness {
         };
 
         // ── Backends + per-scenario config ──────────────────────────────────────
+        let gate = Arc::new(HarnessGate::default());
         let backends = Backends {
             scylla: ScyllaConfig {
                 contact_points: vec![scylla_cp],
@@ -147,6 +176,7 @@ impl TestHarness {
             },
             redis: RedisConfig { hosts: vec![redis_endpoint], ..RedisConfig::default() },
             kafka,
+            interaction_gate: Some(Arc::clone(&gate) as Arc<dyn InteractionGate>),
         };
 
         let config = AppConfig {
@@ -191,6 +221,7 @@ impl TestHarness {
             params,
             member_repo,
             scylla,
+            gate,
         }
     }
 
@@ -286,6 +317,69 @@ impl TestHarness {
         .await
         .expect("send_message");
         MessageId::try_from(resp.into_inner().message_id.as_str()).expect("valid message id")
+    }
+
+    /// `OpenDirectConversation` from `profile` to `peer`: the id, and whether
+    /// it is a request.
+    pub async fn open_direct(&self, profile: &ProfileId, peer: &ProfileId) -> Result<(ConversationId, bool), Status> {
+        let opened = ChatService::open_direct_conversation(
+            &self.handler,
+            Request::new(proto::OpenDirectConversationRequest { profile_id: profile.as_str(), peer_id: peer.as_str() }),
+        )
+        .await?
+        .into_inner();
+        Ok((ConversationId::try_from(opened.conversation_id.as_str()).expect("valid conversation id"), opened.request))
+    }
+
+    /// `RespondToMessageRequest` by `profile`.
+    pub async fn respond(&self, conv: &ConversationId, profile: &ProfileId, accept: bool) -> Result<(), Status> {
+        ChatService::respond_to_message_request(
+            &self.handler,
+            Request::new(proto::RespondToMessageRequestRequest {
+                conversation_id: conv.as_str(),
+                profile_id:      profile.as_str(),
+                accept,
+            }),
+        )
+        .await
+        .map(drop)
+    }
+
+    /// `SendMessage` of a text, returning the raw RPC outcome.
+    pub async fn try_send(&self, conv: &ConversationId, sender: &ProfileId, body: &str) -> Result<String, Status> {
+        ChatService::send_message(
+            &self.handler,
+            Request::new(proto::SendMessageRequest {
+                conversation_id: conv.as_str(),
+                sender_id:       sender.as_str(),
+                content_type:    0,
+                body:            body.to_owned(),
+                media_ref:       String::new(),
+                reply_to:        String::new(),
+            }),
+        )
+        .await
+        .map(|r| r.into_inner().message_id)
+    }
+
+    /// The bodies of the history `reader` sees, newest first.
+    pub async fn bodies(&self, conv: &ConversationId, reader: &ProfileId) -> Vec<String> {
+        ChatService::get_history(
+            &self.handler,
+            Request::new(proto::GetHistoryRequest {
+                conversation_id: conv.as_str(),
+                requester_id:    reader.as_str(),
+                limit:           50,
+                page_token:      String::new(),
+            }),
+        )
+        .await
+        .expect("get_history")
+        .into_inner()
+        .messages
+        .into_iter()
+        .map(|m| m.body)
+        .collect()
     }
 
     /// Opens a Member-Plane stream and returns the raw response stream.

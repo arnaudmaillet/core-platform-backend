@@ -419,6 +419,8 @@ services:
       REDIS_HOSTS: redis:6379
       REDIS_TOPOLOGY: standalone
       KAFKA_BROKERS: redpanda:9092
+      # Direct messages (#656): who may message whom.
+      CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT: http://social-graph-server:50053
     ports:
       - "50051:50051"
     depends_on:

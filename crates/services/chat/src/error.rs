@@ -54,6 +54,27 @@ pub enum ChatError {
     #[error("conversation {conversation_id} not found")]
     ConversationConcealed { conversation_id: String },
 
+    /// A message request already holds its one message (#656). A declined
+    /// request, and one whose recipient blocks the sender, answer **exactly
+    /// the same**: the sender never learns which.
+    #[error("the message request in conversation {conversation_id} awaits an answer")]
+    MessageRequestPending { conversation_id: String },
+
+    /// The recipient takes messages from no one (#656). Never the answer to a
+    /// block: a blocked sender sees a pending request instead.
+    #[error("profile {profile_id} does not accept messages")]
+    MessagingNotAllowed { profile_id: String },
+
+    /// Accept or decline with no request from someone else to answer (#656).
+    #[error("no message request to answer in conversation {conversation_id}")]
+    NoMessageRequest { conversation_id: String },
+
+    // ── CHT-5xxx: Peer services ───────────────────────────────────────────────
+    /// social-graph, which decides who may message whom, did not answer:
+    /// direct messages and invitations fail closed until it does (#656).
+    #[error("interaction check unavailable: {reason}")]
+    InteractionCheckUnavailable { reason: String },
+
     // ── CHT-2xxx: Domain validation ───────────────────────────────────────────
     #[error("unknown conversation kind: '{kind}'")]
     UnknownConversationKind { kind: String },
@@ -120,6 +141,11 @@ impl AppError for ChatError {
             Self::NotAMember { .. }                 => "CHT-1007",
             Self::ConversationNotPublic { .. }      => "CHT-1008",
             Self::ConversationConcealed { .. }      => "CHT-1009",
+            Self::MessageRequestPending { .. }      => "CHT-1010",
+            Self::MessagingNotAllowed { .. }        => "CHT-1011",
+            Self::NoMessageRequest { .. }           => "CHT-1012",
+
+            Self::InteractionCheckUnavailable { .. } => "CHT-5001",
 
             Self::UnknownConversationKind { .. } => "CHT-2001",
             Self::UnknownVisibility { .. }       => "CHT-2002",
@@ -160,7 +186,13 @@ impl AppError for ChatError {
             Self::MemberLimitExceeded { .. }
             | Self::ConversationNotPublic { .. } => StatusCode::UNPROCESSABLE_ENTITY,
 
-            Self::NotAMember { .. } => StatusCode::FORBIDDEN,
+            Self::NotAMember { .. }
+            | Self::MessagingNotAllowed { .. } => StatusCode::FORBIDDEN,
+
+            Self::MessageRequestPending { .. }
+            | Self::NoMessageRequest { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+
+            Self::InteractionCheckUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
 
             Self::UnknownConversationKind { .. }
             | Self::UnknownVisibility { .. }
@@ -188,7 +220,8 @@ impl AppError for ChatError {
 
             Self::EventPublishFailed { .. } => Severity::High,
 
-            Self::StreamSendFailed { .. } => Severity::Medium,
+            Self::StreamSendFailed { .. }
+            | Self::InteractionCheckUnavailable { .. } => Severity::Medium,
 
             Self::Validation(e) => e.severity(),
 
@@ -212,6 +245,9 @@ impl AppError for ChatError {
             | Self::AlreadyMember { .. }
             | Self::NotAMember { .. }
             | Self::ConversationNotPublic { .. }
+            | Self::MessageRequestPending { .. }
+            | Self::MessagingNotAllowed { .. }
+            | Self::NoMessageRequest { .. }
             | Self::InvalidConversationId(_)
             | Self::InvalidMessageId(_)
             | Self::InvalidProfileId(_) => Severity::Low,
@@ -222,6 +258,7 @@ impl AppError for ChatError {
         match self {
             Self::Scylla(e) => e.is_retryable(),
             Self::Redis(e)  => e.is_retryable(),
+            Self::InteractionCheckUnavailable { .. } => true,
             _               => false,
         }
     }
@@ -266,6 +303,18 @@ impl AppError for ChatError {
 
             Self::ConversationNotPublic { .. } =>
                 "This conversation is not public.",
+
+            Self::MessageRequestPending { .. } =>
+                "Your message request is waiting for an answer.",
+
+            Self::MessagingNotAllowed { .. } =>
+                "This account doesn't accept messages.",
+
+            Self::NoMessageRequest { .. } =>
+                "There is no message request to answer.",
+
+            Self::InteractionCheckUnavailable { .. } =>
+                "Messages are temporarily unavailable. Please try again later.",
 
             Self::UnknownConversationKind { .. }
             | Self::UnknownVisibility { .. }

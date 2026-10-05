@@ -29,4 +29,11 @@ pub struct MessageSentEvent {
     pub media_ref:       Option<String>,
     pub reply_to:        Option<String>,
     pub created_at_ms:   i64,
+    /// Shown to its sender only (#656): deliver it to nobody else.
+    #[serde(default)]
+    pub withheld:        bool,
+    /// A message request (#656): it waits in the recipient's requests — no
+    /// push until they accept.
+    #[serde(default)]
+    pub request:         bool,
 }

@@ -6,7 +6,7 @@ use crate::domain::event::{
 };
 use crate::domain::aggregate::{Invitation, Participant};
 use crate::domain::value_object::{
-    ConversationId, ConversationKind, ConversationPolicy, MessageId, ProfileId, Role, Visibility,
+    ConversationId, ConversationKind, ConversationPolicy, MessageId, MessageRequest, ProfileId, Role, Visibility,
 };
 use crate::error::ChatError;
 
@@ -29,6 +29,9 @@ use crate::error::ChatError;
 /// - Visibility transitions are monotone guards: you cannot publish a public
 ///   conversation, nor unpublish a private one.
 /// - A `Channel` is born `Public`; a `Group` is born `Private`.
+/// - A `Direct` conversation (#656) is between its owner (who opened it) and
+///   one peer, both plain members, and is never public, never joined, never
+///   invited into. Its [`MessageRequest`] says whether the peer has accepted.
 /// - Joining a `Private` conversation requires a pending [`Invitation`] for the
 ///   joiner, issued by an administering member; a `Public` one is open-join.
 ///
@@ -43,9 +46,19 @@ pub struct Conversation {
     /// Watermark set when the conversation became public: the audience may read
     /// only messages with `id >= public_since`. `None` while private.
     public_since:   Option<MessageId>,
+    /// `Some` for a `Direct` conversation only.
+    direct:         Option<Direct>,
     created_at:     DateTime<Utc>,
     updated_at:     DateTime<Utc>,
     pending_events: Vec<DomainEvent>,
+}
+
+/// What a `Direct` conversation adds (#656): the other member, and whether
+/// they have accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Direct {
+    pub peer:    ProfileId,
+    pub request: MessageRequest,
 }
 
 impl Conversation {
@@ -59,7 +72,7 @@ impl Conversation {
 
         let (visibility, public_since) = match kind {
             ConversationKind::Channel => (Visibility::Public, Some(MessageId::new())),
-            ConversationKind::Group   => (Visibility::Private, None),
+            ConversationKind::Group | ConversationKind::Direct => (Visibility::Private, None),
         };
 
         let mut conversation = Self {
@@ -69,6 +82,7 @@ impl Conversation {
             owner_id,
             member_count: 1,
             public_since,
+            direct: None,
             created_at: now,
             updated_at: now,
             pending_events: Vec::new(),
@@ -87,6 +101,17 @@ impl Conversation {
         conversation
     }
 
+    /// Opens the direct conversation between `opener` and `peer` (#656): both
+    /// on the roster, private. `as_request` when the peer's settings do not
+    /// admit the opener: it is then a message request from the opener.
+    pub fn open_direct(id: ConversationId, opener: ProfileId, peer: ProfileId, as_request: bool) -> Self {
+        let mut conversation = Self::create(id, ConversationKind::Direct, opener);
+        conversation.member_count = 2;
+        let request = if as_request { MessageRequest::Pending { requester: opener } } else { MessageRequest::Open };
+        conversation.direct = Some(Direct { peer, request });
+        conversation
+    }
+
     /// Reconstitutes an aggregate from persisted state (no events buffered).
     #[allow(clippy::too_many_arguments)]
     pub fn reconstitute(
@@ -96,6 +121,7 @@ impl Conversation {
         owner_id:     ProfileId,
         member_count: u16,
         public_since: Option<MessageId>,
+        direct:       Option<Direct>,
         created_at:   DateTime<Utc>,
         updated_at:   DateTime<Utc>,
     ) -> Self {
@@ -106,6 +132,7 @@ impl Conversation {
             owner_id,
             member_count,
             public_since,
+            direct,
             created_at,
             updated_at,
             pending_events: Vec::new(),
@@ -122,6 +149,9 @@ impl Conversation {
     /// Returns the watermark on success, or
     /// [`ChatError::ConversationAlreadyPublic`] if already public.
     pub fn publish(&mut self) -> Result<MessageId, ChatError> {
+        if self.is_direct() {
+            return Err(Self::not_for_direct("a direct conversation is never public"));
+        }
         if self.visibility.is_public() {
             return Err(ChatError::ConversationAlreadyPublic { conversation_id: self.id.as_str() });
         }
@@ -205,6 +235,9 @@ impl Conversation {
     /// (a non-member never reaches this method) and checks that the invitee is
     /// not already a member.
     pub fn invite(&self, inviter: &Participant, invitee_id: ProfileId) -> Result<Invitation, ChatError> {
+        if self.is_direct() {
+            return Err(Self::not_for_direct("nobody is invited into a direct conversation"));
+        }
         if !inviter.can_administer() {
             return Err(ChatError::NotAuthorized {
                 profile_id:      inviter.profile_id().as_str(),
@@ -228,10 +261,50 @@ impl Conversation {
         invitation: Option<&Invitation>,
     ) -> Result<(), ChatError> {
         let invited = invitation.is_some_and(|i| i.invitee_id() == profile_id);
-        if !self.visibility.is_public() && !invited {
+        if self.is_direct() || (!self.visibility.is_public() && !invited) {
             return Err(self.concealed());
         }
         self.admit_member(profile_id, Role::Member)
+    }
+
+    /// The other member of a direct conversation, as seen by `member`.
+    pub fn peer_of(&self, member: ProfileId) -> Option<ProfileId> {
+        let direct = self.direct?;
+        if member == self.owner_id {
+            Some(direct.peer)
+        } else if member == direct.peer {
+            Some(self.owner_id)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_direct(&self) -> bool {
+        self.direct.is_some()
+    }
+
+    /// Where a direct conversation stands; a group or channel is `Open`.
+    pub fn request(&self) -> MessageRequest {
+        self.direct.map_or(MessageRequest::Open, |d| d.request)
+    }
+
+    /// Moves a direct conversation's request to `request` (the repository
+    /// applies it only from the state it was read in).
+    pub fn set_request(&mut self, request: MessageRequest) {
+        if let Some(direct) = self.direct.as_mut() {
+            direct.request = request;
+            self.updated_at = Utc::now();
+        }
+    }
+
+    /// Presence, typing and read receipts flow only once a request is
+    /// accepted (#656).
+    pub fn signals_flow(&self) -> bool {
+        !self.request().is_unanswered()
+    }
+
+    fn not_for_direct(message: &str) -> ChatError {
+        ChatError::DomainViolation { field: "kind".to_owned(), message: message.to_owned() }
     }
 
     /// The error a caller with no standing in this conversation gets when it is
@@ -322,6 +395,7 @@ impl Conversation {
     pub fn owner_id(&self)     -> ProfileId           { self.owner_id }
     pub fn member_count(&self) -> u16                 { self.member_count }
     pub fn public_since(&self) -> Option<MessageId>   { self.public_since }
+    pub fn direct(&self)       -> Option<Direct>      { self.direct }
     pub fn created_at(&self)   -> DateTime<Utc>       { self.created_at }
     pub fn updated_at(&self)   -> DateTime<Utc>       { self.updated_at }
 }
@@ -405,6 +479,7 @@ mod tests {
             pid(),
             ConversationKind::Group.max_members(),
             None,
+            None,
             Utc::now(),
             Utc::now(),
         );
@@ -438,6 +513,31 @@ mod tests {
         let c = group();
         assert!(matches!(c.deny_audience(true), ChatError::ConversationNotPublic { .. }));
         assert!(matches!(c.deny_audience(false), ChatError::ConversationConcealed { .. }));
+    }
+
+    #[test]
+    fn a_direct_conversation_is_two_members_never_public_joined_or_invited_into() {
+        let (opener, peer) = (pid(), pid());
+        let mut c = Conversation::open_direct(ConversationId::new(), opener, peer, true);
+        assert_eq!(c.kind(), ConversationKind::Direct);
+        assert_eq!(c.member_count(), 2);
+        assert!(!c.visibility().is_public());
+        assert_eq!(c.request(), MessageRequest::Pending { requester: opener });
+        assert!(!c.signals_flow(), "no receipts nor presence before acceptance");
+        assert_eq!(c.peer_of(opener), Some(peer));
+        assert_eq!(c.peer_of(peer), Some(opener));
+        assert_eq!(c.peer_of(pid()), None);
+
+        assert!(c.publish().is_err());
+        let owner = Participant::new(opener, Role::Owner).unwrap();
+        assert!(c.invite(&owner, pid()).is_err());
+        let err = c.admit_joiner(pid(), None).unwrap_err();
+        assert!(matches!(err, ChatError::ConversationConcealed { .. }), "{err:?}");
+
+        c.set_request(MessageRequest::Open);
+        assert!(c.signals_flow());
+        assert!(Conversation::open_direct(ConversationId::new(), opener, peer, false).signals_flow());
+        assert!(group().signals_flow(), "groups are never requests");
     }
 
     #[test]
