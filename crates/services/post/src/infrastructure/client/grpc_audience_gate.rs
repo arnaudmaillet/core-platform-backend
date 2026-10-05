@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use social_graph_api::social_graph_service_client::SocialGraphServiceClient;
-use social_graph_api::{CheckAccessRequest, ContentAccess as ProtoAccess};
+use social_graph_api::{CheckAccessRequest, CheckInteractionRequest, ContentAccess as ProtoAccess, InteractionKind};
 use tonic::transport::Channel;
 
 use crate::application::port::AudienceGate;
@@ -82,6 +82,21 @@ impl AudienceGate for GrpcAudienceGate {
             answers.push(map_access(answer));
         }
         Ok(combine(answers))
+    }
+
+    async fn may_mention(&self, author: &ProfileId, mentioned: &ProfileId) -> Result<bool, PostError> {
+        let answer = self
+            .social_graph
+            .clone()
+            .check_interaction(CheckInteractionRequest {
+                actor_profile_id:  author.as_str(),
+                target_profile_id: mentioned.as_str(),
+                kind:              InteractionKind::Mention as i32,
+            })
+            .await
+            .map_err(|status| PostError::AccessCheckUnavailable { reason: status.to_string() })?
+            .into_inner();
+        Ok(answer.allowed)
     }
 }
 

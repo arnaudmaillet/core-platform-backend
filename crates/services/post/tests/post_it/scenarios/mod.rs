@@ -9,3 +9,4 @@ mod post_window;
 mod recently_deleted;
 mod viewer_visibility;
 mod sound_reuse;
+mod mentions;

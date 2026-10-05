@@ -123,6 +123,12 @@ calls it — is refused (`PST-1008`, 403) unless that post, or failing an overri
 one's own sounds and unknown ones (library tracks) are free. Remix has no server surface yet: the flag is
 stored for the client.
 
+**Mentions (#656).** A caption mentions a profile with a link `[@handle](profile:<uuid>)`. `CreatePost` and
+`UpdatePost` ask social-graph `CheckInteraction(MENTION)` for each mentioned profile (each once, oneself
+aside): one that does not take mentions from the author (its "who can mention me" audience, or a block
+either way) refuses the write (`PST-1009`, 403), nothing stored. At most 20 profiles per caption. An
+outage fails the write closed (retryable); a caption without mentions asks nothing.
+
 **Recently deleted (#663).** A delete is a tombstone: the post is indexed in `post.deleted_by_profile`
 (rows expire after 30 days) and `ListRecentlyDeleted` shows the author their restorable posts.
 `RestorePost` brings one back within 30 days as it was — published (re-announced on `post.published` at its
@@ -170,6 +176,7 @@ the read rather than show the point.
 | PST-1006 | `PostNotDeleted` (restore of a post that is not deleted) | 409 |
 | PST-1007 | `RestoreWindowExpired` (deleted more than 30 days ago) | 410 |
 | PST-1008 | `SoundReuseNotAllowed` (the sound's creator does not allow reuse) | 403 |
+| PST-1009 | `MentionNotAllowed` (a mentioned profile does not take mentions from the author, #656) | 403 |
 | PST-2001..2003 | carousel cardinality / video length | 422 |
 | PST-3001..3004 | thumbnail / MIME / CDN URL / dimensions | 422 |
 | PST-9001/9002 | invalid post/profile ID | 422 |

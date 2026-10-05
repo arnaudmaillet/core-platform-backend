@@ -10,6 +10,34 @@ pub trait AudienceGate: Send + Sync + 'static {
     /// `viewers` are the reader's profiles (empty when anonymous). Errors are
     /// `AccessCheckUnavailable`; callers fail closed.
     async fn access(&self, viewers: &[ProfileId], author: &ProfileId) -> Result<ContentAccess, PostError>;
+
+    /// May `author` mention `mentioned`? Their "who can mention me" setting
+    /// (#656, social-graph `CheckInteraction`, a block either way refuses).
+    /// Errors are `AccessCheckUnavailable`; the write fails closed.
+    async fn may_mention(&self, author: &ProfileId, mentioned: &ProfileId) -> Result<bool, PostError>;
+}
+
+/// Refuses a caption mentioning more than [`MAX_MENTIONS`] profiles, or one
+/// that does not take mentions from `author` (#656). Mentioning oneself is
+/// always fine.
+pub async fn check_mentions(
+    gate: &dyn AudienceGate,
+    author: &ProfileId,
+    caption: &crate::domain::value_object::Caption,
+) -> Result<(), PostError> {
+    let mentioned: Vec<ProfileId> = caption.mentions().into_iter().filter(|m| m != author).collect();
+    if mentioned.len() > crate::domain::value_object::MAX_MENTIONS {
+        return Err(PostError::DomainViolation {
+            field:   "caption".into(),
+            message: format!("a caption mentions at most {} profiles", crate::domain::value_object::MAX_MENTIONS),
+        });
+    }
+    for profile in &mentioned {
+        if !gate.may_mention(author, profile).await? {
+            return Err(PostError::MentionNotAllowed { profile_id: profile.as_str() });
+        }
+    }
+    Ok(())
 }
 
 /// Whether `viewer` may see `author`'s posts at all. The author itself and a
@@ -49,6 +77,10 @@ mod tests {
         async fn access(&self, viewers: &[ProfileId], _: &ProfileId) -> Result<ContentAccess, PostError> {
             self.asked.lock().unwrap().push(viewers.to_vec());
             self.answer.ok_or(PostError::AccessCheckUnavailable { reason: "down".into() })
+        }
+
+        async fn may_mention(&self, _: &ProfileId, _: &ProfileId) -> Result<bool, PostError> {
+            self.answer.map(|_| true).ok_or(PostError::AccessCheckUnavailable { reason: "down".into() })
         }
     }
 

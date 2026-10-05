@@ -4,7 +4,7 @@ use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
 use crate::{
-    application::port::{EventPublisher, PostRepository, ReuseRegistry},
+    application::port::{check_mentions, AudienceGate, EventPublisher, PostRepository, ReuseRegistry},
     domain::{
         aggregate::{Post, ReuseOverrides},
         entity::MediaAttachment,
@@ -86,6 +86,8 @@ pub struct CreatePostHandler<R, P> {
     pub publisher:  Arc<P>,
     /// Who may reuse whose original sound (#669).
     pub reuse:      Arc<dyn ReuseRegistry>,
+    /// Who takes mentions from whom (#656).
+    pub audience:   Arc<dyn AudienceGate>,
 }
 
 /// May `author` reuse `audio`? Allowed unless the sound's original post (by
@@ -135,6 +137,8 @@ where
 
         let caption     = Caption::new(&cmd.caption)?;
         let attachments = parse_attachments(&cmd.attachments)?;
+        // Every mentioned profile must take mentions from the author (#656).
+        check_mentions(self.audience.as_ref(), &profile_id, &caption).await?;
 
         let parent_id = cmd.parent_id
             .as_deref()

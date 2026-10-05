@@ -7,7 +7,7 @@ pub mod post_repository;
 pub mod recently_deleted;
 pub mod reuse_registry;
 
-pub use audience_gate::{author_visible_to, AudienceGate};
+pub use audience_gate::{author_visible_to, check_mentions, AudienceGate};
 pub use author_location_store::AuthorLocationStore;
 pub use author_tier_store::AuthorTierStore;
 pub use author_window_store::{window_start, AuthorWindowStore};

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: cfc30122bf829ce6b66d9836d02c37e9d604a41521d52695ab66e9da23dba751
+  source_sha256: 3e39caebaf32bf3de5196bb32bad31c4a4ac5432439901be3d322dc829434f74
   translated_at: 2026-10-05
   status: complete
 ---
@@ -136,6 +136,13 @@ ados). Un son original appartient au post qui l'a créé (`post.audio_origins`, 
 sons inconnus (pistes de bibliothèque) sont libres. Le remix n'a pas encore de surface serveur : le drapeau
 est stocké pour le client.
 
+**Mentions (#656).** Une légende mentionne un profil par un lien `[@handle](profile:<uuid>)`. `CreatePost` et
+`UpdatePost` interrogent social-graph `CheckInteraction(MENTION)` pour chaque profil mentionné (une fois
+chacun, soi-même mis à part) : un profil qui n'accepte pas les mentions de l'auteur (son audience « qui peut
+me mentionner », ou un blocage dans un sens ou l'autre) fait refuser l'écriture (`PST-1009`, 403), rien
+n'est enregistré. Au plus 20 profils par légende. Une panne fait échouer l'écriture (réessayable) ; une
+légende sans mention n'interroge rien.
+
 **Récemment supprimés (#663).** Une suppression est une pierre tombale : le post est indexé dans
 `post.deleted_by_profile` (lignes expirées au bout de 30 jours) et `ListRecentlyDeleted` montre à l'auteur ses
 posts restaurables. `RestorePost` en ramène un dans les 30 jours tel qu'il était — publié (réannoncé sur
@@ -186,6 +193,7 @@ magasin fait échouer la lecture plutôt que de montrer le point.
 | PST-1006 | `PostNotDeleted` (restauration d'un post non supprimé) | 409 |
 | PST-1007 | `RestoreWindowExpired` (supprimé il y a plus de 30 jours) | 410 |
 | PST-1008 | `SoundReuseNotAllowed` (le créateur du son n'autorise pas sa réutilisation) | 403 |
+| PST-1009 | `MentionNotAllowed` (un profil mentionné n'accepte pas les mentions de l'auteur, #656) | 403 |
 | PST-2001..2003 | carousel cardinality / video length | 422 |
 | PST-3001..3004 | thumbnail / MIME / CDN URL / dimensions | 422 |
 | PST-9001/9002 | invalid post/profile ID | 422 |

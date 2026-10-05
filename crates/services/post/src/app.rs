@@ -92,6 +92,7 @@ impl App {
                     repository: Arc::clone(&repository),
                     publisher:  Arc::clone(&publisher),
                     reuse:      Arc::clone(&reuse_registry),
+                    audience:   Arc::clone(&audience),
                 })?
                 .register::<PublishPostCommand, _>(PublishPostHandler {
                     repository:        Arc::clone(&repository),
@@ -101,6 +102,7 @@ impl App {
                 .register::<UpdatePostCommand, _>(UpdatePostHandler {
                     repository: Arc::clone(&repository),
                     publisher:  Arc::clone(&publisher),
+                    audience:   Arc::clone(&audience),
                 })?
                 .register::<DeletePostCommand, _>(DeletePostHandler {
                     repository:       Arc::clone(&repository),
