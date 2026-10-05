@@ -65,6 +65,9 @@ pub struct SignUpCommand {
     pub home_country:        Option<String>,
     pub device:              DeviceFingerprint,
     pub guest_refresh_token: Option<String>,
+    /// The caller's address as the transport saw it — what code lockouts key
+    /// on. Never the client-written `device` IP.
+    pub client_ip: Option<String>,
 }
 
 impl Validate for SignUpCommand {
@@ -165,7 +168,7 @@ impl SignUpHandler {
         self
     }
 
-    async fn prove(&self, credential: &SignUpCredential) -> Result<Proven, AuthError> {
+    async fn prove(&self, credential: &SignUpCredential, client_ip: Option<&str>) -> Result<Proven, AuthError> {
         match credential {
             SignUpCredential::IdToken { provider, id_token, nonce } => {
                 let identity = self.verifier.verify(*provider, id_token, nonce).await?;
@@ -183,7 +186,7 @@ impl SignUpHandler {
                     .codes
                     .as_ref()
                     .ok_or_else(|| AuthError::VerificationChannelUnavailable { channel: "email".into() })?;
-                let proven = codes.verify(challenge_id, code).await?;
+                let proven = codes.verify(challenge_id, code, client_ip).await?;
                 Ok(match proven.channel {
                     VerificationChannel::Email => Proven {
                         subject: IdpSubject::new(EMAIL_CODE_ISSUER, proven.destination.clone())?,
@@ -216,7 +219,7 @@ impl SignUpHandler {
         let correlation_id = envelope.correlation_id;
 
         // 1. Who this is: per the provider, or per the code sent to the address.
-        let identity = self.prove(&cmd.credential).await?;
+        let identity = self.prove(&cmd.credential, cmd.client_ip.as_deref()).await?;
         let subject = identity.subject.clone();
 
         // 2. This very identity already has an account: sign in instead.
@@ -396,6 +399,7 @@ mod tests {
             home_country: Some("fr".into()),
             device: DeviceFingerprint::default(),
             guest_refresh_token: guest,
+            client_ip: None,
         })
     }
 
@@ -546,6 +550,7 @@ mod tests {
                 },
                 device: DeviceFingerprint::default(),
                 guest_refresh_token: guest,
+                client_ip: None,
             })
         };
         let handler = fx.login_handler().with_federated(Arc::clone(&verifier) as _, Arc::clone(&fx.guests) as _);
@@ -588,6 +593,7 @@ mod tests {
             channel: VerificationChannel::Email,
             destination: to.into(),
             locale: None,
+            client_ip: None,
         };
         let by_code = |challenge_id: String, code: String| {
             let mut env = sign_up("unused", adult_dob(), None);
@@ -624,6 +630,7 @@ mod tests {
                     grant: AuthnGrant::Code { challenge_id: next.challenge_id, code },
                     device: DeviceFingerprint::default(),
                     guest_refresh_token: None,
+                    client_ip: None,
                 }),
                 t0(),
             )
@@ -640,6 +647,7 @@ mod tests {
                     grant: AuthnGrant::Code { challenge_id: stranger.challenge_id, code },
                     device: DeviceFingerprint::default(),
                     guest_refresh_token: None,
+                    client_ip: None,
                 }),
                 t0(),
             )
@@ -667,6 +675,7 @@ mod tests {
             channel: VerificationChannel::Sms,
             destination: number.into(),
             locale: None,
+            client_ip: None,
         };
         let sign_up_with = |challenge_id: String, code: String| {
             let mut env = sign_up("unused", adult_dob(), None);

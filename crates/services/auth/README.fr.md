@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: ca1d0bc292863ccdde3b599304abcc9934fa235bd31ad42c226f5e704f00c367
+  source_sha256: 29f5805d3c4172a371f8a69a5dcf01002a490cea9007f68455401b4669baeeed
   translated_at: 2026-10-05
   status: complete
 ---
@@ -119,9 +119,13 @@ Redis (`auth:{otp:<id>}`), vivent `AUTH_VERIFICATION_TTL_SECS` (600), autorisent
 utilisé donne une seule et même erreur (`AUT-5011`). Les envois sont limités par adresse
 (`AUTH_VERIFICATION_PER_HOUR` 5, `AUTH_VERIFICATION_PER_DAY` 20, `AUTH_VERIFICATION_RESEND_SECS` 30
 → `RESOURCE_EXHAUSTED` `AUT-5013` avec `retry-after-secs`) et par IP à l'edge. **Les tentatives sont
-bornées par adresse :** après `AUTH_VERIFICATION_MAX_FAILURES` (15) codes faux en 24 h, tous
-challenges confondus, l'adresse ne reçoit plus de code et même un bon code est refusé jusqu'à la fin
-de la fenêtre. **Rien à énumérer :** la réponse de StartVerification est
+bornées par adresse, sans offrir de levier de verrouillage aux attaquants :** les codes faux comptent
+par adresse **et IP du client** (l'adresse vue par le transport — l'entrée `X-Forwarded-For` de l'ALB,
+`GRPC_TRUSTED_PROXY_HOPS` — jamais un champ de la requête). Après `AUTH_VERIFICATION_MAX_FAILURES_PER_IP`
+(15) en 24 h, tous challenges confondus, cette IP ne reçoit plus de code pour l'adresse et même un bon
+code est refusé : celui qui devine se verrouille lui-même, tandis que le titulaire, sur un autre
+réseau, se connecte toujours. Seuls `AUTH_VERIFICATION_MAX_FAILURES` (50) codes faux venus de partout
+(une attaque distribuée) verrouillent l'adresse pour tous jusqu'à la fin de la fenêtre. **Rien à énumérer :** la réponse de StartVerification est
 la même pour toute adresse ; qu'elle ait un compte (ou un compte Apple / Google) n'est dit qu'à celui
 qui saisit le code. L'e-mail part en SMTP vers **Amazon SES** (`AUTH_VERIFICATION_SENDER=smtp`,
 `AUTH_SMTP_*`) ; `log` écrit le code dans les logs (exécutions locales uniquement) ; non défini =
@@ -266,7 +270,7 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_SMS_COUNTRIES` | Pays (ISO 3166-1 alpha-2, séparés par des virgules) vers lesquels les codes SMS peuvent partir ; doit être égal à la liste autorisée de la protect configuration SNS (infra `global/messaging/sms`). Un code inconnu fait échouer le démarrage. | les marchés de lancement (37) |
 | `AUTH_SMS_DAILY_BUDGET` | SMS que le service entier peut envoyer par jour UTC (`0` = aucun) ; au-delà `AUT-5016`. | `50` |
 | `AUTH_SMS_COUNTRY_DAILY_BUDGET` | SMS qu'un pays de destination peut recevoir par jour UTC, vérifié avant celui du service ; au-delà `AUT-5016`. | `25` |
-| `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES` | Durée de vie d'un code, essais par code, codes par adresse par heure / par jour, délai avant renvoi, codes faux par adresse en 24 h avant verrouillage. | `600` · `5` · `5` · `20` · `30` · `15` |
+| `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES_PER_IP` · `_MAX_FAILURES` | Durée de vie d'un code, essais par code, codes par adresse par heure / par jour, délai avant renvoi, codes faux par adresse depuis une IP en 24 h avant verrouillage pour cette IP, et depuis partout avant verrouillage pour tous. | `600` · `5` · `5` · `20` · `30` · `15` · `50` |
 | Postgres / Redis / Kafka | via les `from_env()` des crates de stockage partagées | — |
 
 ## 🧪 Développement local

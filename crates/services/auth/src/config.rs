@@ -50,6 +50,9 @@ pub struct AuthConfig {
     /// client-generated nonce is only logged — turn it on once every client
     /// calls StartFederatedSignIn.
     pub federated_nonce_required: bool,
+    /// `GRPC_TRUSTED_PROXY_HOPS` (the runtime's setting, default 1 = the ALB):
+    /// how the client's address is read for per-IP code lockouts.
+    pub trusted_proxy_hops: usize,
     /// Native Sign in with Apple / Google: the app's client ids a provider's
     /// id_token must be minted for (`aud`). Empty = that provider is off.
     pub apple_audiences: Vec<String>,
@@ -129,6 +132,10 @@ impl AuthConfig {
             profile_connect_timeout: env_ms("AUTH_PROFILE_CONNECT_TIMEOUT_MS", 2_000),
             idp_http_timeout: env_ms("AUTH_IDP_HTTP_TIMEOUT_MS", 5_000),
             idp_connect_timeout: env_ms("AUTH_IDP_CONNECT_TIMEOUT_MS", 2_000),
+            trusted_proxy_hops: std::env::var("GRPC_TRUSTED_PROXY_HOPS")
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(transport::grpc::client_ip::DEFAULT_TRUSTED_PROXY_HOPS),
             guest_sessions_enabled: std::env::var("AUTH_GUEST_SESSIONS_ENABLED")
                 .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes")),
             federated_nonce_required: std::env::var("AUTH_FEDERATED_NONCE_REQUIRED")
@@ -149,7 +156,8 @@ impl AuthConfig {
                 per_hour: env_secs("AUTH_VERIFICATION_PER_HOUR", 5).max(1) as u32,
                 per_day: env_secs("AUTH_VERIFICATION_PER_DAY", 20).max(1) as u32,
                 resend: chrono::Duration::seconds(env_secs("AUTH_VERIFICATION_RESEND_SECS", 30)),
-                max_failures: env_secs("AUTH_VERIFICATION_MAX_FAILURES", 15).max(1) as u32,
+                max_failures: env_secs("AUTH_VERIFICATION_MAX_FAILURES", 50).max(1) as u32,
+                max_failures_per_ip: env_secs("AUTH_VERIFICATION_MAX_FAILURES_PER_IP", 15).max(1) as u32,
                 failure_window: chrono::Duration::hours(24),
                 sms_countries: sms_countries_from_env().map_err(anyhow::Error::msg)?,
                 sms_daily_budget: env_secs(

@@ -101,8 +101,13 @@ new code (`SIGN_IN_METHOD_EMAIL_CODE`). Codes are stored hashed in Redis (`auth:
 use; a wrong, expired or used code is one error (`AUT-5011`). Sends are budgeted per address
 (`AUTH_VERIFICATION_PER_HOUR` 5, `AUTH_VERIFICATION_PER_DAY` 20, `AUTH_VERIFICATION_RESEND_SECS` 30
 → `RESOURCE_EXHAUSTED` `AUT-5013` with `retry-after-secs`) and per IP at the edge. **Guessing is
-bounded per address:** after `AUTH_VERIFICATION_MAX_FAILURES` (15) wrong codes within 24 h, across
-challenges, the address gets no new code and even a right one is refused until the window ends. **Nothing to enumerate:** the answer to
+bounded per address, without handing attackers a lockout lever:** wrong codes count per address
+**and client IP** (the address the transport saw — the ALB's `X-Forwarded-For` entry,
+`GRPC_TRUSTED_PROXY_HOPS` — never a request field). After `AUTH_VERIFICATION_MAX_FAILURES_PER_IP`
+(15) within 24 h, across challenges, that IP gets no new code for the address and even a right one
+is refused: the guesser locks itself out, while the owner on another network still signs in. Only
+`AUTH_VERIFICATION_MAX_FAILURES` (50) wrong codes from anywhere (a distributed attack) lock the
+address for everyone until the window ends. **Nothing to enumerate:** the answer to
 StartVerification is the same for any address; whether it has an account (or one made with Apple /
 Google) is only told to whoever enters the code. Email goes through SMTP to **Amazon SES**
 (`AUTH_VERIFICATION_SENDER=smtp`, `AUTH_SMTP_*`); `log` writes the code to the log (local runs only);
@@ -244,7 +249,7 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | `AUTH_SMS_COUNTRIES` | Comma-separated ISO 3166-1 alpha-2 countries SMS codes may go to; must equal the SNS protect allow-list (infra `global/messaging/sms`). An unknown code fails the boot. | the launch markets (37) |
 | `AUTH_SMS_DAILY_BUDGET` | SMS the whole service may send per UTC day (`0` = none); over it `AUT-5016`. | `50` |
 | `AUTH_SMS_COUNTRY_DAILY_BUDGET` | SMS one destination country may receive per UTC day, checked before the service's; over it `AUT-5016`. | `25` |
-| `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES` | Code lifetime, tries per code, codes per address an hour / a day, resend cooldown, wrong codes per address in 24 h before it is locked. | `600` · `5` · `5` · `20` · `30` · `15` |
+| `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES_PER_IP` · `_MAX_FAILURES` | Code lifetime, tries per code, codes per address an hour / a day, resend cooldown, wrong codes per address from one IP in 24 h before it is locked for that IP, and from anywhere before it is locked for everyone. | `600` · `5` · `5` · `20` · `30` · `15` · `50` |
 | Postgres / Redis / Kafka | via the shared storage crates' own `from_env()` | — |
 
 ## 🧪 Local Development

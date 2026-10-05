@@ -45,6 +45,9 @@ pub struct AuthServiceHandler {
     sign_up: Option<Arc<SignUpHandler>>,
     codes: Option<Arc<VerificationCodes>>,
     nonces: Option<Arc<FederatedNonces>>,
+    /// Proxies appending to `X-Forwarded-For` in front of the edge
+    /// (`GRPC_TRUSTED_PROXY_HOPS`), to find the client's address.
+    trusted_proxy_hops: usize,
 }
 
 impl AuthServiceHandler {
@@ -73,7 +76,19 @@ impl AuthServiceHandler {
             sign_up: None,
             codes: None,
             nonces: None,
+            trusted_proxy_hops: transport::grpc::client_ip::DEFAULT_TRUSTED_PROXY_HOPS,
         }
+    }
+
+    /// Sets how many trusted proxies append to `X-Forwarded-For`.
+    pub fn with_trusted_proxy_hops(mut self, hops: usize) -> Self {
+        self.trusted_proxy_hops = hops;
+        self
+    }
+
+    /// The caller's address as the transport saw it (`None` when unknown).
+    fn client_ip<T>(&self, request: &Request<T>) -> Option<String> {
+        transport::grpc::client_ip::request_client_ip(request, self.trusted_proxy_hops).map(|ip| ip.to_string())
     }
 
     /// Enables StartVerification (email one-time codes).
@@ -88,6 +103,7 @@ impl AuthServiceHandler {
         request: Request<proto::StartVerificationRequest>,
     ) -> Result<Response<proto::StartVerificationResponse>, Status> {
         let codes = self.codes.as_ref().ok_or_else(|| Status::unimplemented("verification codes are not enabled"))?;
+        let client_ip = self.client_ip(&request);
         let req = request.into_inner();
         let channel = match proto::VerificationChannel::try_from(req.channel) {
             Ok(proto::VerificationChannel::Email) => VerificationChannel::Email,
@@ -99,6 +115,7 @@ impl AuthServiceHandler {
                 channel,
                 destination: req.destination,
                 locale: Some(req.locale).filter(|l| !l.is_empty()),
+                client_ip,
             })
             .await
             .map_err(auth_error_to_status)?;
@@ -140,6 +157,7 @@ impl AuthServiceHandler {
         request: Request<proto::SignUpRequest>,
     ) -> Result<Response<proto::SignUpResponse>, Status> {
         let handler = self.sign_up.as_ref().ok_or_else(|| Status::unimplemented("sign-up is not enabled"))?;
+        let client_ip = self.client_ip(&request);
         let req = request.into_inner();
         let credential = match (req.id_token, req.verification_code) {
             (Some(grant), None) => SignUpCredential::IdToken {
@@ -165,8 +183,9 @@ impl AuthServiceHandler {
                 analytics: consent.analytics,
             },
             home_country: Some(req.home_country).filter(|c| !c.is_empty()),
-            device: device_from_proto(req.device),
+            device: device_from_proto(req.device, client_ip.clone()),
             guest_refresh_token: Some(req.guest_refresh_token).filter(|t| !t.is_empty()),
+            client_ip,
         };
         let outcome = handler
             .handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now())
@@ -246,10 +265,11 @@ impl AuthServiceHandler {
         &self,
         request: Request<proto::StartGuestSessionRequest>,
     ) -> Result<Response<proto::StartGuestSessionResponse>, Status> {
+        let client_ip = self.client_ip(&request);
         let req = request.into_inner();
         let non_empty = |s: String| if s.trim().is_empty() { None } else { Some(s) };
         let cmd = StartGuestSessionCommand {
-            device: device_from_proto(req.device),
+            device: device_from_proto(req.device, client_ip),
             attestation: non_empty(req.attestation),
             locale: non_empty(req.locale),
             region_hint: non_empty(req.region_hint),
@@ -272,12 +292,14 @@ impl AuthServiceHandler {
         &self,
         request: Request<proto::LoginRequest>,
     ) -> Result<Response<proto::LoginResponse>, Status> {
+        let client_ip = self.client_ip(&request);
         let req = request.into_inner();
         let grant = grant_from_proto(req.credential)?;
         let cmd = LoginCommand {
             grant,
-            device: device_from_proto(req.device),
+            device: device_from_proto(req.device, client_ip.clone()),
             guest_refresh_token: Some(req.guest_refresh_token).filter(|t| !t.is_empty()),
+            client_ip,
         };
 
         let issued = self
@@ -298,10 +320,11 @@ impl AuthServiceHandler {
         &self,
         request: Request<proto::RefreshRequest>,
     ) -> Result<Response<proto::RefreshResponse>, Status> {
+        let client_ip = self.client_ip(&request);
         let req = request.into_inner();
         let cmd = RefreshCommand {
             refresh_token: req.refresh_token,
-            device: device_from_proto(req.device),
+            device: device_from_proto(req.device, client_ip),
         };
 
         let issued = self
@@ -472,15 +495,18 @@ fn method_to_proto(method: SignInMethod) -> proto::SignInMethod {
     }
 }
 
-fn device_from_proto(device: Option<proto::DeviceContext>) -> DeviceFingerprint {
+/// The device of a request. Its IP is the one the transport saw (`client_ip`)
+/// whenever known: the request's own `ip_address` is client-written, only a
+/// fallback for display, and never what code lockouts key on at the edge.
+fn device_from_proto(device: Option<proto::DeviceContext>, client_ip: Option<String>) -> DeviceFingerprint {
     let non_empty = |s: String| if s.is_empty() { None } else { Some(s) };
     match device {
         Some(d) => DeviceFingerprint::new(
             non_empty(d.user_agent),
-            non_empty(d.ip_address),
+            client_ip.or_else(|| non_empty(d.ip_address)),
             non_empty(d.device_id),
         ),
-        None => DeviceFingerprint::default(),
+        None => DeviceFingerprint::new(None, client_ip, None),
     }
 }
 
@@ -541,5 +567,24 @@ pub fn auth_error_to_status(err: AuthError) -> Status {
         400 | 422 => Status::failed_precondition(msg),
         502 | 503 => Status::unavailable(msg),
         _ => Status::internal(msg),
+    }
+}
+
+#[cfg(test)]
+mod client_ip_tests {
+    use super::*;
+
+    #[test]
+    fn the_device_ip_is_the_transports_not_the_requests() {
+        let spoofed = Some(proto::DeviceContext {
+            user_agent: "app".into(),
+            ip_address: "6.6.6.6".into(),
+            device_id: "d".into(),
+        });
+        let device = device_from_proto(spoofed.clone(), Some("203.0.113.9".into()));
+        assert_eq!(device.ip_address(), Some("203.0.113.9"));
+        // Unknown to the transport: the request's value, for display only.
+        assert_eq!(device_from_proto(spoofed, None).ip_address(), Some("6.6.6.6"));
+        assert_eq!(device_from_proto(None, Some("203.0.113.9".into())).ip_address(), Some("203.0.113.9"));
     }
 }
