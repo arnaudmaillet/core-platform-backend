@@ -85,6 +85,17 @@ impl AssetRepository for InMemoryAssetRepository {
         Ok(self.assets.lock().unwrap().get(id).cloned())
     }
 
+    async fn find_by_content_hash(&self, hash: &ContentHash) -> Result<Vec<Asset>, MediaError> {
+        Ok(self
+            .assets
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|a| a.state() != AssetState::Deleted && a.content_hash() == Some(hash))
+            .cloned()
+            .collect())
+    }
+
     async fn find_ready_by_content_hash(
         &self,
         hash: &ContentHash,

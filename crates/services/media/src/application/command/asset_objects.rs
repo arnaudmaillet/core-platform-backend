@@ -12,26 +12,16 @@ use crate::domain::value_object::storage_key::QUARANTINE_PREFIX;
 use crate::domain::value_object::StorageKey;
 use crate::error::MediaError;
 
-/// Whether the asset's objects are its own to move or delete. Identical bytes
-/// share content-addressed keys, so when another asset with the same bytes is
-/// still delivered, the shared objects stay (moving them would break that
-/// asset); a legal hold (CSAM evidence) always takes them.
+/// Whether the asset's objects are its own to delete. Identical bytes share
+/// content-addressed keys: while another (not deleted) asset holds the same
+/// bytes, a delete leaves the shared objects to it.
 pub(crate) async fn owns_objects(assets: &dyn AssetRepository, asset: &Asset) -> Result<bool, MediaError> {
-    if asset.legal_hold() {
-        return Ok(true);
-    }
     let Some(hash) = asset.content_hash() else { return Ok(true) };
-    match assets.find_ready_by_content_hash(hash).await? {
-        Some(other) if other.id() != asset.id() => {
-            tracing::warn!(
-                asset.id = %asset.id(),
-                other.id = %other.id(),
-                "objects shared with another delivered asset (same bytes) left in place"
-            );
-            Ok(false)
-        }
-        _ => Ok(true),
+    let others = assets.find_by_content_hash(hash).await?.into_iter().filter(|a| a.id() != asset.id()).count();
+    if others > 0 {
+        tracing::info!(asset.id = %asset.id(), others, "objects shared with other assets (same bytes) kept on delete");
     }
+    Ok(others == 0)
 }
 
 /// The asset's content-addressed trees.

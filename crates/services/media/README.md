@@ -79,10 +79,11 @@ renditions, a video's whole HLS output) and its original upload **move under
 `quarantine/`** — a prefix the CDN's origin access is not granted — and the CDN is
 purged last. A restore moves them back *before* reinstating the asset. Each step is
 idempotent, so a redelivered event redoes only what is left. Identical bytes share
-keys: when another asset with the same bytes is still delivered, the shared objects
-stay (logged), unless the taken-down asset is under a **legal hold**, which always
-moves them. A delete erases public and quarantined copies alike (the legal hold
-still blocks it first).
+keys, so **a takedown is about the content**: every asset holding the same bytes is
+quarantined with it (each saved and announced), and a reversal restores them all —
+unless one of them is under a **legal hold** (CSAM evidence), in which case nothing is
+restored. A delete erases public and quarantined copies alike, except objects another
+asset with the same bytes still holds (the legal hold still blocks a delete first).
 
 > **Invariants** (and where enforced): no message carries a `bytes` payload
 > (proto review + `media-api` contract rule); asset state transitions are guarded

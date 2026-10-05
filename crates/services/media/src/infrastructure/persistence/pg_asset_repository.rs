@@ -65,6 +65,17 @@ impl AssetRepository for PgAssetRepository {
         Ok(row.map(|r| r.doc.0))
     }
 
+    async fn find_by_content_hash(&self, hash: &ContentHash) -> Result<Vec<Asset>, MediaError> {
+        let rows = sqlx::query_as::<_, AssetDocRow>(
+            "SELECT doc FROM assets WHERE content_hash = $1 AND state <> 'deleted'",
+        )
+        .bind(hash.as_str())
+        .fetch_all(self.tx.pool())
+        .await
+        .map_err(storage_err)?;
+        Ok(rows.into_iter().map(|r| r.doc.0).collect())
+    }
+
     async fn find_ready_by_content_hash(
         &self,
         hash: &ContentHash,
