@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: c4e4c8adfe6b654036165a37decc62cf2f486c92dab4a85cfcd4d06d09f7eb67
+  source_sha256: 2973220d20910d3f496476f9e057672175a86b8f1beffd76431c442a293e6ba9
   translated_at: 2026-10-05
   status: complete
 ---
@@ -53,7 +53,9 @@ et évitant des variantes de cache en O(utilisateurs × posts).
 
 **Objectifs fondamentaux :** requête de tuile sub-50 ms P99 (pipeline Redis + MGET) ; ~9 Go de Redis à
 100 M de posts (cap Top-K + éviction à froid + filtrage en loi de puissance) ; zéro fan-out au moment de
-la requête ; TTL par défaut 48 h (30 j pour premium), imposé via `USING TTL` Scylla et `EX` Redis.
+la requête ; TTL par défaut 48 h (30 j pour premium), compté depuis le `published_at` du post (un `post.published`
+tardif ou répété — une restauration réannonce un vieux post — n'obtient que ce qui reste, et rien une fois
+écoulé), imposé via `USING TTL` Scylla et `EX` Redis.
 
 ---
 

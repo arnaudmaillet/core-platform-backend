@@ -41,7 +41,9 @@ O(users × posts) cache variants.
 
 **Core objectives:** sub-50 ms P99 tile query (Redis pipeline + MGET); ~9 GB Redis at 100 M posts
 (Top-K cap + cold eviction + power-law filtering); zero query-time fan-out; 48 h default TTL (30 d for
-premium), enforced via Scylla `USING TTL` and Redis `EX`.
+premium), counted from the post's `published_at` (a late or repeated `post.published` — a restore
+re-announces an old post — gets only what is left, and nothing once it ran out), enforced via Scylla
+`USING TTL` and Redis `EX`.
 
 ---
 

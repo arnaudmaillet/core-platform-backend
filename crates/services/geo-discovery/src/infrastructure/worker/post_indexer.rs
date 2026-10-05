@@ -49,7 +49,8 @@ pub struct PostPublishedEvent {
     pub virality_score:  f64,
     /// Unix epoch milliseconds of the publication timestamp.
     pub published_at_ms: i64,
-    /// Optional retention override in seconds. Absent → 172 800 s (48 h).
+    /// Optional retention override in seconds, counted from `published_at_ms`.
+    /// Absent → 172 800 s (48 h).
     #[serde(default)]
     pub retention_secs:  Option<u64>,
     /// Author tier at publish time. 0=Standard, 1=Premium, 2=VIP.
