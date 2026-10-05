@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: d4bd52f79a10a1cc7c1a72a71208b0eb7bd19068902621a523d8c27f53e4bf1d
+  source_sha256: 1f13043dcaf2725aa141a62ad785e0f6a491c546aba91172c8c2ba2b7a300cf4
   translated_at: 2026-10-05
   status: complete
 ---
@@ -250,7 +250,7 @@ chez `account`, renvoie **10 codes de secours, affichés une seule fois** (seuls
 conservés), et **déconnecte les autres sessions du compte** (`mfa_changed`, comme un changement de mot de
 passe : un intrus déjà connecté ailleurs doit passer le second facteur) ; aucun enrôlement en attente
 donne `AUT-5021`. `RegenerateBackupCodes` remplace les codes (les anciens cessent de fonctionner) et
-déconnecte aussi les autres sessions ; `DisableMfa` la désactive (`AUT-5020` si elle l'est déjà). Chaque
+déconnecte aussi les autres sessions ; `DisableMfa` la désactive (`AUT-5020` si elle l'est déjà) sans déconnecter personne : les sessions déjà émises n'y perdent rien. Chaque
 changement est envoyé par e-mail à l'adresse du compte (activée, désactivée, nouveaux codes de secours),
 si bien qu'une prise de contrôle qui la désactive reste visible.
 

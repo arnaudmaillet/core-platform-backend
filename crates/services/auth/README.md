@@ -221,7 +221,7 @@ turns two-step sign-in on at `account`, returns **10 backup codes, shown once** 
 kept), and **signs the account's other sessions out** (`mfa_changed`, like a password change: an
 intruder already signed in elsewhere has to pass the second factor); no enrolment waiting is
 `AUT-5021`. `RegenerateBackupCodes` replaces the codes (the old ones stop working) and signs the other
-sessions out too; `DisableMfa` turns it off (`AUT-5020` when it is). Each change is emailed to the
+sessions out too; `DisableMfa` turns it off (`AUT-5020` when it is) and signs nobody out: the sessions already issued lose nothing by it. Each change is emailed to the
 account's address (turned on, turned off, new backup codes), so a takeover that disables it is visible.
 
 **Step-up.** A token minted right after a credential proof — `Login` / `CompleteLogin`, or
