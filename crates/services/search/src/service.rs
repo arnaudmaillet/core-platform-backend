@@ -65,7 +65,7 @@ impl Service for SearchService {
         // Ingestion: post + profile content (hydrated) + moderation visibility.
         spawn_post_consumer(Arc::clone(&app.projection), Arc::clone(&app.hydrator));
         spawn_profile_consumer(Arc::clone(&app.projection), Arc::clone(&app.hydrator));
-        spawn_moderation_consumer(Arc::clone(&app.projection));
+        spawn_moderation_consumer(Arc::clone(&app.projection), Arc::clone(&app.hydrator));
 
         Ok(Self { app })
     }
@@ -137,12 +137,13 @@ fn spawn_profile_consumer(projection: Arc<ProjectionHandler>, hydrator: Arc<dyn 
 }
 
 /// Spawns the supervised moderation-visibility consumer.
-fn spawn_moderation_consumer(projection: Arc<ProjectionHandler>) {
+fn spawn_moderation_consumer(projection: Arc<ProjectionHandler>, hydrator: Arc<dyn SourceHydrator>) {
     tokio::spawn(async move {
         loop {
             match build_consumer(MODERATION_TOPIC, MODERATION_GROUP) {
                 Ok((consumer, producer)) => {
-                    run_moderation_consumer(consumer, Arc::clone(&projection), producer).await;
+                    run_moderation_consumer(consumer, Arc::clone(&projection), Arc::clone(&hydrator), producer)
+                        .await;
                     tracing::warn!("moderation consumer exited; respawning after backoff");
                 }
                 Err(error) => {

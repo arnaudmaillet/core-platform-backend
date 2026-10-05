@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 6503a4c371b7d0c3e31c2049bba82b1275b94756e1bc1fb87967fbcc554fda4d
+  source_sha256: 6f626c4cf08653e3168d98b5523047733d5218a43c1be367459eb95d890612b4
   translated_at: 2026-10-05
   status: complete
 ---
@@ -144,7 +144,7 @@ Chaque faute implémente `error::AppError` avec un code `SCH-XXXX` stable, mapp�
 |---|---|---|---|
 | `post.v1.events` | `search-post-indexer` | indexe/met à jour/supprime les posts (contenu hydraté via `GetPost`) | DLQ `post.v1.events.dlq` |
 | `profile.v1.events` | `search-profile-indexer` | indexe/met à jour/supprime les profils (contenu hydraté via `GetProfileById`) ; masquage par le propriétaire → drapeau de visibilité **owner** ; `ProfileTabSettingsChanged` → la fenêtre de posts de l'auteur | DLQ `profile.v1.events.dlq` |
-| `moderation.v1.events` | `search-moderation-indexer` | bascule le drapeau de visibilité **moderation** au masquage ; rétablit à la réversion | DLQ `moderation.v1.events.dlq` |
+| `moderation.v1.events` | `search-moderation-indexer` | bascule le drapeau de visibilité **moderation** au masquage ; rétablit à la réversion et, pour un **post**, le réhydrate (`GetPost`, version de contenu = son `updated_at`), pour qu'un post écarté pendant le retrait — ou restauré sous le retrait et jamais réannoncé (#663) — revienne. Tant que `post` le lit encore retiré/limité : `SCH-8004`, réessayé | DLQ `moderation.v1.events.dlq` |
 | `<hashtag stream>` | `search-post-indexer` | maintient l'index hashtag (dérivé des événements post) | DLQ `<...>.dlq` |
 
 > **Deux autorités de visibilité :** un document n'est recherchable que si **les deux** drapeaux l'autorisent — `searchable = moderation_searchable AND owner_searchable`. Ce sont deux champs indépendants, chacun avec sa propre garde de version, écrits par des flux différents (`moderation.v1.events` vs un événement de masquage par le propriétaire du profil). Aucune autorité ne peut surpasser l'autre : un propriétaire de profil qui rétablit sa propre visibilité ne peut pas lever un masquage de modération, et inversement. Une **troisième autorité**, `discoverable` (#661), porte le choix du profil d'être trouvable par la recherche (`by_handle_search` de `ProfileDiscoverySettingsChanged`) ; le masquage et la modération n'y touchent pas. Ses deux champs ont été ajoutés aux index existants sur place : `ensure_indices` pose les propriétés communes à chaque démarrage, une mise à jour `_mapping` additive (sans réindexation). Un drapeau absent vaut visible. Un post **soumis à une limite d'âge** (`age_gate` de la modération) est hors de la recherche pour tous : search n'a pas de niveau de contenu par lecteur, il tient donc le contenu mature à l'écart des 13–17 ans et des invités de façon prudente (RESTRICTED par défaut, comme les fils de découverte).

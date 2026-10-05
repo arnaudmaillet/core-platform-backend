@@ -30,6 +30,14 @@ pub trait SourceHydrator: Send + Sync + 'static {
         content_ref: ContentRef,
         now: DateTime<Utc>,
     ) -> Result<SourceEvent, SearchError>;
+
+    /// The post as it reads now that moderation lifted its takedown, so a
+    /// post search no longer holds (dropped while it was removed, or restored
+    /// under the takedown and never re-announced, #663) comes back. The
+    /// content version is the post's own `updated_at`, so a stored document is
+    /// left alone and a later edit still applies. `SourceNotConverged` (retried)
+    /// while `post` has not applied the reversal yet.
+    async fn reinstated_post(&self, post_id: &str) -> Result<SourceEvent, SearchError>;
 }
 
 /// The production hydrator: `post` + `profile` gRPC clients, routed by kind.
@@ -111,6 +119,24 @@ impl GrpcSourceHydrator {
 
 #[async_trait]
 impl SourceHydrator for GrpcSourceHydrator {
+    async fn reinstated_post(&self, post_id: &str) -> Result<SourceEvent, SearchError> {
+        let view = match self.post.clone().get_post(GetPostRequest { post_id: post_id.to_owned() }).await {
+            Ok(resp) => resp.into_inner(),
+            Err(status) if status.code() == Code::NotFound => {
+                return Ok(deleted(EntityKind::Post, post_id.to_owned()));
+            }
+            Err(status) if is_transient(status.code()) => return Err(SearchError::EngineUnavailable),
+            Err(status) => {
+                return Err(SearchError::UnmappedSource { reason: format!("get_post failed: {status}") });
+            }
+        };
+        if still_taken_down(&view) {
+            return Err(SearchError::SourceNotConverged { id: post_id.to_owned() });
+        }
+        let revision = view.updated_at_ms.max(0) as u64;
+        Ok(post_event(view, revision))
+    }
+
     async fn hydrate(
         &self,
         content_ref: ContentRef,
@@ -124,6 +150,12 @@ impl SourceHydrator for GrpcSourceHydrator {
             }),
         }
     }
+}
+
+/// `post` still holds the takedown a reversal lifted (removed or limited).
+fn still_taken_down(view: &post_api::PostView) -> bool {
+    view.moderation == post_api::ModerationRestriction::Removed as i32
+        || view.moderation == post_api::ModerationRestriction::Limited as i32
 }
 
 /// The search event for a hydrated post. Only a **published** post is indexed: a
@@ -206,6 +238,16 @@ fn is_transient(code: Code) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_post_still_removed_or_limited_has_not_caught_up_with_a_reversal() {
+        let view = |m: post_api::ModerationRestriction| post_api::PostView { moderation: m as i32, ..Default::default() };
+        assert!(still_taken_down(&view(post_api::ModerationRestriction::Removed)));
+        assert!(still_taken_down(&view(post_api::ModerationRestriction::Limited)));
+        assert!(!still_taken_down(&view(post_api::ModerationRestriction::None)));
+        // Age-gated is not the takedown a reversal lifts: hydration drops it.
+        assert!(!still_taken_down(&view(post_api::ModerationRestriction::AgeGated)));
+    }
 
     #[test]
     fn extracts_and_normalizes_hashtags() {
