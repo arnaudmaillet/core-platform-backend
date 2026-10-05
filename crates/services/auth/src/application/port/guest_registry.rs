@@ -11,8 +11,10 @@ use crate::error::AuthError;
 pub struct GuestRecord {
     pub guest_id:         AccountId,
     pub device_id:        String,
-    /// An App Attest / DeviceCheck assertion was sent. Not verified yet (B5).
+    /// An App Attest attestation was sent (verified or not).
     pub attestation_sent: bool,
+    /// The App Attest key that vouched for this install, when verified.
+    pub attest_key_id:    Option<String>,
     pub locale:           Option<String>,
     pub region_hint:      Option<String>,
     /// ISO country derived on the device (B10 verifies it against GeoIP).

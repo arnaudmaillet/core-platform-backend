@@ -45,6 +45,9 @@ pub struct AuthConfig {
     /// the abuse controls (per-IP / per-device limits, App Attest — B5) are not
     /// in front of it yet. The local fleet turns it on.
     pub guest_sessions_enabled: bool,
+    /// App Attest in front of `StartGuestSession` (B5b). The app ids and
+    /// environments come from the environment, never from code.
+    pub app_attest: AppAttestConfig,
     /// `AUTH_FEDERATED_NONCE_REQUIRED` (default **false**): an id_token SignUp /
     /// Login must carry a nonce from StartFederatedSignIn (single use). Off, a
     /// client-generated nonce is only logged — turn it on once every client
@@ -140,6 +143,7 @@ impl AuthConfig {
                 .and_then(|v| v.trim().parse().ok())
                 .unwrap_or(transport::grpc::client_ip::DEFAULT_TRUSTED_PROXY_HOPS),
             guest_retention_days: env_secs("AUTH_GUEST_RETENTION_DAYS", 90).max(1),
+            app_attest: AppAttestConfig::from_env().map_err(anyhow::Error::msg)?,
             guest_sessions_enabled: std::env::var("AUTH_GUEST_SESSIONS_ENABLED")
                 .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes")),
             federated_nonce_required: std::env::var("AUTH_FEDERATED_NONCE_REQUIRED")
@@ -245,4 +249,50 @@ fn env_ms(key: &str, default: u64) -> std::time::Duration {
 
 fn env_required(key: &str) -> anyhow::Result<String> {
     std::env::var(key).map_err(|_| anyhow::anyhow!("required env var {key} is not set"))
+}
+
+/// App Attest settings:
+/// - `AUTH_APP_ATTEST_MODE`: `off` (default) · `observe` · `enforce`;
+/// - `AUTH_APP_ATTEST_APP_IDS`: comma-separated `<team id>.<bundle id>` the
+///   attestation must name (required unless off);
+/// - `AUTH_APP_ATTEST_ENVIRONMENTS`: `production` (default) and/or `development`;
+/// - `AUTH_APP_ATTEST_GUESTS_PER_DEVICE_PER_DAY`: guest sessions per attested key (5).
+#[derive(Debug, Clone)]
+pub struct AppAttestConfig {
+    pub mode: crate::application::command::AttestMode,
+    pub app_ids: Vec<String>,
+    pub environments: Vec<crate::infrastructure::attest::AttestEnvironment>,
+    pub guests_per_device_per_day: u32,
+}
+
+impl AppAttestConfig {
+    fn from_env() -> Result<Self, String> {
+        use crate::application::command::AttestMode;
+        use crate::infrastructure::attest::AttestEnvironment;
+        let raw_mode = env_or("AUTH_APP_ATTEST_MODE", "off");
+        let mode = AttestMode::parse(&raw_mode)
+            .ok_or_else(|| format!("AUTH_APP_ATTEST_MODE: {raw_mode:?} is not off, observe or enforce"))?;
+        let app_ids = env_list("AUTH_APP_ATTEST_APP_IDS");
+        if let Some(bad) = app_ids.iter().find(|id| id.split_once('.').is_none_or(|(team, bundle)| team.is_empty() || bundle.is_empty())) {
+            return Err(format!("AUTH_APP_ATTEST_APP_IDS: {bad:?} is not <team id>.<bundle id>"));
+        }
+        if mode != AttestMode::Off && app_ids.is_empty() {
+            return Err("AUTH_APP_ATTEST_MODE is on but AUTH_APP_ATTEST_APP_IDS is empty".into());
+        }
+        let raw_envs = env_list("AUTH_APP_ATTEST_ENVIRONMENTS");
+        let environments = if raw_envs.is_empty() {
+            vec![AttestEnvironment::Production]
+        } else {
+            raw_envs
+                .iter()
+                .map(|e| AttestEnvironment::parse(e).ok_or_else(|| format!("AUTH_APP_ATTEST_ENVIRONMENTS: {e:?}")))
+                .collect::<Result<_, _>>()?
+        };
+        Ok(Self {
+            mode,
+            app_ids,
+            environments,
+            guests_per_device_per_day: env_secs("AUTH_APP_ATTEST_GUESTS_PER_DEVICE_PER_DAY", 5).max(1) as u32,
+        })
+    }
 }

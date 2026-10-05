@@ -45,6 +45,8 @@ impl Service for AuthService {
         // Guest mode: an installation starts an anonymous, read-only session.
         // Abuse controls (App Attest, per-IP / per-device limits) come with B5.
         public("/auth.v1.AuthService/StartGuestSession"),
+        // A single-use App Attest challenge for that session (B5b).
+        public("/auth.v1.AuthService/StartDeviceAttestation"),
         // Sign-up with a native Apple / Google id_token (proof of the identity
         // is the verified token; the edge has no session yet).
         public("/auth.v1.AuthService/SignUp"),

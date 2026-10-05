@@ -36,8 +36,8 @@ impl GuestRegistry for PgGuestRegistry {
                         r#"
                         INSERT INTO guest_principals (
                             guest_id, device_id, attestation_sent, locale, region_hint,
-                            current_country, first_seen_at
-                        ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+                            current_country, first_seen_at, attest_key_id
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
                         ON CONFLICT (guest_id) DO NOTHING
                         "#,
                     )
@@ -48,6 +48,7 @@ impl GuestRegistry for PgGuestRegistry {
                     .bind(g.region_hint)
                     .bind(g.current_country)
                     .bind(g.first_seen_at)
+                    .bind(g.attest_key_id)
                     .execute(&mut **tx)
                     .await
                     .map(|_| ())

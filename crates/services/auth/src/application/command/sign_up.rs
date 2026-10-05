@@ -492,6 +492,8 @@ mod tests {
                 Envelope::new(Uuid::now_v7(), StartGuestSessionCommand {
                     device: DeviceFingerprint::new(None, None, Some("device-1".into())),
                     attestation: None,
+                    attest_key_id: None,
+                    attest_challenge: None,
                     locale: None,
                     region_hint: None,
                     current_country: None,
