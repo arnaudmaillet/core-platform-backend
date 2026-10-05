@@ -54,6 +54,30 @@ impl Notification {
         }
     }
 
+    /// A notice from the platform itself (an appeal's outcome, #744): no
+    /// sender — the nil profile id, no sample senders, a count of 0.
+    pub fn from_platform(
+        id:                NotificationId,
+        target_profile_id: ProfileId,
+        kind:              NotificationKind,
+        subject_kind:      SubjectKind,
+        subject_id:        SubjectId,
+        created_at:        DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id,
+            target_profile_id,
+            sender_profile_id: ProfileId::from_uuid(Uuid::nil()),
+            sample_sender_ids: Vec::new(),
+            sender_count: 0,
+            kind,
+            subject_kind,
+            subject_id,
+            created_at,
+            is_read: false,
+        }
+    }
+
     /// Reconstitutes a collapsed notification produced by the CollapseFlushWorker.
     /// `sender_profile_id` is the most-recent sender in the window.
     #[allow(clippy::too_many_arguments)] // aggregate/worker constructor — same precedent as chat

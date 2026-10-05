@@ -10,7 +10,7 @@
 //! knobs each), so — unlike chat/timeline — there is no separate `AppConfig`; the
 //! domain config *is* the tuning surface.
 //!
-//! The four Kafka workers are derived from [`Backends::kafka`]: when it is `Some`
+//! The Kafka workers are derived from [`Backends::kafka`]: when it is `Some`
 //! they are spawned; when `None` the harness drives [`CreateNotificationCommand`]
 //! and the gRPC handler directly against [`App::command_bus`] and
 //! [`App::stream_registry`], so the stream-lifetime and counter scenarios need no
@@ -54,15 +54,15 @@ use crate::infrastructure::persistence::{ScyllaNotificationRepository, ScyllaPus
 use crate::infrastructure::publisher::{KafkaNotificationPublisher, NoopNotificationPublisher};
 use crate::infrastructure::streaming::BroadcastRegistry;
 use crate::infrastructure::worker::{
-    collapse_flush_worker::CollapseFlushWorker, comment_worker::CommentNotificationWorker,
+    appeal_worker::AppealNotificationWorker, collapse_flush_worker::CollapseFlushWorker, comment_worker::CommentNotificationWorker,
     follow_worker::FollowNotificationWorker,
     mention_worker::MentionNotificationWorker, reaction_worker::ReactionNotificationWorker,
 };
 
 /// Storage/transport endpoints the graph is wired against.
 ///
-/// `kafka` is optional: `Some` spawns the three ingestion workers plus the
-/// collapse-flush worker; `None` leaves the command handlers driveable directly.
+/// `kafka` is optional: `Some` spawns the ingestion workers (reactions,
+/// comments, follows, mentions, appeal outcomes) plus the collapse-flush worker; `None` leaves the command handlers driveable directly.
 pub struct Backends {
     pub scylla: ScyllaConfig,
     pub redis:  RedisConfig,
@@ -88,7 +88,7 @@ pub struct App {
 impl App {
     /// Builds storage clients from `backends`, assembles the repository, cache,
     /// broadcast registry, and CQRS buses, spawns the broadcast-registry reaper,
-    /// and — when Kafka is configured — the four background workers.
+    /// and — when Kafka is configured — the background workers.
     pub async fn build(
         config:   Arc<NotificationConfig>,
         backends: Backends,
@@ -212,6 +212,16 @@ impl App {
                     Arc::clone(&counter),
                     Arc::clone(&stream_registry),
                     "notification-follow-consumer",
+                )
+                .run(),
+            );
+            tokio::spawn(
+                AppealNotificationWorker::new(
+                    kafka_config.clone(),
+                    Arc::clone(&repository),
+                    Arc::clone(&counter),
+                    Arc::clone(&stream_registry),
+                    "notification-appeal-consumer",
                 )
                 .run(),
             );

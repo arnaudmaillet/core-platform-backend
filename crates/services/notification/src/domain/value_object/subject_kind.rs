@@ -7,6 +7,8 @@ pub enum SubjectKind {
     Comment,
     /// A profile (follows, follow requests): the other profile.
     Profile,
+    /// A moderation appeal (its outcome, #744).
+    Appeal,
 }
 
 impl SubjectKind {
@@ -15,6 +17,7 @@ impl SubjectKind {
             Self::Post    => 1,
             Self::Comment => 2,
             Self::Profile => 3,
+            Self::Appeal  => 4,
         }
     }
 
@@ -23,6 +26,7 @@ impl SubjectKind {
             1 => Ok(Self::Post),
             2 => Ok(Self::Comment),
             3 => Ok(Self::Profile),
+            4 => Ok(Self::Appeal),
             n => Err(NotificationError::UnknownSubjectKind { kind: n.to_string() }),
         }
     }

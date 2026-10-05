@@ -49,7 +49,7 @@ producer's `DOMAIN.md §8`.
 | `chat.member.left` | `chat` | — *(orphan — see below)* |
 | `chat.message.sent` | `chat` | — *(orphan — see below)* |
 | `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery`, `timeline` |
-| `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline` |
+| `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline`, `notification` |
 | `auth.v1.events` | `auth` | `audit` |
 | `media.v1.events` | `media` | `media` |
 
@@ -150,7 +150,7 @@ producer's `DOMAIN.md §8`.
 | `decision_recorded` | an authoritative integrity ruling was made — carries *who decided* + *why* (DSA SoR) | a decision is recorded (auto-screen / human review / appeal reversal) | `audit` (seals rationale in crypto-shred envelope) |
 | `enforcement_applied` / `enforcement_reversed` | a consequence was applied/lifted against an actor (versioned) | enforcement commits | `timeline`, `chat`, `account` (Plane-B denorm); `post` (holds the restriction its reads apply: `remove_content` → author-only); `search`, `media` (visibility / takedown); `geo-discovery` (map suppression: `remove_content` / `visibility_limit` hide a post, a reversal restores it); `audit` |
 | `case_opened` / `case_resolved` | a review unit opened/closed | ingestion threshold / reviewer action | Plane-B consumers |
-| `appeal_resolved` | an appeal was decided | appeal resolution | Plane-B consumers |
+| `appeal_resolved` | an appeal was decided (upheld / overturned; `by_reporter`; `profile_ids` = the appellant account's profiles) | appeal resolution | `notification` (tells each of `profile_ids` of the outcome, #744) |
 
 > Keyed by `actor_id` for per-actor ordering. `decision_recorded` is the compliance-evidence variant
 > (offender-centric consumers ignore it; `audit` consumes it + `enforcement_applied`).

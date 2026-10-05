@@ -125,6 +125,7 @@ impl App {
             Arc::clone(&deps.enforcements),
             Arc::clone(&deps.cases),
             Arc::clone(&deps.projection),
+            Arc::clone(&deps.subjects),
             Arc::clone(&deps.publisher),
         ));
         let statement_of_reasons =

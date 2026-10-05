@@ -57,11 +57,14 @@ message StreamNotificationsRequest {
 message NotificationView {
     string           notification_id   = 1;
     string           target_profile_id = 2;
-    // Primary actor. For collapsed rows this is the most-recent sender.
+    // Primary actor. For collapsed rows this is the most-recent sender. A
+    // notice from the platform itself (an appeal's outcome) has none: the nil
+    // UUID, no sample senders and a sender_count of 0.
     string           sender_profile_id = 3;
     // Up to 5 sample senders for "X, Y and N others" display.
     repeated string  sample_sender_ids = 4;
-    // Total number of distinct senders collapsed into this row (>= 1).
+    // Total number of distinct senders collapsed into this row (>= 1; 0 for a
+    // platform notice).
     int32            sender_count      = 5;
     NotificationKind kind              = 6;
     SubjectKind      subject_kind      = 7;

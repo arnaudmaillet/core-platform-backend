@@ -22,6 +22,13 @@ enum NotificationKind {
     // The private profile the recipient asked to follow accepted (subject:
     // that profile).
     NOTIFICATION_KIND_FOLLOW_ACCEPTED = 7;
+    // The recipient's appeal was decided and the decision stands (subject: the
+    // appeal; sent by the platform, so no sender — see NotificationView).
+    // Every profile of the appellant account is told (#744).
+    NOTIFICATION_KIND_APPEAL_UPHELD    = 8;
+    // The recipient's appeal was decided in their favour: a sanction is lifted,
+    // or a reporter's case goes back to review (the appeal says which).
+    NOTIFICATION_KIND_APPEAL_OVERTURNED = 9;
 }
 
 // Discriminates the entity that was interacted with.
@@ -34,6 +41,9 @@ enum SubjectKind {
     SUBJECT_KIND_COMMENT     = 2;
     // The subject is a profile (profile_id stored in subject_id).
     SUBJECT_KIND_PROFILE     = 3;
+    // The subject is a moderation appeal (appeal_id stored in subject_id; the
+    // app finds it with moderation's ListMyAppeals).
+    SUBJECT_KIND_APPEAL      = 4;
 }
 
 // What a push or an email is about (notification preferences, #654).
