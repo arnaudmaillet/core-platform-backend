@@ -7,15 +7,15 @@ use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::application::port::{DeviceRegistry, PreferenceStore};
 use crate::domain::device::Device;
-use crate::domain::preferences::{NotificationPreferences, PushCategory};
+use crate::domain::preferences::{HolderAge, NotificationPreferences, PushCategory};
 use crate::domain::value_object::ProfileId;
 use crate::error::NotificationError;
 
-/// The holder's preferences (stored, or their defaults).
+/// The holder's preferences (stored, or their defaults), for their age now.
 #[derive(Debug, Clone)]
 pub struct GetPreferencesQuery {
     pub profile_id: String,
-    pub minor:      bool,
+    pub age:        HolderAge,
 }
 
 impl Query for GetPreferencesQuery {
@@ -36,7 +36,8 @@ impl QueryHandler<GetPreferencesQuery> for GetPreferencesHandler {
             .preferences
             .get(&profile)
             .await?
-            .unwrap_or_else(|| NotificationPreferences::defaults(q.minor)))
+            .unwrap_or_else(|| NotificationPreferences::defaults(q.age))
+            .for_age(q.age))
     }
 }
 

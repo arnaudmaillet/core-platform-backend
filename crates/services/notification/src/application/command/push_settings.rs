@@ -8,7 +8,7 @@ use validate_core::{FieldViolation, Validate};
 
 use crate::application::port::{DeviceRegistry, PreferenceStore};
 use crate::domain::device::{Device, DevicePlatform, PushEnvironment, MAX_DEVICE_ID_LEN, MAX_TOKEN_LEN};
-use crate::domain::preferences::{is_time_zone, NotificationPreferences, PushCategory, QuietHours, MAX_PAUSE};
+use crate::domain::preferences::{is_time_zone, HolderAge, NotificationPreferences, PushCategory, QuietHours, MAX_PAUSE};
 use crate::domain::value_object::ProfileId;
 use crate::error::NotificationError;
 
@@ -23,14 +23,15 @@ fn check_time_zone(zone: Option<&str>) -> Result<(), NotificationError> {
     }
 }
 
-/// The stored preferences, or the holder's defaults.
-async fn current(store: &dyn PreferenceStore, profile: &ProfileId, minor: bool) -> Result<NotificationPreferences, NotificationError> {
-    Ok(store.get(profile).await?.unwrap_or_else(|| NotificationPreferences::defaults(minor)))
+/// The stored preferences, or the holder's defaults, for their age now.
+async fn current(store: &dyn PreferenceStore, profile: &ProfileId, age: HolderAge) -> Result<NotificationPreferences, NotificationError> {
+    Ok(store.get(profile).await?.unwrap_or_else(|| NotificationPreferences::defaults(age)).for_age(age))
 }
 
 /// Registers (or refreshes) a device for push. A holder's first device also
 /// writes their defaults (teens: quiet hours), so the push sender, which has
-/// no token to read the age from, applies them.
+/// no token to read the age from, applies them; the app refreshes its device
+/// at launch, which also lifts the teen quiet hours once the holder is 18.
 #[derive(Debug, Clone)]
 pub struct RegisterDeviceCommand {
     pub profile_id:  String,
@@ -42,8 +43,8 @@ pub struct RegisterDeviceCommand {
     pub environment: PushEnvironment,
     /// The device's IANA zone; quiet hours are read in it.
     pub timezone:    Option<String>,
-    /// The holder is 13–17 (edge token `age`).
-    pub minor:       bool,
+    /// The holder's age (edge token `age`; unknown over the mesh).
+    pub age:         HolderAge,
 }
 
 impl Command for RegisterDeviceCommand {}
@@ -86,7 +87,7 @@ impl CommandHandler<RegisterDeviceCommand> for RegisterDeviceHandler {
         self.devices.register(&profile, &cmd.account_id, &device).await?;
 
         let stored = self.preferences.get(&profile).await?;
-        let mut preferences = stored.clone().unwrap_or_else(|| NotificationPreferences::defaults(cmd.minor));
+        let mut preferences = stored.clone().unwrap_or_else(|| NotificationPreferences::defaults(cmd.age)).for_age(cmd.age);
         if cmd.timezone.is_some() {
             preferences.timezone.clone_from(&cmd.timezone);
         }
@@ -133,7 +134,7 @@ impl CommandHandler<UnregisterDeviceCommand> for UnregisterDeviceHandler {
 #[derive(Debug, Clone, Default)]
 pub struct UpdatePreferencesCommand {
     pub profile_id:  String,
-    pub minor:       bool,
+    pub age:         HolderAge,
     pub push:        Vec<(PushCategory, bool)>,
     pub email:       Vec<(PushCategory, bool)>,
     /// `Some(None)` resumes; `Some(Some(t))` pauses until `t` (≤ 8 h ahead).
@@ -172,7 +173,7 @@ impl CommandHandler<UpdatePreferencesCommand> for UpdatePreferencesHandler {
             }
         }
 
-        let mut preferences = current(self.preferences.as_ref(), &profile, cmd.minor).await?;
+        let mut preferences = current(self.preferences.as_ref(), &profile, cmd.age).await?;
         for (category, on) in &cmd.push {
             preferences.set_push(*category, *on);
         }
@@ -183,7 +184,7 @@ impl CommandHandler<UpdatePreferencesCommand> for UpdatePreferencesHandler {
             preferences.paused_until = pause;
         }
         if let Some(quiet) = cmd.quiet_hours {
-            preferences.quiet_hours = quiet;
+            preferences.set_quiet_hours(quiet);
         }
         if cmd.timezone.is_some() {
             preferences.timezone.clone_from(&cmd.timezone);
