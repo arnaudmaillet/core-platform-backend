@@ -156,7 +156,9 @@ where
         .map_err(|e| e.to_string())
     }
 
-    async fn process(&self, event: &CommentEventPayload) -> Result<(), NotificationError> {
+    /// Handles one `comment.created` event, as the runner hands it (public so
+    /// the integration suite drives it without a broker).
+    pub async fn process(&self, event: &CommentEventPayload) -> Result<(), NotificationError> {
         let sender_id  = ProfileId::try_from(event.author_id.as_str())?;
         let subject_id = SubjectId::try_from(event.post_id.as_str())?;
 

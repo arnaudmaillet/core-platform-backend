@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use scylla::observability::history::HistoryListener;
 use scylla::statement::unprepared::Statement;
-use scylla::value::CqlTimestamp;
+use scylla::value::{Counter, CqlTimestamp};
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
 use uuid::Uuid;
 
@@ -282,13 +282,15 @@ impl NotificationRepository for ScyllaNotificationRepository {
             .into_rows_result()
             .map_err(|e| row_err("read_counter:rows", e))?;
 
+        // A `counter` column decodes as `Counter`, never as a bare `i64` (the
+        // type check fails up front, even with no row).
         let count: i64 = result
-            .rows::<(i64,)>()
+            .rows::<(Counter,)>()
             .map_err(|e| row_err("read_counter:iter", e))?
             .next()
             .transpose()
             .map_err(|e| row_err("read_counter:deser", e))?
-            .map(|(c,)| c)
+            .map(|(Counter(c),)| c)
             .unwrap_or(0);
 
         Ok(count)

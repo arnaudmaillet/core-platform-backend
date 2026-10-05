@@ -21,7 +21,11 @@ use search::domain::{
     ComplianceEvent, EntityKind, HashtagEvent, HashtagSnapshot, ModerationEvent, PostEvent,
     PostSnapshot, ProfileEvent, ProfileSnapshot, SourceEvent, VisibilityChange,
 };
+use search::error::SearchError;
+use search::infrastructure::consumer::moderation_consumer;
+use search::infrastructure::decode::ModerationWireEvent;
 use search::infrastructure::grpc::{SearchServiceHandler, proto};
+use search::infrastructure::hydrate::SourceHydrator;
 use search::infrastructure::index::{OpenSearchConfig, OpenSearchIndex};
 
 /// Proto `SearchEntityType` discriminants, for entity-type filtering in scenarios.
@@ -152,6 +156,19 @@ impl Harness {
             },
         )))
         .await;
+    }
+
+    /// A hard delete of a post document (as a re-hydration during a takedown,
+    /// or a delete, leaves it).
+    pub async fn delete_post(&self, post_id: &str) {
+        self.apply(SourceEvent::Post(PostEvent::Deleted(search::domain::EntityDeletion { id: post_id.to_owned() })))
+            .await;
+    }
+
+    /// Runs one `moderation.v1.events` event through the real consumer path,
+    /// with `source` standing in for `post`'s `GetPost`.
+    pub async fn moderation(&self, event: &ModerationWireEvent, source: &dyn SourceHydrator) -> Result<(), SearchError> {
+        moderation_consumer::process(&self.projection, source, event).await
     }
 
     pub async fn restore(&self, kind: EntityKind, id: &str, occurred_ms: i64) {
