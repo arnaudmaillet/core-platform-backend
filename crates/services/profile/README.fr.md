@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 73f74eb6891d250fddb57c1cf542f9f015b71ceca4811c43db07eb118a6d6f4a
+  source_sha256: ae3bec681ae4138b2cb1e38789ed82ec9d73271423385165f967253e8eed0443
   translated_at: 2026-10-05
   status: complete
 ---
@@ -74,7 +74,12 @@ empêchant le détournement rapide d'identité (`handle_is_available()` l'impose
 Ensuite, la réservation reprend le tombstone par une seconde LWT (`UPDATE … IF tombstoned_at < now − 30 d`),
 sans tâche de GC. `CreateProfile` réserve le handle **avant** d'écrire le profil : une course perdue
 n'écrit rien (pas de ligne orpheline, pas de `pids` parasite), et une écriture en échec rend la
-réservation (`DELETE … IF profile_id = ?`).
+réservation (`DELETE … IF profile_id = ?`). Une réservation dont le profil porte désormais un autre
+handle (un renommage interrompu avant le tombstone de l'ancien handle) est réparée à la lecture : les
+recherches et les vérifications de disponibilité la passent en tombstone (`IF profile_id = ? AND
+tombstoned_at = null AND created_at < now − 5 min`) et elle ne résout plus. Le délai de grâce de
+5 minutes protège un renommage en cours, dont la nouvelle réservation précède de quelques
+millisecondes l'enregistrement du profil.
 
 > **Invariants** (et où ils sont imposés) : unicité du handle via LWT `IF NOT EXISTS` sur
 > `profile_handles` ; concurrence optimiste via LWT `IF version = ?` sur `profiles` (→ `PRF-4001`,

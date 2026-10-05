@@ -110,6 +110,46 @@ struct ProfileUpdate {
     expected_version:  i64,
 }
 
+// ── Stale claims ──────────────────────────────────────────────────────────────
+
+/// How old a claim must be before a read may heal it. A rename in flight
+/// claims the new handle *before* saving the profile: for those few
+/// milliseconds the claim's profile still carries the old handle, and must not
+/// be mistaken for a stale claim.
+const STALE_CLAIM_GRACE_SECS: i64 = 300;
+
+impl ScyllaProfileRepository {
+    /// Tombstones `handle` when its live claim still points at `profile_id`
+    /// although that profile now carries another handle — what a crash between
+    /// ChangeHandle's profile save and its old-handle tombstone leaves behind.
+    /// The LWT only fires if the row is still that profile's live claim and is
+    /// older than [`STALE_CLAIM_GRACE_SECS`] (never a rename in flight). Best
+    /// effort: a failure is logged and the next read retries.
+    async fn heal_stale_claim(&self, handle: &Handle, profile_id: ProfileId) {
+        let cutoff = Self::dt_ms(Utc::now() - chrono::Duration::seconds(STALE_CLAIM_GRACE_SECS));
+        let stmt = self.strict_stmt(
+            "UPDATE profile.profile_handles SET tombstoned_at = ? \
+             WHERE handle = ? IF profile_id = ? AND tombstoned_at = null AND created_at < ?",
+        );
+        let healed = self
+            .client
+            .session
+            .execute_unpaged(
+                stmt,
+                (Self::dt_ms(Utc::now()), handle.as_str().to_owned(), profile_id.as_uuid(), cutoff),
+            )
+            .await
+            .map_err(scylla_err)
+            .and_then(|r| r.into_rows_result().map_err(|e| row_err("heal_lwt_rows", e)))
+            .and_then(|rows| lwt_applied(rows, "heal_lwt_deser"));
+        match healed {
+            Ok(true) => tracing::warn!(handle = handle.as_str(), "a stale handle claim (interrupted rename) was released"),
+            Ok(false) => {} // a rename in flight, or already healed
+            Err(e) => tracing::error!(error = %e, handle = handle.as_str(), "a stale handle claim could not be released"),
+        }
+    }
+}
+
 // ── Error helpers ─────────────────────────────────────────────────────────────
 
 
@@ -341,7 +381,13 @@ impl ProfileRepository for ScyllaProfileRepository {
             Some(r) => ProfileId::from_uuid(r.profile_id),
         };
 
-        self.find_by_id(&profile_id).await
+        match self.find_by_id(&profile_id).await? {
+            Some(profile) if profile.handle() != handle => {
+                self.heal_stale_claim(handle, profile_id).await;
+                Ok(None)
+            }
+            found => Ok(found),
+        }
     }
 
     async fn list_by_account(
@@ -505,10 +551,10 @@ impl ProfileRepository for ScyllaProfileRepository {
 
     async fn handle_is_available(&self, handle: &Handle) -> Result<bool, ProfileError> {
         #[derive(DeserializeRow)]
-        struct TombRow { tombstoned_at: Option<CqlTimestamp> }
+        struct TombRow { profile_id: Uuid, tombstoned_at: Option<CqlTimestamp> }
 
         let stmt = self.fast_stmt(
-            "SELECT tombstoned_at FROM profile.profile_handles WHERE handle = ?",
+            "SELECT profile_id, tombstoned_at FROM profile.profile_handles WHERE handle = ?",
         );
         let result = self.client.session
             .execute_unpaged(stmt, (handle.as_str().to_owned(),))
@@ -520,8 +566,18 @@ impl ProfileRepository for ScyllaProfileRepository {
 
         match row {
             None => Ok(true),
-            Some(TombRow { tombstoned_at: None }) => Ok(false),
-            Some(TombRow { tombstoned_at: Some(ts) }) => {
+            Some(TombRow { profile_id, tombstoned_at: None }) => {
+                // A claim left behind by an interrupted rename is healed, and the
+                // handle then enters its reservation (not available yet).
+                let profile_id = ProfileId::from_uuid(profile_id);
+                if let Some(profile) = self.find_by_id(&profile_id).await?
+                    && profile.handle() != handle
+                {
+                    self.heal_stale_claim(handle, profile_id).await;
+                }
+                Ok(false)
+            }
+            Some(TombRow { tombstoned_at: Some(ts), .. }) => {
                 let days_elapsed = (Utc::now().timestamp_millis() - ts.0) / 86_400_000;
                 Ok(days_elapsed >= HANDLE_RESERVATION_DAYS)
             }
