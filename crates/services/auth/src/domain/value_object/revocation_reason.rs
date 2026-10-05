@@ -22,6 +22,9 @@ pub enum RevocationReason {
     /// A guest session ended because its device signed up or signed in: the
     /// guest became the member.
     GuestUpgraded,
+    /// The holder turned two-step sign-in on or regenerated its backup codes:
+    /// their other sessions end (#649).
+    MfaChanged,
 }
 
 impl RevocationReason {
@@ -33,6 +36,7 @@ impl RevocationReason {
             Self::Administrative => "administrative",
             Self::PasswordChanged => "password_changed",
             Self::GuestUpgraded => "guest_upgraded",
+            Self::MfaChanged => "mfa_changed",
         }
     }
 }
@@ -54,6 +58,7 @@ impl TryFrom<&str> for RevocationReason {
             "administrative" => Ok(Self::Administrative),
             "password_changed" => Ok(Self::PasswordChanged),
             "guest_upgraded" => Ok(Self::GuestUpgraded),
+            "mfa_changed" => Ok(Self::MfaChanged),
             other => Err(AuthError::DomainViolation {
                 field: "revocation_reason".into(),
                 message: format!("unknown revocation reason: '{other}'"),

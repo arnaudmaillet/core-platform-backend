@@ -130,4 +130,14 @@ pub trait AccountDirectory: Send + Sync + 'static {
     /// Spends the backup code hashed `code_hash`: `true` when one matched
     /// (now spent), `false` when none did (wrong, spent, or MFA off).
     async fn consume_recovery_code(&self, account_id: &AccountId, code_hash: &str) -> Result<bool, AuthError>;
+
+    /// Turns two-step sign-in on with `sealed_seed` and the backup codes'
+    /// hashes. [`AuthError::MfaAlreadyEnabled`] when it already is.
+    async fn enroll_mfa(&self, account_id: &AccountId, sealed_seed: &[u8], code_hashes: &[String]) -> Result<(), AuthError>;
+
+    /// Turns two-step sign-in off. [`AuthError::MfaNotEnabled`] when it is.
+    async fn revoke_mfa(&self, account_id: &AccountId) -> Result<(), AuthError>;
+
+    /// Replaces the backup codes. [`AuthError::MfaNotEnabled`] when it is off.
+    async fn replace_recovery_codes(&self, account_id: &AccountId, code_hashes: &[String]) -> Result<(), AuthError>;
 }

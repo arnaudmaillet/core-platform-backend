@@ -2,8 +2,8 @@ use account_api::account_service_client::AccountServiceClient;
 use account_api::{
     AccountStatus, AgeBracket as ProtoAgeBracket, CreateAccountRequest, GetAccountByEmailRequest,
     GetAccountByIdRequest, GetAccountByIdentityIdRequest, GetAccountByPhoneRequest,
-    ChangeEmailRequest, ChangePhoneRequest, ConsumeRecoveryCodeRequest, GetMfaSecretRequest,
-    ResumeDeactivatedAccountRequest, UpdateConsentsRequest,
+    ChangeEmailRequest, ChangePhoneRequest, ConsumeRecoveryCodeRequest, EnrollMfaRequest, GetMfaSecretRequest,
+    ReplaceRecoveryCodesRequest, ResumeDeactivatedAccountRequest, RevokeMfaRequest, UpdateConsentsRequest,
     VerifyEmailRequest, VerifyPhoneRequest,
 };
 use async_trait::async_trait;
@@ -295,6 +295,43 @@ impl AccountDirectory for GrpcAccountDirectory {
         }
     }
 
+    #[instrument(name = "auth.directory.enroll_mfa", skip_all, fields(account.id = %account_id))]
+    async fn enroll_mfa(&self, account_id: &AccountId, sealed_seed: &[u8], code_hashes: &[String]) -> Result<(), AuthError> {
+        self.client
+            .clone()
+            .enroll_mfa(EnrollMfaRequest {
+                account_id: account_id.as_str(),
+                totp_secret: sealed_seed.to_vec(),
+                recovery_code_hashes: code_hashes.to_vec(),
+            })
+            .await
+            .map(|_| ())
+            .map_err(mfa_write_error)
+    }
+
+    #[instrument(name = "auth.directory.revoke_mfa", skip(self), fields(account.id = %account_id))]
+    async fn revoke_mfa(&self, account_id: &AccountId) -> Result<(), AuthError> {
+        self.client
+            .clone()
+            .revoke_mfa(RevokeMfaRequest { account_id: account_id.as_str() })
+            .await
+            .map(|_| ())
+            .map_err(mfa_write_error)
+    }
+
+    #[instrument(name = "auth.directory.replace_recovery_codes", skip_all, fields(account.id = %account_id))]
+    async fn replace_recovery_codes(&self, account_id: &AccountId, code_hashes: &[String]) -> Result<(), AuthError> {
+        self.client
+            .clone()
+            .replace_recovery_codes(ReplaceRecoveryCodesRequest {
+                account_id: account_id.as_str(),
+                recovery_code_hashes: code_hashes.to_vec(),
+            })
+            .await
+            .map(|_| ())
+            .map_err(mfa_write_error)
+    }
+
     #[instrument(name = "auth.directory.find_by_email", skip(self, email))]
     async fn find_by_email(&self, email: &str) -> Result<Option<EmailHolder>, AuthError> {
         match self
@@ -348,4 +385,15 @@ fn status_name(status: AccountStatus) -> String {
         AccountStatus::Deleted => "deleted",
     }
     .to_owned()
+}
+
+/// account's answer to an MFA write (#649).
+fn mfa_write_error(status: tonic::Status) -> AuthError {
+    match error_code(&status) {
+        Some("ACC-5001") => AuthError::MfaAlreadyEnabled,
+        Some("ACC-5002") => AuthError::MfaNotEnabled,
+        _ if status.code() == Code::Aborted => AuthError::ConcurrentModification,
+        _ if status.code() == Code::FailedPrecondition => AuthError::AccountNotActive { current: status.message().to_owned() },
+        _ => AuthError::AccountDirectoryUnavailable,
+    }
 }

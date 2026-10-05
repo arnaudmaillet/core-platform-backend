@@ -152,6 +152,29 @@ impl AccountDirectory for StubDirectory {
         })
     }
 
+    async fn enroll_mfa(&self, account_id: &AccountId, sealed_seed: &[u8], code_hashes: &[String]) -> Result<(), AuthError> {
+        let mut mfa = self.mfa.lock().unwrap();
+        if mfa.contains_key(account_id) {
+            return Err(AuthError::MfaAlreadyEnabled);
+        }
+        mfa.insert(*account_id, (sealed_seed.to_vec(), code_hashes.to_vec()));
+        Ok(())
+    }
+
+    async fn revoke_mfa(&self, account_id: &AccountId) -> Result<(), AuthError> {
+        self.mfa.lock().unwrap().remove(account_id).map(|_| ()).ok_or(AuthError::MfaNotEnabled)
+    }
+
+    async fn replace_recovery_codes(&self, account_id: &AccountId, code_hashes: &[String]) -> Result<(), AuthError> {
+        match self.mfa.lock().unwrap().get_mut(account_id) {
+            Some((_, codes)) => {
+                *codes = code_hashes.to_vec();
+                Ok(())
+            }
+            None => Err(AuthError::MfaNotEnabled),
+        }
+    }
+
     async fn consume_recovery_code(&self, account_id: &AccountId, code_hash: &str) -> Result<bool, AuthError> {
         let mut mfa = self.mfa.lock().unwrap();
         let Some((_, codes)) = mfa.get_mut(account_id) else { return Ok(false) };
@@ -300,6 +323,7 @@ impl Harness {
                 true,
             )),
             mfa,
+            mfa_issuer: "Core Platform".into(),
             policy: SessionPolicy::new(
                 ChronoDuration::minutes(10),
                 ChronoDuration::minutes(30),

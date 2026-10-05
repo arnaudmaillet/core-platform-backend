@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::application::port::{CodeSender, VerificationChannel};
+use crate::application::port::{CodeSender, MfaChange, VerificationChannel};
 use crate::error::AuthError;
 
 /// Local development: logs the code instead of sending it
@@ -48,6 +48,16 @@ impl CodeSender for LogCodeSender {
         _locale: Option<&str>,
     ) -> Result<(), AuthError> {
         tracing::warn!(email, device, ip, "new sign-in notice (log sender — local only)");
+        Ok(())
+    }
+
+    async fn send_mfa_changed_notice(
+        &self,
+        email: &str,
+        change: MfaChange,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        tracing::warn!(email, ?change, "two-step sign-in change notice (log sender — local only)");
         Ok(())
     }
 }

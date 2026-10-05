@@ -73,6 +73,24 @@ pub trait MfaStore: Send + Sync + 'static {
 
     /// Forgets `account`'s attempts (a right code came).
     async fn clear_failures(&self, account: &AccountId) -> Result<(), AuthError>;
+
+    /// Keeps the sealed seed of an enrolment started for `account`, until its
+    /// first code confirms it (replaces any earlier one).
+    async fn save_pending_enrollment(&self, account: &AccountId, sealed_seed: &[u8], ttl_secs: u64) -> Result<(), AuthError>;
+
+    /// The enrolment waiting for its first code, if any.
+    async fn pending_enrollment(&self, account: &AccountId) -> Result<Option<Vec<u8>>, AuthError>;
+
+    /// Drops the enrolment waiting for its first code.
+    async fn discard_pending_enrollment(&self, account: &AccountId) -> Result<(), AuthError>;
+}
+
+/// What changed in a holder's two-step sign-in — what their email says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MfaChange {
+    Enabled,
+    Disabled,
+    BackupCodesRegenerated,
 }
 
 /// The holder's two-step material, as account keeps it.

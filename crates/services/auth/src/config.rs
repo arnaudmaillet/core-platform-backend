@@ -59,6 +59,9 @@ pub struct AuthConfig {
     /// `AUTH_GUEST_RETENTION_DAYS` (default 90): guests that never became an
     /// account (and their ended sessions) are deleted after this long.
     pub guest_retention_days: i64,
+    /// `AUTH_MFA_ISSUER` (default `Core Platform`): the service's name in the
+    /// holder's authenticator app (#649).
+    pub mfa_issuer: String,
     /// Native Sign in with Apple / Google: the app's client ids a provider's
     /// id_token must be minted for (`aud`). Empty = that provider is off.
     pub apple_audiences: Vec<String>,
@@ -143,6 +146,11 @@ impl AuthConfig {
                 .and_then(|v| v.trim().parse().ok())
                 .unwrap_or(transport::grpc::client_ip::DEFAULT_TRUSTED_PROXY_HOPS),
             guest_retention_days: env_secs("AUTH_GUEST_RETENTION_DAYS", 90).max(1),
+            mfa_issuer: std::env::var("AUTH_MFA_ISSUER")
+                .ok()
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "Core Platform".to_owned()),
             app_attest: AppAttestConfig::from_env().map_err(anyhow::Error::msg)?,
             guest_sessions_enabled: std::env::var("AUTH_GUEST_SESSIONS_ENABLED")
                 .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes")),

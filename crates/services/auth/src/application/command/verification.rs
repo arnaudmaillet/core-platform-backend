@@ -240,6 +240,16 @@ impl VerificationCodes {
         self.sender.send_new_login_notice(email, device, ip, locale).await
     }
 
+    /// Tells the holder at `email` that their two-step sign-in changed (#649).
+    pub async fn notify_mfa_changed(
+        &self,
+        email: &str,
+        change: crate::application::port::MfaChange,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        self.sender.send_mfa_changed_notice(email, change, locale).await
+    }
+
     pub async fn start(&self, cmd: StartVerificationCommand) -> Result<StartedVerification, AuthError> {
         ensure_valid(&cmd)?;
         let (destination, sms_country) = match cmd.channel {

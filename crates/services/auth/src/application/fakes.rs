@@ -348,6 +348,34 @@ impl AccountDirectory for StubAccountDirectory {
         })
     }
 
+    async fn enroll_mfa(&self, account_id: &AccountId, sealed_seed: &[u8], code_hashes: &[String]) -> Result<(), AuthError> {
+        if self.mfa.lock().unwrap().contains_key(account_id) {
+            return Err(AuthError::MfaAlreadyEnabled);
+        }
+        self.with_mfa(*account_id, sealed_seed.to_vec(), code_hashes.to_vec());
+        Ok(())
+    }
+
+    async fn revoke_mfa(&self, account_id: &AccountId) -> Result<(), AuthError> {
+        if self.mfa.lock().unwrap().remove(account_id).is_none() {
+            return Err(AuthError::MfaNotEnabled);
+        }
+        if let Some(snapshot) = self.snapshots.lock().unwrap().get_mut(account_id) {
+            snapshot.mfa_enrolled = false;
+        }
+        Ok(())
+    }
+
+    async fn replace_recovery_codes(&self, account_id: &AccountId, code_hashes: &[String]) -> Result<(), AuthError> {
+        match self.mfa.lock().unwrap().get_mut(account_id) {
+            Some((_, codes)) => {
+                *codes = code_hashes.to_vec();
+                Ok(())
+            }
+            None => Err(AuthError::MfaNotEnabled),
+        }
+    }
+
     async fn resume_deactivated(&self, account_id: &AccountId) -> Result<(), AuthError> {
         if self.refuse_resume.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(AuthError::AccountNotActive { current: "not_resumable".into() });
@@ -849,6 +877,7 @@ impl super::port::MfaSeedCipher for FakeSeedCipher {
 #[derive(Default)]
 pub struct InMemoryMfaStore {
     pending: Mutex<HashMap<String, super::port::PendingLogin>>,
+    enrolments: Mutex<HashMap<AccountId, Vec<u8>>>,
     steps: Mutex<std::collections::HashSet<(AccountId, i64)>>,
     failures: Mutex<HashMap<AccountId, u32>>,
 }
@@ -887,6 +916,20 @@ impl super::port::MfaStore for InMemoryMfaStore {
 
     async fn clear_failures(&self, account: &AccountId) -> Result<(), AuthError> {
         self.failures.lock().unwrap().remove(account);
+        Ok(())
+    }
+
+    async fn save_pending_enrollment(&self, account: &AccountId, sealed_seed: &[u8], _ttl_secs: u64) -> Result<(), AuthError> {
+        self.enrolments.lock().unwrap().insert(*account, sealed_seed.to_vec());
+        Ok(())
+    }
+
+    async fn pending_enrollment(&self, account: &AccountId) -> Result<Option<Vec<u8>>, AuthError> {
+        Ok(self.enrolments.lock().unwrap().get(account).cloned())
+    }
+
+    async fn discard_pending_enrollment(&self, account: &AccountId) -> Result<(), AuthError> {
+        self.enrolments.lock().unwrap().remove(account);
         Ok(())
     }
 }
@@ -1199,6 +1242,8 @@ pub struct RecordingCodeSender {
     contact_notices: Mutex<Vec<(super::port::VerificationChannel, String)>>,
     /// (email told, device, ip) of every new-sign-in notice (#649).
     login_notices: Mutex<Vec<LoginNotice>>,
+    /// (email told, change) of every two-step change notice (#649).
+    mfa_notices: Mutex<Vec<(String, super::port::MfaChange)>>,
     failing: std::sync::atomic::AtomicBool,
 }
 
@@ -1217,6 +1262,11 @@ impl RecordingCodeSender {
 
     pub fn recover(&self) {
         self.failing.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The (email told, change) of every two-step change notice.
+    pub fn mfa_notices(&self) -> Vec<(String, super::port::MfaChange)> {
+        self.mfa_notices.lock().unwrap().clone()
     }
 
     /// The (email told, device, ip) of every new-sign-in notice.
@@ -1279,6 +1329,16 @@ impl super::port::CodeSender for RecordingCodeSender {
         _locale: Option<&str>,
     ) -> Result<(), AuthError> {
         self.login_notices.lock().unwrap().push((email.to_owned(), device.map(str::to_owned), ip.map(str::to_owned)));
+        Ok(())
+    }
+
+    async fn send_mfa_changed_notice(
+        &self,
+        email: &str,
+        change: super::port::MfaChange,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        self.mfa_notices.lock().unwrap().push((email.to_owned(), change));
         Ok(())
     }
 }
