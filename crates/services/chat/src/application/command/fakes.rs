@@ -443,7 +443,7 @@ impl MessageRepository for FakeMessages {
             .filter(|m| cursor.is_none_or(|(ms, _)| m.created_at.timestamp_millis() < ms))
             .cloned()
             .collect();
-        page.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        page.sort_by_key(|m| std::cmp::Reverse(m.created_at));
         Ok((page, None))
     }
 }
