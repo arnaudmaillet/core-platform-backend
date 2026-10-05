@@ -7,7 +7,7 @@ use lettre::message::{header::ContentType, Mailbox};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
-use super::code_message::code_message;
+use super::code_message::{code_message, lockout_notice_message};
 use crate::application::port::{CodeSender, VerificationChannel};
 use crate::error::AuthError;
 
@@ -54,11 +54,30 @@ impl CodeSender for SmtpCodeSender {
         if channel != VerificationChannel::Email {
             return Err(AuthError::VerificationChannelUnavailable { channel: channel.as_str().to_owned() });
         }
+        let (subject, body) = code_message(code, self.code_ttl_minutes, locale);
+        self.mail(destination, subject, body).await
+    }
+
+    async fn send_lockout_notice(
+        &self,
+        channel: VerificationChannel,
+        destination: &str,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        if channel != VerificationChannel::Email {
+            return Ok(());
+        }
+        let (subject, body) = lockout_notice_message(locale);
+        self.mail(destination, subject, body).await
+    }
+}
+
+impl SmtpCodeSender {
+    async fn mail(&self, destination: &str, subject: String, body: String) -> Result<(), AuthError> {
         let to: Mailbox = destination.parse().map_err(|_| AuthError::DomainViolation {
             field: "destination".into(),
             message: "not an email address".into(),
         })?;
-        let (subject, body) = code_message(code, self.code_ttl_minutes, locale);
         let message = Message::builder()
             .from(self.from.clone())
             .to(to)

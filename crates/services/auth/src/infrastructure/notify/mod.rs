@@ -42,4 +42,18 @@ impl CodeSender for ChannelCodeSender {
             None => Err(AuthError::VerificationChannelUnavailable { channel: channel.as_str().to_owned() }),
         }
     }
+
+    /// Email only: an SMS notice would cost money on every lockout and could be
+    /// triggered at will against any number.
+    async fn send_lockout_notice(
+        &self,
+        channel: VerificationChannel,
+        destination: &str,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        match (channel, &self.email) {
+            (VerificationChannel::Email, Some(sender)) => sender.send_lockout_notice(channel, destination, locale).await,
+            _ => Ok(()),
+        }
+    }
 }

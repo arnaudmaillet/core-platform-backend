@@ -19,6 +19,16 @@ impl CodeSender for LogCodeSender {
         tracing::warn!(channel = channel.as_str(), destination, code, "one-time code (log sender — local only)");
         Ok(())
     }
+
+    async fn send_lockout_notice(
+        &self,
+        channel: VerificationChannel,
+        destination: &str,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        tracing::warn!(channel = channel.as_str(), destination, "lockout notice (log sender — local only)");
+        Ok(())
+    }
 }
 
 /// No transport configured: codes cannot be sent (FAILED_PRECONDITION).

@@ -287,6 +287,7 @@ impl VerificationCodes {
             destination: destination.clone(),
             destination_key: key,
             code_hash: code_hash(&challenge_id, &code),
+            locale: cmd.locale.clone(),
         };
         self.store.save(&challenge, self.policy.ttl, self.policy.max_attempts).await?;
         if let Err(e) = self.sender.send(cmd.channel, &destination, &code, cmd.locale.as_deref()).await {
@@ -337,7 +338,7 @@ impl VerificationCodes {
                 }
                 Ok(destination)
             }
-            ConsumeOutcome::Miss { destination_key } => {
+            ConsumeOutcome::Miss { destination_key, destination, locale } => {
                 let window = self.policy.failure_window;
                 let from_ip = self.store.record_failure(&ip_failure_key(&destination_key, client_ip), window).await?;
                 let failures = self.store.record_failure(&destination_key, window).await?;
@@ -346,6 +347,12 @@ impl VerificationCodes {
                 }
                 if failures == self.policy.max_failures {
                     tracing::warn!("an address reached its code failure ceiling from everywhere: locked for everyone");
+                    // Once per window: the owner learns why codes stopped coming.
+                    let notice =
+                        self.sender.send_lockout_notice(destination.channel, &destination.destination, locale.as_deref());
+                    if let Err(e) = notice.await {
+                        tracing::warn!(error = %e, "the lockout notice could not be sent");
+                    }
                 }
                 Err(AuthError::VerificationCodeInvalid)
             }
@@ -582,7 +589,8 @@ mod tests {
         let (_, code, _) = sender.last().unwrap();
         assert!(codes.verify(&owner.challenge_id, &code, Some("203.0.113.9")).await.is_ok());
 
-        // A distributed attack (8 wrong codes from many IPs) locks it for everyone.
+        // A distributed attack (8 wrong codes from many IPs) locks it for everyone…
+        assert!(sender.notices().is_empty(), "a per-IP lock tells the owner nothing");
         for n in 0..5 {
             let ip = format!("198.51.100.{n}");
             let c = codes.start(from(&ip)).await.unwrap();
@@ -590,5 +598,7 @@ mod tests {
             let _ = codes.verify(&c.challenge_id, &wrong(&code), Some(&ip)).await;
         }
         assert!(matches!(codes.start(from("203.0.113.9")).await, Err(AuthError::VerificationRateLimited { .. })));
+        // …and its owner is told, once.
+        assert_eq!(sender.notices(), vec![("owner@example.com".to_owned(), None)]);
     }
 }
