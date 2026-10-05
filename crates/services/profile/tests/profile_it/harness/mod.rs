@@ -13,10 +13,10 @@ use cqrs::query::InMemoryQueryBus;
 use cqrs::{CommandBus, CqrsError, Envelope, QueryBus};
 use redis_storage::RedisConfig;
 use infra_config::{CacheRegistry, InfrastructureConfig};
-use scylla_storage::ScyllaConfig;
+use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 
 use profile::app::{App, Backends};
-use profile::application::command::{CreateProfileCommand, UpdateProfileCommand};
+use profile::application::command::{CreateProfileCommand, DeleteProfileCommand, UpdateProfileCommand};
 use profile::application::port::{EventPublisher, ProfileCache, ProfileRepository};
 use profile::application::query::{GetProfileByHandleQuery, GetProfileByIdQuery};
 use profile::domain::event::DomainEvent;
@@ -86,6 +86,9 @@ pub struct TestHarness {
     pub repository:  Arc<dyn ProfileRepository>,
     pub cache:       Arc<dyn ProfileCache>,
     pub publisher:   Arc<CapturingEventPublisher>,
+    /// A raw session, for scenarios that must shape rows directly (e.g. age a
+    /// handle tombstone past its reservation).
+    pub scylla:      Arc<ScyllaClient>,
 }
 
 impl TestHarness {
@@ -95,6 +98,16 @@ impl TestHarness {
         let scylla_cp = test_support::containers::scylla_ready(KEYSPACE, MIGRATIONS_DIR).await;
         let redis_endpoint = test_support::containers::redis_endpoint().await;
 
+        let scylla = Arc::new(
+            ScyllaSessionBuilder::new(ScyllaConfig {
+                contact_points: vec![scylla_cp.clone()],
+                keyspace:       None,
+                ..ScyllaConfig::default()
+            })
+            .build()
+            .await
+            .expect("integration: raw scylla session"),
+        );
         let backends = Backends {
             scylla: ScyllaConfig {
                 contact_points: vec![scylla_cp],
@@ -127,6 +140,7 @@ impl TestHarness {
             repository:  app.repository,
             cache:       app.cache,
             publisher,
+            scylla,
         }
     }
 
@@ -198,6 +212,13 @@ pub async fn dispatch_create(
         minor:        false,
     };
     command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await
+}
+
+/// Deletes a profile (its handle enters the reservation window).
+pub async fn dispatch_delete(command_bus: Arc<InMemoryCommandBus>, profile_id: &str) -> Result<(), CqrsError> {
+    command_bus
+        .dispatch(Envelope::new(Uuid::now_v7(), DeleteProfileCommand { profile_id: profile_id.to_owned() }))
+        .await
 }
 
 /// A fresh random account id (UUID string).

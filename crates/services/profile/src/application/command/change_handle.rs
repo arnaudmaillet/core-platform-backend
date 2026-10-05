@@ -73,8 +73,14 @@ impl CommandHandler<ChangeHandleCommand> for ChangeHandleHandler {
             });
         }
 
+        if let Err(e) = self.repo.save(&profile).await {
+            if let Err(release) = self.repo.release_handle_claim(&new_handle, profile.id()).await {
+                tracing::error!(error = %release, handle = new_handle.as_str(), "handle claim not released after a failed change");
+            }
+            return Err(e);
+        }
+        // The profile now carries the new handle: release the old one.
         self.repo.tombstone_handle(&old_handle).await?;
-        self.repo.save(&profile).await?;
 
         for event in profile.drain_events() {
             self.publisher.publish(&event).await?;
