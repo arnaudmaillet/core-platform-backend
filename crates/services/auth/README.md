@@ -107,7 +107,9 @@ bounded per address, without handing attackers a lockout lever:** wrong codes co
 (15) within 24 h, across challenges, that IP gets no new code for the address and even a right one
 is refused: the guesser locks itself out, while the owner on another network still signs in. Only
 `AUTH_VERIFICATION_MAX_FAILURES` (50) wrong codes from anywhere (a distributed attack) lock the
-address for everyone until the window ends. **Nothing to enumerate:** the answer to
+address for everyone until the window ends — and its owner gets an **email** saying codes are paused
+for 24 hours (once per window, in the language of the last code request; never by SMS, which would
+cost money on every lockout). **Nothing to enumerate:** the answer to
 StartVerification is the same for any address; whether it has an account (or one made with Apple /
 Google) is only told to whoever enters the code. Email goes through SMTP to **Amazon SES**
 (`AUTH_VERIFICATION_SENDER=smtp`, `AUTH_SMTP_*`); `log` writes the code to the log (local runs only);

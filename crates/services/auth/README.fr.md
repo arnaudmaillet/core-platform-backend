@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 29f5805d3c4172a371f8a69a5dcf01002a490cea9007f68455401b4669baeeed
+  source_sha256: dfb80aa0a4532b2022db718deb7e261aaf1b462ab5a998f24033dd022a76618c
   translated_at: 2026-10-05
   status: complete
 ---
@@ -125,7 +125,10 @@ par adresse **et IP du client** (l'adresse vue par le transport — l'entrée `X
 (15) en 24 h, tous challenges confondus, cette IP ne reçoit plus de code pour l'adresse et même un bon
 code est refusé : celui qui devine se verrouille lui-même, tandis que le titulaire, sur un autre
 réseau, se connecte toujours. Seuls `AUTH_VERIFICATION_MAX_FAILURES` (50) codes faux venus de partout
-(une attaque distribuée) verrouillent l'adresse pour tous jusqu'à la fin de la fenêtre. **Rien à énumérer :** la réponse de StartVerification est
+(une attaque distribuée) verrouillent l'adresse pour tous jusqu'à la fin de la fenêtre — et son
+titulaire reçoit un **e-mail** indiquant que les codes sont en pause pendant 24 heures (une fois par
+fenêtre, dans la langue de la dernière demande de code ; jamais par SMS, qui coûterait à chaque
+verrouillage). **Rien à énumérer :** la réponse de StartVerification est
 la même pour toute adresse ; qu'elle ait un compte (ou un compte Apple / Google) n'est dit qu'à celui
 qui saisit le code. L'e-mail part en SMTP vers **Amazon SES** (`AUTH_VERIFICATION_SENDER=smtp`,
 `AUTH_SMTP_*`) ; `log` écrit le code dans les logs (exécutions locales uniquement) ; non défini =
