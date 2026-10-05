@@ -6,7 +6,7 @@ use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
 use crate::domain::value_object::{
-    InteractionAudience, InteractionSettings, LocationPrecision, LocationSettings,
+    InteractionAudience, InteractionSettings, LocationAudience, LocationPrecision,
 };
 use crate::application::command::{
     SetCommentFiltersCommand, SetDiscoverySettingsCommand, SetFeedSettingsCommand, SetInteractionSettingsCommand,
@@ -273,9 +273,19 @@ where
             Ok(proto::LocationPrecision::City) => LocationPrecision::City,
             _ => return Err(Status::invalid_argument("precision must be set")),
         };
+        let audience = match proto::LocationAudience::try_from(s.audience) {
+            Ok(proto::LocationAudience::Everyone) => Some(LocationAudience::Everyone),
+            Ok(proto::LocationAudience::Followers) => Some(LocationAudience::Followers),
+            Ok(proto::LocationAudience::Mutuals) => Some(LocationAudience::Mutuals),
+            Ok(proto::LocationAudience::Unspecified) => None,
+            Err(_) => return Err(Status::invalid_argument("unknown location audience")),
+        };
         let cmd = SetLocationSettingsCommand {
             profile_id: req.profile_id.clone(),
-            settings: LocationSettings { ghost: s.ghost, precision },
+            ghost: s.ghost,
+            precision,
+            audience,
+            on_new_posts: s.on_new_posts,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -719,6 +729,12 @@ fn profile_view_to_proto(v: ProfileView) -> proto::ProfileView {
                 LocationPrecision::Precise => proto::LocationPrecision::Precise,
                 LocationPrecision::City => proto::LocationPrecision::City,
             }) as i32,
+            audience: (match l.audience {
+                LocationAudience::Everyone => proto::LocationAudience::Everyone,
+                LocationAudience::Followers => proto::LocationAudience::Followers,
+                LocationAudience::Mutuals => proto::LocationAudience::Mutuals,
+            }) as i32,
+            on_new_posts: Some(l.on_new_posts),
         }),
         business_info: v.business_info.map(|b| proto::BusinessInfo {
             category:      b.category,

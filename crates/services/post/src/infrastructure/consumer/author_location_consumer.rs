@@ -151,6 +151,8 @@ mod tests {
             profile_id: id.clone(),
             ghost: true,
             precision: "city".into(),
+            audience: "everyone".into(),
+            on_new_posts: true,
             occurred_at_ms: 1,
         });
         assert_eq!(

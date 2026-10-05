@@ -209,8 +209,14 @@ message SetInteractionSettingsRequest {
 // Teen accounts (13–17) start ghosted.
 message LocationSettings {
     // Ghost mode: the profile's posts leave everyone else's map.
-    bool              ghost     = 1;
-    LocationPrecision precision = 2;
+    bool              ghost        = 1;
+    LocationPrecision precision    = 2;
+    // Who sees the location when not a ghost (#657). Teens: mutuals.
+    LocationAudience  audience     = 3;
+    // The app adds the location to new posts by default (a stored preference;
+    // the server never changes a post for it). On a set request, absent keeps
+    // the stored value. Teens: off.
+    optional bool     on_new_posts = 4;
 }
 
 message SetLocationSettingsRequest {

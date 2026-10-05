@@ -4,14 +4,18 @@ use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
 use crate::application::port::{EventPublisher, ProfileCache, ProfileRepository};
-use crate::domain::value_object::{LocationSettings, ProfileId};
+use crate::domain::value_object::{LocationAudience, LocationPrecision, LocationSettings, ProfileId};
 use crate::error::ProfileError;
 
-/// The owner sets ghost mode and location precision (#657).
+/// The owner sets ghost mode and location precision (#657); the audience and
+/// the new-posts preference when given (absent keeps the stored value).
 #[derive(Debug, Clone)]
 pub struct SetLocationSettingsCommand {
-    pub profile_id: String,
-    pub settings:   LocationSettings,
+    pub profile_id:   String,
+    pub ghost:        bool,
+    pub precision:    LocationPrecision,
+    pub audience:     Option<LocationAudience>,
+    pub on_new_posts: Option<bool>,
 }
 
 impl Command for SetLocationSettingsCommand {}
@@ -53,7 +57,14 @@ impl CommandHandler<SetLocationSettingsCommand> for SetLocationSettingsHandler {
             .await?
             .ok_or_else(|| ProfileError::ProfileNotFound { id: cmd.profile_id.clone() })?;
 
-        if !profile.set_location_settings(cmd.settings, envelope.correlation_id)? {
+        let current = profile.location();
+        let settings = LocationSettings {
+            ghost:        cmd.ghost,
+            precision:    cmd.precision,
+            audience:     cmd.audience.unwrap_or(current.audience),
+            on_new_posts: cmd.on_new_posts.unwrap_or(current.on_new_posts),
+        };
+        if !profile.set_location_settings(settings, envelope.correlation_id)? {
             return Ok(());
         }
         self.repo.save(&profile).await?;
