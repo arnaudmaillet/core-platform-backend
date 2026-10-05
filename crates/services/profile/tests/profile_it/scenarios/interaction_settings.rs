@@ -60,6 +60,7 @@ async fn location_settings_round_trip_owner_only_and_are_announced() {
         precision: LocationPrecision::City,
         audience,
         on_new_posts,
+        minor: false,
     };
     h.command_bus
         .dispatch(Envelope::new(Uuid::now_v7(), set(Some(LocationAudience::Followers), Some(false))))
@@ -77,6 +78,21 @@ async fn location_settings_round_trip_owner_only_and_are_announced() {
     // new-posts preference stay as stored (#657).
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), set(None, None))).await.expect("set");
     assert_eq!(h.get_by_id(&profile.id).await.unwrap().location, Some(ghost));
+
+    // A minor: mutuals at most — a wider audience, asked for or kept, is
+    // refused and nothing changes; mutuals is fine.
+    let as_minor = |audience| SetLocationSettingsCommand { minor: true, ..set(audience, None) };
+    for wider in [Some(LocationAudience::Everyone), Some(LocationAudience::Followers), None] {
+        let refused = h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), as_minor(wider))).await;
+        assert!(refused.is_err(), "{wider:?}: the stored audience is followers, wider than mutuals");
+    }
+    assert_eq!(h.get_by_id(&profile.id).await.unwrap().location, Some(ghost), "unchanged");
+    h.command_bus
+        .dispatch(Envelope::new(Uuid::now_v7(), as_minor(Some(LocationAudience::Mutuals))))
+        .await
+        .expect("mutuals is fine");
+    let location = h.get_by_id(&profile.id).await.unwrap().location.unwrap();
+    assert_eq!(location.audience, LocationAudience::Mutuals);
     // Owner-only: nobody else learns that the profile ghosts the map.
     let other = Viewer::Account(harness::random_account_id());
     assert_eq!(h.get_by_handle_as(&handle, other).await.unwrap().location, None);

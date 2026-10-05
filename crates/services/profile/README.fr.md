@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 757a8e6c931bae78dac7fb05ce94894c80bd9248849605036d7bc13e74232b80
+  source_sha256: 607f9248050b07df244507797686d9abd36ae7e5516aa5e04d51de7bd22353eb
   translated_at: 2026-10-05
   status: complete
 ---
@@ -143,7 +143,7 @@ service ProfileService {
   rpc SetInteractionLimit(SetInteractionLimitRequest) returns (CommandResponse); // #669 mettre en attente les commentaires / messages des non-abonnés ou abonnés récents jusqu'à une date (≤ 4 semaines)
   rpc ClearInteractionLimit(ClearInteractionLimitRequest) returns (CommandResponse);
   rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // qui peut commenter / mentionner / écrire, téléchargements, compteurs de likes, remix et réutilisation du son original (#669 ; absent d'une requête ⇒ inchangé) ; les ados démarrent abonnés uniquement, sans téléchargement / remix / réutilisation du son
-  rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse); // mode fantôme + précis / niveau ville + audience (tout le monde / abonnés / mutuels ; UNSPECIFIED la garde) + on_new_posts (une préférence stockée ; absent la garde), réservé au propriétaire sur la vue ; les ados démarrent fantômes, mutuels, sans localisation sur les nouveaux posts ; geo-discovery et post l'appliquent (#657)
+  rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse); // mode fantôme + précis / niveau ville + audience (tout le monde / abonnés / mutuels ; UNSPECIFIED la garde) + on_new_posts (une préférence stockée ; absent la garde), réservé au propriétaire sur la vue ; les ados démarrent fantômes, mutuels, sans localisation sur les nouveaux posts, et sont plafonnés à mutuels (une audience plus large est refusée, PRF-9001) ; geo-discovery et post l'appliquent (#657)
   rpc SetFeedSettings(SetFeedSettingsRequest) returns (CommandResponse); // #662 contenu sensible moins (par défaut) / standard, synchronisé entre appareils ; le client l'envoie comme content_level de timeline ; réservé au propriétaire sur la vue
   rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse); // #664 fenêtre de posts (tout / 6 mois / 1 mois / 3 jours ; post masque les posts plus anciens aux visiteurs) + visibilité des onglets j'aime / enregistrés / republications / lieux (stockée ; aucun onglet servi pour l'instant) ; partiel ; réservé au propriétaire sur la vue
   rpc SetCommentFilters(SetCommentFiltersRequest) returns (CommandResponse); // #660 mots masqués (≤ 200, normalisés) + filtre offensant (activé par défaut) ; réservé au propriétaire sur la vue ; comment les applique
