@@ -122,6 +122,7 @@ impl App {
                 ))?
                 .register::<WithdrawFollowRequestCommand, _>(WithdrawFollowRequestHandler::new(
                     Arc::clone(&repo),
+                    Arc::clone(&publisher),
                 ))?
                 .register::<MuteProfileCommand, _>(MuteProfileHandler::new(Arc::clone(&mutes)))?
                 .register::<UnmuteProfileCommand, _>(UnmuteProfileHandler::new(Arc::clone(&mutes)))?

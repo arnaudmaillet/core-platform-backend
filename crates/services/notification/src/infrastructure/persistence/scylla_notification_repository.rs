@@ -228,6 +228,24 @@ impl NotificationRepository for ScyllaNotificationRepository {
         Ok(true)
     }
 
+    async fn delete(
+        &self,
+        profile_id:      &ProfileId,
+        notification_id: Uuid,
+        created_at_ms:   i64,
+    ) -> Result<(), NotificationError> {
+        let stmt = self.strict_stmt(
+            "DELETE FROM notification.notifications_by_profile \
+             WHERE target_profile_id = ? AND created_at = ? AND notification_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt, (profile_id.as_uuid(), CqlTimestamp(created_at_ms), notification_id))
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
+    }
+
     async fn increment_counter(&self, profile_id: &ProfileId) -> Result<(), NotificationError> {
         let stmt = self.strict_stmt(
             "UPDATE notification.notification_unread_counters \

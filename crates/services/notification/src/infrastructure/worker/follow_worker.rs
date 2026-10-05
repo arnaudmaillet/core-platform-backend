@@ -10,6 +10,11 @@
 //!
 //! The subject is the other profile. Self-notifications and blocked senders are
 //! suppressed, like every worker.
+//!
+//! A request gone without becoming a follow (cancelled, declined, cut by a
+//! block, moot once the profile is public) arrives on the request's topic with
+//! `withdrawn_at`: its "X asked to follow you" is **retracted** — deleted, and
+//! taken off the badge when it was still unread.
 
 use std::sync::Arc;
 
@@ -33,7 +38,8 @@ const TOPIC_FOLLOW_REQUESTED: &str = "social-graph.follow_requested";
 
 /// Both topics' payloads: `actor_id` follows (or asked to follow) `target_id`.
 /// A request carries `requested_at`, a follow `followed_at` (and `via_request`
-/// when it is an approved request).
+/// when it is an approved request); a withdrawn request `requested_at` and
+/// `withdrawn_at`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FollowEventPayload {
     pub actor_id: String,
@@ -44,6 +50,8 @@ pub struct FollowEventPayload {
     pub requested_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub via_request: bool,
+    #[serde(default)]
+    pub withdrawn_at: Option<DateTime<Utc>>,
 }
 
 /// The notification an event becomes: who is told, by whom, of what.
@@ -59,6 +67,9 @@ pub struct FollowNotice {
 
 /// What `event` notifies, or `None` (malformed times are poison upstream).
 pub fn notice_of(event: &FollowEventPayload) -> Result<Option<FollowNotice>, NotificationError> {
+    if event.withdrawn_at.is_some() {
+        return Ok(None);
+    }
     let actor = ProfileId::try_from(event.actor_id.as_str())?;
     let target = ProfileId::try_from(event.target_id.as_str())?;
     let (notice_target, sender, kind, at) = match (event.requested_at, event.followed_at) {
@@ -67,8 +78,28 @@ pub fn notice_of(event: &FollowEventPayload) -> Result<Option<FollowNotice>, Not
         (None, Some(at)) => (target, actor, NotificationKind::Follow, at),
         (None, None) => return Ok(None),
     };
-    let business_key = format!("{}:{}:{}:{}", kind.as_str(), actor, target, at.timestamp_millis());
+    let business_key = business_key(kind, &actor, &target, at);
     Ok(Some(FollowNotice { target: notice_target, sender, kind, business_key, at }))
+}
+
+/// The notification an event about `actor` → `target` at `at` is stored under.
+fn business_key(kind: NotificationKind, actor: &ProfileId, target: &ProfileId, at: DateTime<Utc>) -> String {
+    format!("{}:{}:{}:{}", kind.as_str(), actor, target, at.timestamp_millis())
+}
+
+/// The "X asked to follow you" a withdrawal retracts: the owner's notice for
+/// that request, or `None` when `event` withdraws nothing.
+pub fn retraction_of(event: &FollowEventPayload) -> Result<Option<FollowNotice>, NotificationError> {
+    let (Some(_), Some(requested_at)) = (event.withdrawn_at, event.requested_at) else { return Ok(None) };
+    let actor = ProfileId::try_from(event.actor_id.as_str())?;
+    let target = ProfileId::try_from(event.target_id.as_str())?;
+    Ok(Some(FollowNotice {
+        target,
+        sender: actor,
+        kind: NotificationKind::FollowRequest,
+        business_key: business_key(NotificationKind::FollowRequest, &actor, &target, requested_at),
+        at: requested_at,
+    }))
 }
 
 pub struct FollowNotificationWorker<R, B, U, S> {
@@ -141,6 +172,9 @@ where
     /// Handles one event, as the runner hands it (public so the integration
     /// suite drives it without a broker).
     pub async fn process(&self, event: &FollowEventPayload) -> Result<(), NotificationError> {
+        if let Some(withdrawn) = retraction_of(event)? {
+            return self.retract(&withdrawn).await;
+        }
         let Some(notice) = notice_of(event)? else {
             tracing::debug!(actor = %event.actor_id, "follow event without a time — skipped");
             return Ok(());
@@ -183,6 +217,26 @@ where
         tracing::debug!(kind = notice.kind.as_str(), target = %notice.target, "follow notification written");
         Ok(())
     }
+
+    /// Takes a withdrawn request's notice back: off the badge when it was
+    /// still unread (and newer than a mark-all-read), then deleted. A replay
+    /// finds nothing and does nothing; one that lands between the two steps
+    /// leaves the badge one too high until the next mark-all-read, never low.
+    async fn retract(&self, notice: &FollowNotice) -> Result<(), NotificationError> {
+        let id = NotificationId::deterministic(&notice.business_key);
+        let at_ms = notice.at.timestamp_millis();
+        let was_unread = match self.repository.mark_read(&notice.target, id.as_uuid(), at_ms).await {
+            Ok(was_unread) => was_unread,
+            Err(NotificationError::NotificationNotFound { .. }) => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        if was_unread && at_ms > self.counter.get_read_horizon(&notice.target).await? {
+            self.counter.decrement(&notice.target).await?;
+        }
+        self.repository.delete(&notice.target, id.as_uuid(), at_ms).await?;
+        tracing::debug!(target = %notice.target, "withdrawn follow request: notification retracted");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -204,6 +258,7 @@ mod tests {
             followed_at,
             requested_at,
             via_request,
+            withdrawn_at: None,
         };
 
         let follow = notice_of(&event(Some(at), None, false)).unwrap().unwrap();
@@ -254,5 +309,48 @@ mod tests {
         let read: FollowEventPayload = serde_json::from_str(&serde_json::to_string(&requested).unwrap()).unwrap();
         assert_eq!(notice_of(&read).unwrap().unwrap().kind, NotificationKind::FollowRequest);
     }
-}
 
+    /// A withdrawn request retracts the owner's notice for that very request
+    /// (same id as when it was told), and notifies nothing new.
+    #[test]
+    fn a_withdrawal_retracts_the_requests_notice() {
+        let (actor, target) = ids();
+        let requested_at = Utc::now() - chrono::Duration::minutes(5);
+        let request = FollowEventPayload {
+            actor_id: actor.clone(),
+            target_id: target.clone(),
+            followed_at: None,
+            requested_at: Some(requested_at),
+            via_request: false,
+            withdrawn_at: None,
+        };
+        let withdrawn = FollowEventPayload { withdrawn_at: Some(Utc::now()), ..request.clone() };
+
+        assert!(notice_of(&withdrawn).unwrap().is_none(), "nothing new is told");
+        assert!(retraction_of(&request).unwrap().is_none(), "a request retracts nothing");
+        let told = notice_of(&request).unwrap().unwrap();
+        let retracted = retraction_of(&withdrawn).unwrap().unwrap();
+        assert_eq!(retracted.business_key, told.business_key, "the very notice it was told");
+        assert_eq!((retracted.target, retracted.at), (told.target, told.at));
+    }
+
+    /// The contract with the producer for withdrawals.
+    #[test]
+    fn social_graphs_withdrawal_decodes_as_the_worker_reads_it() {
+        use social_graph::domain::event::FollowRequestWithdrawn;
+        use social_graph::domain::value_object::ProfileId as GraphProfileId;
+
+        let (actor, target) = ids();
+        let requested_at = Utc::now();
+        let withdrawn = FollowRequestWithdrawn {
+            actor_id: GraphProfileId::try_from(actor.as_str()).unwrap(),
+            target_id: GraphProfileId::try_from(target.as_str()).unwrap(),
+            requested_at,
+            withdrawn_at: Utc::now(),
+        };
+        let read: FollowEventPayload = serde_json::from_str(&serde_json::to_string(&withdrawn).unwrap()).unwrap();
+        let retracted = retraction_of(&read).unwrap().expect("a retraction");
+        assert_eq!((retracted.target.as_str(), retracted.sender.as_str()), (target, actor));
+        assert_eq!(retracted.at.timestamp_millis(), requested_at.timestamp_millis());
+    }
+}

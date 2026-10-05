@@ -181,6 +181,7 @@ producer's `DOMAIN.md §8`.
 | Event | Means | Emitted when | Consumers & why |
 |---|---|---|---|
 | `ProfileFollowed` / `ProfileUnfollowed` | a follow edge was created/removed | follow/unfollow commits | `timeline`/`counter` (consume **via gRPC today**; the `social-graph.follows` stream is deferred) |
+| `FollowRequested` / `FollowRequestWithdrawn` | a follow request to a private profile was made / is gone without becoming a follow (cancelled, declined, cut by a block, moot once the profile is public) — both on `social-graph.follow_requested`, keyed `actor:target`, so a withdrawal is never read before its request | request / cancel / decline / block / follow of a now-public profile | `notification` (tells the owner; a withdrawal retracts that notice and its unread count) |
 | `ProfileBlocked` / `ProfileUnblocked` | a block edge changed (severs follows) | block/unblock commits | feeds |
 | `AuthorTierChanged` | the author's tier changed | follower count crosses a threshold | `profile` (owns + re-emits as `tier_changed`) |
 

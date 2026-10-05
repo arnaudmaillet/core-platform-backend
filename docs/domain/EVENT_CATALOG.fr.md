@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 017524c2794a42c745a329a845f02a2783f9ccfc605919c12b7c94857622bb39
+  source_sha256: b79e83530df0b034b3f3edebd9fd23c1a15970daf270714ee9e35454b55a5bce
   translated_at: 2026-10-05
   status: complete
 ---
@@ -195,6 +195,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | Événement | Signifie | Émis quand | Consommateurs & pourquoi |
 |---|---|---|---|
 | `ProfileFollowed` / `ProfileUnfollowed` | une arête de follow a été créée/retirée | follow/unfollow commite | `timeline`/`counter` (consomment **via gRPC aujourd'hui** ; le stream `social-graph.follows` est différé) |
+| `FollowRequested` / `FollowRequestWithdrawn` | une demande d'abonnement à un profil privé a été faite / a disparu sans devenir un abonnement (annulée, refusée, coupée par un blocage, caduque une fois le profil public) — les deux sur `social-graph.follow_requested`, clé `actor:target`, si bien qu'un retrait n'est jamais lu avant sa demande | demande / annulation / refus / blocage / abonnement à un profil devenu public | `notification` (informe le propriétaire ; un retrait retire cette notification et son compte de non-lus) |
 | `ProfileBlocked` / `ProfileUnblocked` | une arête de block a changé (sectionne les follows) | block/unblock commite | fils |
 | `AuthorTierChanged` | le tier de l'auteur a changé | le nombre de followers franchit un seuil | `profile` (possède + ré-émet en `tier_changed`) |
 
