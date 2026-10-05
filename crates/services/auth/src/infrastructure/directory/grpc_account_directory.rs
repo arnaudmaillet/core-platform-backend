@@ -2,7 +2,8 @@ use account_api::account_service_client::AccountServiceClient;
 use account_api::{
     AccountStatus, AgeBracket as ProtoAgeBracket, CreateAccountRequest, GetAccountByEmailRequest,
     GetAccountByIdRequest, GetAccountByIdentityIdRequest, GetAccountByPhoneRequest,
-    ChangeEmailRequest, ChangePhoneRequest, ResumeDeactivatedAccountRequest, UpdateConsentsRequest,
+    ChangeEmailRequest, ChangePhoneRequest, ConsumeRecoveryCodeRequest, GetMfaSecretRequest,
+    ResumeDeactivatedAccountRequest, UpdateConsentsRequest,
     VerifyEmailRequest, VerifyPhoneRequest,
 };
 use async_trait::async_trait;
@@ -11,7 +12,7 @@ use tonic::Code;
 use tracing::instrument;
 
 use crate::application::port::{
-    AccountActivation, AccountDirectory, AccountSnapshot, ContactDetails, EmailHolder, NewAccount,
+    AccountActivation, AccountDirectory, AccountSnapshot, ContactDetails, EmailHolder, MfaSecret, NewAccount,
     VerificationChannel,
 };
 use crate::domain::value_object::{AccountId, AgeBracket, IdpSubject, Permission};
@@ -97,7 +98,7 @@ impl AccountDirectory for GrpcAccountDirectory {
             _ => None,
         };
 
-        Ok(AccountSnapshot { activation, permissions, age_bracket })
+        Ok(AccountSnapshot { activation, permissions, age_bracket, mfa_enrolled: view.mfa_enrolled })
     }
 
     #[instrument(name = "auth.directory.resume", skip(self), fields(account.id = %account_id))]
@@ -253,6 +254,45 @@ impl AccountDirectory for GrpcAccountDirectory {
             }
             _ => AuthError::AccountDirectoryUnavailable,
         })
+    }
+
+    #[instrument(name = "auth.directory.mfa_secret", skip(self), fields(account.id = %account_id))]
+    async fn mfa_secret(&self, account_id: &AccountId) -> Result<MfaSecret, AuthError> {
+        let view = self
+            .client
+            .clone()
+            .get_mfa_secret(GetMfaSecretRequest { account_id: account_id.as_str() })
+            .await
+            .map_err(|status| match status.code() {
+                Code::NotFound => AuthError::AccountNotActive { current: "not_found".into() },
+                _ => AuthError::AccountDirectoryUnavailable,
+            })?
+            .into_inner();
+        Ok(MfaSecret {
+            enrolled: view.enrolled,
+            sealed_seed: view.totp_secret,
+            recovery_codes_remaining: u32::try_from(view.recovery_codes_remaining).unwrap_or(0),
+        })
+    }
+
+    #[instrument(name = "auth.directory.consume_recovery_code", skip(self, code_hash), fields(account.id = %account_id))]
+    async fn consume_recovery_code(&self, account_id: &AccountId, code_hash: &str) -> Result<bool, AuthError> {
+        let spent = self
+            .client
+            .clone()
+            .consume_recovery_code(ConsumeRecoveryCodeRequest {
+                account_id: account_id.as_str(),
+                code_hash: code_hash.to_owned(),
+            })
+            .await;
+        match spent {
+            Ok(_) => Ok(true),
+            // No unused code matches, or MFA is off: the code proves nothing.
+            Err(status) if matches!(error_code(&status), Some("ACC-5003" | "ACC-5002")) => Ok(false),
+            // Two sign-ins spent codes at once: the code may still be unused.
+            Err(status) if status.code() == Code::Aborted => Err(AuthError::ConcurrentModification),
+            Err(_) => Err(AuthError::AccountDirectoryUnavailable),
+        }
     }
 
     #[instrument(name = "auth.directory.find_by_email", skip(self, email))]

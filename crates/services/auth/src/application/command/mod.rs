@@ -7,6 +7,7 @@ pub mod guest_attestation;
 pub mod guest_retention;
 pub mod login;
 pub mod member_session;
+pub mod mfa;
 pub mod logout;
 pub mod logout_all_sessions;
 pub mod refresh;
@@ -25,12 +26,13 @@ pub use guest_attestation::{
     StartedDeviceAttestation,
 };
 pub use guest_retention::GuestRetention;
-pub use login::{IssuedSession, LoginCommand, LoginHandler};
+pub use login::{CompleteLoginCommand, IssuedSession, LoginCommand, LoginHandler, LoginOutcome, MfaChallenge};
 pub use logout::{LogoutCommand, LogoutHandler, LogoutOutcome};
 pub use logout_all_sessions::{
     LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutAllSessionsOutcome,
 };
 pub use member_session::{MemberSession, MemberSessions};
+pub use mfa::{MfaPolicy, MfaVerifier};
 pub use refresh::{RefreshCommand, RefreshHandler};
 pub use sign_up::{SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome};
 pub use verification::{

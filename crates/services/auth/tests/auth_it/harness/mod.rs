@@ -102,14 +102,24 @@ impl CredentialAdmin for StubCredentials {
 
 /// `account` stub: provisions a stable account id per subject and reports every
 /// account active with a fixed permission set; contacts are kept per account.
+/// (sealed seed, unused backup-code hashes), as `account` keeps them.
+pub type StoredMfa = (Vec<u8>, Vec<String>);
+
 pub struct StubDirectory {
     accounts: Mutex<HashMap<IdpSubject, AccountId>>,
     pub contacts: Mutex<HashMap<AccountId, auth::application::port::ContactDetails>>,
+    /// account → (sealed seed, unused backup-code hashes): two-step sign-in
+    /// on (#649), kept as `account` would.
+    pub mfa: Mutex<HashMap<AccountId, StoredMfa>>,
 }
 
 impl StubDirectory {
     pub fn new() -> Self {
-        Self { accounts: Mutex::new(HashMap::new()), contacts: Mutex::new(HashMap::new()) }
+        Self {
+            accounts: Mutex::new(HashMap::new()),
+            contacts: Mutex::new(HashMap::new()),
+            mfa: Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -122,11 +132,35 @@ impl AccountDirectory for StubDirectory {
             .or_insert_with(|| AccountId::from_uuid(Uuid::now_v7())))
     }
 
-    async fn lookup(&self, _account_id: &AccountId) -> Result<AccountSnapshot, AuthError> {
+    async fn lookup(&self, account_id: &AccountId) -> Result<AccountSnapshot, AuthError> {
         Ok(AccountSnapshot {
             activation: AccountActivation::Active,
             permissions: vec![Permission::new("posts:write")],
             age_bracket: None,
+            mfa_enrolled: self.mfa.lock().unwrap().contains_key(account_id),
+        })
+    }
+
+    async fn mfa_secret(&self, account_id: &AccountId) -> Result<auth::application::port::MfaSecret, AuthError> {
+        Ok(match self.mfa.lock().unwrap().get(account_id) {
+            Some((sealed, codes)) => auth::application::port::MfaSecret {
+                enrolled: true,
+                sealed_seed: sealed.clone(),
+                recovery_codes_remaining: codes.len() as u32,
+            },
+            None => auth::application::port::MfaSecret::default(),
+        })
+    }
+
+    async fn consume_recovery_code(&self, account_id: &AccountId, code_hash: &str) -> Result<bool, AuthError> {
+        let mut mfa = self.mfa.lock().unwrap();
+        let Some((_, codes)) = mfa.get_mut(account_id) else { return Ok(false) };
+        Ok(match codes.iter().position(|c| c == code_hash) {
+            Some(at) => {
+                codes.remove(at);
+                true
+            }
+            None => false,
         })
     }
 
@@ -189,6 +223,8 @@ pub struct Harness {
     pub directory: Arc<StubDirectory>,
     /// The live Redis, for adapter-level scenarios (one-time codes).
     pub redis: redis_storage::RedisClient,
+    /// The seed key the handler uses (#649), to enroll accounts in scenarios.
+    pub seed_cipher: Arc<auth::infrastructure::mfa::AesSeedCipher>,
 }
 
 impl Harness {
@@ -229,6 +265,16 @@ impl Harness {
 
         let credentials = Arc::new(StubCredentials::default());
         let directory = Arc::new(StubDirectory::new());
+        // Two-step sign-in (#649) over the real cipher and the live Redis.
+        let seed_cipher = Arc::new(
+            auth::infrastructure::mfa::AesSeedCipher::new("it", &[7u8; 32], &[]).expect("it: seed key"),
+        );
+        let mfa = Arc::new(auth::application::command::MfaVerifier::new(
+            directory.clone(),
+            seed_cipher.clone(),
+            Arc::new(auth::infrastructure::cache::RedisMfaStore::new(redis.clone())),
+            auth::application::command::MfaPolicy::default(),
+        ));
         let deps = AppDeps {
             idp: Arc::new(StubIdp),
             credentials: credentials.clone(),
@@ -253,6 +299,7 @@ impl Harness {
                 std::sync::Arc::new(auth::infrastructure::cache::RedisNonceStore::new(redis.clone())),
                 true,
             )),
+            mfa,
             policy: SessionPolicy::new(
                 ChronoDuration::minutes(10),
                 ChronoDuration::minutes(30),
@@ -261,7 +308,7 @@ impl Harness {
             ),
         };
 
-        Self { handler: App::compose(deps), pool, credentials, directory, redis }
+        Self { handler: App::compose(deps), pool, credentials, directory, redis, seed_cipher }
     }
 
     // ── RPC helpers ──────────────────────────────────────────────────────────

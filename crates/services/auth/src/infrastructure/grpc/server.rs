@@ -18,6 +18,13 @@ impl AuthService for AuthServiceHandler {
         self.login(request).await
     }
 
+    async fn complete_login(
+        &self,
+        request: Request<proto::CompleteLoginRequest>,
+    ) -> Result<Response<proto::LoginResponse>, Status> {
+        self.complete_login(request).await
+    }
+
     async fn refresh(
         &self,
         request: Request<proto::RefreshRequest>,

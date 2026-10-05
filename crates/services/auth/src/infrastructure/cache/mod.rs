@@ -6,14 +6,18 @@
 //! * `auth:{sess:<id>}:revoked` — per-session blacklist marker with TTL.
 //! * `auth:{otp:<challenge>}` / `auth:{otpd:<hash>}:*` — one-time codes and their
 //!   per-address send budget (see [`redis_verification_store`]).
+//! * `auth:{mfal:<hash>}` / `auth:{mfa:<id>}:*` — two-step sign-in state (see
+//!   [`redis_mfa_store`]).
 
 pub mod keys;
 pub mod redis_device_quota;
+pub mod redis_mfa_store;
 pub mod redis_nonce_store;
 pub mod redis_session_cache;
 pub mod redis_verification_store;
 
 pub use redis_device_quota::RedisDeviceQuota;
+pub use redis_mfa_store::RedisMfaStore;
 pub use redis_nonce_store::RedisNonceStore;
 pub use redis_session_cache::RedisSessionCache;
 pub use redis_verification_store::RedisVerificationStore;

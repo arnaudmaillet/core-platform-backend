@@ -14,6 +14,7 @@ pub mod revocation_reason;
 pub mod session_id;
 pub mod session_kind;
 pub mod session_status;
+pub mod totp;
 
 pub use access_token_claims::AccessTokenClaims;
 pub use account_id::AccountId;
@@ -33,3 +34,7 @@ pub use revocation_reason::RevocationReason;
 pub use session_id::SessionId;
 pub use session_kind::SessionKind;
 pub use session_status::SessionStatus;
+pub use totp::{
+    generate_backup_codes, normalize_backup_code, step_of, totp_digits, TotpSecret, BACKUP_CODE_COUNT, TOTP_PERIOD_SECS,
+    TOTP_SKEW_STEPS,
+};

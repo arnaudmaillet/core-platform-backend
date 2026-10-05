@@ -212,7 +212,7 @@ mod tests {
                 client_ip: None,
             },
         );
-        login_handler(fx).handle(env, t0()).await.unwrap()
+        login_handler(fx).handle(env, t0()).await.unwrap().issued().unwrap()
     }
 
     fn login_handler(fx: &Fixture) -> LoginHandler {

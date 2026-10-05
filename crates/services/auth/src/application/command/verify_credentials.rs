@@ -5,6 +5,7 @@ use cqrs::Envelope;
 use validate_core::{FieldViolation, Validate};
 
 use super::credentials::{caller_session, prove_password, STEP_UP_WINDOW_SECS};
+use super::mfa::MfaVerifier;
 use crate::application::ensure_valid;
 use crate::application::policy::SessionPolicy;
 use crate::application::port::{
@@ -18,7 +19,8 @@ use crate::error::AuthError;
 #[derive(Clone)]
 pub enum StepUpCredential {
     Password(String),
-    /// A TOTP or backup code — once MFA enrolment exists (#649).
+    /// A TOTP or backup code, for an account with two-step sign-in on (#649)
+    /// — the step-up of an account without a password, too.
     MfaCode(String),
 }
 
@@ -81,9 +83,17 @@ pub struct VerifyCredentialsHandler {
     cache: Arc<dyn SessionCache>,
     minter: Arc<dyn TokenMinter>,
     policy: SessionPolicy,
+    /// Two-step codes (#649); `None`: an MFA code proves nothing.
+    mfa: Option<Arc<MfaVerifier>>,
 }
 
 impl VerifyCredentialsHandler {
+    /// Accepts the holder's two-step code as a step-up (#649).
+    pub fn with_mfa(mut self, mfa: Arc<MfaVerifier>) -> Self {
+        self.mfa = Some(mfa);
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         idp: Arc<dyn IdentityProvider>,
@@ -95,7 +105,7 @@ impl VerifyCredentialsHandler {
         minter: Arc<dyn TokenMinter>,
         policy: SessionPolicy,
     ) -> Self {
-        Self { idp, admin, directory, profiles, sessions, cache, minter, policy }
+        Self { idp, admin, directory, profiles, sessions, cache, minter, policy, mfa: None }
     }
 
     pub async fn handle(
@@ -113,8 +123,10 @@ impl VerifyCredentialsHandler {
             StepUpCredential::Password(password) => {
                 prove_password(&self.admin, &self.idp, &session, password).await?;
             }
-            // No MFA enrolment exists yet (#649).
-            StepUpCredential::MfaCode(_) => return Err(AuthError::VerificationMethodUnavailable),
+            StepUpCredential::MfaCode(code) => {
+                let mfa = self.mfa.as_ref().ok_or(AuthError::MfaUnavailable)?;
+                mfa.check(&account_id, &code, now).await?;
+            }
         }
 
         // Re-read the authoritative grants, as a refresh would.
@@ -162,7 +174,7 @@ mod tests {
             guest_refresh_token: None,
             client_ip: None,
         };
-        fx.login_handler().handle(Envelope::new(Uuid::now_v7(), cmd), t0()).await.unwrap()
+        fx.login_handler().handle(Envelope::new(Uuid::now_v7(), cmd), t0()).await.unwrap().issued().unwrap()
     }
 
     fn verify(on: &IssuedSession, credential: StepUpCredential) -> Envelope<VerifyCredentialsCommand> {
@@ -211,7 +223,29 @@ mod tests {
             .handle(verify(&session, StepUpCredential::MfaCode("123456".into())), t0())
             .await
             .unwrap_err();
-        assert!(matches!(err, AuthError::VerificationMethodUnavailable));
+        assert!(matches!(err, AuthError::MfaNotEnabled), "{err:?}");
+    }
+
+    /// #649: with two-step sign-in on, its code is a step-up — for an account
+    /// without a password, the only one. A code works once.
+    #[tokio::test]
+    async fn a_two_step_code_steps_up_once() {
+        use crate::domain::value_object::step_of;
+        let fx = Fixture::new();
+        let session = login(&fx).await;
+        let seed = fx.enroll_mfa(session.account_id);
+        let handler = fx.verify_credentials_handler();
+        let later = t0() + Duration::minutes(3);
+
+        let code = seed.code_at(step_of(later));
+        let token = handler.handle(verify(&session, StepUpCredential::MfaCode(code.clone())), later).await.unwrap();
+        assert_eq!(fx.minter.verify_access(&token.access_token).await.unwrap().auth_time, Some(later));
+        let replay = handler.handle(verify(&session, StepUpCredential::MfaCode(code)), later).await.unwrap_err();
+        assert!(matches!(replay, AuthError::MfaCodeInvalid), "{replay:?}");
+        handler
+            .handle(verify(&session, StepUpCredential::MfaCode("abcde-fghjk".into())), later)
+            .await
+            .expect("a backup code");
     }
 
     #[tokio::test]

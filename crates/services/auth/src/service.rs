@@ -41,6 +41,8 @@ impl Service for AuthService {
     // (they *produce* the session). Introspect is INTERNAL and stays mesh-only.
     const EDGE_POLICY: EdgePolicy = &[
         public("/auth.v1.AuthService/Login"),
+        // The second step of a sign-in (#649): the mfa_token is the proof.
+        public("/auth.v1.AuthService/CompleteLogin"),
         public("/auth.v1.AuthService/Refresh"),
         // Guest mode: an installation starts an anonymous, read-only session.
         // Abuse controls (App Attest, per-IP / per-device limits) come with B5.

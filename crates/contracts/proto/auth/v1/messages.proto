@@ -125,6 +125,21 @@ message LoginResponse {
     // reactivated it (its profiles become visible again) — the app can welcome
     // the user back. A suspended account is never reactivated by a login.
     bool        reactivated = 4;
+    // Two-step sign-in is on (#649): the credential is proven but no session
+    // exists yet (`tokens` unset, `first_link` / `reactivated` false). Send
+    // the holder's code with `mfa_token` to CompleteLogin.
+    bool        mfa_required   = 5;
+    // Opaque and single use; valid for `mfa_expires_in` seconds.
+    string      mfa_token      = 6;
+    int64       mfa_expires_in = 7;
+}
+
+message CompleteLoginRequest {
+    // From the LoginResponse that asked for a second factor.
+    string  mfa_token = 1;
+    // Six digits from the authenticator app, or a backup code
+    // (`xxxxx-xxxxx`; case and the dash do not matter).
+    string  code      = 2;
 }
 
 // ── Sign-up ───────────────────────────────────────────────────────────────────
@@ -334,7 +349,8 @@ message ChangePasswordResponse {
 message VerifyCredentialsRequest {
     oneof credential {
         string  password  = 1;
-        // A TOTP or backup code. Refused (AUT-5007) until MFA enrolment exists.
+        // A TOTP or backup code (#649): the step-up of an account with
+        // two-step sign-in on, password or not. AUT-5020 when it is off.
         string  mfa_code  = 2;
     }
 }

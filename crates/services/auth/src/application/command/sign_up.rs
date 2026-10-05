@@ -566,7 +566,7 @@ mod tests {
         else {
             panic!("expected a sign-up")
         };
-        let issued = handler.handle(login(None), t0()).await.unwrap();
+        let issued = handler.handle(login(None), t0()).await.unwrap().issued().unwrap();
         assert_eq!(issued.account_id, account_id);
         assert!(!issued.first_link, "linked at sign-up");
 
@@ -637,6 +637,8 @@ mod tests {
                 t0(),
             )
             .await
+            .unwrap()
+            .issued()
             .unwrap();
         assert_eq!(issued.account_id, account_id);
 
