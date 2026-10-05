@@ -42,6 +42,9 @@ use thiserror::Error;
 /// | AUT-5015 | SmsDestinationNotSupported   | 422  | Low      | No        |
 /// | AUT-5016 | SmsBudgetExhausted           | 503  | **High** | No        |
 /// | AUT-1005 | GuestSessionsDisabled        | 403  | Low      | No        |
+/// | AUT-1006 | DeviceAttestationRequired    | 403  | Low      | No        |
+/// | AUT-1007 | DeviceAttestationInvalid     | 403  | Medium   | No        |
+/// | AUT-1008 | DeviceGuestQuotaExceeded     | 429  | Low      | No        |
 /// | AUT-6001 | AccountNotActive             | 403  | Medium   | No        |
 /// | AUT-6002 | AccountDirectoryUnavailable  | 503  | High     | **Yes**   |
 /// | AUT-6003 | ProfileDirectoryUnavailable  | 503  | Medium   | **Yes**   |
@@ -230,6 +233,20 @@ pub enum AuthError {
     /// `StartGuestSession` is switched off (`AUTH_GUEST_SESSIONS_ENABLED`).
     #[error("guest sessions are disabled")]
     GuestSessionsDisabled,
+
+    /// App Attest is enforced and the guest session request carries no
+    /// attestation.
+    #[error("this app must attest the device")]
+    DeviceAttestationRequired,
+
+    /// The App Attest attestation did not verify (or its challenge is unknown,
+    /// expired or used).
+    #[error("the device attestation is invalid: {reason}")]
+    DeviceAttestationInvalid { reason: String },
+
+    /// Too many guest sessions from one attested device today.
+    #[error("too many guest sessions from this device today")]
+    DeviceGuestQuotaExceeded,
 }
 
 impl AppError for AuthError {
@@ -288,6 +305,9 @@ impl AppError for AuthError {
             AuthError::InvalidSessionId(_) => "AUT-9002",
             AuthError::InvalidAccountId(_) => "AUT-9003",
             AuthError::GuestSessionsDisabled => "AUT-1005",
+            AuthError::DeviceAttestationRequired => "AUT-1006",
+            AuthError::DeviceAttestationInvalid { .. } => "AUT-1007",
+            AuthError::DeviceGuestQuotaExceeded => "AUT-1008",
         }
     }
 
@@ -322,7 +342,12 @@ impl AppError for AuthError {
             | AuthError::EmailAlreadyRegistered
             | AuthError::PhoneAlreadyRegistered => StatusCode::CONFLICT,
 
-            AuthError::AccountNotActive { .. } | AuthError::GuestSessionsDisabled => StatusCode::FORBIDDEN,
+            AuthError::AccountNotActive { .. }
+            | AuthError::GuestSessionsDisabled
+            | AuthError::DeviceAttestationRequired
+            | AuthError::DeviceAttestationInvalid { .. } => StatusCode::FORBIDDEN,
+
+            AuthError::DeviceGuestQuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
 
             AuthError::TokenSigningFailed => StatusCode::INTERNAL_SERVER_ERROR,
 
@@ -423,6 +448,10 @@ impl AppError for AuthError {
             AuthError::AccountDirectoryUnavailable => "The account service is temporarily unavailable.",
             AuthError::ProfileDirectoryUnavailable => "The profile service is temporarily unavailable.",
             AuthError::GuestSessionsDisabled => "Browsing without an account is not available right now.",
+            AuthError::DeviceAttestationRequired | AuthError::DeviceAttestationInvalid { .. } => {
+                "This app could not be verified on this device. Please update it from the App Store."
+            }
+            AuthError::DeviceGuestQuotaExceeded => "Too many sessions from this device today; please try again later.",
             AuthError::IdTokenRejected { .. } => "Your sign-in could not be verified; please try again.",
             AuthError::FederatedProviderNotConfigured { .. } => "This sign-in method is not available right now.",
             AuthError::IdTokenWithoutEmail => "This sign-in did not share an email address; please allow it and try again.",

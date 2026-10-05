@@ -248,6 +248,7 @@ impl Harness {
                 std::sync::Arc::new(auth::infrastructure::notify::LogCodeSender),
                 auth::application::command::VerificationPolicy::default(),
             )),
+            attestation: None,
             nonces: std::sync::Arc::new(auth::application::command::FederatedNonces::new(
                 std::sync::Arc::new(auth::infrastructure::cache::RedisNonceStore::new(redis.clone())),
                 true,
@@ -289,6 +290,7 @@ impl Harness {
             locale: "fr-FR".to_owned(),
             region_hint: "FR".to_owned(),
             current_country: String::new(),
+            ..Default::default()
         });
         self.handler.start_guest_session(request).await.map(|r| r.into_inner())
     }

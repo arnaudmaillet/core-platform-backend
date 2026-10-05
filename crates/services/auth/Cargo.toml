@@ -62,7 +62,13 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "s
 # JWKS fetching / key cache for native Sign in with Apple / Google id_tokens.
 auth-context = { workspace = true }
 # P-256 public-key parsing for JWKS publication (key-ring rotation, Phase 7).
-p256         = { version = "0.13", features = ["pem", "pkcs8"] }
+p256         = { version = "0.13", features = ["pem", "pkcs8", "ecdsa"] }
+# App Attest (guest mode B5b): Apple's attestation object is CBOR, its
+# certificates X.509 (the root P-384, the leaf P-256). Versions on der/spki 0.7,
+# like p256 0.13.
+ciborium     = "0.2"
+x509-cert    = "0.2"
+p384         = { version = "0.13", features = ["ecdsa"] }
 
 # ── Observability ─────────────────────────────────────────────────────────────
 tracing = { workspace = true }
@@ -88,6 +94,8 @@ tokio        = { workspace = true }
 # hardcoded. `rand_core` 0.6 supplies the OsRng that `p256`'s ECDSA keygen wants
 # (the workspace `rand` 0.9 uses an incompatible rand_core major).
 rand_core    = { version = "0.6", features = ["getrandom"] }
+# Synthetic App Attest chains (ephemeral test CA → intermediate → leaf).
+x509-cert    = { version = "0.2", features = ["builder"] }
 # Cross-crate edge-token verification (tests/edge_token_verify.rs) drives the same
 # `auth-context` decoder every downstream service uses — no container needed.
 auth-context = { workspace = true }

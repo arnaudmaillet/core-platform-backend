@@ -62,9 +62,24 @@ device, attestation flag, locale and hints are recorded in `guest_principals` (t
 once per device at sign-up). The client edge refuses a guest token on every `authenticated` method
 (`PERMISSION_DENIED`), so guests only reach `permission(…, "read:public")` routes; realtime refuses
 guest handshakes. **Members carry `read:public` too** (added at every mint). Guest session issuance
-is not published to the outbox (the audit plane records accounts). App Attest verification and
-per-IP / per-device limits on `StartGuestSession` are the abuse-control slice (B5); until then the
-RPC is **off by default** (`AUTH_GUEST_SESSIONS_ENABLED`; the local fleet turns it on).
+is not published to the outbox (the audit plane records accounts). The RPC is **off by default**
+(`AUTH_GUEST_SESSIONS_ENABLED`; the local fleet turns it on).
+
+**App Attest (B5b).** Per-IP limits alone let anyone with proxies mint guest sessions, so the app
+proves each install is a genuine copy of **our** app on a real Apple device: it asks
+`StartDeviceAttestation` (edge **public**) for a single-use challenge (Redis `auth:{attest:<sha256>}`,
+5 min), attests a fresh Secure Enclave key for it (`clientDataHash = SHA-256(challenge)`), and sends
+`attest_key_id` + `attestation` + `attest_challenge` with `StartGuestSession`. auth verifies the
+`apple-appattest` object: the certificate chain up to Apple's App Attestation Root CA (public,
+embedded; fingerprint pinned by a test), the nonce binding it to the challenge, the key id, the
+**app id** (`AUTH_APP_ATTEST_APP_IDS`, `<team id>.<bundle id>` — from configuration, never in
+code), a zero counter and an accepted **environment** (`AUTH_APP_ATTEST_ENVIRONMENTS`). Guest
+sessions are then also counted per attested key (`AUTH_APP_ATTEST_GUESTS_PER_DEVICE_PER_DAY`, 5 — per
+*key*: an app can rotate its key, Apple throttling attestations per device, so it is a speed bump),
+and the key is recorded on the guest (`guest_principals.attest_key_id`). Rolled out by
+`AUTH_APP_ATTEST_MODE`: `off` (default), `observe` (checked and logged, never refused), `enforce` (no
+attestation → `PERMISSION_DENIED` `AUT-1006`; an invalid one → `AUT-1007`; over the device quota →
+`RESOURCE_EXHAUSTED` `AUT-1008`). A mode other than `off` without app ids fails the boot.
 
 ### Sign-up with Apple / Google (guest mode)
 
@@ -275,6 +290,7 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | `AUTH_ACCOUNT_RPC_TIMEOUT_MS` · `AUTH_ACCOUNT_CONNECT_TIMEOUT_MS` | Per-request / connect deadlines on the `account` channel (login hot path — fail fast, never hang) | `2000` · `2000` |
 | `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Request / connect deadlines on Keycloak HTTP calls (token exchange) | `5000` · `2000` |
 | `AUTH_GUEST_SESSIONS_ENABLED` | `StartGuestSession` kill switch. **Off by default**: it writes a session per call with no credential, so keep it off wherever the abuse controls (per-IP / per-device limits, App Attest) are not in front of it. Off → `AUT-1005` (`PERMISSION_DENIED`). | `false` |
+| `AUTH_APP_ATTEST_MODE` · `AUTH_APP_ATTEST_APP_IDS` · `AUTH_APP_ATTEST_ENVIRONMENTS` · `AUTH_APP_ATTEST_GUESTS_PER_DEVICE_PER_DAY` | App Attest in front of `StartGuestSession`: `off` / `observe` / `enforce`; the accepted `<team id>.<bundle id>` (comma-separated; required unless off); `production` and/or `development`; guest sessions per attested device per UTC day. | `off` · — · `production` · `5` |
 | `AUTH_FEDERATED_NONCE_REQUIRED` | An id_token `SignUp` / `Login` must redeem a nonce from `StartFederatedSignIn` (else `AUT-5008`). Off: a client-made nonce is only logged — turn on once every client calls `StartFederatedSignIn`. | `false` |
 | `AUTH_GUEST_RETENTION_DAYS` · `AUTH_GUEST_RETENTION_INTERVAL_SECS` | Guest data retention: guests that never became an account and have no live session (device id, locale, country), and guest sessions that ended (device, IP, refresh tokens), are deleted after this many days; a pass runs at boot and at this interval on every replica (batched, idempotent). Guests that became an account are kept (once-per-device welcome gift). | `90` · `3600` |
 | `AUTH_APPLE_AUDIENCES` · `AUTH_GOOGLE_AUDIENCES` | Comma-separated client ids an Apple / Google id_token must be minted for (`aud`: the app's bundle / services ids; Google OAuth client ids). Empty = that provider's sign-in is off (`AUT-5009`). | — |

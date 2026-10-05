@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 681202436a3f01e167e4fd1a3bf35ec5a008708cd6b559e5a3d95e09e3b14201
+  source_sha256: a78a5e773902328e655a720a3704ad0767a4f87df6d4f60187eb08574b3b12b9
   translated_at: 2026-10-05
   status: complete
 ---
@@ -77,9 +77,25 @@ une fois par appareil à l'inscription). L'edge client refuse un jeton invité s
 `authenticated` (`PERMISSION_DENIED`) : les invités n'atteignent que les routes
 `permission(…, "read:public")` ; realtime refuse les handshakes invité. **Les membres portent aussi
 `read:public`** (ajoutée à chaque émission). L'émission d'une session invité n'est pas publiée dans
-l'outbox (le plan d'audit enregistre des comptes). La vérification App Attest et les limites par IP
-/ par appareil sur `StartGuestSession` relèvent de la tranche anti-abus (B5) ; d'ici là, la RPC est
-**désactivée par défaut** (`AUTH_GUEST_SESSIONS_ENABLED` ; la fleet locale l'active).
+l'outbox (le plan d'audit enregistre des comptes). La RPC est **désactivée par défaut**
+(`AUTH_GUEST_SESSIONS_ENABLED` ; la fleet locale l'active).
+
+**App Attest (B5b).** Les limites par IP seules laissent quiconque dispose de proxys créer des
+sessions invité ; l'app prouve donc que chaque installation est une copie authentique de **notre**
+app sur un vrai appareil Apple : elle demande à `StartDeviceAttestation` (edge **public**) un défi à
+usage unique (Redis `auth:{attest:<sha256>}`, 5 min), atteste pour lui une clé neuve de la Secure
+Enclave (`clientDataHash = SHA-256(défi)`), et envoie `attest_key_id` + `attestation` +
+`attest_challenge` avec `StartGuestSession`. auth vérifie l'objet `apple-appattest` : la chaîne de
+certificats jusqu'à l'Apple App Attestation Root CA (publique, embarquée ; empreinte vérifiée par un
+test), le nonce qui la lie au défi, l'id de clé, l'**app id** (`AUTH_APP_ATTEST_APP_IDS`,
+`<team id>.<bundle id>` — issu de la configuration, jamais du code), un compteur à zéro et un
+**environnement** accepté (`AUTH_APP_ATTEST_ENVIRONMENTS`). Les sessions invité sont ensuite aussi
+comptées par clé attestée (`AUTH_APP_ATTEST_GUESTS_PER_DEVICE_PER_DAY`, 5 — par *clé* : une app peut
+renouveler sa clé, Apple limitant les attestations par appareil, c'est donc un ralentisseur), et la clé est enregistrée
+sur l'invité (`guest_principals.attest_key_id`). Déploiement par `AUTH_APP_ATTEST_MODE` : `off` (par
+défaut), `observe` (vérifié et journalisé, jamais refusé), `enforce` (sans attestation →
+`PERMISSION_DENIED` `AUT-1006` ; invalide → `AUT-1007` ; au-delà du quota par appareil →
+`RESOURCE_EXHAUSTED` `AUT-1008`). Un mode autre que `off` sans app id fait échouer le démarrage.
 
 ### Inscription avec Apple / Google (mode invité)
 
@@ -300,6 +316,7 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_ACCOUNT_RPC_TIMEOUT_MS` · `AUTH_ACCOUNT_CONNECT_TIMEOUT_MS` | Deadlines par requête / de connexion sur le canal `account` (chemin chaud du login — échouer vite, ne jamais bloquer) | `2000` · `2000` |
 | `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Deadlines de requête / de connexion des appels HTTP Keycloak (échange de token) | `5000` · `2000` |
 | `AUTH_GUEST_SESSIONS_ENABLED` | Interrupteur de `StartGuestSession`. **Désactivé par défaut** : il écrit une session par appel sans identifiant, donc à laisser éteint partout où les contrôles anti-abus (limites par IP / par appareil, App Attest) ne sont pas devant lui. Éteint → `AUT-1005` (`PERMISSION_DENIED`). | `false` |
+| `AUTH_APP_ATTEST_MODE` · `AUTH_APP_ATTEST_APP_IDS` · `AUTH_APP_ATTEST_ENVIRONMENTS` · `AUTH_APP_ATTEST_GUESTS_PER_DEVICE_PER_DAY` | App Attest devant `StartGuestSession` : `off` / `observe` / `enforce` ; les `<team id>.<bundle id>` acceptés (séparés par des virgules ; obligatoires sauf `off`) ; `production` et/ou `development` ; sessions invité par appareil attesté et par jour UTC. | `off` · — · `production` · `5` |
 | `AUTH_FEDERATED_NONCE_REQUIRED` | Un `SignUp` / `Login` par id_token doit consommer un nonce de `StartFederatedSignIn` (sinon `AUT-5008`). Désactivé : un nonce créé par le client est seulement journalisé — à activer quand tous les clients appellent `StartFederatedSignIn`. | `false` |
 | `AUTH_GUEST_RETENTION_DAYS` · `AUTH_GUEST_RETENTION_INTERVAL_SECS` | Conservation des données d'invités : les invités jamais devenus un compte et sans session active (identifiant d'appareil, langue, pays), et les sessions d'invités terminées (appareil, IP, refresh tokens), sont supprimés après ce nombre de jours ; une passe tourne au démarrage puis à cet intervalle sur chaque réplica (par lots, idempotente). Les invités devenus un compte sont conservés (cadeau de bienvenue une fois par appareil). | `90` · `3600` |
 | `AUTH_APPLE_AUDIENCES` · `AUTH_GOOGLE_AUDIENCES` | Client ids (séparés par des virgules) pour lesquels un id_token Apple / Google doit être émis (`aud` : bundle / services ids de l'app ; client ids OAuth Google). Vide = l'inscription par ce fournisseur est désactivée (`AUT-5009`). | — |

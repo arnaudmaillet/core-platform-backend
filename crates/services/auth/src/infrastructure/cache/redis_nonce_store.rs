@@ -10,8 +10,8 @@ use redis_storage::{RedisClient, RedisStorageError};
 use crate::application::port::FederatedNonceStore;
 use crate::error::AuthError;
 
-fn key(nonce_hash: &str) -> String {
-    format!("auth:{{fnonce:{nonce_hash}}}")
+fn key(namespace: &str, nonce_hash: &str) -> String {
+    format!("auth:{{{namespace}:{nonce_hash}}}")
 }
 
 fn cache_err(e: fred::error::Error) -> AuthError {
@@ -21,11 +21,19 @@ fn cache_err(e: fred::error::Error) -> AuthError {
 #[derive(Clone)]
 pub struct RedisNonceStore {
     client: RedisClient,
+    namespace: &'static str,
 }
 
 impl RedisNonceStore {
+    /// Sign-in nonces (`auth:{fnonce:<hash>}`).
     pub fn new(client: RedisClient) -> Self {
-        Self { client }
+        Self { client, namespace: "fnonce" }
+    }
+
+    /// Single-use values of another kind (e.g. App Attest challenges:
+    /// `auth:{attest:<hash>}`).
+    pub fn with_namespace(client: RedisClient, namespace: &'static str) -> Self {
+        Self { client, namespace }
     }
 }
 
@@ -34,14 +42,14 @@ impl FederatedNonceStore for RedisNonceStore {
     async fn issue(&self, nonce_hash: &str, ttl: Duration) -> Result<(), AuthError> {
         let _: Option<String> = self
             .client
-            .set(key(nonce_hash), "1", Some(Expiration::EX(ttl.num_seconds().max(1))), Some(SetOptions::NX), false)
+            .set(key(self.namespace, nonce_hash), "1", Some(Expiration::EX(ttl.num_seconds().max(1))), Some(SetOptions::NX), false)
             .await
             .map_err(cache_err)?;
         Ok(())
     }
 
     async fn consume(&self, nonce_hash: &str) -> Result<bool, AuthError> {
-        let removed: i64 = self.client.del(key(nonce_hash)).await.map_err(cache_err)?;
+        let removed: i64 = self.client.del(key(self.namespace, nonce_hash)).await.map_err(cache_err)?;
         Ok(removed == 1)
     }
 }

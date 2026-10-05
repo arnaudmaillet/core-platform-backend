@@ -228,8 +228,9 @@ message StartGuestSessionRequest {
     // Required: device_id identifies the installation (the token's `did`; the
     // welcome gift is once per device).
     DeviceContext   device          = 1;
-    // App Attest assertion (DeviceCheck fallback). Recorded; verified by the
-    // abuse controls.
+    // App Attest: base64 of the key's attestation object, made for the
+    // challenge of StartDeviceAttestation (the app attests with
+    // clientDataHash = SHA-256(challenge)). Verified per AUTH_APP_ATTEST_MODE.
     string          attestation     = 2;
     // BCP-47, e.g. "fr-FR".
     string          locale          = 3;
@@ -238,6 +239,19 @@ message StartGuestSessionRequest {
     // ISO 3166-1 alpha-2 country derived on the device from location, when the
     // user allowed it. Never a coordinate.
     string          current_country = 5;
+    // App Attest: the attested key's id (base64, from generateKey).
+    string          attest_key_id    = 6;
+    // App Attest: the challenge StartDeviceAttestation returned (single use).
+    string          attest_challenge = 7;
+}
+
+message StartDeviceAttestationRequest {}
+
+message StartDeviceAttestationResponse {
+    // Single use; the app attests its key with clientDataHash = SHA-256 of this
+    // string's UTF-8 bytes.
+    string  challenge        = 1;
+    int64   expires_in_secs  = 2;
 }
 
 message StartGuestSessionResponse {

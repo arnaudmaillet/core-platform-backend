@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use transport::grpc::edge;
 use crate::application::command::{
-    ChangeContactCommand, ChangeContactHandler, ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, IssuedSession, LoginCommand, LoginHandler,
+    ChangeContactCommand, ChangeContactHandler, ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, GuestAttestation, IssuedSession, LoginCommand, LoginHandler,
     LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutCommand, LogoutHandler,
     RefreshCommand, RefreshHandler, SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome,
     StartGuestSessionCommand, StartGuestSessionHandler, StartVerificationCommand, VerificationCodes,
@@ -46,6 +46,7 @@ pub struct AuthServiceHandler {
     codes: Option<Arc<VerificationCodes>>,
     change_contact: Option<Arc<ChangeContactHandler>>,
     nonces: Option<Arc<FederatedNonces>>,
+    attestation: Option<Arc<GuestAttestation>>,
     /// Proxies appending to `X-Forwarded-For` in front of the edge
     /// (`GRPC_TRUSTED_PROXY_HOPS`), to find the client's address.
     trusted_proxy_hops: usize,
@@ -78,6 +79,7 @@ impl AuthServiceHandler {
             codes: None,
             change_contact: None,
             nonces: None,
+            attestation: None,
             trusted_proxy_hops: transport::grpc::client_ip::DEFAULT_TRUSTED_PROXY_HOPS,
         }
     }
@@ -167,6 +169,26 @@ impl AuthServiceHandler {
             challenge_id: started.challenge_id,
             expires_in_secs: started.expires_in_secs,
             resend_after_secs: started.resend_after_secs,
+        }))
+    }
+
+    /// Enables StartDeviceAttestation (App Attest challenges).
+    pub fn with_device_attestation(mut self, attestation: Arc<GuestAttestation>) -> Self {
+        self.attestation = Some(attestation);
+        self
+    }
+
+    /// Edge `public`: a single-use App Attest challenge.
+    pub async fn start_device_attestation(
+        &self,
+        _request: Request<proto::StartDeviceAttestationRequest>,
+    ) -> Result<Response<proto::StartDeviceAttestationResponse>, Status> {
+        let attestation =
+            self.attestation.as_ref().ok_or_else(|| Status::unimplemented("device attestation is not enabled"))?;
+        let started = attestation.start().await.map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::StartDeviceAttestationResponse {
+            challenge: started.challenge,
+            expires_in_secs: started.expires_in_secs,
         }))
     }
 
@@ -315,6 +337,8 @@ impl AuthServiceHandler {
         let cmd = StartGuestSessionCommand {
             device: device_from_proto(req.device, client_ip),
             attestation: non_empty(req.attestation),
+            attest_key_id: non_empty(req.attest_key_id),
+            attest_challenge: non_empty(req.attest_challenge),
             locale: non_empty(req.locale),
             region_hint: non_empty(req.region_hint),
             current_country: non_empty(req.current_country),
@@ -605,6 +629,7 @@ pub fn auth_error_to_status(err: AuthError) -> Status {
     match err.http_status().as_u16() {
         401 => Status::unauthenticated(msg),
         403 => Status::permission_denied(msg),
+        429 => Status::resource_exhausted(msg),
         404 => Status::not_found(msg),
         409 if retryable => Status::aborted(msg),
         409 => Status::already_exists(msg),

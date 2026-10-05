@@ -56,12 +56,18 @@ service AuthService {
     // id_token cannot be replayed within its lifetime.
     rpc StartFederatedSignIn(StartFederatedSignInRequest) returns (StartFederatedSignInResponse);
 
+    // A single-use challenge for App Attest (edge: public): the app attests a
+    // fresh Secure Enclave key for it, then presents the attestation to
+    // StartGuestSession.
+    rpc StartDeviceAttestation(StartDeviceAttestationRequest) returns (StartDeviceAttestationResponse);
+
     // Start an anonymous GUEST session for an app installation (guest mode:
     // browse before sign-up). No account is created. The edge token carries
     // sub = "guest:<guest_id>", kind = "guest", perms = ["read:public"], no
     // profiles, and the installation's device id (`did`); it is refreshed with
     // Refresh. The client edge refuses a guest token on every `authenticated`
-    // method: guests only read public content.
+    // method: guests only read public content. With App Attest enforced, the
+    // request must carry a valid attestation (PERMISSION_DENIED otherwise).
     rpc StartGuestSession(StartGuestSessionRequest) returns (StartGuestSessionResponse);
 
     // ── Revocation ────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ use cqrs::Envelope;
 use uuid::Uuid;
 use validate_core::{FieldViolation, Validate};
 
+use crate::application::command::guest_attestation::{AttestationProof, GuestAttestation};
 use crate::application::command::IssuedSession;
 use crate::application::ensure_valid;
 use crate::application::policy::SessionPolicy;
@@ -26,9 +27,11 @@ pub struct StartGuestSessionCommand {
     /// Must carry the installation's `device_id`: the session is bound to it,
     /// the token's `did` comes from it, and the welcome gift is once per device.
     pub device: DeviceFingerprint,
-    /// App Attest / DeviceCheck assertion. Recorded as sent; verified by the
-    /// abuse controls (B5).
+    /// App Attest: base64 of the attestation object, for `attest_challenge`
+    /// and the key `attest_key_id` (verified per `AUTH_APP_ATTEST_MODE`).
     pub attestation: Option<String>,
+    pub attest_key_id: Option<String>,
+    pub attest_challenge: Option<String>,
     pub locale: Option<String>,
     /// Store / region hint for discovery.
     pub region_hint: Option<String>,
@@ -64,6 +67,8 @@ pub struct StartGuestSessionHandler {
     /// into this TIER-0 store; until the abuse controls (B5) front it, an
     /// environment can turn it off.
     enabled: bool,
+    /// App Attest (B5b); `None` = not configured (as `off`).
+    attestation: Option<Arc<GuestAttestation>>,
 }
 
 impl StartGuestSessionHandler {
@@ -76,7 +81,13 @@ impl StartGuestSessionHandler {
         policy: SessionPolicy,
         enabled: bool,
     ) -> Self {
-        Self { sessions, refresh_tokens, cache, minter, guests, policy, enabled }
+        Self { sessions, refresh_tokens, cache, minter, guests, policy, enabled, attestation: None }
+    }
+
+    /// Checks App Attest per its mode before a guest session is issued.
+    pub fn with_attestation(mut self, attestation: Arc<GuestAttestation>) -> Self {
+        self.attestation = Some(attestation);
+        self
     }
 
     pub async fn handle(
@@ -91,6 +102,22 @@ impl StartGuestSessionHandler {
         let cmd = envelope.payload;
         let correlation_id = envelope.correlation_id;
 
+        // A genuine install of our app (App Attest), before anything is written.
+        let attested = match &self.attestation {
+            Some(attestation) => {
+                let proof = match (&cmd.attest_key_id, &cmd.attestation, &cmd.attest_challenge) {
+                    (Some(key_id), Some(attestation), Some(challenge)) => Some(AttestationProof {
+                        key_id: key_id.clone(),
+                        attestation: attestation.clone(),
+                        challenge: challenge.clone(),
+                    }),
+                    _ => None,
+                };
+                attestation.check(proof, now).await?
+            }
+            None => None,
+        };
+
         let guest_id = AccountId::from_uuid(Uuid::now_v7());
         let subject = IdpSubject::new(GUEST_ISSUER, guest_id.as_str())?;
 
@@ -99,6 +126,7 @@ impl StartGuestSessionHandler {
                 guest_id,
                 device_id: cmd.device.device_id().unwrap_or_default().to_owned(),
                 attestation_sent: cmd.attestation.as_deref().is_some_and(|a| !a.is_empty()),
+                attest_key_id: attested.map(|device| device.key_id),
                 locale: cmd.locale,
                 region_hint: cmd.region_hint,
                 current_country: cmd.current_country,
@@ -163,6 +191,8 @@ mod tests {
         StartGuestSessionCommand {
             device: DeviceFingerprint::new(None, None, device_id.map(str::to_owned)),
             attestation: Some("assertion".into()),
+            attest_key_id: None,
+            attest_challenge: None,
             locale: Some("fr-FR".into()),
             region_hint: Some("FR".into()),
             current_country: None,
@@ -194,6 +224,51 @@ mod tests {
         assert_eq!(fx.publisher.count(), 0, "no account, nothing published");
         // No account was looked up or created.
         assert!(fx.directory.lookups().is_empty());
+    }
+
+    #[tokio::test]
+    async fn enforced_app_attest_gates_the_session_and_records_the_attested_key() {
+        use crate::application::command::guest_attestation::{
+            AttestMode, AttestedDevice, DeviceAttestationVerifier, DeviceQuota, GuestAttestation,
+        };
+        use crate::application::fakes::InMemoryNonceStore;
+
+        struct Genuine;
+        impl DeviceAttestationVerifier for Genuine {
+            fn verify(&self, proof: &AttestationProof, _: DateTime<Utc>) -> Result<AttestedDevice, String> {
+                Ok(AttestedDevice { key_id: proof.key_id.clone(), environment: "production".into() })
+            }
+        }
+        struct Unlimited;
+        #[async_trait::async_trait]
+        impl DeviceQuota for Unlimited {
+            async fn admit(&self, _: &str, _: u32) -> Result<bool, AuthError> {
+                Ok(true)
+            }
+        }
+
+        let fx = Fixture::new();
+        let attestation = Arc::new(GuestAttestation::new(
+            AttestMode::Enforce,
+            Arc::new(Genuine),
+            Arc::new(InMemoryNonceStore::default()),
+            Arc::new(Unlimited),
+            5,
+        ));
+        let handler = fx.start_guest_handler().with_attestation(Arc::clone(&attestation));
+
+        // No attestation: refused before anything is written.
+        let err = handler.handle(Envelope::new(Uuid::now_v7(), cmd(Some("install-1"))), Utc::now()).await.unwrap_err();
+        assert!(matches!(err, AuthError::DeviceAttestationRequired));
+        assert!(fx.guests.records.lock().unwrap().is_empty());
+
+        // Attested for a challenge of ours: the session starts, the key is kept.
+        let challenge = attestation.start().await.unwrap().challenge;
+        let mut attested = cmd(Some("install-1"));
+        attested.attest_key_id = Some("key-1".into());
+        attested.attest_challenge = Some(challenge);
+        handler.handle(Envelope::new(Uuid::now_v7(), attested), Utc::now()).await.unwrap();
+        assert_eq!(fx.guests.records.lock().unwrap()[0].attest_key_id.as_deref(), Some("key-1"));
     }
 
     #[tokio::test]

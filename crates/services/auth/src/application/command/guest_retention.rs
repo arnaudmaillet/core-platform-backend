@@ -67,6 +67,7 @@ mod tests {
             guest_id: AccountId::from_uuid(uuid::Uuid::now_v7()),
             device_id: "d".into(),
             attestation_sent: false,
+            attest_key_id: None,
             locale: None,
             region_hint: None,
             current_country: None,

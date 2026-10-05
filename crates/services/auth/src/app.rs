@@ -17,7 +17,7 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    AccountErasure, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
+    AccountErasure, AttestMode, GuestAttestation, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
     LogoutAllSessionsHandler, LogoutHandler, MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler,
     StartGuestSessionHandler, VerificationCodes, VerifyCredentialsHandler,
 };
@@ -31,7 +31,8 @@ use crate::application::port::{
 use crate::application::query::{IntrospectHandler, ListSessionsHandler};
 use crate::application::SessionPolicy;
 use crate::config::AuthConfig;
-use crate::infrastructure::cache::{RedisNonceStore, RedisSessionCache, RedisVerificationStore};
+use crate::infrastructure::attest::AppAttestVerifier;
+use crate::infrastructure::cache::{RedisDeviceQuota, RedisNonceStore, RedisSessionCache, RedisVerificationStore};
 use crate::infrastructure::notify::{ChannelCodeSender, LogCodeSender, SmtpCodeSender, SnsCodeSender};
 use crate::application::port::CodeSender;
 use crate::infrastructure::directory::{GrpcAccountDirectory, GrpcProfileDirectory};
@@ -72,6 +73,8 @@ pub struct AppDeps {
     /// Server-issued sign-in nonces (StartFederatedSignIn), redeemed by the
     /// id_token SignUp / Login.
     pub nonces: Arc<FederatedNonces>,
+    /// App Attest in front of StartGuestSession (B5b); `None` = off.
+    pub attestation: Option<Arc<GuestAttestation>>,
     pub policy: SessionPolicy,
 }
 
@@ -187,7 +190,7 @@ impl App {
             Arc::clone(&deps.minter),
             deps.policy.clone(),
         ));
-        let start_guest = Arc::new(StartGuestSessionHandler::new(
+        let mut start_guest = StartGuestSessionHandler::new(
             Arc::clone(&deps.sessions),
             Arc::clone(&deps.refresh_tokens),
             Arc::clone(&deps.cache),
@@ -195,9 +198,13 @@ impl App {
             Arc::clone(&deps.guests),
             deps.policy.clone(),
             deps.guest_sessions_enabled,
-        ));
+        );
+        if let Some(attestation) = &deps.attestation {
+            start_guest = start_guest.with_attestation(Arc::clone(attestation));
+        }
+        let start_guest = Arc::new(start_guest);
 
-        AuthServiceHandler::new(
+        let handler = AuthServiceHandler::new(
             login,
             refresh,
             logout,
@@ -219,7 +226,11 @@ impl App {
             Arc::clone(&deps.publisher),
         )))
         .with_codes(deps.codes)
-        .with_federated_nonces(deps.nonces)
+        .with_federated_nonces(deps.nonces);
+        match deps.attestation {
+            Some(attestation) => handler.with_device_attestation(attestation),
+            None => handler,
+        }
     }
 
     /// Builds the concrete adapter graph from config + backend connections.
@@ -353,6 +364,21 @@ impl App {
                 Arc::new(RedisNonceStore::new(redis.clone())),
                 config.federated_nonce_required,
             )),
+            attestation: match config.app_attest.mode {
+                AttestMode::Off => None,
+                mode => {
+                    let verifier = AppAttestVerifier::new(&config.app_attest.app_ids, &config.app_attest.environments)
+                        .map_err(|e| format!("App Attest: {e}"))?;
+                    tracing::info!(?mode, apps = config.app_attest.app_ids.len(), "App Attest in front of StartGuestSession");
+                    Some(Arc::new(GuestAttestation::new(
+                        mode,
+                        Arc::new(verifier),
+                        Arc::new(RedisNonceStore::with_namespace(redis.clone(), "attest")),
+                        Arc::new(RedisDeviceQuota::new(redis.clone())),
+                        config.app_attest.guests_per_device_per_day,
+                    )))
+                }
+            },
             policy: config.policy,
         };
 
@@ -401,6 +427,7 @@ mod tests {
                 Arc::new(crate::application::fakes::InMemoryNonceStore::default()),
                 true,
             )),
+            attestation: None,
             policy: fx.policy.clone(),
         })
     }

@@ -39,6 +39,13 @@ impl AuthService for AuthServiceHandler {
         self.sign_up(request).await
     }
 
+    async fn start_device_attestation(
+        &self,
+        request: Request<proto::StartDeviceAttestationRequest>,
+    ) -> Result<Response<proto::StartDeviceAttestationResponse>, Status> {
+        self.start_device_attestation(request).await
+    }
+
     async fn start_federated_sign_in(
         &self,
         request: Request<proto::StartFederatedSignInRequest>,
