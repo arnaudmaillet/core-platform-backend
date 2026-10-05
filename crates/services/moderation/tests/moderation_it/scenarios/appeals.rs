@@ -109,3 +109,53 @@ async fn an_appeal_past_the_window_is_refused() {
     assert!(status.message().contains("window"), "{status:?}");
     assert!(my_appeals(&h, &actor).await.is_empty());
 }
+
+/// Migration 0003 on old data (a restored backup) holding duplicate appeals:
+/// it keeps one per (decision, appellant) — the resolved one — and then builds
+/// the unique index instead of failing. Run in a scratch schema so the shared
+/// database is untouched.
+#[tokio::test]
+async fn the_appeal_migration_survives_duplicates_in_old_data() {
+    let h = Harness::start().await;
+    let schema = format!("dedupe_{}", Uuid::now_v7().simple());
+    let mut conn = h.pool.acquire().await.unwrap();
+    sqlx::raw_sql(&format!(
+        "CREATE SCHEMA {schema};
+         CREATE TABLE {schema}.appeals (
+             id UUID NOT NULL, decision_id UUID NOT NULL, actor_id UUID NOT NULL,
+             statement TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'filed',
+             filed_at TIMESTAMPTZ NOT NULL, resolved_at TIMESTAMPTZ, PRIMARY KEY (id));
+         SET search_path TO {schema};"
+    ))
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+
+    let (decision, actor) = (Uuid::now_v7(), Uuid::now_v7());
+    let (first, resolved, third) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    for (id, minutes, status) in [(first, 1, "filed"), (resolved, 2, "upheld"), (third, 3, "filed")] {
+        sqlx::query(
+            "INSERT INTO appeals (id, decision_id, actor_id, statement, status, filed_at, resolved_at)
+             VALUES ($1, $2, $3, 'x', $4, now() + make_interval(mins => $5),
+                     CASE WHEN $4 = 'upheld' THEN now() END)",
+        )
+        .bind(id)
+        .bind(decision)
+        .bind(actor)
+        .bind(status)
+        .bind(minutes)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    }
+
+    let migration = include_str!("../../../migrations/postgres/0003_appeal_outcome.sql");
+    sqlx::raw_sql(migration).execute(&mut *conn).await.expect("migration 0003 on duplicates");
+
+    let kept: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM appeals").fetch_all(&mut *conn).await.unwrap();
+    assert_eq!(kept, vec![resolved], "the resolved appeal is kept");
+    sqlx::raw_sql(&format!("SET search_path TO public; DROP SCHEMA {schema} CASCADE;"))
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+}
