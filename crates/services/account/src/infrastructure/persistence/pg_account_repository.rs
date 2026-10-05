@@ -569,3 +569,34 @@ impl crate::application::port::ContactIndex for PgAccountRepository {
             .collect())
     }
 }
+
+/// The daily contact lookup budget (#661, migration 0008): one atomic upsert
+/// that adds `n` only while the day's total stays within the limit.
+#[async_trait]
+impl crate::application::port::ContactLookupQuota for PgAccountRepository {
+    async fn reserve(
+        &self,
+        account_id: &crate::domain::value_object::AccountId,
+        day: chrono::NaiveDate,
+        n: i64,
+        limit: i64,
+    ) -> Result<bool, AccountError> {
+        if n > limit {
+            return Ok(false);
+        }
+        let reserved: Option<(i32,)> = sqlx::query_as(
+            "INSERT INTO contact_lookup_quota AS q (account_id, day, used) VALUES ($1, $2, $3) \
+             ON CONFLICT (account_id, day) DO UPDATE SET used = q.used + EXCLUDED.used \
+             WHERE q.used + EXCLUDED.used <= $4 \
+             RETURNING used",
+        )
+        .bind(account_id.as_uuid())
+        .bind(day)
+        .bind(n as i32)
+        .bind(limit as i32)
+        .fetch_optional(self.tx_manager.pool())
+        .await
+        .map_err(|e| AccountError::Storage(StorageError::from(e)))?;
+        Ok(reserved.is_some())
+    }
+}

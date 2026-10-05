@@ -7,18 +7,26 @@
 //! when they are active and findable through that channel (`by_email` /
 //! `by_phone`, profile's discovery settings), except any the caller blocks
 //! or is blocked by (or a hidden one), and never the caller's own.
+//!
+//! Hashes of phone numbers hide nothing (a numbering plan hashes in
+//! minutes), so lookups are bounded per account and UTC day
+//! ([`DAILY_CONTACT_LOOKUPS`]): every submitted hash counts, matched or not,
+//! reserved before anything is matched; past it, `ACC-7007`.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use cqrs::{Envelope, Query, QueryHandler};
 
-use crate::application::port::{ContactChannel, ContactIndex, DirectoryProfile, ProfileDirectory};
+use crate::application::port::{ContactChannel, ContactIndex, ContactLookupQuota, DirectoryProfile, ProfileDirectory};
 use crate::domain::value_object::AccountId;
 use crate::error::AccountError;
 
 /// Most hashes per call: one page of an address book.
 pub const MAX_CONTACT_HASHES: usize = 1_000;
+
+/// Most hashes one account looks up per UTC day: an address book or two.
+pub const DAILY_CONTACT_LOOKUPS: i64 = 5_000;
 
 pub struct FindProfilesByContactsQuery {
     pub account_id:   String,
@@ -40,15 +48,27 @@ impl Query for FindProfilesByContactsQuery {
 }
 
 pub struct FindProfilesByContactsHandler {
-    contacts:  Arc<dyn ContactIndex>,
-    directory: Option<Arc<dyn ProfileDirectory>>,
+    contacts:    Arc<dyn ContactIndex>,
+    quota:       Arc<dyn ContactLookupQuota>,
+    directory:   Option<Arc<dyn ProfileDirectory>>,
+    daily_limit: i64,
 }
 
 impl FindProfilesByContactsHandler {
     /// Without a directory (profile / social-graph not configured), matching
     /// is unavailable (`ACC-7006`).
-    pub fn new(contacts: Arc<dyn ContactIndex>, directory: Option<Arc<dyn ProfileDirectory>>) -> Self {
-        Self { contacts, directory }
+    pub fn new(
+        contacts: Arc<dyn ContactIndex>,
+        quota: Arc<dyn ContactLookupQuota>,
+        directory: Option<Arc<dyn ProfileDirectory>>,
+    ) -> Self {
+        Self { contacts, quota, directory, daily_limit: DAILY_CONTACT_LOOKUPS }
+    }
+
+    /// A different daily budget (scenarios).
+    pub fn with_daily_limit(mut self, daily_limit: i64) -> Self {
+        self.daily_limit = daily_limit;
+        self
     }
 }
 
@@ -75,6 +95,11 @@ impl QueryHandler<FindProfilesByContactsQuery> for FindProfilesByContactsHandler
             .directory
             .as_ref()
             .ok_or_else(|| AccountError::DirectoryUnavailable { reason: "no profile directory configured".to_owned() })?;
+        let submitted = (q.email_hashes.len() + q.phone_hashes.len()) as i64;
+        let today = chrono::Utc::now().date_naive();
+        if !self.quota.reserve(&caller, today, submitted, self.daily_limit).await? {
+            return Err(AccountError::ContactLookupQuotaExceeded { limit: self.daily_limit });
+        }
 
         let matches = self.contacts.match_contacts(&q.email_hashes, &q.phone_hashes).await?;
         let mut found = Vec::new();
@@ -126,6 +151,23 @@ mod tests {
                 })
                 .cloned()
                 .collect())
+        }
+    }
+
+    /// The daily budget, in memory.
+    #[derive(Default)]
+    struct Quota(Mutex<HashMap<AccountId, i64>>);
+
+    #[async_trait]
+    impl ContactLookupQuota for Quota {
+        async fn reserve(&self, account: &AccountId, _: chrono::NaiveDate, n: i64, limit: i64) -> Result<bool, AccountError> {
+            let mut used = self.0.lock().unwrap();
+            let total = used.entry(*account).or_default();
+            if *total + n > limit {
+                return Ok(false);
+            }
+            *total += n;
+            Ok(true)
         }
     }
 
@@ -189,7 +231,8 @@ mod tests {
             hidden: HashSet::from(["friend-blocked".to_owned()]),
             asked: Mutex::new(Vec::new()),
         };
-        let handler = FindProfilesByContactsHandler::new(Arc::new(index), Some(Arc::new(directory)));
+        let handler =
+            FindProfilesByContactsHandler::new(Arc::new(index), Arc::new(Quota::default()), Some(Arc::new(directory)));
 
         let found = find(&handler, &me, vec![hash(1), hash(3)], vec![hash(2)]).await.unwrap();
         let ids: Vec<_> = found.iter().map(|f| f.profile.profile_id.as_str()).collect();
@@ -201,13 +244,35 @@ mod tests {
     #[tokio::test]
     async fn malformed_or_too_many_hashes_are_refused_and_no_directory_is_unavailable() {
         let me = AccountId::new();
-        let handler = FindProfilesByContactsHandler::new(Arc::new(Index::default()), Some(Arc::new(Directory::default())));
+        let handler = FindProfilesByContactsHandler::new(
+            Arc::new(Index::default()),
+            Arc::new(Quota::default()),
+            Some(Arc::new(Directory::default())),
+        );
         assert!(matches!(find(&handler, &me, vec![vec![1; 31]], vec![]).await, Err(AccountError::DomainViolation { .. })));
         let many = vec![hash(1); MAX_CONTACT_HASHES + 1];
         assert!(matches!(find(&handler, &me, many, vec![]).await, Err(AccountError::DomainViolation { .. })));
         assert!(find(&handler, &me, vec![], vec![]).await.unwrap().is_empty());
 
-        let off = FindProfilesByContactsHandler::new(Arc::new(Index::default()), None);
+        let off = FindProfilesByContactsHandler::new(Arc::new(Index::default()), Arc::new(Quota::default()), None);
         assert!(matches!(find(&off, &me, vec![hash(1)], vec![]).await, Err(AccountError::DirectoryUnavailable { .. })));
+    }
+
+    /// Every submitted hash counts, matched or not; past the day's budget the
+    /// call is refused before anything is matched.
+    #[tokio::test]
+    async fn the_daily_budget_counts_every_hash_and_refuses_past_it() {
+        let me = AccountId::new();
+        let handler = FindProfilesByContactsHandler::new(
+            Arc::new(Index::default()),
+            Arc::new(Quota::default()),
+            Some(Arc::new(Directory::default())),
+        )
+        .with_daily_limit(5);
+        find(&handler, &me, vec![hash(1), hash(2)], vec![hash(3)]).await.unwrap();
+        let err = find(&handler, &me, vec![hash(4), hash(5), hash(6)], vec![]).await.unwrap_err();
+        assert!(matches!(err, AccountError::ContactLookupQuotaExceeded { limit: 5 }), "{err:?}");
+        find(&handler, &me, vec![hash(7), hash(8)], vec![]).await.expect("a refused call reserves nothing");
+        assert!(find(&handler, &AccountId::new(), vec![hash(1); 5], vec![]).await.is_ok(), "per account");
     }
 }

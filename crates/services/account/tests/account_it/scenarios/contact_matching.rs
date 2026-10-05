@@ -70,3 +70,34 @@ async fn verified_contacts_of_active_accounts_match_their_hash() {
     assert_eq!(found[0].channel, ContactChannel::Phone);
     assert_eq!(found[0].account_id.as_uuid().to_string(), phone_account.id);
 }
+
+/// The daily budget over real Postgres: reservations add up per account and
+/// day, one that would pass the limit reserves nothing, and concurrent
+/// reservations never overshoot it.
+#[tokio::test]
+async fn the_daily_lookup_budget_is_atomic_and_never_overshot() {
+    use account::domain::value_object::AccountId;
+
+    let h = TestHarness::start().await;
+    let (me, day) = (AccountId::new(), chrono::Utc::now().date_naive());
+    assert!(h.quota.reserve(&me, day, 600, 1_000).await.unwrap());
+    assert!(!h.quota.reserve(&me, day, 500, 1_000).await.unwrap(), "past the limit");
+    assert!(h.quota.reserve(&me, day, 400, 1_000).await.unwrap(), "the refusal reserved nothing");
+    assert!(!h.quota.reserve(&me, day, 1, 1_000).await.unwrap(), "spent");
+    let tomorrow = day.succ_opt().unwrap();
+    assert!(h.quota.reserve(&me, tomorrow, 1_000, 1_000).await.unwrap(), "a new day");
+
+    // Twenty concurrent reservations of 100 against 1000: exactly ten pass.
+    let other = AccountId::new();
+    let attempts: Vec<_> = (0..20)
+        .map(|_| {
+            let quota = std::sync::Arc::clone(&h.quota);
+            tokio::spawn(async move { quota.reserve(&other, day, 100, 1_000).await.unwrap() })
+        })
+        .collect();
+    let mut granted = 0;
+    for attempt in attempts {
+        granted += usize::from(attempt.await.unwrap());
+    }
+    assert_eq!(granted, 10);
+}

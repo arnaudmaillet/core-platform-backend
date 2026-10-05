@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 5978ab31cb92580391dd6597fd10a90b3407462afce56dda9ebba79333aa7a69
+  source_sha256: 67ba951ac2454da4206e69526e4f40cfa0cfc7d815f5d2aedf08584e0ad22982
   translated_at: 2026-10-05
   status: complete
 ---
@@ -182,7 +182,13 @@ statut et réglages de découvrabilité) et gardés s'ils sont actifs et trouvab
 (`by_email` / `by_phone`), jamais ceux de l'appelant, jamais un profil que les profils de l'appelant
 bloquent ou qui les bloque (`CheckAccess` de social-graph ; une réponse absente compte comme masquée).
 Chaque résultat nomme l'empreinte dont il vient, pour que l'app affiche le contact. Profile ou
-social-graph injoignable ⇒ `ACC-7006` (`UNAVAILABLE`, rejouable).
+social-graph injoignable ⇒ `ACC-7006` (`UNAVAILABLE`, rejouable). Les empreintes de numéros ne cachent
+rien (un plan de numérotation se hache en quelques minutes) : chaque compte peut chercher **5000
+empreintes par jour UTC** (`contact_lookup_quota`, migration 0008) ; chaque empreinte envoyée compte,
+trouvée ou non, réservée atomiquement avant toute recherche ; au-delà ⇒ `ACC-7007`
+(`RESOURCE_EXHAUSTED`, `retry-after-secs` = jusqu'au prochain minuit UTC). Les numéros stockés sont déjà
+en E.164 (validés à chaque écriture) : la colonne d'empreinte des téléphones n'a pas besoin de
+normalisation.
 
 **Export de données RGPD (#653, art. 15/20).** `RequestDataExport` marque l'export en attente ; la
 **passe d'export** (`ExportDueData`) construit alors, pour chaque compte en attente, un ZIP de fichiers

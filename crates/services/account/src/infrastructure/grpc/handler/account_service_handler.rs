@@ -625,7 +625,18 @@ where
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
-            .map_err(cqrs_error_to_status)?;
+            .map_err(|e| {
+                // The daily budget renews at the next UTC midnight.
+                let mut status = cqrs_error_to_status(e);
+                if status.code() == tonic::Code::ResourceExhausted {
+                    let now = chrono::Utc::now();
+                    let midnight = (now.date_naive() + chrono::Days::new(1)).and_time(chrono::NaiveTime::MIN).and_utc();
+                    if let Ok(value) = (midnight - now).num_seconds().max(1).to_string().parse() {
+                        status.metadata_mut().insert("retry-after-secs", value);
+                    }
+                }
+                status
+            })?;
         Ok(Response::new(proto::FindProfilesByContactsResponse {
             profiles: found
                 .into_iter()
@@ -836,6 +847,7 @@ pub fn cqrs_error_to_status(err: cqrs::error::CqrsError) -> Status {
                 409 if retryable => Status::aborted(msg),
                 409 => Status::already_exists(msg),
                 400 | 422 => Status::failed_precondition(msg),
+                429 => Status::resource_exhausted(msg),
                 503 | 502 => Status::unavailable(msg),
                 _ => Status::internal(msg),
             };

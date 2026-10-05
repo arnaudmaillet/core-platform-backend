@@ -33,6 +33,15 @@ pub trait ContactIndex: Send + Sync + 'static {
     ) -> Result<Vec<ContactMatch>, AccountError>;
 }
 
+/// Each account's daily budget of contact hashes looked up (#661).
+#[async_trait]
+pub trait ContactLookupQuota: Send + Sync + 'static {
+    /// Reserves `n` more hashes for `account_id` on `day`, only if the day's
+    /// total stays within `limit` (atomically); `false`, with nothing
+    /// reserved, otherwise.
+    async fn reserve(&self, account_id: &AccountId, day: chrono::NaiveDate, n: i64, limit: i64) -> Result<bool, AccountError>;
+}
+
 /// One profile of an account, with how it may be found (#661).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectoryProfile {

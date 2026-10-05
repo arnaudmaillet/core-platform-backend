@@ -33,7 +33,9 @@ use crate::application::command::{
     VerifyEmailHandler, VerifyPhoneCommand, VerifyPhoneHandler, ChangeEmailCommand, ChangeEmailHandler,
     ChangePhoneCommand, ChangePhoneHandler,
 };
-use crate::application::port::{AccountRepository, ContactIndex, EventPublisher, ExportStore, ProfileDirectory};
+use crate::application::port::{
+    AccountRepository, ContactIndex, ContactLookupQuota, EventPublisher, ExportStore, ProfileDirectory,
+};
 use crate::application::query::{
     FindProfilesByContactsHandler, FindProfilesByContactsQuery,
     GetAccountByEmailHandler, GetAccountByEmailQuery, GetAccountByIdHandler, GetAccountByIdQuery,
@@ -54,6 +56,8 @@ pub struct App {
     pub repository:  Arc<dyn AccountRepository>,
     /// The accounts' contacts by hash (#661), for index-level scenarios.
     pub contacts:    Arc<dyn ContactIndex>,
+    /// Contact matching's daily budget (#661), for scenarios.
+    pub quota:       Arc<dyn ContactLookupQuota>,
 }
 
 impl App {
@@ -77,7 +81,9 @@ impl App {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let pg = Arc::new(PgAccountRepository::new(TransactionManager::new(pool), publisher));
         let repository: Arc<dyn AccountRepository> = Arc::clone(&pg) as Arc<dyn AccountRepository>;
-        let contacts: Arc<dyn ContactIndex> = pg;
+        let contacts: Arc<dyn ContactIndex> = Arc::clone(&pg) as Arc<dyn ContactIndex>;
+        let quota: Arc<dyn ContactLookupQuota> = pg;
+        let budget = Arc::clone(&quota);
 
         let command_bus = Arc::new(
             CommandBusBuilder::new()
@@ -124,11 +130,12 @@ impl App {
                 .register::<ListAccountsByStatusQuery, _>(ListAccountsByStatusHandler::new(Arc::clone(&repository)))?
                 .register::<FindProfilesByContactsQuery, _>(FindProfilesByContactsHandler::new(
                     Arc::clone(&contacts),
+                    budget,
                     directory,
                 ))?
                 .build(),
         );
 
-        Ok(Self { command_bus, query_bus, repository, contacts })
+        Ok(Self { command_bus, query_bus, repository, contacts, quota })
     }
 }

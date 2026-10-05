@@ -40,6 +40,8 @@ pub struct TestHarness {
     pub repository:  Arc<dyn account::application::port::AccountRepository>,
     /// The accounts' contacts by hash (#661).
     pub contacts:    Arc<dyn account::application::port::ContactIndex>,
+    /// Contact matching's daily budget (#661).
+    pub quota:       Arc<dyn account::application::port::ContactLookupQuota>,
 }
 
 impl TestHarness {
@@ -72,6 +74,7 @@ impl TestHarness {
             pool,
             repository: app.repository,
             contacts: app.contacts,
+            quota: app.quota,
         }
     }
 
