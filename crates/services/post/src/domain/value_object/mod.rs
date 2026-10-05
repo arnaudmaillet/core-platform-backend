@@ -17,7 +17,7 @@ pub mod viewer;
 pub use audio_id::AudioId;
 pub use audio_kind::AudioKind;
 pub use audio_reference::AudioReference;
-pub use caption::Caption;
+pub use caption::{Caption, MAX_MENTIONS};
 pub use cdn_url::CdnUrl;
 pub use content_access::ContentAccess;
 pub use geo_point::GeoPoint;

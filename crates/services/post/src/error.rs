@@ -38,6 +38,10 @@ pub enum PostError {
     #[error("the sound {audio_id} may not be reused")]
     SoundReuseNotAllowed { audio_id: String },
 
+    /// A mentioned profile does not take mentions from the author (#656).
+    #[error("profile {profile_id} does not allow this mention")]
+    MentionNotAllowed { profile_id: String },
+
     #[error("carousel requires at least 2 items")]
     CarouselTooFewItems,
 
@@ -93,6 +97,7 @@ impl AppError for PostError {
             Self::PostNotDeleted { .. }       => "PST-1006",
             Self::RestoreWindowExpired { .. } => "PST-1007",
             Self::SoundReuseNotAllowed { .. } => "PST-1008",
+            Self::MentionNotAllowed { .. }    => "PST-1009",
             Self::CarouselTooFewItems         => "PST-2001",
             Self::CarouselTooManyItems { .. } => "PST-2002",
             Self::CarouselVideoTooLong { .. } => "PST-2003",
@@ -119,7 +124,8 @@ impl AppError for PostError {
             | Self::PostNotDeleted { .. }      => StatusCode::CONFLICT,
             Self::RestoreWindowExpired { .. }  => StatusCode::GONE,
             Self::AuthorMismatch { .. }
-            | Self::SoundReuseNotAllowed { .. } => StatusCode::FORBIDDEN,
+            | Self::SoundReuseNotAllowed { .. }
+            | Self::MentionNotAllowed { .. } => StatusCode::FORBIDDEN,
             Self::NotDraft { .. }
             | Self::CarouselTooFewItems
             | Self::CarouselTooManyItems { .. }
@@ -192,6 +198,7 @@ impl AppError for PostError {
             Self::PostNotDeleted { .. }         => "This post is not in Recently deleted.",
             Self::RestoreWindowExpired { .. }   => "This post was deleted more than 30 days ago and can no longer be restored.",
             Self::SoundReuseNotAllowed { .. }   => "The creator of this sound does not allow it to be reused.",
+            Self::MentionNotAllowed { .. }      => "Someone you mentioned doesn't allow mentions from you.",
             Self::AuthorMismatch { .. }         => "You are not authorised to modify this post.",
             Self::CarouselTooFewItems           => "A carousel must contain at least 2 items.",
             Self::CarouselTooManyItems { .. }   => "A carousel can contain at most 10 items.",

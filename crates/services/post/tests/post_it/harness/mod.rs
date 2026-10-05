@@ -104,6 +104,24 @@ impl TestHarness {
             .expect("create_post");
     }
 
+    /// Tries to create a `TextOnly` post with `caption`; the error when refused.
+    pub async fn try_create_captioned(&self, post_id: &str, profile_id: &str, caption: &str) -> Result<(), CqrsError> {
+        let mut cmd = create_command(post_id.to_owned(), profile_id.to_owned());
+        cmd.caption = caption.to_owned();
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await
+    }
+
+    /// Tries to change a post's caption; the error when refused.
+    pub async fn try_recaption(&self, post_id: &str, profile_id: &str, caption: &str) -> Result<(), CqrsError> {
+        let cmd = post::application::command::update_post::UpdatePostCommand {
+            post_id:     post_id.to_owned(),
+            profile_id:  profile_id.to_owned(),
+            caption:     caption.to_owned(),
+            attachments: Vec::new(),
+        };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await
+    }
+
     /// Creates a `TextOnly` post made at `(lat, lng)`, expecting success.
     pub async fn create_at(&self, post_id: &str, profile_id: &str, lat: f64, lng: f64) {
         let mut cmd = create_command(post_id.to_owned(), profile_id.to_owned());

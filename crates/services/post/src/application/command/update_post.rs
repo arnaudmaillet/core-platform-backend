@@ -6,7 +6,7 @@ use validate_core::{FieldViolation, Validate};
 use crate::{
     application::{
         command::create_post::{AttachmentInput, parse_attachments},
-        port::{EventPublisher, PostRepository},
+        port::{check_mentions, AudienceGate, EventPublisher, PostRepository},
     },
     domain::value_object::{Caption, PostId, ProfileId},
     error::PostError,
@@ -37,6 +37,8 @@ impl Validate for UpdatePostCommand {
 pub struct UpdatePostHandler<R, P> {
     pub repository: Arc<R>,
     pub publisher:  Arc<P>,
+    /// Who takes mentions from whom (#656).
+    pub audience:   Arc<dyn AudienceGate>,
 }
 
 impl<R, P> CommandHandler<UpdatePostCommand> for UpdatePostHandler<R, P>
@@ -64,6 +66,8 @@ where
 
         let caption     = Caption::new(&cmd.caption)?;
         let attachments = parse_attachments(&cmd.attachments)?;
+        // Every mentioned profile must take mentions from the author (#656).
+        check_mentions(self.audience.as_ref(), &profile_id, &caption).await?;
 
         post.update(caption, attachments)?;
         self.repository.update_content(&post).await?;

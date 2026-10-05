@@ -53,12 +53,19 @@ impl EventPublisher for CapturingPublisher {
 #[derive(Default)]
 pub struct ScriptedGate {
     access: Mutex<std::collections::HashMap<String, post::domain::value_object::ContentAccess>>,
+    /// Profiles that take no mentions (#656).
+    no_mentions: Mutex<std::collections::HashSet<String>>,
     down:   Mutex<bool>,
 }
 
 impl ScriptedGate {
     pub fn set(&self, author: &str, access: post::domain::value_object::ContentAccess) {
         self.access.lock().unwrap().insert(author.to_owned(), access);
+    }
+
+    /// `profile` takes no mentions.
+    pub fn refuse_mentions(&self, profile: &str) {
+        self.no_mentions.lock().unwrap().insert(profile.to_owned());
     }
 
     pub fn set_down(&self, down: bool) {
@@ -83,5 +90,16 @@ impl post::application::port::AudienceGate for ScriptedGate {
             .get(&author.as_str())
             .copied()
             .unwrap_or(post::domain::value_object::ContentAccess::Visible))
+    }
+
+    async fn may_mention(
+        &self,
+        _author: &post::domain::value_object::ProfileId,
+        mentioned: &post::domain::value_object::ProfileId,
+    ) -> Result<bool, PostError> {
+        if *self.down.lock().unwrap() {
+            return Err(PostError::AccessCheckUnavailable { reason: "scripted outage".into() });
+        }
+        Ok(!self.no_mentions.lock().unwrap().contains(&mentioned.as_str()))
     }
 }
