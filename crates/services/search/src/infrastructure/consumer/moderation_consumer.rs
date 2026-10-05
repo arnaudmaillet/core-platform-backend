@@ -37,7 +37,9 @@ pub async fn run_moderation_consumer(
     }
 }
 
-pub(crate) async fn process(
+/// Handles one `moderation.v1.events` event, as the runner hands it (public so
+/// the integration suite drives it against a live engine without a broker).
+pub async fn process(
     projection: &ProjectionHandler,
     hydrator: &dyn SourceHydrator,
     event: &ModerationWireEvent,

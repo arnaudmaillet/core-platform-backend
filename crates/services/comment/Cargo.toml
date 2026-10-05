@@ -53,5 +53,7 @@ tokio = { workspace = true }
 # the shared `test-support` crate; the suite code is wholly behind
 # `#[cfg(feature = "integration-comment")]`.
 test-support = { workspace = true }
+# In-process post / social-graph peers for the real gRPC read gate.
+tokio-stream = { workspace = true }
 async-trait  = { workspace = true }
 uuid         = { workspace = true }

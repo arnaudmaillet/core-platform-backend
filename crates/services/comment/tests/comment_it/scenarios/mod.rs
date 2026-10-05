@@ -8,3 +8,4 @@ mod read_gate;
 mod hidden_words;
 mod held_comments;
 mod restricted_comments;
+mod gate_over_grpc;

@@ -18,13 +18,13 @@ use uuid::Uuid;
 use cqrs::command::InMemoryCommandBus;
 use cqrs::query::InMemoryQueryBus;
 use cqrs::{CommandBus, Envelope};
-use redis_storage::RedisConfig;
-use scylla_storage::ScyllaConfig;
+use redis_storage::{RedisClient, RedisConfig};
+use scylla_storage::{ScyllaClient, ScyllaConfig};
 use tonic::{Request, Status};
 
 use notification::app::{App, Backends};
 use notification::application::command::create_notification::CreateNotificationCommand;
-use notification::application::port::UnreadCounter;
+use notification::application::port::{NotificationRepository, UnreadCounter};
 use notification::config::NotificationConfig;
 use notification::infrastructure::streaming::BroadcastRegistry;
 
@@ -59,6 +59,11 @@ pub struct TestHarness {
     pub command_bus:     Arc<InMemoryCommandBus>,
     pub stream_registry: Arc<BroadcastRegistry>,
     pub counter:         Arc<dyn UnreadCounter>,
+    pub repository:      Arc<dyn NotificationRepository>,
+    pub config:          Arc<NotificationConfig>,
+    /// The live clients, to wire a worker against the same stores.
+    pub scylla:          Arc<ScyllaClient>,
+    pub redis:           RedisClient,
 }
 
 impl TestHarness {
@@ -94,6 +99,10 @@ impl TestHarness {
             command_bus:     app.command_bus,
             stream_registry: app.stream_registry,
             counter:         app.counter,
+            repository:      app.repository,
+            config,
+            scylla:          app.scylla,
+            redis:           app.redis,
         }
     }
 

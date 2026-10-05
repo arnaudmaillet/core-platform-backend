@@ -361,6 +361,32 @@ mod tests {
         })))
     }
 
+    fn aged(age: Option<&str>) -> EdgePrincipal {
+        let mut raw: OidcClaims =
+            serde_json::from_value(json!({ "sub": "acct-1", "exp": 4_102_444_800_i64 })).unwrap();
+        if let Some(age) = age {
+            raw.extra.insert("age".into(), json!(age));
+        }
+        EdgePrincipal::new(Arc::new(CurrentPrincipal {
+            user_id: PrincipalId::new("acct-1"),
+            tenant_id: None,
+            permissions: vec![],
+            raw_claims: raw,
+        }))
+    }
+
+    #[test]
+    fn only_an_explicit_18_plus_is_adult_and_13_to_17_is_minor() {
+        let (teen, older_teen, adult, unknown, odd) =
+            (aged(Some("13-15")), aged(Some("16-17")), aged(Some("18+")), aged(None), aged(Some("21")));
+        assert!(teen.is_minor() && !teen.is_adult());
+        assert!(older_teen.is_minor() && !older_teen.is_adult());
+        assert!(adult.is_adult() && !adult.is_minor());
+        // No date of birth on file: neither — a protection is not lifted on a guess.
+        assert!(!unknown.is_adult() && !unknown.is_minor());
+        assert!(!odd.is_adult() && !odd.is_minor(), "an unknown bracket is not adult");
+    }
+
     #[test]
     fn step_up_needs_a_recent_credential_proof_on_the_edge_only() {
         let now = std::time::SystemTime::now()

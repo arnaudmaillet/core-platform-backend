@@ -7,6 +7,8 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+pub mod peers;
+
 use async_trait::async_trait;
 use uuid::Uuid;
 
@@ -181,6 +183,22 @@ impl TestHarness {
     /// Boots/reuses the shared ScyllaDB container, applies migrations, and
     /// assembles the service graph with a no-op publisher.
     pub async fn start() -> Self {
+        let gate = Arc::new(ScriptedGate::default());
+        Self::start_with(Arc::clone(&gate) as _, gate).await
+    }
+
+    /// The service wired to the real gRPC read gate against in-process `post`
+    /// and `social-graph` peers.
+    pub async fn start_over_grpc() -> (Self, peers::Peers) {
+        let peers = peers::Peers::start().await;
+        let gate = comment::infrastructure::client::GrpcReadGate::new(
+            peers.post_channel.clone(),
+            peers.graph_channel.clone(),
+        );
+        (Self::start_with(Arc::new(gate), Arc::new(ScriptedGate::default())).await, peers)
+    }
+
+    async fn start_with(read_gate: Arc<dyn ReadGate>, gate: Arc<ScriptedGate>) -> Self {
         let scylla_cp = test_support::containers::scylla_ready(KEYSPACE, MIGRATIONS_DIR).await;
 
         let backends = Backends {
@@ -191,10 +209,9 @@ impl TestHarness {
             },
         };
 
-        let gate = Arc::new(ScriptedGate::default());
         let offensive = Arc::new(TermList::new([OFFENSIVE_TERM.to_owned()]));
         let published = Arc::new(RecordingPublisher::default());
-        let app = App::build(backends, Arc::clone(&published), Arc::clone(&gate) as _, offensive)
+        let app = App::build(backends, Arc::clone(&published), read_gate, offensive)
             .await
             .expect("integration: build comment app");
 
@@ -295,6 +312,24 @@ impl TestHarness {
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
                 ListTopLevelQuery { post_id: post_id.to_owned(), limit: 100, page_token: None, viewer, mature: true },
+            ))
+            .await?;
+        Ok(summaries)
+    }
+
+    /// Lists top-level comments of a post as `viewer`, cleared for mature
+    /// content or not.
+    pub async fn try_list_top_level_rated(
+        &self,
+        post_id: &str,
+        viewer: Viewer,
+        mature: bool,
+    ) -> Result<Vec<CommentSummary>, CqrsError> {
+        let (summaries, _next): (Vec<CommentSummary>, Option<String>) = self
+            .query_bus
+            .dispatch(Envelope::new(
+                Uuid::now_v7(),
+                ListTopLevelQuery { post_id: post_id.to_owned(), limit: 100, page_token: None, viewer, mature },
             ))
             .await?;
         Ok(summaries)

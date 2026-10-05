@@ -87,3 +87,21 @@ async fn increment_once_is_idempotent_under_concurrent_claims() {
     assert!(incremented, "a new dedupe key must increment");
     assert_eq!(h.counter.get(&target).await.expect("get"), 2);
 }
+
+/// A badge Redis does not hold is read from the Scylla `counter` column (and
+/// re-cached): 0 for a profile never notified, the durable count otherwise.
+/// (It used to fail: the column was decoded as a bare i64.)
+#[tokio::test]
+async fn a_badge_missing_from_redis_is_read_from_scylla() {
+    let h = TestHarness::start().await;
+
+    let never = harness::random_profile();
+    assert_eq!(h.counter.get(&never).await.expect("read a never-notified badge"), 0);
+
+    let durable = harness::random_profile();
+    h.repository.increment_counter(&durable).await.unwrap();
+    h.repository.increment_counter(&durable).await.unwrap();
+    assert_eq!(h.counter.get(&durable).await.expect("read through to scylla"), 2);
+    assert_eq!(h.counter.get(&durable).await.unwrap(), 2, "re-cached");
+}
+
