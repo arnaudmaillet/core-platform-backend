@@ -381,6 +381,9 @@ where
         request: Request<proto::SetDiscoverySettingsRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
         edge::require_profile(&request, &request.get_ref().profile_id)?;
+        // Unless the token says 18+ (an unknown age fails closed); the mesh
+        // carries no principal.
+        let minor = edge::principal(&request).is_some_and(|p| !p.is_adult());
         let req = request.into_inner();
         let cmd = SetDiscoverySettingsCommand {
             profile_id:       req.profile_id.clone(),
@@ -391,6 +394,7 @@ where
             by_handle_search: req.by_handle_search,
             by_qr:            req.by_qr,
             in_suggestions:   req.in_suggestions,
+            minor,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))

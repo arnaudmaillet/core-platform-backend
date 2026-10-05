@@ -743,10 +743,10 @@ impl SocialGraphRepository for ScyllaSocialGraphRepository {
         #[derive(DeserializeRow)]
         struct Pair { a: Uuid, b: Uuid }
         #[derive(DeserializeRow)]
-        struct Audience { profile_id: Uuid, private: Option<bool>, hidden: Option<bool> }
+        struct Audience { profile_id: Uuid, private: Option<bool>, hidden: Option<bool>, suggestible: Option<bool> }
 
         let audience = self.fast_stmt(
-            "SELECT profile_id, private, hidden FROM social_graph.profile_audience \
+            "SELECT profile_id, private, hidden, suggestible FROM social_graph.profile_audience \
              WHERE profile_id IN ?",
         );
         let rows = self
@@ -765,6 +765,9 @@ impl SocialGraphRepository for ScyllaSocialGraphRepository {
             }
             if row.hidden == Some(true) {
                 facts.hidden.insert(id);
+            }
+            if row.suggestible == Some(false) {
+                facts.unsuggestible.insert(id);
             }
         }
 
@@ -834,6 +837,18 @@ impl SocialGraphRepository for ScyllaSocialGraphRepository {
         self.client
             .session
             .execute_unpaged(stmt, (private, profile_id.as_uuid()))
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn set_profile_suggestible(&self, profile_id: &ProfileId, suggestible: bool) -> Result<(), SocialGraphError> {
+        let stmt = self.strict_stmt(
+            "UPDATE social_graph.profile_audience SET suggestible = ? WHERE profile_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt, (suggestible, profile_id.as_uuid()))
             .await
             .map_err(scylla_err)?;
         Ok(())

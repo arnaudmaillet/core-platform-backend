@@ -153,6 +153,9 @@ pub trait SocialGraphRepository: Send + Sync + 'static {
     /// Records whether `profile_id` is hidden (audience projection).
     async fn set_profile_hidden(&self, profile_id: &ProfileId, hidden: bool) -> Result<(), SocialGraphError>;
 
+    /// Records whether `profile_id` may appear in others' suggestions (#661).
+    async fn set_profile_suggestible(&self, profile_id: &ProfileId, suggestible: bool) -> Result<(), SocialGraphError>;
+
     /// Records who may comment / mention / message `profile_id`.
     async fn set_interaction_policy(
         &self,

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: e6f5c5703bd622250180826c8f1b9296ad5fc80f2c8aa2f61357a95528ffb44c
+  source_sha256: 8cf532f49faf65609d5c855685dabe15819406f05caf993681dff10dd7880104
   translated_at: 2026-10-06
   status: complete
 ---
@@ -147,7 +147,7 @@ service ProfileService {
   rpc SetFeedSettings(SetFeedSettingsRequest) returns (CommandResponse); // #662 contenu sensible moins (par défaut) / standard, synchronisé entre appareils ; le client l'envoie comme content_level de timeline ; réservé au propriétaire sur la vue
   rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse); // #664 fenêtre de posts (tout / 6 mois / 1 mois / 3 jours ; post masque les posts plus anciens aux visiteurs) + visibilité des onglets j'aime / enregistrés / republications / lieux (stockée ; aucun onglet servi pour l'instant) ; partiel ; réservé au propriétaire sur la vue
   rpc SetCommentFilters(SetCommentFiltersRequest) returns (CommandResponse); // #660 mots masqués (≤ 200, normalisés) + filtre offensant (activé par défaut) ; réservé au propriétaire sur la vue ; comment les applique
-  rpc SetDiscoverySettings(SetDiscoverySettingsRequest) returns (CommandResponse); // #661 statut d'activité, accusés de lecture, trouvable par téléphone / e-mail / recherche de handle / QR / suggestions (partiel ; réservé au propriétaire sur la vue) ; les ados démarrent introuvables par téléphone, e-mail, suggestions ; search applique by_handle_search
+  rpc SetDiscoverySettings(SetDiscoverySettingsRequest) returns (CommandResponse); // #661 statut d'activité, accusés de lecture, trouvable par téléphone / e-mail / recherche de handle / QR / suggestions (partiel ; réservé au propriétaire sur la vue) ; les ados démarrent introuvables par téléphone, e-mail, suggestions ; search applique by_handle_search ; `in_suggestions` ne peut être activé que si le jeton dit 18+ (PRF-9001 : un ado n'est jamais suggéré) ; social-graph le projette pour SuggestProfiles, account lit by_phone / by_email pour FindProfilesByContacts
   rpc SetAccountType(SetAccountTypeRequest) returns (CommandResponse); // #668 personnel / professionnel (créateur) / marque (entreprise) + la fiche de contact publique d'une marque ; un bot reste un bot ; créateur et entreprise réservés aux 18 ans et plus (un jeton 13–17 reçoit FAILED_PRECONDITION)
   rpc RequestVerification(RequestVerificationRequest) returns (CommandResponse); // #668 propriétaire : catégorie + 1 à 5 documents → file du personnel
   rpc GetVerificationRequest(GetVerificationRequestRequest) returns (GetVerificationRequestResponse); // #668 propriétaire : en attente / approuvée / refusée (+ motif)

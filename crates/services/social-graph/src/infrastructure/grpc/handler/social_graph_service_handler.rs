@@ -507,6 +507,30 @@ where
         Ok(Response::new(relation_status_view_to_proto(view)))
     }
 
+    /// People the caller may know (#661). Edge: one of the caller's profiles.
+    pub async fn suggest_profiles(
+        &self,
+        request: Request<proto::SuggestProfilesRequest>,
+    ) -> Result<Response<proto::SuggestProfilesResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let query = crate::application::query::SuggestProfilesQuery {
+            profile_id: req.profile_id,
+            limit:      if req.limit > 0 { req.limit } else { 20 },
+        };
+        let suggestions: Vec<crate::application::query::Suggestion> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::SuggestProfilesResponse {
+            profiles: suggestions
+                .into_iter()
+                .map(|s| proto::SuggestedProfile { profile_id: s.profile_id.as_str(), mutual_count: s.mutual_count })
+                .collect(),
+        }))
+    }
+
     pub async fn list_followers(
         &self,
         request: Request<proto::ListFollowersRequest>,

@@ -19,6 +19,9 @@ pub struct SetDiscoverySettingsCommand {
     pub by_handle_search: Option<bool>,
     pub by_qr:            Option<bool>,
     pub in_suggestions:   Option<bool>,
+    /// The holder is not known to be 18+ (the edge token's age): they never
+    /// appear in suggestions (#661).
+    pub minor:            bool,
 }
 
 impl SetDiscoverySettingsCommand {
@@ -75,6 +78,15 @@ impl CommandHandler<SetDiscoverySettingsCommand> for SetDiscoverySettingsHandler
             .ok_or_else(|| ProfileError::ProfileNotFound { id: cmd.profile_id.clone() })?;
 
         let settings = cmd.apply(profile.discovery());
+        // A holder not known to be 18+ never turns on appearing in others'
+        // suggestions (#661): asking is refused, never silently ignored. (A
+        // teen's profile is born with it off.)
+        if cmd.minor && cmd.in_suggestions == Some(true) {
+            return Err(ProfileError::DomainViolation {
+                field:   "in_suggestions".to_owned(),
+                message: "a holder under 18 does not appear in suggestions".to_owned(),
+            });
+        }
         if !profile.set_discovery_settings(settings, envelope.correlation_id)? {
             return Ok(());
         }

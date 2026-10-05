@@ -31,7 +31,7 @@ use crate::application::port::{
     EventPublisher, MuteRepository, RestrictionRepository, SocialGraphCache, SocialGraphRepository,
 };
 use crate::application::query::{
-    CheckAccessHandler, CheckAccessQuery, CheckInteractionHandler, CheckInteractionQuery, GetListPrivacyHandler,
+    CheckAccessHandler, CheckAccessQuery, SuggestProfilesHandler, SuggestProfilesQuery, CheckInteractionHandler, CheckInteractionQuery, GetListPrivacyHandler,
     GetListPrivacyQuery, GetRelationStatusHandler, GetRelationStatusQuery,
     ListBlocksHandler, ListBlocksQuery, ListFollowRequestsHandler, ListFollowRequestsQuery,
     ListFollowersHandler, ListFollowersQuery, ListFollowingHandler, ListFollowingQuery,
@@ -149,6 +149,7 @@ impl App {
                 .register::<GetListPrivacyQuery, _>(GetListPrivacyHandler::new(Arc::clone(&repo)))?
                 .register::<ListFollowRequestsQuery, _>(ListFollowRequestsHandler::new(Arc::clone(&repo)))?
                 .register::<CheckAccessQuery, _>(CheckAccessHandler::new(Arc::clone(&repo)))?
+                .register::<SuggestProfilesQuery, _>(SuggestProfilesHandler::new(Arc::clone(&repo)))?
                 .register::<CheckInteractionQuery, _>(CheckInteractionHandler::new(Arc::clone(&repo)))?
                 .build(),
         );

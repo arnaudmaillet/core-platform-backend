@@ -54,6 +54,8 @@ pub struct AccessFacts {
     pub private: HashSet<ProfileId>,
     /// Targets hidden (moderation, account suspension or deletion).
     pub hidden:  HashSet<ProfileId>,
+    /// Targets that turned "appear in suggestions" off (#661).
+    pub unsuggestible: HashSet<ProfileId>,
 }
 
 impl AccessFacts {
