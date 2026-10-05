@@ -22,8 +22,8 @@ pub struct DeleteOutcome {
 
 /// Deletes an asset: the domain `delete` is attempted **first** so a legal hold
 /// (`LegalHoldActive`, MED-7003) blocks erasure before any byte is touched. On a
-/// real delete it purges every object (master + renditions + staging), invalidates
-/// the CDN, drops the cache, tombstones the row, and emits `AssetDeleted`.
+/// real delete it purges every object (master + renditions + staging), tombstones
+/// the row, emits `AssetDeleted`, drops the cache, then purges the CDN.
 pub struct DeleteAssetHandler {
     assets: Arc<dyn AssetRepository>,
     store: Arc<dyn ObjectStore>,
@@ -70,13 +70,15 @@ impl DeleteAssetHandler {
         for key in &keys {
             self.store.delete(key).await?;
         }
-        self.cdn.invalidate(&keys).await?;
-        self.cache.invalidate(&asset.id()).await?;
-
+        // Persist the tombstone before the edge purge: a CDN outage must not
+        // leave the asset deliverable. Retrying the delete (already deleted: a
+        // no-op transition, idempotent object deletes) only purges again.
         self.assets.save(&asset).await?;
         for event in asset.drain_events() {
             self.publisher.publish(&event).await?;
         }
+        self.cache.invalidate(&asset.id()).await?;
+        self.cdn.invalidate(&keys).await?;
         Ok(DeleteOutcome { deleted: true })
     }
 }

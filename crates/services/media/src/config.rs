@@ -16,6 +16,10 @@ pub struct MediaConfig {
     pub s3: S3Config,
     /// CDN base URL for public, content-addressed delivery.
     pub cdn_base_url: String,
+    /// `MEDIA_CLOUDFRONT_DISTRIBUTION_ID`: takedowns purge this distribution
+    /// (signed with the S3 keys, whose IAM user needs
+    /// `cloudfront:CreateInvalidation`). Unset: takedowns only log.
+    pub cloudfront_distribution_id: Option<String>,
     /// gRPC endpoint of `moderation` (the pre-publish Screen gate).
     pub screen_endpoint: String,
     pub policy: MediaPolicy,
@@ -46,6 +50,10 @@ impl MediaConfig {
         Self {
             s3,
             cdn_base_url: env_or("MEDIA_CDN_BASE_URL", "http://localhost:9000/media"),
+            cloudfront_distribution_id: std::env::var("MEDIA_CLOUDFRONT_DISTRIBUTION_ID")
+                .ok()
+                .map(|id| id.trim().to_owned())
+                .filter(|id| !id.is_empty()),
             screen_endpoint: env_or("MEDIA_SCREEN_GRPC_ENDPOINT", "http://localhost:50061"),
             policy,
         }

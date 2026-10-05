@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: bbd88f1e864cedc2e1d7406e05379d9f760ae7a420c6effc6365505a00bc8200
-  translated_at: 2026-06-26
+  source_sha256: e37457d8563ab54999c4723ed98ce54a46975a5843ede3ea34a97d5203d539e8
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -296,6 +296,7 @@ async fn main() -> anyhow::Result<()> {
 | `MEDIA_PRESIGN_TTL_SECS` | Non | `900` | validité des URLs signées côté serveur |
 | `MEDIA_OBJECT_STORE_TIMEOUT_MS` | Non | `10000` | hard timeout sur chaque appel HTTP au stockage objet |
 | `MEDIA_CDN_BASE_URL` | Non | `…:9000/media` | origine de diffusion publique adressée par contenu |
+| `MEDIA_CLOUDFRONT_DISTRIBUTION_ID` | Non | — | les retraits (quarantaine / suppression) purgent les rendus de l'asset de cette distribution CloudFront (`CreateInvalidation`, SigV4 avec les clés `MEDIA_S3_*`, dont l'utilisateur IAM doit avoir `cloudfront:CreateInvalidation`) ; une purge en échec fait échouer le retrait, qui est rejoué. Non défini : les retraits sont seulement journalisés (exécutions locales) |
 | `MEDIA_UPLOAD_TICKET_TTL_SECS` | Non | `900` | fenêtre de validité de l'upload pré-signé |
 | `MEDIA_SIGNED_URL_TTL_SECS` | Non | `300` | validité de l'URL de diffusion privée (signée) |
 | `MEDIA_DEDUP_ENABLED` | Non | `false` | dédup par hash de contenu (off tant que le purge-refcount n'est pas durci) |
@@ -349,9 +350,7 @@ bloquée ne peuvent coincer un worker.
 port `Transcoder` frère + échelle ABR en fast-follow) ; un vrai sidecar de scan
 anti-malware (le port `MalwareScanner` livre un stub passe-tout) ; le consommateur
 de GC des orphelins (réclamation des uploads abandonnés non liés après TTL) ;
-l'encodage WebP/AVIF (v1 émet du JPEG) ; un vrai CloudFront `CreateInvalidation`
-(le gateway journalise ; l'immutabilité adressée par contenu fait que
-l'invalidation ne compte qu'au retrait) ; et le purge RGPD conscient du refcount de
+l'encodage WebP/AVIF (v1 émet du JPEG) ; et le purge RGPD conscient du refcount de
 dédup (la dédup est livrée derrière un flag off-par-défaut tant que ce chemin n'a
 pas de couverture live).
 
