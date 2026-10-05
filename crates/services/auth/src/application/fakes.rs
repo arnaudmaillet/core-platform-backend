@@ -92,6 +92,8 @@ pub struct StubAccountDirectory {
     provisioned: Mutex<Vec<super::port::NewAccount>>,
     /// account → its email / phone (#651).
     contacts: Mutex<HashMap<AccountId, super::port::ContactDetails>>,
+    /// When set, `change_contact` fails as if another account won a race.
+    refuse_contact_changes: std::sync::atomic::AtomicBool,
 }
 
 impl Default for StubAccountDirectory {
@@ -111,7 +113,13 @@ impl StubAccountDirectory {
             emails: Mutex::new(HashMap::new()),
             provisioned: Mutex::new(Vec::new()),
             contacts: Mutex::new(HashMap::new()),
+            refuse_contact_changes: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Every later `change_contact` fails (`EmailAlreadyRegistered`).
+    pub fn refuse_contact_changes(&self) {
+        self.refuse_contact_changes.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Sets an account's email / phone as `account` holds them.
@@ -274,6 +282,9 @@ impl AccountDirectory for StubAccountDirectory {
         channel: super::port::VerificationChannel,
         destination: &str,
     ) -> Result<(), AuthError> {
+        if self.refuse_contact_changes.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AuthError::EmailAlreadyRegistered);
+        }
         let key = destination.to_lowercase();
         if let Some(holder) = self.emails.lock().unwrap().get(&key)
             && holder.account_id != *account_id

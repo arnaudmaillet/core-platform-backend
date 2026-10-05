@@ -134,12 +134,26 @@ impl ChangeContactHandler {
         let links = self.links.find_by_account(&account_id).await?;
         // The IdP first: if it refuses (the address is another IdP user's),
         // nothing has moved.
+        let mut idp_moved: Vec<&IdpSubject> = Vec::new();
         if channel == VerificationChannel::Email {
             for link in links.iter().filter(|l| idp_managed(l.subject())) {
                 self.admin.set_email(link.subject(), &destination).await?;
+                idp_moved.push(link.subject());
             }
         }
-        self.accounts.change_contact(&account_id, channel, &destination).await?;
+        if let Err(error) = self.accounts.change_contact(&account_id, channel, &destination).await {
+            // The account refused (a race on the address since the check): put
+            // the IdP back, so the two never disagree (best effort; a retry
+            // with a fresh code heals the rest).
+            if let Some(old) = before.email.as_deref() {
+                for subject in idp_moved {
+                    if let Err(restore) = self.admin.set_email(subject, old).await {
+                        tracing::error!(%restore, "IdP email not restored after a refused account change");
+                    }
+                }
+            }
+            return Err(error);
+        }
 
         // A passwordless account signs in by the new address, not the old one:
         // the new link first, so a failure leaves the old one working.
@@ -295,6 +309,23 @@ mod tests {
         assert_eq!(w.fx.directory.contact_of(&me.0).email.as_deref(), Some("old@example.com"));
         assert!(w.fx.credentials.emails_set().is_empty());
         assert!(w.sender.contact_notices().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_refused_account_change_puts_the_idp_email_back() {
+        let w = world();
+        let me = member(&w).await;
+        let proof = code_to(&w, VerificationChannel::Email, "new@example.com").await;
+        w.fx.directory.refuse_contact_changes();
+
+        assert!(w.handler.handle(change(&me, proof), t0()).await.is_err());
+        let idp = IdpSubject::new("https://idp.test", "sub-123").unwrap();
+        assert_eq!(
+            w.fx.credentials.emails_set(),
+            vec![(idp.clone(), "new@example.com".to_owned()), (idp, "old@example.com".to_owned())],
+            "moved, then put back"
+        );
+        assert!(w.sender.contact_notices().is_empty(), "nothing changed: nobody is told");
     }
 
     #[tokio::test]
