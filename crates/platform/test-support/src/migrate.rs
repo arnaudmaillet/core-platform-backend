@@ -108,13 +108,52 @@ fn load_cql_statements(migrations_dir: &str, keyspace: &str) -> Vec<String> {
             .collect::<Vec<_>>()
             .join("\n");
 
-        for piece in code.split(';') {
-            let trimmed = piece.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            statements.push(adapt_keyspace(trimmed, keyspace));
+        for piece in split_statements(&code) {
+            statements.push(adapt_keyspace(&piece, keyspace));
         }
+    }
+    statements
+}
+
+/// Splits CQL on the `;` that end statements — never one inside a
+/// single-quoted literal (`''` is an escaped quote), like the production
+/// migrator (`crates/apps/migrator`): a `;` in a table's `comment = '…'`
+/// split it here only, and failed a suite that prod would have applied.
+fn split_statements(code: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut in_string = false;
+    let mut chars = code.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_string {
+            current.push(c);
+            if c == '\'' {
+                if chars.peek() == Some(&'\'') {
+                    current.push(chars.next().expect("peeked"));
+                } else {
+                    in_string = false;
+                }
+            }
+            continue;
+        }
+        match c {
+            '\'' => {
+                in_string = true;
+                current.push(c);
+            }
+            ';' => {
+                let statement = current.trim();
+                if !statement.is_empty() {
+                    statements.push(statement.to_owned());
+                }
+                current.clear();
+            }
+            _ => current.push(c),
+        }
+    }
+    let tail = current.trim();
+    if !tail.is_empty() {
+        statements.push(tail.to_owned());
     }
     statements
 }
@@ -180,5 +219,19 @@ pub async fn postgres_apply(url: &str, migrations_dir: &str) {
             .unwrap_or_else(|e| {
                 panic!("migration '{}' failed: {e}", path.display())
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_semicolon_inside_a_literal_does_not_split_a_statement() {
+        let code = "CREATE TABLE t (a int PRIMARY KEY) WITH comment = 'one; two, it''s fine';\nCREATE TABLE u (b int PRIMARY KEY);";
+        let statements = split_statements(code);
+        assert_eq!(statements.len(), 2, "{statements:?}");
+        assert!(statements[0].ends_with("'one; two, it''s fine'"));
+        assert_eq!(statements[1], "CREATE TABLE u (b int PRIMARY KEY)");
     }
 }
