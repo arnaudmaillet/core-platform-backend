@@ -148,6 +148,9 @@ service ProfileService {
   rpc GetProfileByHandle(GetProfileByHandleRequest) returns (ProfileView);
   rpc CheckHandleAvailability(CheckHandleAvailabilityRequest) returns (CheckHandleAvailabilityResponse);
   rpc ListProfilesByAccount(ListProfilesByAccountRequest) returns (ListProfilesByAccountResponse);
+  rpc GetShareToken(GetShareTokenRequest) returns (ShareTokenResponse);        // #661 the owner's QR / share-link token (22 URL-safe chars), issued on first ask
+  rpc RotateShareToken(RotateShareTokenRequest) returns (ShareTokenResponse);  // #661 revoke for a new one: the old one stops resolving at once
+  rpc ResolveShareToken(ResolveShareTokenRequest) returns (ProfileView);       // #661 public_read: the profile as the reader may see it; NOT_FOUND if revoked, not active, or `by_qr` off (the owner still resolves)
 }
 ```
 

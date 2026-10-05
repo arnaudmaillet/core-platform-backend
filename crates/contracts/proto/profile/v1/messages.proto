@@ -371,3 +371,22 @@ message DecideVerificationRequestRequest {
     bool   approve    = 2;
     string reason     = 3;
 }
+
+// ── Share tokens (#661) ───────────────────────────────────────────────────────
+
+message GetShareTokenRequest {
+    string profile_id = 1;
+}
+
+message RotateShareTokenRequest {
+    string profile_id = 1;
+}
+
+message ShareTokenResponse {
+    // 22 URL-safe characters; the app builds the QR code / link around it.
+    string token = 1;
+}
+
+message ResolveShareTokenRequest {
+    string token = 1;
+}

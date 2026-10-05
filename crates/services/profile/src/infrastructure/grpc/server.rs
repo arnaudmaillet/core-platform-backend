@@ -207,4 +207,25 @@ where
     ) -> Result<Response<proto::ListProfilesByAccountResponse>, Status> {
         self.list_profiles_by_account(request).await
     }
+
+    async fn get_share_token(
+        &self,
+        request: Request<proto::GetShareTokenRequest>,
+    ) -> Result<Response<proto::ShareTokenResponse>, Status> {
+        self.get_share_token(request).await
+    }
+
+    async fn rotate_share_token(
+        &self,
+        request: Request<proto::RotateShareTokenRequest>,
+    ) -> Result<Response<proto::ShareTokenResponse>, Status> {
+        self.rotate_share_token(request).await
+    }
+
+    async fn resolve_share_token(
+        &self,
+        request: Request<proto::ResolveShareTokenRequest>,
+    ) -> Result<Response<proto::ProfileView>, Status> {
+        self.resolve_share_token(request).await
+    }
 }

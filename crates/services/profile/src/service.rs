@@ -89,6 +89,9 @@ impl Service for ProfileService {
         authenticated("/profile.v1.ProfileService/DeleteProfile"),
         public_read("/profile.v1.ProfileService/GetProfileById"),
         public_read("/profile.v1.ProfileService/GetProfileByHandle"),
+        public_read("/profile.v1.ProfileService/ResolveShareToken"),
+        authenticated("/profile.v1.ProfileService/GetShareToken"),
+        authenticated("/profile.v1.ProfileService/RotateShareToken"),
         // Sign-up's live handle check: guests (who are signing up) and members.
         public_read("/profile.v1.ProfileService/CheckHandleAvailability"),
         authenticated("/profile.v1.ProfileService/ListProfilesByAccount"),

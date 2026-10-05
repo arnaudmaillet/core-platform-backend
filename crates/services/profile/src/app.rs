@@ -99,6 +99,16 @@ impl App {
         let verifications: Arc<dyn VerificationStore> = Arc::new(
             crate::infrastructure::persistence::ScyllaVerificationStore::new(Arc::clone(&scylla_client)),
         );
+        let share_tokens: Arc<dyn crate::application::port::ShareTokenStore> = Arc::new(
+            crate::infrastructure::persistence::ScyllaShareTokenStore::new(Arc::clone(&scylla_client)),
+        );
+        let share_token_handler = || {
+            crate::application::query::ShareTokenHandler::new(
+                Arc::clone(&repository),
+                Arc::clone(&cache),
+                Arc::clone(&share_tokens),
+            )
+        };
 
         // ── Command bus ──────────────────────────────────────────────────────
         let command_bus = Arc::new(
@@ -177,6 +187,7 @@ impl App {
                     Arc::clone(&cache),
                     Arc::clone(&publisher),
                 ))?
+                .register::<crate::application::query::RotateShareTokenCommand, _>(share_token_handler())?
                 .register::<SetDiscoverySettingsCommand, _>(SetDiscoverySettingsHandler::new(
                     Arc::clone(&repository),
                     Arc::clone(&cache),
@@ -223,6 +234,8 @@ impl App {
         // ── Query bus ────────────────────────────────────────────────────────
         let query_bus = Arc::new(
             QueryBusBuilder::new()
+                .register::<crate::application::query::GetShareTokenQuery, _>(share_token_handler())?
+                .register::<crate::application::query::ResolveShareTokenQuery, _>(share_token_handler())?
                 .register::<GetProfileByIdQuery, _>(GetProfileByIdHandler::new(
                     Arc::clone(&repository),
                     Arc::clone(&cache),

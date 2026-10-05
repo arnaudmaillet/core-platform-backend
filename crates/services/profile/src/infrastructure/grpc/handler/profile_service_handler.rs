@@ -607,6 +607,53 @@ where
             .ok_or_else(|| Status::not_found("profile not found"))
     }
 
+    /// The owner's QR / share-link token (#661), issued on first ask.
+    pub async fn get_share_token(
+        &self,
+        request: Request<proto::GetShareTokenRequest>,
+    ) -> Result<Response<proto::ShareTokenResponse>, Status> {
+        use crate::application::query::GetShareTokenQuery;
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let query = GetShareTokenQuery { profile_id: request.into_inner().profile_id };
+        let token: String =
+            self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.map_err(cqrs_error_to_status)?;
+        Ok(Response::new(proto::ShareTokenResponse { token }))
+    }
+
+    /// Revokes the owner's token for a new one (#661); the old one stops
+    /// resolving at once.
+    pub async fn rotate_share_token(
+        &self,
+        request: Request<proto::RotateShareTokenRequest>,
+    ) -> Result<Response<proto::ShareTokenResponse>, Status> {
+        use crate::application::query::{GetShareTokenQuery, RotateShareTokenCommand};
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let profile_id = request.into_inner().profile_id;
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), RotateShareTokenCommand { profile_id: profile_id.clone() }))
+            .await
+            .map_err(cqrs_error_to_status)?;
+        let token: String = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), GetShareTokenQuery { profile_id }))
+            .await
+            .map_err(cqrs_error_to_status)?;
+        Ok(Response::new(proto::ShareTokenResponse { token }))
+    }
+
+    /// A scanned token, resolved as the caller may see the profile (#661).
+    pub async fn resolve_share_token(
+        &self,
+        request: Request<proto::ResolveShareTokenRequest>,
+    ) -> Result<Response<proto::ProfileView>, Status> {
+        use crate::application::query::ResolveShareTokenQuery;
+        let viewer = viewer_of(&request);
+        let query = ResolveShareTokenQuery { token: request.into_inner().token, viewer };
+        let view: Option<ProfileView> =
+            self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.map_err(cqrs_error_to_status)?;
+        view.map(profile_view_to_proto).map(Response::new).ok_or_else(|| Status::not_found("profile not found"))
+    }
+
     pub async fn get_profile_by_handle(
         &self,
         request: Request<proto::GetProfileByHandleRequest>,
