@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 32a3f7796bb1c94dca6ee51e31e6ec38e88aac4bc90a67d78605cfd4e1e41989
+  source_sha256: 5755e6cf29eac546c34a4fc558a1185ee90c60b1cfcb01545dcffc3f53fc28f6
   translated_at: 2026-10-05
   status: complete
 ---
@@ -20,7 +20,7 @@ i18n:
 > | **Palier (Tier)** | **TIER-2** — dérivé/best-effort ; le fil est durable, les pushs sont best-effort |
 > | **Binaire déployable** | `crates/apps/notification-server` (crate bibliothèque : `crates/services/notification`) |
 > | **Bases de données** | ScyllaDB keyspace `notification` (fil TWCS + compteurs) · Redis (collapse + non-lus) |
-> | **Asynchrone** | ne publie rien · consomme `engagement.reactions` / `comment.created` / `post.published` |
+> | **Asynchrone** | ne publie rien · consomme `engagement.reactions` / `comment.created` / `post.published` / `social-graph.followed` / `social-graph.follow_requested` |
 > | **Appelants amont** | `<TODO: mobile / BFF (stream + lectures de fil)>` |
 > | **Dépendances aval** | ScyllaDB, Redis, Kafka |
 > | **SLO** | lecture du compte de non-lus sub-ms (Redis) · lecture de fil paginée O(1) · push best-effort |
@@ -183,6 +183,7 @@ identifiers — via le crate partagé `error`.
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `engagement.reactions` | `notification-reaction-consumer` | reaction notifications (collapsed) | DLQ `{topic}.dlq` |
+| `social-graph.followed` + `social-graph.follow_requested` | `notification-follow-consumer` | follows → `FOLLOW` to the followee; a request to a private profile → `FOLLOW_REQUEST` to its owner (the app opens the requests inbox); an approved request (`via_request`) → `FOLLOW_ACCEPTED` to the requester, not the owner again (#755). Subject: the other profile (`SUBJECT_KIND_PROFILE`). Block-gated, self-guarded, one notification per event (deterministic id) | DLQ `{topic}.dlq` |
 | `comment.created` | `notification-comment-consumer` | comment notifications (block-gated, self-guarded; none for a `quiet` event: a restricted author, #659) | DLQ `{topic}.dlq` |
 | `post.published` | `notification-mention-consumer` | parse `@mentions`, cache post author | DLQ `{topic}.dlq` |
 

@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::event::{
-    DomainEvent, ProfileBlocked, ProfileFollowed, ProfileUnblocked, ProfileUnfollowed,
+    DomainEvent, FollowRequested, ProfileBlocked, ProfileFollowed, ProfileUnblocked, ProfileUnfollowed,
 };
 use crate::domain::value_object::{ProfileId, RelationStatus};
 use crate::error::SocialGraphError;
@@ -131,10 +131,15 @@ impl Relation {
                 });
             }
             self.actor_requested_target_at = Some(now);
+            self.pending_events.push(DomainEvent::FollowRequested(FollowRequested {
+                actor_id:     self.actor_id,
+                target_id:    self.target_id,
+                requested_at: now,
+            }));
             return Ok(FollowOutcome::Requested { requested_at: now });
         }
         let cleared_request = self.actor_requested_target_at.take();
-        self.start_following(now);
+        self.start_following(now, false);
         Ok(FollowOutcome::Followed { followed_at: now, cleared_request })
     }
 
@@ -149,7 +154,7 @@ impl Relation {
         self.block_gate()?;
         let requested_at = self.take_request()?;
         let now = Utc::now();
-        self.start_following(now);
+        self.start_following(now, true);
         Ok((requested_at, now))
     }
 
@@ -180,12 +185,13 @@ impl Relation {
         Ok(())
     }
 
-    fn start_following(&mut self, now: DateTime<Utc>) {
+    fn start_following(&mut self, now: DateTime<Utc>, via_request: bool) {
         self.actor_follows_target_since = Some(now);
         self.pending_events.push(DomainEvent::ProfileFollowed(ProfileFollowed {
             actor_id:    self.actor_id,
             target_id:   self.target_id,
             followed_at: now,
+            via_request,
         }));
     }
 
@@ -333,7 +339,10 @@ mod tests {
         assert!(matches!(outcome, FollowOutcome::Requested { .. }));
         assert_eq!(r.status(), RelationStatus::Requested);
         assert_eq!(r.actor_follows_target_since(), None);
-        assert!(r.take_events().is_empty(), "no ProfileFollowed for a request");
+        assert!(
+            matches!(r.take_events().as_slice(), [DomainEvent::FollowRequested(e)] if e.actor_id == r.actor_id),
+            "a request announces itself (its owner is told), not a follow"
+        );
         assert!(matches!(r.follow(true).unwrap_err(), SocialGraphError::AlreadyRequested { .. }));
     }
 
@@ -345,7 +354,7 @@ mod tests {
         assert_eq!(was, requested_at);
         assert_eq!(r.actor_follows_target_since(), Some(followed_at));
         assert_eq!(r.status(), RelationStatus::Following);
-        assert!(matches!(r.take_events().as_slice(), [DomainEvent::ProfileFollowed(_)]));
+        assert!(matches!(r.take_events().as_slice(), [DomainEvent::ProfileFollowed(e)] if e.via_request));
         assert!(matches!(r.approve_request().unwrap_err(), SocialGraphError::NoFollowRequest { .. }));
     }
 

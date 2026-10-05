@@ -80,6 +80,10 @@ impl CommandHandler<FollowProfileCommand> for FollowProfileHandler {
         match relation.follow(target_is_private)? {
             FollowOutcome::Requested { requested_at } => {
                 self.repo.persist_follow_request(&actor_id, &target_id, requested_at).await?;
+                // The owner is told (#755); best-effort like the follow event.
+                for event in relation.take_events() {
+                    let _ = self.publisher.publish(&event).await;
+                }
             }
             FollowOutcome::Followed { followed_at, cleared_request } => {
                 // Persist the follow edge across the three adjacency tables.

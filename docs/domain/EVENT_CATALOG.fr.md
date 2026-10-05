@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: cdc6d99be7b66477d130b640ed04dc7148433daa47a5c8ceaaa17af07c55bafd
+  source_sha256: 0654cb005baa007bb80d5797f8654201aa26572758f5a884ff1e7239c988e464
   translated_at: 2026-10-05
   status: complete
 ---
@@ -50,10 +50,11 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `comment.created` | `comment` | `notification`, `engagement` |
 | `comment.deleted` | `comment` | `engagement` |
 | `engagement.reactions` | `engagement` | `counter`, `notification`, `engagement` |
-| `social-graph.followed` | `social-graph` | `timeline` |
+| `social-graph.followed` | `social-graph` | `notification`, `timeline` |
 | `social-graph.unfollowed` | `social-graph` | `timeline` |
 | `social-graph.blocked` | `social-graph` | — *(orphan — see below)* |
 | `social-graph.author_tier_changed` | `social-graph` | `profile` |
+| `social-graph.follow_requested` | `social-graph` | `notification` |
 | `chat.conversation.created` | `chat` | — *(orphan — see below)* |
 | `chat.conversation.published` | `chat` | — *(orphan — see below)* |
 | `chat.conversation.unpublished` | `chat` | `chat` |

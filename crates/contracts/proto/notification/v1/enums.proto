@@ -14,6 +14,14 @@ enum NotificationKind {
     NOTIFICATION_KIND_REPLY       = 3;
     // A profile mentioned the recipient in a post or comment caption.
     NOTIFICATION_KIND_MENTION     = 4;
+    // A profile started following the recipient (subject: that profile).
+    NOTIFICATION_KIND_FOLLOW          = 5;
+    // A profile asked to follow the recipient's private profile (subject: the
+    // requester; the app opens the follow-requests inbox).
+    NOTIFICATION_KIND_FOLLOW_REQUEST  = 6;
+    // The private profile the recipient asked to follow accepted (subject:
+    // that profile).
+    NOTIFICATION_KIND_FOLLOW_ACCEPTED = 7;
 }
 
 // Discriminates the entity that was interacted with.
@@ -24,6 +32,8 @@ enum SubjectKind {
     SUBJECT_KIND_POST        = 1;
     // The subject is a comment (comment_id stored in subject_id).
     SUBJECT_KIND_COMMENT     = 2;
+    // The subject is a profile (profile_id stored in subject_id).
+    SUBJECT_KIND_PROFILE     = 3;
 }
 
 // What a push or an email is about (notification preferences, #654).

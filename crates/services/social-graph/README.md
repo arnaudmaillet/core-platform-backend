@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-1** — feeds, notifications, and block-gating depend on it |
 > | **Deployable** | `crates/apps/social-graph-server` (library crate: `crates/services/social-graph`) |
 > | **Datastores** | ScyllaDB keyspace `social_graph` (5 tables) · Redis (sets + counters) |
-> | **Async** | publishes `social-graph.followed` / `.unfollowed` / `.blocked` / `.author_tier_changed` · consumes `profile.v1.events` (audience projection) |
+> | **Async** | publishes `social-graph.followed` / `.follow_requested` / `.unfollowed` / `.blocked` / `.author_tier_changed` · consumes `profile.v1.events` (audience projection) |
 > | **Upstream callers** | `timeline`, `notification`, `<TODO: gateway>` |
 > | **Downstream deps** | ScyllaDB, Redis, Kafka |
 > | **SLO** | `<TODO>` avail · `GetRelationStatus` p99 `<TODO>` · write p99 `<TODO>` |
@@ -193,7 +193,8 @@ commenters, ≤ 100 per call); `Unrestrict` lifts it, `ListRestricted` pages the
 
 | Topic | Trigger | Key | Consumers |
 |---|---|---|---|
-| `social-graph.followed` | `Follow` success | `{actor}:{target}` | `timeline` (fan-out), `notification` |
+| `social-graph.followed` | `Follow` success, or `ApproveFollowRequest` (`via_request: true`) | `{actor}:{target}` | `timeline` (fan-out), `notification` (new follower / request accepted) |
+| `social-graph.follow_requested` | `Follow` of a private profile: a pending request (#755) | `{actor}:{target}` | `notification` (the owner is told). `{actor_id, target_id, requested_at}` |
 | `social-graph.unfollowed` | `Unfollow` success | `{actor}:{target}` | `timeline` (pruning) |
 | `social-graph.blocked` | `Block` success | `{actor}:{target}` | content filtering, notification suppression |
 | `social-graph.author_tier_changed` | a follow/unfollow crosses a follower-count tier boundary | `{profile}` | `profile` (persists tier → re-emits on `profile.v1.events` for `post` to denormalize → `timeline`/`geo-discovery` fan-out routing). `{profile_id, new_tier, follower_count, changed_at_ms}` |
