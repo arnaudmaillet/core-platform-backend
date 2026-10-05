@@ -54,6 +54,17 @@ pub trait SearchIndex: Send + Sync + 'static {
     /// indices, with no retained tombstone. Returns the number removed.
     async fn purge_by_author(&self, author_id: &AuthorId) -> Result<u64, SearchError>;
 
+    /// Apply an author's post window (#664) to every post of theirs already
+    /// indexed: each leaves search at `created_at + window_days` (never with
+    /// `None`). Posts are kept, so widening the window brings them back. Guarded
+    /// per document by `version`. Returns the number of posts updated.
+    async fn set_post_window(
+        &self,
+        author_id: &AuthorId,
+        window_days: Option<u32>,
+        version: DocVersion,
+    ) -> Result<u64, SearchError>;
+
     /// Run a federated query. Implementations fail OPEN — on partial/unavailable
     /// shards they return what they can with `SearchResults.degraded = true` rather
     /// than erroring.

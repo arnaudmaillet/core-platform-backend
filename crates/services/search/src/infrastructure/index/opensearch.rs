@@ -47,6 +47,15 @@ if (ctx._source[params.version_field] != null && params.version <= ctx._source[p
 else { ctx._source[params.flag_field] = params.searchable; ctx._source[params.version_field] = params.version; \
 if (ctx._source.entity_type == null) { ctx._source.entity_type = params.entity_type; } }";
 
+/// Painless (update-by-query over an author's posts): apply their post window
+/// (#664) when strictly newer — the post leaves search at `created_at +
+/// window_ms`, or never (`window_ms` null).
+const WINDOW_SCRIPT: &str = "\
+if (ctx._source.window_version != null && params.version <= ctx._source.window_version) { ctx.op = 'noop'; } \
+else { ctx._source.window_version = params.version; \
+if (params.window_ms == null || ctx._source.created_at == null) { ctx._source.visible_until = null; } \
+else { ctx._source.visible_until = ZonedDateTime.parse(ctx._source.created_at).toInstant().toEpochMilli() + params.window_ms; } }";
+
 /// Boosted matchable fields for the federated multi_match (missing fields per index
 /// are simply ignored by OpenSearch).
 const MATCH_FIELDS: &[&str] = &[
@@ -288,6 +297,34 @@ impl SearchIndex for OpenSearchIndex {
         Ok(value["deleted"].as_u64().unwrap_or(0))
     }
 
+    async fn set_post_window(
+        &self,
+        author_id: &AuthorId,
+        window_days: Option<u32>,
+        version: DocVersion,
+    ) -> Result<u64, SearchError> {
+        let path = format!(
+            "{}/_update_by_query?conflicts=proceed&refresh=true",
+            self.write_alias(EntityKind::Post)
+        );
+        let body = json!({
+            "query": { "term": { "author_id": author_id.as_str() } },
+            "script": {
+                "lang": "painless",
+                "source": WINDOW_SCRIPT,
+                "params": {
+                    "version": version.value(),
+                    "window_ms": window_days.map(|d| i64::from(d) * 86_400_000),
+                }
+            }
+        });
+        let (status, value) = self.send(Method::POST, &path, Some(body)).await?;
+        if !status.is_success() {
+            return Err(write_status_error(status, &value));
+        }
+        Ok(value["updated"].as_u64().unwrap_or(0))
+    }
+
     async fn search(&self, query: &SearchQuery) -> Result<SearchResults, SearchError> {
         let path = format!(
             "{}/_search?ignore_unavailable=true&allow_no_indices=true",
@@ -458,6 +495,7 @@ fn content_source(doc: &IndexDocument) -> Value {
             "created_at": d.created_at,
             "indexed_at": d.indexed_at,
             "popularity": d.popularity.value(),
+            "visible_until": d.visible_until,
         }),
         IndexDocument::Hashtag(d) => json!({
             "entity_type": "hashtag",
@@ -498,12 +536,14 @@ fn search_body(query: &SearchQuery) -> Value {
 }
 
 /// `must_not` clauses excluding any document hidden by any authority (a missing
-/// flag counts as visible).
+/// flag counts as visible), and posts past their author's post window (#664; no
+/// `visible_until`, no window).
 fn visibility_must_not() -> Vec<Value> {
     vec![
         json!({ "term": { "moderation_searchable": false } }),
         json!({ "term": { "owner_searchable": false } }),
         json!({ "term": { "discoverable": false } }),
+        json!({ "range": { "visible_until": { "lte": "now" } } }),
     ]
 }
 

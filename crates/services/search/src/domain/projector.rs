@@ -79,6 +79,15 @@ fn project_profile(event: ProfileEvent, now: DateTime<Utc>) -> Result<IndexMutat
             searchable: if searchable { Searchable::VISIBLE } else { Searchable::HIDDEN },
             version: DocVersion::from_event_time(occurred_at),
         }),
+        ProfileEvent::PostWindowChanged {
+            profile_id,
+            window_days,
+            occurred_at,
+        } => Ok(IndexMutation::SetPostWindow {
+            author_id: AuthorId::new(profile_id)?,
+            window_days,
+            version: DocVersion::from_event_time(occurred_at),
+        }),
     }
 }
 
@@ -157,6 +166,7 @@ fn post_doc(s: PostSnapshot, now: DateTime<Utc>) -> Result<PostDoc, SearchError>
         created_at: s.created_at,
         indexed_at: now,
         version: DocVersion::new(s.revision),
+        visible_until: s.visible_until,
     })
 }
 
@@ -220,6 +230,7 @@ mod tests {
             hashtags: vec!["rust".to_owned()],
             thumbnail_key: "thumbs/post-1.jpg".to_owned(),
             created_at: created(),
+            visible_until: None,
             revision: 7,
         }
     }
@@ -391,6 +402,28 @@ mod tests {
                 kind: EntityKind::Profile,
                 id: "prof-1".to_owned(),
                 searchable: Searchable::HIDDEN,
+                version: DocVersion::from_event_time(occurred),
+            }
+        );
+    }
+
+    #[test]
+    fn a_post_window_change_reaches_the_authors_posts() {
+        let occurred = Utc.timestamp_opt(1_700_000_500, 0).unwrap();
+        let m = project(
+            SourceEvent::Profile(ProfileEvent::PostWindowChanged {
+                profile_id: "prof-1".to_owned(),
+                window_days: Some(30),
+                occurred_at: occurred,
+            }),
+            now(),
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            IndexMutation::SetPostWindow {
+                author_id: AuthorId::new("prof-1").unwrap(),
+                window_days: Some(30),
                 version: DocVersion::from_event_time(occurred),
             }
         );

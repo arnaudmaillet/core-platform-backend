@@ -112,6 +112,13 @@ pub enum ProfileWireEvent {
         by_handle_search: bool,
         occurred_at_ms: i64,
     },
+    /// Post history window (#664): `all` | `six_months` | `one_month` |
+    /// `three_days`; search reads `post_window` only.
+    ProfileTabSettingsChanged {
+        profile_id: String,
+        post_window: String,
+        occurred_at_ms: i64,
+    },
     #[serde(other)]
     Unknown,
 }

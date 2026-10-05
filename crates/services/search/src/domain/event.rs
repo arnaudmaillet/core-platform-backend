@@ -58,6 +58,13 @@ pub enum ProfileEvent {
         searchable: bool,
         occurred_at: DateTime<Utc>,
     },
+    /// The author's post history window (#664): their posts older than
+    /// `window_days` leave search; `None` shows them all.
+    PostWindowChanged {
+        profile_id: String,
+        window_days: Option<u32>,
+        occurred_at: DateTime<Utc>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +84,8 @@ pub struct PostSnapshot {
     pub hashtags: Vec<String>,
     pub thumbnail_key: String,
     pub created_at: DateTime<Utc>,
+    /// When the post leaves its author's post window (#664); `None` without one.
+    pub visible_until: Option<DateTime<Utc>>,
     pub revision: u64,
 }
 

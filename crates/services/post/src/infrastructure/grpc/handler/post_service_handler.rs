@@ -298,6 +298,7 @@ fn post_to_proto(post: Post) -> proto::PostView {
         allow_remix:       post.reuse().allow_remix,
         allow_sound_reuse: post.reuse().allow_sound_reuse,
         outside_window:    post.outside_window(),
+        visible_until_ms:  post.visible_until().map(|t| t.timestamp_millis()).unwrap_or_default(),
     }
 }
 

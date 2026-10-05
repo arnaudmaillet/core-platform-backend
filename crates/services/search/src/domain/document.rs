@@ -99,6 +99,10 @@ pub struct PostDoc {
     pub created_at: DateTime<Utc>,
     pub indexed_at: DateTime<Utc>,
     pub version: DocVersion,
+    /// When the post leaves its author's post window (#664): it is not
+    /// searchable from then on. `None` without a window.
+    #[serde(default)]
+    pub visible_until: Option<DateTime<Utc>>,
 }
 
 /// A hashtag document — the discoverable tag entity, maintained from the derived

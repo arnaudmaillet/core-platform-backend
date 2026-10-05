@@ -33,6 +33,15 @@ pub enum IndexMutation {
     /// Deep GDPR purge of everything an actor authored, across all indices.
     PurgeByAuthor { author_id: AuthorId },
 
+    /// Recompute when each of the author's posts leaves their post window
+    /// (#664): `created_at + window_days`, or never (`None`). Guarded by
+    /// `version` so a stale window change can't overwrite a newer one.
+    SetPostWindow {
+        author_id: AuthorId,
+        window_days: Option<u32>,
+        version: DocVersion,
+    },
+
     /// An intentional no-op — commit the offset, index nothing.
     Skip(SkipReason),
 }
