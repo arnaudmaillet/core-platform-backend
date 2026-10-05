@@ -66,6 +66,23 @@ pub enum SendAdmission {
     Refused { retry_after_secs: i64 },
 }
 
+/// SMS per UTC day: for the whole service, and for one destination country.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SmsBudget {
+    pub daily:         u32,
+    pub country_daily: u32,
+}
+
+/// Whether one more SMS fits today's budgets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmsReservation {
+    Reserved,
+    /// The destination country's budget is spent.
+    CountryExhausted,
+    /// The service's budget is spent.
+    Exhausted,
+}
+
 /// Pending codes and the per-address send budget (Redis).
 #[async_trait]
 pub trait VerificationStore: Send + Sync + 'static {
@@ -89,9 +106,14 @@ pub trait VerificationStore: Send + Sync + 'static {
 
     async fn discard(&self, challenge_id: &str) -> Result<(), AuthError>;
 
-    /// Counts one SMS against the service-wide budget of the current UTC day;
-    /// `false` once `daily_budget` SMS went out today.
-    async fn reserve_sms(&self, daily_budget: u32) -> Result<bool, AuthError>;
+    /// Counts one SMS to `country` against today's (UTC) budgets: the
+    /// country's first — a refusal there spends nothing of the service's —
+    /// then the service's.
+    async fn reserve_sms(&self, country: &str, budget: SmsBudget) -> Result<SmsReservation, AuthError>;
+
+    /// Gives back a unit [`reserve_sms`](Self::reserve_sms) took for an SMS that
+    /// was not sent.
+    async fn refund_sms(&self, country: &str) -> Result<(), AuthError>;
 }
 
 /// Delivers a one-time code (email via SES SMTP; a log line locally).

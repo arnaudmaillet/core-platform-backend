@@ -788,10 +788,15 @@ pub struct InMemoryVerificationStore {
     challenges: Mutex<HashMap<String, StoredChallenge>>,
     sends: Mutex<HashMap<String, u32>>,
     failures: Mutex<HashMap<String, u32>>,
-    sms_today: Mutex<u32>,
+    sms_today: Mutex<HashMap<String, u32>>,
 }
 
 impl InMemoryVerificationStore {
+    /// SMS counted against today's service budget.
+    pub fn sms_sent_today(&self) -> u32 {
+        self.sms_today.lock().unwrap().values().sum()
+    }
+
     pub fn len(&self) -> usize {
         self.challenges.lock().unwrap().len()
     }
@@ -863,10 +868,27 @@ impl super::port::VerificationStore for InMemoryVerificationStore {
         Ok(())
     }
 
-    async fn reserve_sms(&self, daily_budget: u32) -> Result<bool, AuthError> {
+    async fn reserve_sms(
+        &self,
+        country: &str,
+        budget: super::port::SmsBudget,
+    ) -> Result<super::port::SmsReservation, AuthError> {
         let mut sent = self.sms_today.lock().unwrap();
-        *sent += 1;
-        Ok(*sent <= daily_budget)
+        if sent.get(country).copied().unwrap_or(0) >= budget.country_daily {
+            return Ok(super::port::SmsReservation::CountryExhausted);
+        }
+        if sent.values().sum::<u32>() >= budget.daily {
+            return Ok(super::port::SmsReservation::Exhausted);
+        }
+        *sent.entry(country.to_owned()).or_default() += 1;
+        Ok(super::port::SmsReservation::Reserved)
+    }
+
+    async fn refund_sms(&self, country: &str) -> Result<(), AuthError> {
+        if let Some(n) = self.sms_today.lock().unwrap().get_mut(country) {
+            *n = n.saturating_sub(1);
+        }
+        Ok(())
     }
 }
 
@@ -885,6 +907,10 @@ impl RecordingCodeSender {
 
     pub fn fail(&self) {
         self.failing.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn recover(&self) {
+        self.failing.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 }
 

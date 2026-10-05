@@ -144,6 +144,11 @@ impl AuthConfig {
                     i64::from(crate::application::command::DEFAULT_SMS_DAILY_BUDGET),
                 )
                 .max(0) as u32,
+                sms_country_daily_budget: env_secs(
+                    "AUTH_SMS_COUNTRY_DAILY_BUDGET",
+                    i64::from(crate::application::command::DEFAULT_SMS_COUNTRY_DAILY_BUDGET),
+                )
+                .max(0) as u32,
             },
         })
     }

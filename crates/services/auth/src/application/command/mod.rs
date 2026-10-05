@@ -22,7 +22,7 @@ pub use refresh::{RefreshCommand, RefreshHandler};
 pub use sign_up::{SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome};
 pub use verification::{
     normalize_email, sms_country, StartVerificationCommand, StartedVerification, VerificationCodes, VerificationPolicy,
-    DEFAULT_SMS_DAILY_BUDGET, SMS_LAUNCH_COUNTRIES,
+    DEFAULT_SMS_COUNTRY_DAILY_BUDGET, DEFAULT_SMS_DAILY_BUDGET, SMS_LAUNCH_COUNTRIES,
 };
 pub use start_guest_session::{StartGuestSessionCommand, StartGuestSessionHandler, GUEST_ISSUER};
 pub use verify_credentials::{

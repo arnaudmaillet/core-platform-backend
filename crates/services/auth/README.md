@@ -113,10 +113,12 @@ number (libphonenumber metadata: no fixed line, premium rate, shared cost, VoIP)
 `AUTH_SMS_COUNTRIES` — by default the launch markets, EU 27 + IS LI NO + GB CH + GP GF MQ RE YT,
 **exactly** the SNS protect configuration's allow-list (core-platform-infra `global/messaging/sms`);
 territories sharing a calling code resolve to their own country (Jersey under +44 is `JE`) — else
-`FAILED_PRECONDITION` `AUT-5015`, decided from the number alone. Every SMS then counts against a
-**service-wide daily budget** (`AUTH_SMS_DAILY_BUDGET`, 50, per UTC day, Redis
-`auth:{sms-budget}:<YYYYMMDD>`); once spent, SMS codes answer `UNAVAILABLE` `AUT-5016` until the next
-UTC day (email keeps working) and auth logs an `error` (alert on it). Size it against the SNS monthly
+`FAILED_PRECONDITION` `AUT-5015`, decided from the number alone. Every SMS then counts against two
+**daily budgets** (per UTC day, Redis `auth:{sms-budget}:<YYYYMMDD>[:<country>]`, one script): the
+destination **country's** first (`AUTH_SMS_COUNTRY_DAILY_BUDGET`, 25), so pumping one prefix only
+exhausts that country, then the **service's** (`AUTH_SMS_DAILY_BUDGET`, 50); an SMS SNS failed to send
+is refunded. Once either is spent, SMS codes answer `UNAVAILABLE` `AUT-5016` until the next UTC day
+(email keeps working) and auth logs an `error` (alert on it). Size it against the SNS monthly
 spend limit (≈ limit / 30 / price per SMS), so SNS's own limit is never what stops SMS for the month.
 
 ### Credentials and step-up
@@ -233,6 +235,7 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | `AUTH_SNS_REGION` · `AUTH_SNS_ACCESS_KEY_ID` · `AUTH_SNS_SECRET_ACCESS_KEY` · `AUTH_SNS_SENDER_ID` | Amazon SNS for SMS codes (an IAM user allowed `sns:Publish`; optional alphanumeric sender id where countries allow it). | — |
 | `AUTH_SMS_COUNTRIES` | Comma-separated ISO 3166-1 alpha-2 countries SMS codes may go to; must equal the SNS protect allow-list (infra `global/messaging/sms`). An unknown code fails the boot. | the launch markets (37) |
 | `AUTH_SMS_DAILY_BUDGET` | SMS the whole service may send per UTC day (`0` = none); over it `AUT-5016`. | `50` |
+| `AUTH_SMS_COUNTRY_DAILY_BUDGET` | SMS one destination country may receive per UTC day, checked before the service's; over it `AUT-5016`. | `25` |
 | `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES` | Code lifetime, tries per code, codes per address an hour / a day, resend cooldown, wrong codes per address in 24 h before it is locked. | `600` · `5` · `5` · `20` · `30` · `15` |
 | Postgres / Redis / Kafka | via the shared storage crates' own `from_env()` | — |
 
