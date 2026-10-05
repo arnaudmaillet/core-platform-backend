@@ -25,6 +25,13 @@ fn row_err(ctx: &'static str, e: impl ToString) -> EngagementError {
     }
 }
 
+/// The write timestamp (µs) of a ledger change: its event's time, so the
+/// latest event wins in Scylla's last-write-wins whatever the order its
+/// writes land in. Events of the same millisecond tie: a removal then wins.
+fn write_time(event_at_ms: i64) -> i64 {
+    event_at_ms.saturating_mul(1_000)
+}
+
 /// Rows per page when scanning `post_reactions` to backfill the profile index.
 const BACKFILL_PAGE_SIZE: i32 = 500;
 
@@ -104,6 +111,7 @@ impl ReactionLedger for ScyllaReactionLedger {
         batch.append_statement(
             "INSERT INTO engagement.reactions_by_profile (profile_id, post_id, kind, reacted_at) VALUES (?, ?, ?, ?)",
         );
+        batch.set_timestamp(Some(write_time(event_at_ms)));
         let at = CqlTimestamp(event_at_ms);
         let values = (
             (post_id.as_uuid(), profile_id.as_uuid(), kind.as_tinyint(), weight as i32, at),
@@ -116,10 +124,12 @@ impl ReactionLedger for ScyllaReactionLedger {
 
     async fn remove(
         &self,
-        post_id:    &PostId,
-        profile_id: &ProfileId,
+        post_id:     &PostId,
+        profile_id:  &ProfileId,
+        event_at_ms: i64,
     ) -> Result<(), EngagementError> {
         let mut batch = self.strict_batch();
+        batch.set_timestamp(Some(write_time(event_at_ms)));
         batch.append_statement("DELETE FROM engagement.post_reactions WHERE post_id = ? AND profile_id = ?");
         batch.append_statement("DELETE FROM engagement.reactions_by_profile WHERE profile_id = ? AND post_id = ?");
         let values = ((post_id.as_uuid(), profile_id.as_uuid()), (profile_id.as_uuid(), post_id.as_uuid()));
@@ -183,9 +193,12 @@ impl ReactionLedger for ScyllaReactionLedger {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| row_err("backfill_profile_index:deser", e))?;
             for (post_id, profile_id, kind, reacted_at) in rows {
-                let stmt = self.strict_stmt(
+                // Stamped with the reaction's own time, as the ledger writes
+                // it: a removal processed after the scan still wins.
+                let mut stmt = self.strict_stmt(
                     "INSERT INTO engagement.reactions_by_profile (profile_id, post_id, kind, reacted_at) VALUES (?, ?, ?, ?)",
                 );
+                stmt.set_timestamp(Some(write_time(reacted_at.0)));
                 self.client
                     .session
                     .execute_unpaged(stmt, (profile_id, post_id, kind, reacted_at))

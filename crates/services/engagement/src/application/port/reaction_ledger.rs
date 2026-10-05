@@ -18,8 +18,9 @@ pub struct ProfileReaction {
 /// gRPC hot path). The ledger is the source of truth for Redis cold-start recovery.
 #[async_trait]
 pub trait ReactionLedger: Send + Sync + 'static {
-    /// Upserts a reaction record. Last-write-wins (no IF conditions) — safe
-    /// to retry on Kafka redelivery.
+    /// Upserts a reaction record, stamped with the event's time: the latest
+    /// **event** wins, whatever order the writes land in (a redelivered or
+    /// late older event never overwrites a newer kind). Safe to retry.
     async fn upsert(
         &self,
         post_id:    &PostId,
@@ -29,11 +30,14 @@ pub trait ReactionLedger: Send + Sync + 'static {
         event_at_ms: i64,
     ) -> Result<(), EngagementError>;
 
-    /// Deletes the reaction record for `(post_id, profile_id)`.
+    /// Deletes the reaction record for `(post_id, profile_id)`, stamped with
+    /// the event's time like [`upsert`](Self::upsert): a reaction made after
+    /// the removal survives it.
     async fn remove(
         &self,
-        post_id:    &PostId,
-        profile_id: &ProfileId,
+        post_id:     &PostId,
+        profile_id:  &ProfileId,
+        event_at_ms: i64,
     ) -> Result<(), EngagementError>;
 
     /// A profile's reactions, by post id (#653: the GDPR export), from
