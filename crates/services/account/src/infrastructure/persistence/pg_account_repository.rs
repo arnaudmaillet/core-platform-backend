@@ -104,6 +104,8 @@ impl AccountRepository for PgAccountRepository {
         let p_gdpr_export_req     = gdpr.data_export_requested_at();
         let p_gdpr_export_done    = gdpr.data_export_completed_at();
         let p_gdpr_analytics_at   = gdpr.analytics_consented_at();
+        let p_gdpr_export_url     = gdpr.data_export_url().map(str::to_owned);
+        let p_gdpr_export_expires = gdpr.data_export_expires_at();
         // The consent history rows this save appends (GDPR Art. 7(1) evidence),
         // from the aggregate's pending ConsentsUpdated events.
         let p_consent_history: Vec<(&'static str, bool, Option<String>, chrono::DateTime<chrono::Utc>)> = account
@@ -147,12 +149,13 @@ impl AccountRepository for PgAccountRepository {
                                 gdpr_data_export_requested_at, gdpr_data_export_completed_at,
                                 roles, permission_overrides,
                                 version, created_at, updated_at, created_by,
-                                gdpr_analytics_consented_at
+                                gdpr_analytics_consented_at,
+                                gdpr_data_export_url, gdpr_data_export_expires_at
                             ) VALUES (
                                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
                                 $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
                                 $31,$32,$33,$34,$35,$36,$37,
-                                $38,$39,$40,$41,$42
+                                $38,$39,$40,$41,$42,$43,$44
                             )
                             "#,
                         )
@@ -198,6 +201,8 @@ impl AccountRepository for PgAccountRepository {
                         .bind(p_updated_at)          // $40
                         .bind(p_created_by)          // $41
                         .bind(p_gdpr_analytics_at)   // $42
+                        .bind(p_gdpr_export_url.clone())     // $43
+                        .bind(p_gdpr_export_expires) // $44
                         .execute(&mut **tx)
                         .await
                         .map(|_| ())
@@ -258,6 +263,8 @@ impl AccountRepository for PgAccountRepository {
                                 roles = $35,
                                 permission_overrides = $36,
                                 gdpr_analytics_consented_at = $38,
+                                gdpr_data_export_url = $39,
+                                gdpr_data_export_expires_at = $40,
                                 version = version + 1,
                                 updated_at = NOW()
                             WHERE id = $1 AND version = $37
@@ -301,6 +308,8 @@ impl AccountRepository for PgAccountRepository {
                         .bind(&p_perms)             // $36
                         .bind(expected_version)     // $37
                         .bind(p_gdpr_analytics_at)  // $38
+                        .bind(p_gdpr_export_url)    // $39
+                        .bind(p_gdpr_export_expires) // $40
                         .execute(&mut **tx)
                         .await
                         .map_err(|e| AccountError::Storage(StorageError::from(e)))?
@@ -481,6 +490,26 @@ impl AccountRepository for PgAccountRepository {
                 .map_err(|e| AccountError::Storage(StorageError::from(e)))?;
 
         Ok(count)
+    }
+
+    async fn list_pending_exports(&self, limit: i64) -> Result<Vec<AccountId>, AccountError> {
+        // Served by the partial index `accounts_gdpr_export_pending_idx`.
+        let ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT id FROM accounts
+            WHERE gdpr_data_export_requested_at IS NOT NULL
+              AND (gdpr_data_export_completed_at IS NULL
+                   OR gdpr_data_export_completed_at < gdpr_data_export_requested_at)
+              AND gdpr_anonymized_at IS NULL
+            ORDER BY gdpr_data_export_requested_at
+            LIMIT $1
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(self.tx_manager.pool())
+        .await
+        .map_err(|e| AccountError::Storage(StorageError::from(e)))?;
+        Ok(ids.into_iter().map(AccountId::from_uuid).collect())
     }
 
     async fn list_due_for_anonymization(

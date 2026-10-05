@@ -19,6 +19,10 @@ pub struct GdprRecordView {
     pub anonymized_at: Option<DateTime<Utc>>,
     pub data_export_requested_at: Option<DateTime<Utc>>,
     pub data_export_completed_at: Option<DateTime<Utc>>,
+    /// The delivered export's download link and its expiry (#653): shown to
+    /// the holder (edge) and to auth (mesh, which emails it).
+    pub data_export_url: Option<String>,
+    pub data_export_expires_at: Option<DateTime<Utc>>,
     pub last_consent_version: Option<String>,
 }
 
@@ -71,6 +75,9 @@ impl QueryHandler<GetGdprRecordQuery> for GetGdprRecordHandler {
             anonymized_at: gdpr.anonymized_at(),
             data_export_requested_at: gdpr.data_export_requested_at(),
             data_export_completed_at: gdpr.data_export_completed_at(),
+            // A newer request is being built: the old link is not the answer.
+            data_export_url: gdpr.data_export_url().filter(|_| !gdpr.has_pending_export()).map(str::to_owned),
+            data_export_expires_at: gdpr.data_export_expires_at().filter(|_| !gdpr.has_pending_export()),
             last_consent_version: gdpr.last_consent_version().map(str::to_owned),
         })
     }

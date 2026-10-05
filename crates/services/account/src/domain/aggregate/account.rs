@@ -6,7 +6,7 @@ use crate::domain::entity::{GdprRecord, MfaState};
 use crate::domain::event::{
     AccountActivated, AccountCreated, AccountDeactivated, AccountDeleted, AccountSuspended,
     ConsentChange, ConsentsUpdated, DateOfBirthSet, DomainEvent, EmailChanged, EmailVerified,
-    GdprDataExportRequested, GdprDeletionCancelled, GdprDeletionRequested, KycStatusChanged, MfaEnrolled, MfaRevoked, PasswordChanged, PhoneChanged, RoleAssigned,
+    GdprDataExportCompleted, GdprDataExportRequested, GdprDeletionCancelled, GdprDeletionRequested, KycStatusChanged, MfaEnrolled, MfaRevoked, PasswordChanged, PhoneChanged, RoleAssigned,
     RoleRevoked,
 };
 use crate::domain::value_object::{
@@ -696,6 +696,38 @@ impl Account {
                 correlation_id,
             },
         ));
+        Ok(())
+    }
+
+    /// Delivers the requested GDPR data export (#653): its download link, good
+    /// until `expires_at`. Emits [`GdprDataExportCompleted`] (without the
+    /// link). The save is version-checked, so a request made while the export
+    /// was being built (a newer `requested_at`) fails it and is built anew.
+    ///
+    /// # Errors
+    /// [`AccountError::DomainViolation`] when no export is pending.
+    pub fn complete_gdpr_data_export(
+        &mut self,
+        url: String,
+        expires_at: DateTime<Utc>,
+        correlation_id: Uuid,
+    ) -> Result<(), AccountError> {
+        if !self.gdpr.has_pending_export() {
+            return Err(AccountError::DomainViolation {
+                field: "gdpr.data_export".into(),
+                message: "no data export is pending".into(),
+            });
+        }
+        let now = self.touch_now();
+        self.gdpr.data_export_completed_at = Some(now);
+        self.gdpr.data_export_url = Some(url);
+        self.gdpr.data_export_expires_at = Some(expires_at);
+        self.pending_events.push(DomainEvent::GdprDataExportCompleted(GdprDataExportCompleted {
+            account_id: self.id,
+            expires_at,
+            occurred_at: now,
+            correlation_id,
+        }));
         Ok(())
     }
 
@@ -1392,5 +1424,29 @@ mod tests {
         account.replace_recovery_codes(hashes("new")).unwrap();
         assert!(matches!(account.consume_recovery_code("old-2"), Err(AccountError::RecoveryCodeInvalid)));
         account.consume_recovery_code("new-2").expect("the new set");
+    }
+
+    /// #653: an export is delivered once per request; a newer request makes
+    /// it pending again; nothing pending, nothing to deliver.
+    #[test]
+    fn an_export_is_delivered_once_per_request() {
+        let mut account = admin_account_with_overrides(Vec::new());
+        let expires = Utc::now() + Duration::days(7);
+        assert!(account.complete_gdpr_data_export("u".into(), expires, Uuid::now_v7()).is_err(), "nothing asked");
+
+        account.request_gdpr_data_export(Uuid::now_v7()).unwrap();
+        assert!(account.gdpr().has_pending_export());
+        account.complete_gdpr_data_export("https://link/1".into(), expires, Uuid::now_v7()).unwrap();
+        assert!(!account.gdpr().has_pending_export());
+        assert_eq!(account.gdpr().data_export_url(), Some("https://link/1"));
+        assert!(matches!(
+            account.events().last(),
+            Some(DomainEvent::GdprDataExportCompleted(e)) if e.expires_at == expires
+        ));
+        assert!(account.complete_gdpr_data_export("u".into(), expires, Uuid::now_v7()).is_err(), "delivered");
+
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        account.request_gdpr_data_export(Uuid::now_v7()).unwrap();
+        assert!(account.gdpr().has_pending_export(), "a newer request");
     }
 }

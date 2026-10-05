@@ -71,6 +71,11 @@ message GdprRecordView {
     google.protobuf.Timestamp       data_processing_consented_at     = 11;
     google.protobuf.Timestamp       marketing_consented_at           = 12;
     google.protobuf.Timestamp       analytics_consented_at           = 13;
+    // The delivered data export (#653): its download link (a ZIP; a credential
+    // — show it to the holder only) and when it stops working (7 days). Empty
+    // while none is delivered, or a newer request is pending.
+    string                          data_export_url                  = 14;
+    google.protobuf.Timestamp       data_export_expires_at           = 15;
 }
 
 // Minimal status-only view used by auth and gateway services.

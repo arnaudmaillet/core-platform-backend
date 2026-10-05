@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 27ea9f63fab6170e939f806a9f32685333a3a556f4622efac73d354388bca944
+  source_sha256: c09a4914ab2ee42d349d961b027fb75ba5594e9ef20769141aff63dfede943f4
   translated_at: 2026-10-05
   status: complete
 ---
@@ -171,6 +171,20 @@ service AccountService {
 **Sécurité à la frontière :** mots de passe stockés en Argon2id uniquement (jamais le clair accepté) ;
 les champs secrets suppriment `Display`/`Debug` et portent `#[serde(skip)]`.
 
+**Export de données RGPD (#653, art. 15/20).** `RequestDataExport` marque l'export en attente ; la
+**passe d'export** (`ExportDueData`) construit alors, pour chaque compte en attente, un ZIP de fichiers
+JSON — le dossier de compte du titulaire (coordonnées, consentements, réglages de connexion ; **ni**
+empreinte de mot de passe, ni matériel MFA, ni champ interne), les fichiers des autres services
+(`ExportSources` : profils, posts, commentaires, réactions, graphe social, conversations, liens vers les
+médias), un `README.txt` — le stocke en privé (`exports/<compte>/<id>.zip`, `S3ExportStore` : clés
+statiques, `ACCOUNT_EXPORT_*`) et inscrit un **lien signé valable 7 jours** dans le dossier RGPD
+(`data_export_url` / `data_export_expires_at`, montré au titulaire et à auth ; masqué tant qu'une demande
+plus récente est en attente). `GdprDataExportCompleted` (sans le lien — c'est un secret) permet à auth de
+l'envoyer par e-mail. Une source en échec laisse l'export en attente (jamais d'archive partielle) et la
+passe le réessaie (`ACC-7005`) ; l'écriture est versionnée, donc une demande faite pendant la
+construction d'un export est reconstruite. Les comptes en attente viennent d'un index partiel (migration
+0005). Le serveur démarre la passe une fois ses sources mesh branchées (prochain changement #653).
+
 **La MFA appartient à auth (#649) ; account ne fait que la conserver.** Toutes les RPC MFA sont **mesh
 uniquement** : le titulaire active et désactive la connexion en deux étapes via auth, après un step-up. auth
 chiffre la graine TOTP avec sa propre clé (AES-256-GCM ; account stocke le chiffré sans jamais le lire),
@@ -211,7 +225,7 @@ Les codes stables vont de `ACC-1xxx` (lifecycle) à `ACC-9xxx` (identifiers), vi
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `ConsentsUpdated`, `DateOfBirthSet` | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet` | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
 
 **Consomme :** rien — `account` est un producteur d'événements pur.
 

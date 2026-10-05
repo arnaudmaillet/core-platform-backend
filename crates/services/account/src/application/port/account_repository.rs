@@ -61,6 +61,10 @@ pub trait AccountRepository: Send + Sync + 'static {
     /// Counts accounts currently in `status`.
     async fn count_by_status(&self, status: &AccountStatus) -> Result<i64, AccountError>;
 
+    /// Accounts whose GDPR data export was asked for and not delivered since
+    /// (not anonymized), oldest request first — the export pass's batch (#653).
+    async fn list_pending_exports(&self, limit: i64) -> Result<Vec<AccountId>, AccountError>;
+
     /// Accounts whose requested erasure is due (`deletion_scheduled_at <= now`)
     /// and not yet anonymized, oldest first — the GDPR janitor's batch.
     async fn list_due_for_anonymization(
