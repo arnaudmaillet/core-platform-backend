@@ -44,9 +44,11 @@ pub trait ReadGate: Send + Sync + 'static {
     /// (published and visible to them — or their own), and its author's
     /// interaction settings must let them comment (social-graph
     /// `CheckInteraction`: everyone / followers / mutuals / no one, a block
-    /// either way refuses). Errors are `AccessCheckUnavailable`; the write
-    /// fails closed.
-    async fn may_comment(&self, author: &ProfileId, post_id: &PostId) -> Result<CommentAdmission, CommentError>;
+    /// either way refuses). An age-gated post takes comments only from a
+    /// commenter cleared for mature content (`mature`), or its author. Errors are
+    /// `AccessCheckUnavailable`; the write fails closed.
+    async fn may_comment(&self, author: &ProfileId, post_id: &PostId, mature: bool)
+        -> Result<CommentAdmission, CommentError>;
 
     /// The post's author (mesh read), `None` when the post does not exist.
     async fn post_author(&self, post_id: &PostId) -> Result<Option<ProfileId>, CommentError>;

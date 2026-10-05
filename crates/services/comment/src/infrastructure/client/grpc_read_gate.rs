@@ -241,7 +241,8 @@ impl ReadGate for GrpcReadGate {
         }))
     }
 
-    async fn may_comment(&self, author: &ProfileId, post_id: &PostId) -> Result<CommentAdmission, CommentError> {
+    async fn may_comment(&self, author: &ProfileId, post_id: &PostId, mature: bool)
+        -> Result<CommentAdmission, CommentError> {
         let view = match self
             .post
             .clone()
@@ -257,6 +258,10 @@ impl ReadGate for GrpcReadGate {
             return Ok(CommentAdmission::Allowed);
         }
         if !post_is_public(&view) {
+            return Ok(CommentAdmission::PostUnavailable);
+        }
+        // Not one they may read: not one they may comment on either.
+        if age_gate_hides(&view, false, mature) {
             return Ok(CommentAdmission::PostUnavailable);
         }
         // Readable for this commenter (a private author they don't follow, a

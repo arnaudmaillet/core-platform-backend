@@ -54,6 +54,7 @@ where
         request: Request<proto::CreateCommentRequest>,
     ) -> Result<Response<proto::CreateCommentResponse>, Status> {
         edge::require_profile(&request, &request.get_ref().author_id)?;
+        let mature = mature_of(&request);
         let req = request.into_inner();
 
         let comment_id = if req.comment_id.is_empty() {
@@ -72,6 +73,7 @@ where
             gif_url:    Some(req.gif_url).filter(|s| !s.is_empty()),
             gif_width:  if req.gif_width == 0 { None } else { Some(req.gif_width) },
             gif_height: if req.gif_height == 0 { None } else { Some(req.gif_height) },
+            mature,
         };
 
         self.command_bus

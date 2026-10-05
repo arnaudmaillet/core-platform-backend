@@ -135,7 +135,8 @@ impl ReadGate for ScriptedGate {
         }))
     }
 
-    async fn may_comment(&self, author: &ProfileId, post_id: &PostId) -> Result<CommentAdmission, CommentError> {
+    async fn may_comment(&self, author: &ProfileId, post_id: &PostId, _mature: bool)
+        -> Result<CommentAdmission, CommentError> {
         if *self.down.lock().unwrap() {
             return Err(CommentError::AccessCheckUnavailable { reason: "scripted outage".into() });
         }
@@ -232,6 +233,7 @@ impl TestHarness {
             gif_url:    None,
             gif_width:  None,
             gif_height: None,
+            mature:     true,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -253,6 +255,7 @@ impl TestHarness {
             gif_url:    None,
             gif_width:  None,
             gif_height: None,
+            mature:     true,
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("create_comment");
         comment_id
@@ -270,6 +273,25 @@ impl TestHarness {
             gif_url:    None,
             gif_width:  None,
             gif_height: None,
+            mature:     true,
+        };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await
+    }
+
+    /// Tries to create a top-level comment as a commenter cleared for mature
+    /// content or not; the error when it is refused.
+    pub async fn try_create_rated(&self, post_id: &str, author_id: &str, mature: bool) -> Result<(), CqrsError> {
+        let cmd = CreateCommentCommand {
+            comment_id: Uuid::now_v7().to_string(),
+            post_id:    post_id.to_owned(),
+            author_id:  author_id.to_owned(),
+            parent_id:  None,
+            body:       Some("a comment".to_owned()),
+            gif_id:     None,
+            gif_url:    None,
+            gif_width:  None,
+            gif_height: None,
+            mature,
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await
     }
