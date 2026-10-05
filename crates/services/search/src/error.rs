@@ -31,6 +31,7 @@ use thiserror::Error;
 /// | SCH-8001 | EventDecodeFailed        | 422  | Medium   | No        |
 /// | SCH-8002 | UnknownEventType         | 422  | Low      | No        |
 /// | SCH-8003 | UnmappedSource           | 422  | Medium   | No        |
+/// | SCH-8004 | SourceNotConverged       | 503  | Medium   | **Yes**   |
 /// | SCH-9001 | DomainViolation          | 422  | Medium   | No        |
 /// | SCH-9002 | InvalidIdentifier        | 422  | Low      | No        |
 /// | SCH-9003 | EventConsumeFailed       | 500  | Medium   | No        |
@@ -114,6 +115,11 @@ pub enum SearchError {
     #[error("source event could not be mapped to an indexable entity: {reason}")]
     UnmappedSource { reason: String },
 
+    /// The source service has not caught up with the event yet (a post whose
+    /// takedown was lifted still reads restricted from `post`): retried.
+    #[error("the source of '{id}' has not caught up with the event yet")]
+    SourceNotConverged { id: String },
+
     // ── Cross-cutting (SCH-9xxx) ──────────────────────────────────────────────
     #[error("domain invariant violated on '{field}': {message}")]
     DomainViolation { field: String, message: String },
@@ -152,6 +158,7 @@ impl AppError for SearchError {
             SearchError::EventDecodeFailed { .. } => "SCH-8001",
             SearchError::UnknownEventType { .. } => "SCH-8002",
             SearchError::UnmappedSource { .. } => "SCH-8003",
+            SearchError::SourceNotConverged { .. } => "SCH-8004",
 
             SearchError::DomainViolation { .. } => "SCH-9001",
             SearchError::InvalidIdentifier(_) => "SCH-9002",
@@ -169,9 +176,9 @@ impl AppError for SearchError {
                 StatusCode::CONFLICT
             }
 
-            SearchError::EngineUnavailable | SearchError::IndexNotFound { .. } => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
+            SearchError::EngineUnavailable
+            | SearchError::IndexNotFound { .. }
+            | SearchError::SourceNotConverged { .. } => StatusCode::SERVICE_UNAVAILABLE,
 
             SearchError::EngineTimeout => StatusCode::GATEWAY_TIMEOUT,
 
@@ -200,6 +207,7 @@ impl AppError for SearchError {
             | SearchError::IndexMappingConflict { .. }
             | SearchError::EventDecodeFailed { .. }
             | SearchError::UnmappedSource { .. }
+            | SearchError::SourceNotConverged { .. }
             | SearchError::DomainViolation { .. }
             | SearchError::EventConsumeFailed(_) => Severity::Medium,
 
@@ -212,7 +220,8 @@ impl AppError for SearchError {
             SearchError::Validation(e) => e.is_retryable(),
             SearchError::EngineUnavailable
             | SearchError::EngineTimeout
-            | SearchError::BulkIndexFailed { .. } => true,
+            | SearchError::BulkIndexFailed { .. }
+            | SearchError::SourceNotConverged { .. } => true,
             _ => false,
         }
     }
