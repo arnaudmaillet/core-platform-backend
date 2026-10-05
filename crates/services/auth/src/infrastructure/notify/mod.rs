@@ -73,10 +73,11 @@ impl CodeSender for ChannelCodeSender {
         &self,
         email: &str,
         device: Option<&str>,
+        ip: Option<&str>,
         locale: Option<&str>,
     ) -> Result<(), AuthError> {
         match &self.email {
-            Some(sender) => sender.send_new_login_notice(email, device, locale).await,
+            Some(sender) => sender.send_new_login_notice(email, device, ip, locale).await,
             None => Ok(()),
         }
     }

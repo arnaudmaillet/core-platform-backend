@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: b3f4636a21bd5ae177c32102b0924d9832b0159322342f46a3239cf9dec4ee42
+  source_sha256: 681202436a3f01e167e4fd1a3bf35ec5a008708cd6b559e5a3d95e09e3b14201
   translated_at: 2026-10-05
   status: complete
 ---
@@ -184,7 +184,10 @@ le message). Sans client admin configuré, les RPC d'identifiants répondent `UN
 **Alertes de nouvelle connexion (#649).** Une connexion depuis un appareil que le compte n'a jamais
 utilisé — son `device_id` (`DeviceContext`) absent de toutes les sessions que le compte a eues, quel que
 soit leur statut — envoie un e-mail à l'adresse du compte (« Nouvelle connexion à ton compte », avec
-l'user agent de l'appareil). Pas à la toute première connexion du compte, pas sans `device_id`, et
+l'user agent de l'appareil — caractères imprimables seulement, 120 au plus, dans un corps en texte brut — et
+l'IP vue par le transport). Le `device_id` est écrit par le client : une connexion **sans** `device_id`
+compte donc aussi comme un nouvel appareil, sauf si les 5 dernières sessions du compte n'en avaient
+aucune (le client du titulaire n'en envoie pas). Pas à la toute première connexion du compte, et
 seulement là où les transports de codes sont configurés. L'historique est lu avant l'émission de la
 session ; l'e-mail part en arrière-plan, si bien qu'une alerte ne fait jamais échouer ni ralentir une
 connexion. Les alertes push attendent APNs.

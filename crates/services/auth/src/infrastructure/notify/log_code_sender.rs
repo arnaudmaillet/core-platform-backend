@@ -44,9 +44,10 @@ impl CodeSender for LogCodeSender {
         &self,
         email: &str,
         device: Option<&str>,
+        ip: Option<&str>,
         _locale: Option<&str>,
     ) -> Result<(), AuthError> {
-        tracing::warn!(email, device, "new sign-in notice (log sender — local only)");
+        tracing::warn!(email, device, ip, "new sign-in notice (log sender — local only)");
         Ok(())
     }
 }

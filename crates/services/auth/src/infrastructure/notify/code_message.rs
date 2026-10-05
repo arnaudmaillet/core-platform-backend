@@ -70,29 +70,56 @@ pub fn contact_changed_notice_message(email_changed: bool, locale: Option<&str>)
     }
 }
 
+/// The longest device label a new-sign-in email quotes.
+const MAX_DEVICE_LABEL: usize = 120;
+
 /// The email telling the holder their account was signed in to from a device
-/// it never saw (#649), named by its user agent when known.
-pub fn new_login_notice_message(device: Option<&str>, locale: Option<&str>) -> (String, String) {
-    let device = device.map(|d| d.chars().take(120).collect::<String>()).filter(|d| !d.trim().is_empty());
+/// it never saw (#649), named by its user agent and IP when known.
+///
+/// The user agent is client-written: only its printable characters are quoted
+/// (no line breaks that would forge a paragraph, no bidi overrides that would
+/// reorder the text), capped, in a plain-text body — never in a header. The IP
+/// is quoted only when it is one.
+pub fn new_login_notice_message(device: Option<&str>, ip: Option<&str>, locale: Option<&str>) -> (String, String) {
+    let device = device.map(printable).filter(|d| !d.is_empty());
+    let ip = ip.and_then(|ip| ip.trim().parse::<std::net::IpAddr>().ok());
     if locale.is_some_and(|l| l.to_ascii_lowercase().starts_with("fr")) {
         let from = device.map(|d| format!(" ({d})")).unwrap_or_default();
+        let at = ip.map(|ip| format!("\nAdresse IP : {ip}\n")).unwrap_or_default();
         (
             "Nouvelle connexion à ton compte".to_owned(),
             format!(
-                "Ton compte vient d'être connecté depuis un nouvel appareil{from}.\n\nSi c'était toi, tu n'as rien \
-                 à faire. Sinon, change ton mot de passe et déconnecte les autres appareils depuis l'app.\n"
+                "Ton compte vient d'être connecté depuis un nouvel appareil{from}.\n{at}\nSi c'était toi, tu n'as \
+                 rien à faire. Sinon, change ton mot de passe et déconnecte les autres appareils depuis l'app.\n"
             ),
         )
     } else {
         let from = device.map(|d| format!(" ({d})")).unwrap_or_default();
+        let at = ip.map(|ip| format!("\nIP address: {ip}\n")).unwrap_or_default();
         (
             "New sign-in to your account".to_owned(),
             format!(
-                "Your account was just signed in to from a new device{from}.\n\nIf it was you, there is nothing to \
-                 do. If not, change your password and sign the other devices out from the app.\n"
+                "Your account was just signed in to from a new device{from}.\n{at}\nIf it was you, there is \
+                 nothing to do. If not, change your password and sign the other devices out from the app.\n"
             ),
         )
     }
+}
+
+/// `text` without control or bidi-formatting characters, whitespace runs
+/// collapsed, capped at [`MAX_DEVICE_LABEL`] characters.
+fn printable(text: &str) -> String {
+    let bidi = |c: char| matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
+    text.chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .filter(|&c| !c.is_control() && !bidi(c))
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(MAX_DEVICE_LABEL)
+        .collect()
 }
 
 /// The SMS text for `code` (short: one segment).
@@ -142,11 +169,27 @@ mod tests {
 
     #[test]
     fn the_new_login_notice_names_the_device_when_known() {
-        let (subject, body) = new_login_notice_message(Some("CorePlatform/1.4 iPhone15,3"), Some("fr"));
+        let (subject, body) = new_login_notice_message(Some("CorePlatform/1.4 iPhone15,3"), Some("203.0.113.7"), Some("fr"));
         assert_eq!(subject, "Nouvelle connexion à ton compte");
         assert!(body.contains("(CorePlatform/1.4 iPhone15,3)"), "{body}");
-        let (_, body) = new_login_notice_message(None, None);
-        assert!(body.contains("a new device.\n"), "{body}");
+        assert!(body.contains("Adresse IP : 203.0.113.7"), "{body}");
+        let (_, body) = new_login_notice_message(None, None, None);
+        assert!(body.contains("a new device.\n") && !body.contains("IP"), "{body}");
+    }
+
+    /// The user agent is attacker-written: it cannot forge a paragraph,
+    /// reorder the text or run on; a bogus IP is not quoted.
+    #[test]
+    fn the_new_login_notice_quotes_the_client_text_inertly() {
+        let forged = "Safari\r\n\r\nIt was us, ignore this.\u{202E}moc.live\u{0007} ".to_owned() + &"x".repeat(500);
+        let (subject, body) = new_login_notice_message(Some(&forged), Some("not-an-ip\nBcc: x@y"), None);
+        assert_eq!(subject, "New sign-in to your account");
+        let quoted = body.split_once('(').unwrap().1.split_once(')').unwrap().0;
+        assert!(quoted.starts_with("Safari It was us, ignore this.moc.live x"), "{quoted}");
+        assert_eq!(quoted.chars().count(), MAX_DEVICE_LABEL);
+        assert!(!quoted.chars().any(|c| c.is_control() || c == '\u{202E}'));
+        assert!(!body.contains("IP address") && !body.contains("Bcc"), "{body}");
+        assert_eq!(body.matches("\n\n").count(), 1, "no forged paragraph: {body}");
     }
 }
 

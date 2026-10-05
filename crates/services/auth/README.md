@@ -161,8 +161,11 @@ credential RPCs answer `UNAVAILABLE` (`AUT-5005`).
 
 **New-sign-in alerts (#649).** A sign-in from a device the account never used — its `device_id`
 (`DeviceContext`) absent from every session the account ever had, whatever their status — emails the
-account's address ("New sign-in to your account", naming the device's user agent). Not on the account's
-very first sign-in, not without a `device_id`, and only where the code transports are configured. The
+account's address ("New sign-in to your account", naming the device's user agent — printable characters
+only, capped at 120, in a plain-text body — and the IP the transport saw). The `device_id` is
+client-written, so a sign-in **without** one counts as a new device too, unless the account's latest 5
+sessions all came without one (the holder's own client sends none). Not on the account's very first
+sign-in, and only where the code transports are configured. The
 history is read before the session is issued; the email goes out in the background, so an alert never
 fails or slows a sign-in. Push alerts wait for APNs.
 

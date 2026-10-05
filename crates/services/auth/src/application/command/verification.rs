@@ -230,8 +230,14 @@ impl VerificationCodes {
 
     /// Tells the holder at `email` of a sign-in from a new device (#649),
     /// through the code transports.
-    pub async fn notify_new_login(&self, email: &str, device: Option<&str>, locale: Option<&str>) -> Result<(), AuthError> {
-        self.sender.send_new_login_notice(email, device, locale).await
+    pub async fn notify_new_login(
+        &self,
+        email: &str,
+        device: Option<&str>,
+        ip: Option<&str>,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        self.sender.send_new_login_notice(email, device, ip, locale).await
     }
 
     pub async fn start(&self, cmd: StartVerificationCommand) -> Result<StartedVerification, AuthError> {

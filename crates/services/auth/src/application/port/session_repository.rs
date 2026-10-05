@@ -4,21 +4,30 @@ use crate::domain::aggregate::Session;
 use crate::domain::value_object::{AccountId, SessionId};
 use crate::error::AuthError;
 
+/// How many of the account's latest sessions decide whether its own client
+/// sends no device id (#649).
+pub const RECENT_SESSIONS: i64 = 5;
+
 /// What an account's sessions — every one issued, whatever its status — say of
 /// a device (#649: a sign-in from a device never seen is announced).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DeviceHistory {
     /// The account had a session before.
     pub any_session: bool,
-    /// One of them was on this device.
+    /// One of them was on this device (never, for a sign-in without a device id).
     pub seen_device: bool,
+    /// Its latest [`RECENT_SESSIONS`] sessions all came without a device id:
+    /// the holder's own client sends none.
+    pub recent_without_device_id: bool,
 }
 
 impl DeviceHistory {
-    /// A sign-in worth telling the holder about: from a new device, on an
-    /// account that signed in before (not its very first sign-in).
-    pub fn is_new_device(&self) -> bool {
-        self.any_session && !self.seen_device
+    /// A sign-in worth telling the holder about, on an account that signed in
+    /// before (not its very first sign-in): from a device never seen, or with
+    /// no device id at all — the id is client-written, so leaving it out must
+    /// not silence the alert — unless the holder's own client sends none.
+    pub fn announces(&self, with_device_id: bool) -> bool {
+        self.any_session && if with_device_id { !self.seen_device } else { !self.recent_without_device_id }
     }
 }
 
@@ -39,6 +48,8 @@ pub trait SessionRepository: Send + Sync + 'static {
         account_id: &AccountId,
     ) -> Result<Vec<Session>, AuthError>;
 
-    /// The account's sessions, of any status, against `device_id`.
-    async fn device_history(&self, account_id: &AccountId, device_id: &str) -> Result<DeviceHistory, AuthError>;
+    /// The account's sessions, of any status, against `device_id` (`None`: the
+    /// sign-in sent none).
+    async fn device_history(&self, account_id: &AccountId, device_id: Option<&str>)
+    -> Result<DeviceHistory, AuthError>;
 }

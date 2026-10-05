@@ -142,14 +142,18 @@ impl LoginHandler {
         }
     }
 
-    /// Did `device` never sign in to the account before (an account that did
-    /// sign in before, #649)? Only with the code transports to announce it, a
-    /// device id to tell devices apart, and the history readable: anything
-    /// else is "no" — an alert never fails or slows a sign-in.
+    /// Is this sign-in from a device the account never used (an account that
+    /// did sign in before, #649)? One without a device id counts as new — the
+    /// id is client-written — unless the holder's own client sends none (see
+    /// [`DeviceHistory::announces`](crate::application::port::DeviceHistory::announces)).
+    /// Only with the code transports to announce it and the history readable:
+    /// anything else is "no" — an alert never fails or slows a sign-in.
     async fn is_new_device(&self, account_id: &AccountId, device: &DeviceFingerprint) -> bool {
-        let (Some(_), Some(device_id)) = (&self.codes, device.device_id()) else { return false };
-        match self.members.sessions.device_history(account_id, device_id).await {
-            Ok(history) => history.is_new_device(),
+        if self.codes.is_none() {
+            return false;
+        }
+        match self.members.sessions.device_history(account_id, device.device_id()).await {
+            Ok(history) => history.announces(device.device_id().is_some()),
             Err(error) => {
                 tracing::warn!(%error, "device history unreadable; no new-sign-in alert");
                 false
@@ -157,9 +161,9 @@ impl LoginHandler {
         }
     }
 
-    /// Emails the account's address about the new device, in the background
-    /// (best effort, off the sign-in's path).
-    fn announce_new_device(&self, account_id: AccountId, user_agent: Option<String>) {
+    /// Emails the account's address about the new device (its user agent and
+    /// IP), in the background (best effort, off the sign-in's path).
+    fn announce_new_device(&self, account_id: AccountId, user_agent: Option<String>, ip: Option<String>) {
         let (Some(codes), directory) = (self.codes.clone(), Arc::clone(&self.directory)) else { return };
         tokio::spawn(async move {
             let email = match directory.contact(&account_id).await {
@@ -170,7 +174,7 @@ impl LoginHandler {
                 }
             };
             if let Some(email) = email
-                && let Err(error) = codes.notify_new_login(&email, user_agent.as_deref(), None).await
+                && let Err(error) = codes.notify_new_login(&email, user_agent.as_deref(), ip.as_deref(), None).await
             {
                 tracing::warn!(%error, "new-sign-in alert not sent");
             }
@@ -279,13 +283,13 @@ impl LoginHandler {
         // 5. Issue the session, its refresh token and the edge access token —
         //    after reading whether this device ever signed in to the account.
         let new_device = self.is_new_device(&account_id, &cmd.device).await;
-        let user_agent = cmd.device.user_agent().map(str::to_owned);
+        let (user_agent, ip) = (cmd.device.user_agent().map(str::to_owned), cmd.device.ip_address().map(str::to_owned));
         let issued = self
             .members
             .issue(account_id, subject, cmd.device, permissions, age_bracket, now, correlation_id)
             .await?;
         if new_device {
-            self.announce_new_device(account_id, user_agent);
+            self.announce_new_device(account_id, user_agent, ip);
         }
 
         // 6. The guest this device was is now this member.
@@ -475,7 +479,7 @@ mod tests {
 
     /// #649: a sign-in from a device the account never used is emailed to the
     /// account's address — not the account's very first sign-in, not a known
-    /// device, not one without a device id.
+    /// device. One without a device id is new: the id is client-written.
     #[tokio::test]
     async fn a_sign_in_from_a_new_device_is_emailed_to_the_account() {
         use crate::application::command::verification::{VerificationCodes, VerificationPolicy};
@@ -496,7 +500,11 @@ mod tests {
                 Uuid::now_v7(),
                 LoginCommand {
                     grant: AuthnGrant::Password { username: "user".into(), password: "pw".into() },
-                    device: DeviceFingerprint::new(Some("App/1.0 iPhone".into()), None, device_id.map(str::to_owned)),
+                    device: DeviceFingerprint::new(
+                        Some("App/1.0 iPhone".into()),
+                        Some("203.0.113.7".into()),
+                        device_id.map(str::to_owned),
+                    ),
                     guest_refresh_token: None,
                     client_ip: None,
                 },
@@ -510,16 +518,21 @@ mod tests {
         settle().await;
         assert!(sender.login_notices().is_empty());
 
-        // The same phone again; then a device with no id: nothing to tell.
+        // The same phone again: nothing to tell.
         handler.handle(login(Some("phone")), t0()).await.unwrap();
-        handler.handle(login(None), t0()).await.unwrap();
         settle().await;
         assert!(sender.login_notices().is_empty());
+        let told = || ("me@example.com".to_owned(), Some("App/1.0 iPhone".to_owned()), Some("203.0.113.7".to_owned()));
+
+        // No device id, from a holder whose client sends one: told.
+        handler.handle(login(None), t0()).await.unwrap();
+        settle().await;
+        assert_eq!(sender.login_notices(), vec![told()]);
 
         // A new device: the account's address is told, naming the device.
         handler.handle(login(Some("laptop")), t0()).await.unwrap();
         settle().await;
-        assert_eq!(sender.login_notices(), vec![("me@example.com".to_owned(), Some("App/1.0 iPhone".to_owned()))]);
+        assert_eq!(sender.login_notices(), vec![told(), told()]);
     }
 }
 

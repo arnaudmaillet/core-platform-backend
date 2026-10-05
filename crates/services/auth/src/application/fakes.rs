@@ -458,13 +458,16 @@ impl SessionRepository for InMemorySessionRepository {
     async fn device_history(
         &self,
         account_id: &AccountId,
-        device_id: &str,
+        device_id: Option<&str>,
     ) -> Result<super::port::DeviceHistory, AuthError> {
         let sessions = self.sessions.lock().unwrap();
-        let mine: Vec<&Session> = sessions.values().filter(|s| s.account_id() == *account_id).collect();
+        let mut mine: Vec<&Session> = sessions.values().filter(|s| s.account_id() == *account_id).collect();
+        mine.sort_by_key(|s| std::cmp::Reverse(s.issued_at()));
         Ok(super::port::DeviceHistory {
             any_session: !mine.is_empty(),
-            seen_device: mine.iter().any(|s| s.device().device_id() == Some(device_id)),
+            seen_device: device_id.is_some_and(|id| mine.iter().any(|s| s.device().device_id() == Some(id))),
+            recent_without_device_id: !mine.is_empty()
+                && mine.iter().take(super::port::RECENT_SESSIONS as usize).all(|s| s.device().device_id().is_none()),
         })
     }
 }
@@ -1029,10 +1032,13 @@ pub struct RecordingCodeSender {
     notices: Mutex<Vec<(String, Option<String>)>>,
     /// (changed channel, email told) of every contact-changed notice (#651).
     contact_notices: Mutex<Vec<(super::port::VerificationChannel, String)>>,
-    /// (email told, device) of every new-sign-in notice (#649).
-    login_notices: Mutex<Vec<(String, Option<String>)>>,
+    /// (email told, device, ip) of every new-sign-in notice (#649).
+    login_notices: Mutex<Vec<LoginNotice>>,
     failing: std::sync::atomic::AtomicBool,
 }
+
+/// (email told, device, ip) of a new-sign-in notice.
+pub type LoginNotice = (String, Option<String>, Option<String>);
 
 impl RecordingCodeSender {
     /// The last (destination, code, locale) sent.
@@ -1048,8 +1054,8 @@ impl RecordingCodeSender {
         self.failing.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// The (email told, device) of every new-sign-in notice.
-    pub fn login_notices(&self) -> Vec<(String, Option<String>)> {
+    /// The (email told, device, ip) of every new-sign-in notice.
+    pub fn login_notices(&self) -> Vec<LoginNotice> {
         self.login_notices.lock().unwrap().clone()
     }
 
@@ -1104,9 +1110,10 @@ impl super::port::CodeSender for RecordingCodeSender {
         &self,
         email: &str,
         device: Option<&str>,
+        ip: Option<&str>,
         _locale: Option<&str>,
     ) -> Result<(), AuthError> {
-        self.login_notices.lock().unwrap().push((email.to_owned(), device.map(str::to_owned)));
+        self.login_notices.lock().unwrap().push((email.to_owned(), device.map(str::to_owned), ip.map(str::to_owned)));
         Ok(())
     }
 }

@@ -85,9 +85,10 @@ impl CodeSender for SmtpCodeSender {
         &self,
         email: &str,
         device: Option<&str>,
+        ip: Option<&str>,
         locale: Option<&str>,
     ) -> Result<(), AuthError> {
-        let (subject, body) = new_login_notice_message(device, locale);
+        let (subject, body) = new_login_notice_message(device, ip, locale);
         self.mail(email, subject, body).await
     }
 }
