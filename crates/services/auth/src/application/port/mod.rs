@@ -31,7 +31,7 @@ pub use federated_nonce_store::FederatedNonceStore;
 pub use federated_token_verifier::{FederatedIdentity, FederatedTokenVerifier};
 pub use guest_registry::{GuestRecord, GuestRegistry};
 pub use identity_provider::{AuthnGrant, IdentityProvider, NormalizedClaims};
-pub use mfa::{MfaSecret, MfaSeedCipher, MfaStore, PendingLogin};
+pub use mfa::{MfaChange, MfaSecret, MfaSeedCipher, MfaStore, PendingLogin};
 pub use profile_directory::{profile_ids_or_empty, ProfileDirectory};
 pub use refresh_token_repository::RefreshTokenRepository;
 pub use session_cache::SessionCache;

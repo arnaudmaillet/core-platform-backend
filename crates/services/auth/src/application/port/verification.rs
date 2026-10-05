@@ -169,4 +169,16 @@ pub trait CodeSender: Send + Sync + 'static {
     ) -> Result<(), AuthError> {
         Ok(())
     }
+
+    /// Tells the holder at `email` that their two-step sign-in changed
+    /// (#649): turned on, off, or its backup codes regenerated — so a
+    /// takeover that disables it is visible to them. Email only.
+    async fn send_mfa_changed_notice(
+        &self,
+        _email: &str,
+        _change: super::MfaChange,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        Ok(())
+    }
 }

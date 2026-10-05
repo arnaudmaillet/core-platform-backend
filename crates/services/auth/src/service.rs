@@ -66,6 +66,12 @@ impl Service for AuthService {
         // The holder's own email / phone (#651): a code to the new address,
         // and a recent credential proof (checked in the handler).
         authenticated("/auth.v1.AuthService/ChangeContact"),
+        // The holder's two-step sign-in (#649); Start / Disable / Regenerate
+        // also need a recent credential proof (checked in the handler).
+        authenticated("/auth.v1.AuthService/StartMfaEnrollment"),
+        authenticated("/auth.v1.AuthService/ConfirmMfaEnrollment"),
+        authenticated("/auth.v1.AuthService/DisableMfa"),
+        authenticated("/auth.v1.AuthService/RegenerateBackupCodes"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

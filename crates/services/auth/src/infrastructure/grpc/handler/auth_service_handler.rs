@@ -8,7 +8,8 @@ use uuid::Uuid;
 
 use transport::grpc::edge;
 use crate::application::command::{
-    ChangeContactCommand, ChangeContactHandler, ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, GuestAttestation, CompleteLoginCommand, IssuedSession, LoginCommand, LoginHandler, LoginOutcome,
+    ChangeContactCommand, ChangeContactHandler, ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, GuestAttestation, CompleteLoginCommand, IssuedSession, LoginCommand, LoginHandler, LoginOutcome, MfaCaller,
+    MfaSettingsHandler,
     LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutCommand, LogoutHandler,
     RefreshCommand, RefreshHandler, SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome,
     StartGuestSessionCommand, StartGuestSessionHandler, StartVerificationCommand, VerificationCodes,
@@ -45,6 +46,7 @@ pub struct AuthServiceHandler {
     sign_up: Option<Arc<SignUpHandler>>,
     codes: Option<Arc<VerificationCodes>>,
     change_contact: Option<Arc<ChangeContactHandler>>,
+    mfa_settings: Option<Arc<MfaSettingsHandler>>,
     nonces: Option<Arc<FederatedNonces>>,
     attestation: Option<Arc<GuestAttestation>>,
     /// Proxies appending to `X-Forwarded-For` in front of the edge
@@ -78,6 +80,7 @@ impl AuthServiceHandler {
             sign_up: None,
             codes: None,
             change_contact: None,
+            mfa_settings: None,
             nonces: None,
             attestation: None,
             trusted_proxy_hops: transport::grpc::client_ip::DEFAULT_TRUSTED_PROXY_HOPS,
@@ -134,6 +137,86 @@ impl AuthServiceHandler {
                 VerificationChannel::Sms => proto::VerificationChannel::Sms,
             } as i32,
             destination: changed.destination,
+        }))
+    }
+
+    /// Enables the two-step sign-in settings RPCs (#649).
+    pub fn with_mfa_settings(mut self, handler: Arc<MfaSettingsHandler>) -> Self {
+        self.mfa_settings = Some(handler);
+        self
+    }
+
+    fn mfa_settings(&self) -> Result<&MfaSettingsHandler, Status> {
+        self.mfa_settings.as_deref().ok_or_else(|| Status::unimplemented("two-step sign-in settings are not enabled"))
+    }
+
+    /// Edge `authenticated` + a recent credential proof (#649).
+    pub async fn start_mfa_enrollment(
+        &self,
+        request: Request<proto::StartMfaEnrollmentRequest>,
+    ) -> Result<Response<proto::StartMfaEnrollmentResponse>, Status> {
+        let handler = self.mfa_settings()?;
+        edge::require_recent_auth(&request, edge::STEP_UP_MAX_AGE_SECS)?;
+        let (account_id, session_id) = caller(&request)?;
+        let started = handler
+            .start(Envelope::new(Uuid::now_v7(), MfaCaller { account_id, session_id }), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::StartMfaEnrollmentResponse {
+            secret: started.secret,
+            otpauth_uri: started.otpauth_uri,
+            expires_in: started.expires_in_secs,
+        }))
+    }
+
+    /// Edge `authenticated` (#649): the enrolment was started after a step-up.
+    pub async fn confirm_mfa_enrollment(
+        &self,
+        request: Request<proto::ConfirmMfaEnrollmentRequest>,
+    ) -> Result<Response<proto::BackupCodesResponse>, Status> {
+        let handler = self.mfa_settings()?;
+        let (account_id, session_id) = caller(&request)?;
+        let code = request.into_inner().code;
+        let codes = handler
+            .confirm(Envelope::new(Uuid::now_v7(), (MfaCaller { account_id, session_id }, code)), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::BackupCodesResponse {
+            backup_codes: codes.codes,
+            sessions_revoked: codes.sessions_revoked,
+        }))
+    }
+
+    /// Edge `authenticated` + a recent credential proof (#649).
+    pub async fn disable_mfa(
+        &self,
+        request: Request<proto::DisableMfaRequest>,
+    ) -> Result<Response<proto::DisableMfaResponse>, Status> {
+        let handler = self.mfa_settings()?;
+        edge::require_recent_auth(&request, edge::STEP_UP_MAX_AGE_SECS)?;
+        let (account_id, session_id) = caller(&request)?;
+        handler
+            .disable(Envelope::new(Uuid::now_v7(), MfaCaller { account_id, session_id }), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::DisableMfaResponse {}))
+    }
+
+    /// Edge `authenticated` + a recent credential proof (#649).
+    pub async fn regenerate_backup_codes(
+        &self,
+        request: Request<proto::RegenerateBackupCodesRequest>,
+    ) -> Result<Response<proto::BackupCodesResponse>, Status> {
+        let handler = self.mfa_settings()?;
+        edge::require_recent_auth(&request, edge::STEP_UP_MAX_AGE_SECS)?;
+        let (account_id, session_id) = caller(&request)?;
+        let codes = handler
+            .regenerate(Envelope::new(Uuid::now_v7(), MfaCaller { account_id, session_id }), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::BackupCodesResponse {
+            backup_codes: codes.codes,
+            sessions_revoked: codes.sessions_revoked,
         }))
     }
 

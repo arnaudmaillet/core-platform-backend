@@ -15,3 +15,4 @@ pub mod verification_codes;
 mod contact_change;
 mod device_history;
 mod two_step_sign_in;
+mod mfa_enrolment;

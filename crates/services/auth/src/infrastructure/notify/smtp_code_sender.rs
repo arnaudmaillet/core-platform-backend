@@ -7,8 +7,11 @@ use lettre::message::{header::ContentType, Mailbox};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
-use super::code_message::{code_message, contact_changed_notice_message, lockout_notice_message, new_login_notice_message};
-use crate::application::port::{CodeSender, VerificationChannel};
+use super::code_message::{
+    code_message, contact_changed_notice_message, lockout_notice_message, mfa_changed_notice_message,
+    new_login_notice_message,
+};
+use crate::application::port::{CodeSender, MfaChange, VerificationChannel};
 use crate::error::AuthError;
 
 #[derive(Debug, Clone)]
@@ -89,6 +92,16 @@ impl CodeSender for SmtpCodeSender {
         locale: Option<&str>,
     ) -> Result<(), AuthError> {
         let (subject, body) = new_login_notice_message(device, ip, locale);
+        self.mail(email, subject, body).await
+    }
+
+    async fn send_mfa_changed_notice(
+        &self,
+        email: &str,
+        change: MfaChange,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        let (subject, body) = mfa_changed_notice_message(change, locale);
         self.mail(email, subject, body).await
     }
 }

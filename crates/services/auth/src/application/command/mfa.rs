@@ -78,6 +78,34 @@ impl MfaVerifier {
         Err(AuthError::MfaCodeInvalid)
     }
 
+    /// Proves the first TOTP code of an enrolment against its new `seed`,
+    /// under the same attempt limit and step claim as any code.
+    pub async fn check_new_seed(
+        &self,
+        account: &AccountId,
+        seed: &TotpSecret,
+        code: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), AuthError> {
+        let (attempts, retry_after_secs) =
+            self.store.reserve_attempt(account, self.policy.failure_window_secs).await?;
+        if attempts > self.policy.max_failures {
+            return Err(AuthError::MfaLocked { retry_after_secs: retry_after_secs.max(1) });
+        }
+        let proven = match seed.matching_step(code, now) {
+            Some(step) => self.store.claim_step(account, step, STEP_CLAIM_TTL_SECS).await?,
+            None => false,
+        };
+        if !proven {
+            return Err(AuthError::MfaCodeInvalid);
+        }
+        self.store.clear_failures(account).await
+    }
+
+    pub fn cipher(&self) -> &Arc<dyn MfaSeedCipher> {
+        &self.cipher
+    }
+
     async fn proves(&self, account: &AccountId, code: &str, now: DateTime<Utc>) -> Result<bool, AuthError> {
         if let Some(totp) = totp_digits(code) {
             let secret = self.directory.mfa_secret(account).await?;

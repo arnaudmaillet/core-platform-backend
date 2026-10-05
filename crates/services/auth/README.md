@@ -209,7 +209,20 @@ used `mfa_token` is `AUT-5021`. The TOTP seed is auth's: sealed with AES-256-GCM
 `AUTH_MFA_SEED_KEY` (the key id stamped on it, older keys in `AUTH_MFA_SEED_KEYS_PREVIOUS`) before
 `account` keeps it; a backup code is kept as an HMAC-SHA-256 under a key derived from it. **Without the
 key, two-step sign-in fails closed**: an account with it on cannot sign in (`AUT-5019`,
-`UNAVAILABLE`) — the key must never be removed once used. Enrolment comes next (#649 part 3).
+`UNAVAILABLE`) — the key must never be removed once used.
+
+**Two-step sign-in settings (#649).** All edge **authenticated**; Start, Disable and Regenerate also
+need a recent credential proof (the step-up below). `StartMfaEnrollment` makes a new seed and returns it
+for the authenticator app (the `otpauth://` URI for a QR code — issuer `AUTH_MFA_ISSUER`, the holder's
+email or phone as the label — or the base32 secret to type); it waits, sealed, for its first code
+(`auth:{mfa:<id>}:enrol`, 10 minutes; starting again replaces it; `AUT-5022` when already on).
+`ConfirmMfaEnrollment(code)` takes that first code (same attempt limit and one-use steps as sign-in),
+turns two-step sign-in on at `account`, returns **10 backup codes, shown once** (only their HMACs are
+kept), and **signs the account's other sessions out** (`mfa_changed`, like a password change: an
+intruder already signed in elsewhere has to pass the second factor); no enrolment waiting is
+`AUT-5021`. `RegenerateBackupCodes` replaces the codes (the old ones stop working) and signs the other
+sessions out too; `DisableMfa` turns it off (`AUT-5020` when it is). Each change is emailed to the
+account's address (turned on, turned off, new backup codes), so a takeover that disables it is visible.
 
 **Step-up.** A token minted right after a credential proof — `Login` / `CompleteLogin`, or
 `VerifyCredentials` (re-prove the password, or give a two-step code: the step-up of an account without
@@ -322,6 +335,7 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | `AUTH_SMS_DAILY_BUDGET` | SMS the whole service may send per UTC day (`0` = none); over it `AUT-5016`. | `50` |
 | `AUTH_SMS_COUNTRY_DAILY_BUDGET` | SMS one destination country may receive per UTC day, checked before the service's; over it `AUT-5016`. | `25` |
 | `AUTH_MFA_SEED_KEY` · `AUTH_MFA_SEED_KEY_ID` · `AUTH_MFA_SEED_KEYS_PREVIOUS` | Two-step sign-in (#649): the AES-256 key sealing TOTP seeds (32 bytes, standard base64), its id, and retired keys (`id:base64,…`) still opening older seeds. Unset → two-step sign-in unavailable, fail-closed (`AUT-5019`). **Never remove once used.** Provisioned by core-platform-infra#27. | — · `k1` · — |
+| `AUTH_MFA_ISSUER` | The service's name in the holder's authenticator app (#649). | `Core Platform` |
 | `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES_PER_IP` · `_MAX_FAILURES` | Code lifetime, tries per code, codes per address an hour / a day, resend cooldown, wrong codes per address from one IP in 24 h before it is locked for that IP, and from anywhere before it is locked for everyone. | `600` · `5` · `5` · `20` · `30` · `15` · `50` |
 | Postgres / Redis / Kafka | via the shared storage crates' own `from_env()` | — |
 

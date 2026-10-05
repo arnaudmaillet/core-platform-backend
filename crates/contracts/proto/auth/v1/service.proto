@@ -116,6 +116,30 @@ service AuthService {
     // before is told. Another account's address: AUT-6006 / AUT-6007.
     rpc ChangeContact(ChangeContactRequest) returns (ChangeContactResponse);
 
+    // ── Two-step sign-in settings (#649) ──────────────────────────────────────
+
+    // Start turning two-step sign-in on: a new seed for the holder's
+    // authenticator app (the `otpauth://` URI for a QR code, or the secret to
+    // type), kept until its first code confirms it (10 minutes; starting again
+    // replaces it). Needs a recent credential proof. AUT-5022 when already on.
+    rpc StartMfaEnrollment(StartMfaEnrollmentRequest) returns (StartMfaEnrollmentResponse);
+
+    // The first code from the authenticator app: two-step sign-in is on, the
+    // backup codes are returned — shown once, never again — and the account's
+    // other sessions are signed out. The account's email is told. A wrong
+    // code is AUT-5017; no enrolment waiting (expired, or never started) is
+    // AUT-5021.
+    rpc ConfirmMfaEnrollment(ConfirmMfaEnrollmentRequest) returns (BackupCodesResponse);
+
+    // Turn two-step sign-in off. Needs a recent credential proof; the
+    // account's email is told. AUT-5020 when already off.
+    rpc DisableMfa(DisableMfaRequest) returns (DisableMfaResponse);
+
+    // A new set of backup codes (shown once; the old ones stop working); the
+    // other sessions are signed out. Needs a recent credential proof; the
+    // account's email is told. AUT-5020 when two-step sign-in is off.
+    rpc RegenerateBackupCodes(RegenerateBackupCodesRequest) returns (BackupCodesResponse);
+
     // ── Introspection & device management ─────────────────────────────────────
 
     // INTERNAL. Server-side token introspection returning the normalized

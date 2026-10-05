@@ -14,7 +14,7 @@ pub use log_code_sender::{LogCodeSender, UnconfiguredCodeSender};
 pub use smtp_code_sender::{SmtpCodeSender, SmtpConfig};
 pub use sns_code_sender::{SnsCodeSender, SnsConfig};
 
-use crate::application::port::{CodeSender, VerificationChannel};
+use crate::application::port::{CodeSender, MfaChange, VerificationChannel};
 use crate::error::AuthError;
 
 /// Routes a code to the sender of its channel (email, SMS); a channel with
@@ -78,6 +78,18 @@ impl CodeSender for ChannelCodeSender {
     ) -> Result<(), AuthError> {
         match &self.email {
             Some(sender) => sender.send_new_login_notice(email, device, ip, locale).await,
+            None => Ok(()),
+        }
+    }
+
+    async fn send_mfa_changed_notice(
+        &self,
+        email: &str,
+        change: MfaChange,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        match &self.email {
+            Some(sender) => sender.send_mfa_changed_notice(email, change, locale).await,
             None => Ok(()),
         }
     }

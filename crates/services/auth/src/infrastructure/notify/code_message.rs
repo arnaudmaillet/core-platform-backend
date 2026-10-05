@@ -1,6 +1,8 @@
 //! The words of a one-time-code message, in the reader's language (French or
 //! English for now).
 
+use crate::application::port::MfaChange;
+
 /// `(subject, plain-text body)` for `code`, valid `minutes`.
 pub fn code_message(code: &str, minutes: i64, locale: Option<&str>) -> (String, String) {
     let french = locale.is_some_and(|l| l.to_ascii_lowercase().starts_with("fr"));
@@ -122,6 +124,51 @@ fn printable(text: &str) -> String {
         .collect()
 }
 
+/// The email telling the holder their two-step sign-in changed (#649).
+pub fn mfa_changed_notice_message(change: MfaChange, locale: Option<&str>) -> (String, String) {
+    let french = locale.is_some_and(|l| l.to_ascii_lowercase().starts_with("fr"));
+    let (subject, what) = match (change, french) {
+        (MfaChange::Enabled, true) => (
+            "Connexion en deux étapes activée",
+            "La connexion en deux étapes vient d'être activée sur ton compte : chaque connexion demandera \
+             désormais un code de ton application d'authentification. Tes autres appareils ont été déconnectés.",
+        ),
+        (MfaChange::Disabled, true) => (
+            "Connexion en deux étapes désactivée",
+            "La connexion en deux étapes vient d'être désactivée sur ton compte : ton mot de passe ou un code \
+             par e-mail suffit de nouveau pour se connecter.",
+        ),
+        (MfaChange::BackupCodesRegenerated, true) => (
+            "Nouveaux codes de secours",
+            "De nouveaux codes de secours viennent d'être générés pour ton compte : les anciens ne fonctionnent \
+             plus. Tes autres appareils ont été déconnectés.",
+        ),
+        (MfaChange::Enabled, false) => (
+            "Two-step sign-in turned on",
+            "Two-step sign-in was just turned on for your account: every sign-in will now ask for a code from \
+             your authenticator app. Your other devices were signed out.",
+        ),
+        (MfaChange::Disabled, false) => (
+            "Two-step sign-in turned off",
+            "Two-step sign-in was just turned off for your account: your password or an email code is enough \
+             to sign in again.",
+        ),
+        (MfaChange::BackupCodesRegenerated, false) => (
+            "New backup codes",
+            "New backup codes were just generated for your account: the old ones no longer work. Your other \
+             devices were signed out.",
+        ),
+    };
+    let tail = if french {
+        "Si c'était toi, tu n'as rien à faire. Sinon, sécurise ton compte tout de suite : change ton mot de \
+         passe et contacte-nous depuis l'app."
+    } else {
+        "If it was you, there is nothing to do. If not, secure your account now: change your password and \
+         contact us from the app."
+    };
+    (subject.to_owned(), format!("{what}\n\n{tail}\n"))
+}
+
 /// The SMS text for `code` (short: one segment).
 pub fn sms_message(code: &str, minutes: i64, locale: Option<&str>) -> String {
     if locale.is_some_and(|l| l.to_ascii_lowercase().starts_with("fr")) {
@@ -191,5 +238,16 @@ mod tests {
         assert!(!body.contains("IP address") && !body.contains("Bcc"), "{body}");
         assert_eq!(body.matches("\n\n").count(), 1, "no forged paragraph: {body}");
     }
-}
 
+    #[test]
+    fn the_mfa_notice_says_what_changed_in_the_holders_language() {
+        let (subject, body) = mfa_changed_notice_message(MfaChange::Disabled, Some("fr-FR"));
+        assert_eq!(subject, "Connexion en deux étapes désactivée");
+        assert!(body.contains("sécurise ton compte"), "{body}");
+        let (subject, body) = mfa_changed_notice_message(MfaChange::Enabled, None);
+        assert_eq!(subject, "Two-step sign-in turned on");
+        assert!(body.contains("signed out") && body.contains("If it was you"), "{body}");
+        let (subject, _) = mfa_changed_notice_message(MfaChange::BackupCodesRegenerated, None);
+        assert_eq!(subject, "New backup codes");
+    }
+}

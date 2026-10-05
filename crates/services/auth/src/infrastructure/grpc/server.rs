@@ -18,6 +18,34 @@ impl AuthService for AuthServiceHandler {
         self.login(request).await
     }
 
+    async fn start_mfa_enrollment(
+        &self,
+        request: Request<proto::StartMfaEnrollmentRequest>,
+    ) -> Result<Response<proto::StartMfaEnrollmentResponse>, Status> {
+        self.start_mfa_enrollment(request).await
+    }
+
+    async fn confirm_mfa_enrollment(
+        &self,
+        request: Request<proto::ConfirmMfaEnrollmentRequest>,
+    ) -> Result<Response<proto::BackupCodesResponse>, Status> {
+        self.confirm_mfa_enrollment(request).await
+    }
+
+    async fn disable_mfa(
+        &self,
+        request: Request<proto::DisableMfaRequest>,
+    ) -> Result<Response<proto::DisableMfaResponse>, Status> {
+        self.disable_mfa(request).await
+    }
+
+    async fn regenerate_backup_codes(
+        &self,
+        request: Request<proto::RegenerateBackupCodesRequest>,
+    ) -> Result<Response<proto::BackupCodesResponse>, Status> {
+        self.regenerate_backup_codes(request).await
+    }
+
     async fn complete_login(
         &self,
         request: Request<proto::CompleteLoginRequest>,

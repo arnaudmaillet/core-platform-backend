@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 1db106241f64c055cb98c2104092bed0463dc9dc3863b3d173fb3a8d0151eb09
+  source_sha256: d4bd52f79a10a1cc7c1a72a71208b0eb7bd19068902621a523d8c27f53e4bf1d
   translated_at: 2026-10-05
   status: complete
 ---
@@ -237,7 +237,22 @@ donne `AUT-5021`. La graine TOTP appartient à auth : scellée en AES-256-GCM so
 qu'`account` ne la conserve ; un code de secours est conservé sous forme de HMAC-SHA-256 avec une clé
 qui en est dérivée. **Sans la clé, la connexion en deux étapes échoue en mode fermé** : un compte qui l'a
 activée ne peut pas se connecter (`AUT-5019`, `UNAVAILABLE`) — la clé ne doit jamais être retirée une
-fois utilisée. L'enrôlement arrive ensuite (#649, partie 3).
+fois utilisée.
+
+**Réglages de la connexion en deux étapes (#649).** Toutes edge **authenticated** ; Start, Disable et
+Regenerate exigent aussi une preuve d'identifiant récente (le step-up ci-dessous). `StartMfaEnrollment`
+crée une nouvelle graine et la renvoie pour l'application d'authentification (l'URI `otpauth://` pour un
+QR code — émetteur `AUTH_MFA_ISSUER`, l'e-mail ou le téléphone du titulaire comme libellé — ou le secret
+base32 à saisir) ; elle attend, scellée, son premier code (`auth:{mfa:<id>}:enrol`, 10 minutes ;
+recommencer la remplace ; `AUT-5022` si déjà active). `ConfirmMfaEnrollment(code)` prend ce premier code
+(même limite de tentatives et pas à usage unique qu'à la connexion), active la connexion en deux étapes
+chez `account`, renvoie **10 codes de secours, affichés une seule fois** (seuls leurs HMAC sont
+conservés), et **déconnecte les autres sessions du compte** (`mfa_changed`, comme un changement de mot de
+passe : un intrus déjà connecté ailleurs doit passer le second facteur) ; aucun enrôlement en attente
+donne `AUT-5021`. `RegenerateBackupCodes` remplace les codes (les anciens cessent de fonctionner) et
+déconnecte aussi les autres sessions ; `DisableMfa` la désactive (`AUT-5020` si elle l'est déjà). Chaque
+changement est envoyé par e-mail à l'adresse du compte (activée, désactivée, nouveaux codes de secours),
+si bien qu'une prise de contrôle qui la désactive reste visible.
 
 **Step-up.** Un jeton émis juste après une preuve d'identifiant — `Login` / `CompleteLogin`, ou
 `VerifyCredentials` (re-prouver le mot de passe, ou donner un code de deux étapes : le step-up d'un
@@ -351,6 +366,7 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_SMS_DAILY_BUDGET` | SMS que le service entier peut envoyer par jour UTC (`0` = aucun) ; au-delà `AUT-5016`. | `50` |
 | `AUTH_SMS_COUNTRY_DAILY_BUDGET` | SMS qu'un pays de destination peut recevoir par jour UTC, vérifié avant celui du service ; au-delà `AUT-5016`. | `25` |
 | `AUTH_MFA_SEED_KEY` · `AUTH_MFA_SEED_KEY_ID` · `AUTH_MFA_SEED_KEYS_PREVIOUS` | Connexion en deux étapes (#649) : la clé AES-256 qui scelle les graines TOTP (32 octets, base64 standard), son identifiant, et les clés retirées (`id:base64,…`) qui ouvrent encore les anciennes graines. Absente → connexion en deux étapes indisponible, en mode fermé (`AUT-5019`). **Ne jamais la retirer une fois utilisée.** Provisionnée par core-platform-infra#27. | — · `k1` · — |
+| `AUTH_MFA_ISSUER` | Le nom du service dans l'application d'authentification du titulaire (#649). | `Core Platform` |
 | `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES_PER_IP` · `_MAX_FAILURES` | Durée de vie d'un code, essais par code, codes par adresse par heure / par jour, délai avant renvoi, codes faux par adresse depuis une IP en 24 h avant verrouillage pour cette IP, et depuis partout avant verrouillage pour tous. | `600` · `5` · `5` · `20` · `30` · `15` · `50` |
 | Postgres / Redis / Kafka | via les `from_env()` des crates de stockage partagées | — |
 

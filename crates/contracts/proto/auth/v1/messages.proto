@@ -380,3 +380,34 @@ message ChangeContactResponse {
     string              destination = 2;
 }
 
+
+// ── Two-step sign-in settings (#649) ──────────────────────────────────────────
+
+message StartMfaEnrollmentRequest {}
+
+message StartMfaEnrollmentResponse {
+    // The seed in base32 (RFC 4648, no padding), to type into the app.
+    string  secret       = 1;
+    // `otpauth://totp/…` (SHA1, 6 digits, 30 s), for a QR code.
+    string  otpauth_uri  = 2;
+    // How long the enrolment waits for its first code.
+    int64   expires_in   = 3;
+}
+
+message ConfirmMfaEnrollmentRequest {
+    // Six digits from the authenticator app.
+    string  code = 1;
+}
+
+message BackupCodesResponse {
+    // One-time backup codes (`xxxxx-xxxxx`): shown now, never again.
+    repeated string backup_codes     = 1;
+    // The account's other sessions signed out.
+    int32           sessions_revoked = 2;
+}
+
+message DisableMfaRequest {}
+
+message DisableMfaResponse {}
+
+message RegenerateBackupCodesRequest {}

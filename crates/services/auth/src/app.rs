@@ -19,7 +19,7 @@ use transport::kafka::producer::KafkaProducerBuilder;
 use crate::application::command::{
     AccountErasure, AttestMode, GuestAttestation, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
     LogoutAllSessionsHandler, LogoutHandler, MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler,
-    MfaPolicy, MfaVerifier, StartGuestSessionHandler, VerificationCodes, VerifyCredentialsHandler,
+    MfaPolicy, MfaSettingsHandler, MfaVerifier, StartGuestSessionHandler, VerificationCodes, VerifyCredentialsHandler,
 };
 use crate::application::port::{
     AccountDirectory, CredentialAdmin, EventPublisher, FederatedTokenVerifier, GuestRegistry,
@@ -82,6 +82,8 @@ pub struct AppDeps {
     /// Two-step sign-in (#649): always present — without a seed key its
     /// cipher fails closed, so an account with it on cannot sign in.
     pub mfa: Arc<MfaVerifier>,
+    /// The service's name in the holder's authenticator app.
+    pub mfa_issuer: String,
     pub policy: SessionPolicy,
 }
 
@@ -234,6 +236,19 @@ impl App {
             Arc::clone(&deps.cache),
             Arc::clone(&deps.publisher),
         )))
+        .with_mfa_settings(Arc::new(
+            MfaSettingsHandler::new(
+                Arc::clone(&deps.mfa),
+                Arc::clone(&deps.directory),
+                Arc::clone(&deps.sessions),
+                Arc::clone(&deps.refresh_tokens),
+                Arc::clone(&deps.cache),
+                Arc::clone(&deps.publisher),
+                deps.policy.clone(),
+                deps.mfa_issuer.clone(),
+            )
+            .with_codes(Arc::clone(&deps.codes)),
+        ))
         .with_codes(deps.codes)
         .with_federated_nonces(deps.nonces);
         match deps.attestation {
@@ -405,6 +420,7 @@ impl App {
                 }
             },
             mfa,
+            mfa_issuer: config.mfa_issuer.clone(),
             policy: config.policy,
         };
 
@@ -455,6 +471,7 @@ mod tests {
             )),
             attestation: None,
             mfa: Arc::clone(&fx.mfa),
+            mfa_issuer: "Core Platform".into(),
             policy: fx.policy.clone(),
         })
     }

@@ -5,11 +5,14 @@
 //!   one caller gets it.
 //! - `auth:{mfa:<account>}:step:<n>` — TOTP step `n` was used (`SET NX` with a
 //!   TTL past the code's acceptance window): a replayed code is refused.
+//! - `auth:{mfa:<account>}:enrol` — the sealed seed of an enrolment waiting
+//!   for its first code (base64), with its TTL.
 //! - `auth:{mfa:<account>}:fail` — code attempts in the current window,
 //!   reserved before each code is checked (one script: no parallel guess
 //!   slips past the limit).
 
 use async_trait::async_trait;
+use base64::Engine;
 use fred::interfaces::{KeysInterface, LuaInterface};
 use fred::types::{Expiration, SetOptions};
 use redis_storage::{RedisClient, RedisStorageError};
@@ -24,6 +27,10 @@ fn pending_key(token_hash: &str) -> String {
 
 fn step_key(account: &AccountId, step: i64) -> String {
     format!("auth:{{mfa:{}}}:step:{step}", account.as_str())
+}
+
+fn enrolment_key(account: &AccountId) -> String {
+    format!("auth:{{mfa:{}}}:enrol", account.as_str())
 }
 
 fn failure_key(account: &AccountId) -> String {
@@ -112,6 +119,32 @@ impl MfaStore for RedisMfaStore {
 
     async fn clear_failures(&self, account: &AccountId) -> Result<(), AuthError> {
         let _: i64 = self.client.del(failure_key(account)).await.map_err(cache_err)?;
+        Ok(())
+    }
+
+    async fn save_pending_enrollment(&self, account: &AccountId, sealed_seed: &[u8], ttl_secs: u64) -> Result<(), AuthError> {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(sealed_seed);
+        let _: Option<String> = self
+            .client
+            .set(enrolment_key(account), encoded, Some(Expiration::EX(ttl_secs.max(1) as i64)), None, false)
+            .await
+            .map_err(cache_err)?;
+        Ok(())
+    }
+
+    async fn pending_enrollment(&self, account: &AccountId) -> Result<Option<Vec<u8>>, AuthError> {
+        let raw: Option<String> = self.client.get(enrolment_key(account)).await.map_err(cache_err)?;
+        raw.map(|encoded| {
+            base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| AuthError::DomainViolation {
+                field: "pending_enrollment".into(),
+                message: "unreadable pending enrolment".into(),
+            })
+        })
+        .transpose()
+    }
+
+    async fn discard_pending_enrollment(&self, account: &AccountId) -> Result<(), AuthError> {
+        let _: i64 = self.client.del(enrolment_key(account)).await.map_err(cache_err)?;
         Ok(())
     }
 }
