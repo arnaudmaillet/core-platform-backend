@@ -60,7 +60,9 @@ impl CommandHandler<DeleteProfileCommand> for DeleteProfileHandler {
         }
 
         // Tombstone the handle so it enters the 30-day reservation window.
-        self.repo.tombstone_handle(&handle).await?;
+        // A verified profile's handle is held for good (no takeover of a
+        // verified identity's name); any other enters the 30-day reservation.
+        self.repo.tombstone_handle(&handle, profile.verified()).await?;
 
         // Remove the lightweight account index row.
         self.repo.delete_account_index(&profile).await?;

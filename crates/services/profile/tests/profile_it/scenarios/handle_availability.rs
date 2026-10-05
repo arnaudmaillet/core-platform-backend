@@ -162,3 +162,60 @@ async fn a_rename_in_flight_keeps_its_new_claim() {
     let (tombstoned_at,): (Option<scylla::value::CqlTimestamp>,) = rows.first_row().unwrap();
     assert!(tombstoned_at.is_none(), "a fresh claim (rename in flight) is not healed");
 }
+
+/// A verified profile's released handle is held for good: even past the
+/// reservation, nobody can claim it (no takeover of a verified identity's name).
+#[tokio::test]
+async fn a_verified_profiles_released_handle_is_held_for_good() {
+    use profile::application::command::VerifyProfileCommand;
+    use profile::application::port::HANDLE_RESERVATION_DAYS;
+
+    let h = TestHarness::start().await;
+    let handle = harness::random_handle();
+    harness::dispatch_create(std::sync::Arc::clone(&h.command_bus), &harness::random_account_id(), &handle, "Brand")
+        .await
+        .expect("create");
+    let id = h.get_by_handle(&handle).await.expect("created").id;
+    h.command_bus
+        .dispatch(Envelope::new(
+            Uuid::now_v7(),
+            VerifyProfileCommand { profile_id: id.clone(), verification_kind: "official".into() },
+        ))
+        .await
+        .expect("verify");
+
+    // The verified profile renames away: its old handle is held — for others…
+    use profile::application::command::ChangeHandleCommand;
+    let other = harness::random_handle();
+    let rename = |to: &str| {
+        h.command_bus.dispatch(Envelope::new(
+            Uuid::now_v7(),
+            ChangeHandleCommand { profile_id: id.clone(), new_handle: to.to_owned() },
+        ))
+    };
+    rename(&other).await.expect("rename away");
+    assert_eq!(check(&h, &handle).await, HandleAvailability::Taken(handle.clone()));
+    // …but the profile itself can take it back.
+    rename(&handle).await.expect("rename back to its own held handle");
+    assert_eq!(h.get_by_handle(&handle).await.expect("back").id, id);
+
+    harness::dispatch_delete(std::sync::Arc::clone(&h.command_bus), &id).await.expect("delete");
+
+    // Even with the tombstone aged past the reservation, it stays taken.
+    let aged = chrono::Utc::now() - chrono::Duration::days(HANDLE_RESERVATION_DAYS + 1);
+    h.scylla
+        .session
+        .execute_unpaged(
+            "UPDATE profile.profile_handles SET tombstoned_at = ? WHERE handle = ?",
+            (scylla::value::CqlTimestamp(aged.timestamp_millis()), handle.clone()),
+        )
+        .await
+        .expect("age the tombstone");
+    assert_eq!(check(&h, &handle).await, HandleAvailability::Taken(handle.clone()));
+    assert!(
+        harness::dispatch_create(std::sync::Arc::clone(&h.command_bus), &harness::random_account_id(), &handle, "Impostor")
+            .await
+            .is_err(),
+        "a held handle is never claimable"
+    );
+}

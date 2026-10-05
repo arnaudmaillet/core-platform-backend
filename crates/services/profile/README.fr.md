@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: ae3bec681ae4138b2cb1e38789ed82ec9d73271423385165f967253e8eed0443
+  source_sha256: 6168f7bca50fffae8e8e46d6f4f357c73863d401d1a30d557bbaaf480bc5f67a
   translated_at: 2026-10-05
   status: complete
 ---
@@ -70,8 +70,11 @@ gRPC ─► ProfileServiceHandler ─► Command bus            Query bus ─►
 **Versionnement des clés de cache.** Toutes les clés portent un préfixe `v1:` — incrémenter le suffixe
 effectue une invalidation de cache à l'échelle de la flotte, sans interruption, lors d'une migration de
 schéma. **Réservation par tombstone :** un handle supprimé est bloqué 30 jours via `tombstoned_at`,
-empêchant le détournement rapide d'identité (`handle_is_available()` l'impose à la couche application).
-Ensuite, la réservation reprend le tombstone par une seconde LWT (`UPDATE … IF tombstoned_at < now − 30 d`),
+empêchant le détournement rapide d'identité (`handle_is_available()` l'impose à la couche application) ;
+un handle libéré par un profil **vérifié** est **réservé définitivement** (`profile_handles.held`) :
+personne ne peut reprendre le nom d'une identité vérifiée — sauf ce profil lui-même, qui peut
+reprendre son propre handle libéré (un renommage inverse, réservé ou non : `IF profile_id = ?`). Passé les 30 jours, la réservation reprend
+un tombstone non réservé par une seconde LWT (`UPDATE … IF tombstoned_at < now − 30 d AND held = null`),
 sans tâche de GC. `CreateProfile` réserve le handle **avant** d'écrire le profil : une course perdue
 n'écrit rien (pas de ligne orpheline, pas de `pids` parasite), et une écriture en échec rend la
 réservation (`DELETE … IF profile_id = ?`). Une réservation dont le profil porte désormais un autre
