@@ -60,7 +60,10 @@ for 30 days via `tombstoned_at`, preventing rapid identity hijacking (`handle_is
 it at the application layer). After that, the claim takes the tombstone over with a second LWT
 (`UPDATE … IF tombstoned_at < now − 30 d`), so no GC job is needed. `CreateProfile` claims the handle
 **before** writing the profile: a lost race writes nothing (no orphan row, no stray `pids`), and a
-failed write gives the claim back (`DELETE … IF profile_id = ?`).
+failed write gives the claim back (`DELETE … IF profile_id = ?`). A claim whose profile now carries
+another handle (a rename interrupted before the old handle's tombstone) is healed on read: lookups
+and availability checks tombstone it (`IF profile_id = ? AND tombstoned_at = null`) and it no longer
+resolves.
 
 > **Invariants** (and where enforced): handle uniqueness via `IF NOT EXISTS` LWT on `profile_handles`;
 > optimistic concurrency via `IF version = ?` LWT on `profiles` (→ `PRF-4001`, retryable); status
