@@ -16,7 +16,7 @@ pub mod enforcement;
 pub mod penalty_ledger;
 pub mod report;
 
-pub use appeal::Appeal;
+pub use appeal::{Appeal, Appellant};
 pub use case::{Case, CaseOpenParams};
 pub use decision::{Decision, DecisionAuthor, DecisionParams};
 pub use enforcement::{EnforcementAction, EnforcementParams};

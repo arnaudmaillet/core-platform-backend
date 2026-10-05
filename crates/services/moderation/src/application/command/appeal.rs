@@ -5,11 +5,11 @@ use cqrs::Envelope;
 
 use crate::application::port::{
     AppealRepository, CaseRepository, DecisionRepository, EnforcementProjection,
-    EnforcementRepository, EventPublisher,
+    EnforcementRepository, EventPublisher, ReportRepository,
 };
 use crate::domain::aggregate::appeal::appealable_until;
-use crate::domain::aggregate::{Appeal, Decision, DecisionAuthor, DecisionParams};
-use crate::domain::value_object::{ActionType, ActorId, AppealId, CaseId, DecisionId};
+use crate::domain::aggregate::{Appeal, Appellant, Decision, DecisionAuthor, DecisionParams};
+use crate::domain::value_object::{ActionType, ActorId, AppealId, CaseId, CaseStatus, DecisionId, ReporterKind};
 use crate::error::ModerationError;
 
 // ─── FileAppeal ───────────────────────────────────────────────────────────────
@@ -17,6 +17,8 @@ use crate::error::ModerationError;
 #[derive(Debug, Clone)]
 pub struct FileAppealCommand {
     pub decision_id: DecisionId,
+    /// The appellant's account: the sanctioned account, or a member who
+    /// reported the content before the decision (DSA Art. 20(1)).
     pub actor_id: ActorId,
     pub statement: String,
 }
@@ -25,6 +27,7 @@ pub struct FileAppealHandler {
     decisions: Arc<dyn DecisionRepository>,
     appeals: Arc<dyn AppealRepository>,
     cases: Arc<dyn CaseRepository>,
+    reports: Arc<dyn ReportRepository>,
 }
 
 impl FileAppealHandler {
@@ -32,8 +35,9 @@ impl FileAppealHandler {
         decisions: Arc<dyn DecisionRepository>,
         appeals: Arc<dyn AppealRepository>,
         cases: Arc<dyn CaseRepository>,
+        reports: Arc<dyn ReportRepository>,
     ) -> Self {
-        Self { decisions, appeals, cases }
+        Self { decisions, appeals, cases, reports }
     }
 
     pub async fn handle(
@@ -47,11 +51,20 @@ impl FileAppealHandler {
             .find_by_id(&cmd.decision_id)
             .await?
             .ok_or(ModerationError::DecisionNotFound { id: cmd.decision_id.as_str() })?;
-        // Only the sanctioned account appeals its decision; anyone else learns
+        // The sanctioned account, or a member who reported that content before
+        // the decision (its complainant, DSA Art. 20(1)); anyone else learns
         // nothing, not even that the decision exists.
-        if decision.subject().actor_id() != cmd.actor_id {
+        let appellant = if decision.subject().actor_id() == cmd.actor_id {
+            Appellant::Sanctioned
+        } else if self
+            .reports
+            .reported_before(ReporterKind::Member, &cmd.actor_id, decision.subject(), decision.decided_at())
+            .await?
+        {
+            Appellant::Reporter
+        } else {
             return Err(ModerationError::DecisionNotFound { id: cmd.decision_id.as_str() });
-        }
+        };
 
         // Some categories (legally-mandated CSAM removals) are not appealable.
         if !decision.category().is_appealable() {
@@ -68,19 +81,26 @@ impl FileAppealHandler {
             return Err(ModerationError::AppealWindowClosed);
         }
 
-        let appeal = Appeal::file(cmd.decision_id, cmd.actor_id, cmd.statement, now)?;
+        let appeal = Appeal::file(cmd.decision_id, cmd.actor_id, appellant, cmd.statement, now)?;
         let stored = self.appeals.file(&appeal).await?;
         if stored.id() != appeal.id() {
             // A concurrent file of the same appeal won the race.
             return Ok(stored);
         }
 
-        // Move the subject's case into the Appealed state (best-effort: the case may
-        // have been opened on a different surface or already cleaned up).
-        let case_id = CaseId::for_subject(decision.subject());
-        if let Some(mut case) = self.cases.find_by_id(&case_id).await? {
-            case.mark_appealed()?;
-            self.cases.save(&case).await?;
+        // The sanctioned account's appeal moves the subject's actioned case into
+        // the Appealed state (best-effort: the case may have been opened on a
+        // different surface, cleaned up, or already be back under review after a
+        // reporter's appeal). A reporter's leaves the case as decided until it
+        // is resolved.
+        if appellant == Appellant::Sanctioned {
+            let case_id = CaseId::for_subject(decision.subject());
+            if let Some(mut case) = self.cases.find_by_id(&case_id).await?
+                && case.status() == CaseStatus::Actioned
+            {
+                case.mark_appealed()?;
+                self.cases.save(&case).await?;
+            }
         }
         Ok(appeal)
     }
@@ -150,6 +170,22 @@ impl ResolveAppealHandler {
         appeal.resolve(cmd.overturn, cmd.rationale.clone(), now, correlation_id)?;
         self.appeals.save(&appeal).await?;
 
+        // A reporter's appeal never reverses anything: upheld, the decision
+        // stands; overturned, the case goes back to review for a new decision.
+        if appeal.appellant() == Appellant::Reporter {
+            if cmd.overturn {
+                let case_id = CaseId::for_subject(original.subject());
+                if let Some(mut case) = self.cases.find_by_id(&case_id).await?
+                    && case.status().is_resolved_or_appealed()
+                {
+                    case.reopen_for_review()?;
+                    self.cases.save(&case).await?;
+                }
+            }
+            self.publish_all(appeal.drain_events()).await?;
+            return Ok(ResolveAppealOutcome { appeal, reversal: None });
+        }
+
         let mut reversal = None;
         if cmd.overturn {
             // 1. Record the reversal decision (append-only; references the original).
@@ -188,9 +224,13 @@ impl ResolveAppealHandler {
             reversal = Some(rev);
         }
 
-        // 3. Close the case (overturned ⇒ dismissed; upheld ⇒ back to actioned).
+        // 3. Close the case (overturned ⇒ dismissed; upheld ⇒ back to actioned)
+        // — when the appeal holds it; a case already back under review (a
+        // reporter's appeal overturned meanwhile) stays there.
         let case_id = CaseId::for_subject(original.subject());
-        if let Some(mut case) = self.cases.find_by_id(&case_id).await? {
+        if let Some(mut case) = self.cases.find_by_id(&case_id).await?
+            && case.status() == CaseStatus::Appealed
+        {
             case.close_appeal(cmd.overturn)?;
             self.cases.save(&case).await?;
         }
@@ -216,6 +256,7 @@ mod tests {
     use crate::application::command::{DecideCaseCommand, OpenCaseCommand};
     use crate::application::fakes::{t0, Fixture};
     use crate::domain::value_object::{EntityType, PolicyCategory, SubjectRef};
+    use crate::application::port::{CaseRepository, ReportRepository};
     use uuid::Uuid;
 
     fn subject() -> SubjectRef {
@@ -366,5 +407,142 @@ mod tests {
         // On its last day it is still accepted.
         let last_day = t0() + crate::domain::aggregate::appeal::APPEAL_WINDOW;
         fx.file_appeal_handler().handle(file, last_day).await.expect("within the window");
+    }
+
+    /// Opens the subject's case and decides it with `action` at t0.
+    async fn decided(fx: &Fixture, action: ActionType) -> DecisionId {
+        let open = Envelope::new(
+            Uuid::now_v7(),
+            OpenCaseCommand {
+                subject: subject(),
+                category: PolicyCategory::Harassment,
+                queue: "q".into(),
+                priority: "p".into(),
+            },
+        );
+        let case = fx.open_case_handler().handle(open, t0()).await.unwrap().case;
+        let decide = Envelope::new(
+            Uuid::now_v7(),
+            DecideCaseCommand {
+                case_id: case.id(),
+                action,
+                category: PolicyCategory::Harassment,
+                rationale: "reviewed".into(),
+                reviewer_id: "rev-1".into(),
+                policy_version: "2026.06.1".into(),
+            },
+        );
+        fx.decide_handler().handle(decide, t0()).await.unwrap().decision.id()
+    }
+
+    fn reporter() -> ActorId {
+        ActorId::from_uuid(Uuid::from_u128(2))
+    }
+
+    async fn reported(fx: &Fixture, who: ActorId, at: chrono::DateTime<Utc>) {
+        let report = crate::domain::aggregate::Report::file(
+            who,
+            ReporterKind::Member,
+            subject(),
+            PolicyCategory::Harassment,
+            "abusive",
+            at,
+        )
+        .unwrap();
+        fx.reports.record(&report).await.unwrap();
+    }
+
+    fn file_as(who: ActorId, decision_id: DecisionId) -> Envelope<FileAppealCommand> {
+        Envelope::new(Uuid::now_v7(), FileAppealCommand { decision_id, actor_id: who, statement: "it was abusive".into() })
+    }
+
+    fn resolve(appeal_id: AppealId, overturn: bool) -> Envelope<ResolveAppealCommand> {
+        Envelope::new(
+            Uuid::now_v7(),
+            ResolveAppealCommand { appeal_id, overturn, rationale: "looked again".into(), reviewer_id: "rev-2".into() },
+        )
+    }
+
+    #[tokio::test]
+    async fn a_reporter_appeals_a_dismissal_and_an_overturn_sends_the_case_back_to_review() {
+        let fx = Fixture::new();
+        reported(&fx, reporter(), t0() - chrono::Duration::hours(1)).await;
+        let decision_id = decided(&fx, ActionType::NoAction).await;
+        let case_id = CaseId::for_subject(&subject());
+
+        let appeal = fx.file_appeal_handler().handle(file_as(reporter(), decision_id), t0()).await.unwrap();
+        assert_eq!(appeal.appellant(), Appellant::Reporter);
+        assert_eq!(
+            fx.cases.find_by_id(&case_id).await.unwrap().unwrap().status(),
+            CaseStatus::Dismissed,
+            "a reporter's appeal leaves the case as decided"
+        );
+
+        fx.publisher.clear();
+        let out = fx.resolve_appeal_handler().handle(resolve(appeal.id(), true), t0()).await.unwrap();
+        assert!(out.reversal.is_none(), "nothing is reversed");
+        assert_eq!(fx.decisions.count(), 1, "no reversal decision");
+        assert_eq!(
+            fx.cases.find_by_id(&case_id).await.unwrap().unwrap().status(),
+            CaseStatus::Triaged,
+            "back to review for a new decision"
+        );
+        assert_eq!(fx.publisher.event_types(), vec!["moderation.appeal_resolved"]);
+    }
+
+    #[tokio::test]
+    async fn a_reporters_appeal_never_lifts_an_enforcement() {
+        let fx = Fixture::new();
+        reported(&fx, reporter(), t0() - chrono::Duration::hours(1)).await;
+        let decision_id = decided(&fx, ActionType::Suspend).await;
+        assert!(fx.projection.is_actor_restricted(&subject().actor_id()).await.unwrap());
+
+        // The reporter finds a suspension too light; overturned, it is reviewed
+        // again — the suspension stands meanwhile.
+        let appeal = fx.file_appeal_handler().handle(file_as(reporter(), decision_id), t0()).await.unwrap();
+        fx.resolve_appeal_handler().handle(resolve(appeal.id(), true), t0()).await.unwrap();
+        assert!(fx.projection.is_actor_restricted(&subject().actor_id()).await.unwrap());
+
+        // The sanctioned account still has its own appeal, the case being back
+        // under review; resolving it leaves the case there.
+        let own = fx.file_appeal_handler().handle(file_as(subject().actor_id(), decision_id), t0()).await.unwrap();
+        assert_eq!(own.appellant(), Appellant::Sanctioned);
+        assert_ne!(own.id(), appeal.id());
+        fx.resolve_appeal_handler().handle(resolve(own.id(), false), t0()).await.unwrap();
+        assert_eq!(
+            fx.cases.find_by_id(&CaseId::for_subject(&subject())).await.unwrap().unwrap().status(),
+            CaseStatus::Triaged
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reporters_overturn_during_the_sanctioned_accounts_appeal_reopens_the_review() {
+        let fx = Fixture::new();
+        reported(&fx, reporter(), t0() - chrono::Duration::hours(1)).await;
+        let decision_id = decided(&fx, ActionType::Suspend).await;
+        let own = fx.file_appeal_handler().handle(file_as(subject().actor_id(), decision_id), t0()).await.unwrap();
+        let theirs = fx.file_appeal_handler().handle(file_as(reporter(), decision_id), t0()).await.unwrap();
+        let case_id = CaseId::for_subject(&subject());
+        assert_eq!(fx.cases.find_by_id(&case_id).await.unwrap().unwrap().status(), CaseStatus::Appealed);
+
+        fx.resolve_appeal_handler().handle(resolve(theirs.id(), true), t0()).await.unwrap();
+        assert_eq!(fx.cases.find_by_id(&case_id).await.unwrap().unwrap().status(), CaseStatus::Triaged);
+        // The sanctioned account's appeal still resolves (overturned: lifted).
+        let out = fx.resolve_appeal_handler().handle(resolve(own.id(), true), t0()).await.unwrap();
+        assert!(out.reversal.is_some());
+        assert!(!fx.projection.is_actor_restricted(&subject().actor_id()).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn only_someone_who_reported_before_the_decision_may_appeal_it() {
+        let fx = Fixture::new();
+        let late = ActorId::from_uuid(Uuid::from_u128(3));
+        reported(&fx, late, t0() + chrono::Duration::hours(1)).await; // after the decision
+        let decision_id = decided(&fx, ActionType::NoAction).await;
+
+        for who in [late, ActorId::from_uuid(Uuid::from_u128(4))] {
+            let err = fx.file_appeal_handler().handle(file_as(who, decision_id), t0()).await.unwrap_err();
+            assert!(matches!(err, ModerationError::DecisionNotFound { .. }), "{err:?}");
+        }
     }
 }

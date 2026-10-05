@@ -95,7 +95,7 @@ mod tests {
     }
 
     async fn appeal(fx: &Fixture, who: ActorId, minutes: i64) -> Appeal {
-        let appeal = Appeal::file(DecisionId::new(), who, "unfair", t0() + Duration::minutes(minutes)).unwrap();
+        let appeal = Appeal::file(DecisionId::new(), who, crate::domain::aggregate::Appellant::Sanctioned, "unfair", t0() + Duration::minutes(minutes)).unwrap();
         fx.appeals.file(&appeal).await.unwrap()
     }
 

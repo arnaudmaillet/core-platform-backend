@@ -159,3 +159,82 @@ async fn the_appeal_migration_survives_duplicates_in_old_data() {
         .await
         .unwrap();
 }
+
+/// DSA Art. 20(1) over real Postgres: a member's report leads to the decision
+/// (ReportView.decision_id); the reporter appeals a dismissal; overturned, the
+/// case is back under review (no decision on the report any more), and the new
+/// decision is the one the report then leads to. A stranger cannot appeal.
+#[tokio::test]
+async fn a_reporter_appeals_the_dismissal_of_their_report() {
+    use crate::moderation_it::harness::OWNER;
+    use moderation::domain::value_object::{ActorId, CaseId, EntityType, SubjectRef};
+
+    let h = Harness::start().await;
+    let reporter = Uuid::now_v7().to_string();
+    let post = format!("post-{}", Uuid::now_v7());
+    let report = as_account(
+        Request::new(proto::SubmitReportRequest {
+            entity_type: proto::EntityType::Post as i32,
+            entity_id: post.clone(),
+            category: proto::PolicyCategory::Harassment as i32,
+            reason: "abusive".into(),
+            surface: "post_menu".into(),
+        }),
+        &reporter,
+    );
+    h.handler.submit_report(report).await.expect("report");
+    let case_id = CaseId::for_subject(
+        &SubjectRef::new(EntityType::Post, post.clone(), ActorId::from_uuid(OWNER), "post_menu").unwrap(),
+    )
+    .as_str();
+    let my_report = || async {
+        let request = as_account(Request::new(proto::ListMyReportsRequest { page_size: 0, page_token: String::new() }), &reporter);
+        h.handler.list_my_reports(request).await.unwrap().into_inner().reports.remove(0)
+    };
+    assert!(my_report().await.decision_id.is_empty(), "not decided yet");
+
+    // Dismissed: the report leads to the decision.
+    h.decide_case(&case_id, proto::ActionType::NoAction as i32, proto::PolicyCategory::Harassment as i32)
+        .await
+        .expect("dismiss");
+    let decided = my_report().await;
+    assert_eq!(decided.status, proto::ReportStatus::NoViolation as i32);
+    let dismissal = decided.decision_id;
+    assert!(!dismissal.is_empty());
+
+    let file = |sub: &str| {
+        as_account(
+            Request::new(proto::FileAppealRequest {
+                decision_id: dismissal.clone(),
+                actor_id: sub.to_owned(),
+                statement: "it is abusive".into(),
+            }),
+            sub,
+        )
+    };
+    let stranger = Uuid::now_v7().to_string();
+    assert_eq!(h.handler.file_appeal(file(&stranger)).await.unwrap_err().code(), Code::NotFound);
+    let appeal = h.handler.file_appeal(file(&reporter)).await.expect("the reporter appeals").into_inner().appeal.unwrap();
+    assert!(appeal.by_reporter);
+    assert_eq!(my_appeals(&h, &reporter).await.len(), 1);
+
+    // Overturned: back under review, no decision to show.
+    h.resolve_appeal(&appeal.appeal_id, true).await.expect("overturn");
+    let reviewed = my_report().await;
+    assert_eq!(reviewed.status, proto::ReportStatus::UnderReview as i32);
+    assert!(reviewed.decision_id.is_empty());
+    let listed = my_appeals(&h, &reporter).await;
+    assert_eq!(listed[0].status, proto::AppealStatus::Overturned as i32);
+
+    // Decided again: the report now leads to the new decision.
+    let removal = h
+        .decide_case(&case_id, proto::ActionType::RemoveContent as i32, proto::PolicyCategory::Harassment as i32)
+        .await
+        .expect("decide again")
+        .decision
+        .unwrap()
+        .decision_id;
+    let final_report = my_report().await;
+    assert_eq!(final_report.status, proto::ReportStatus::ActionTaken as i32);
+    assert_eq!(final_report.decision_id, removal);
+}

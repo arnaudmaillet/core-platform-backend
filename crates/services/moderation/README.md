@@ -151,6 +151,15 @@ rpc GetEnforcementState   (..) returns (..);   // edge: own state only; DISCOURA
 > `status` and, once resolved, `resolved_at` and the reviewer's reasons (`outcome`, from `ResolveAppeal.rationale`,
 > required).
 >
+> **A reporter's appeal (DSA Art. 20(1)).** The notifier is a complainant too: a **member** who reported the content
+> before the decision may appeal it (`FileAppeal` with their own account as `actor_id`; checked against `reports`).
+> Their report leads to the decision: `ReportView.decision_id`, the latest decision on its subject since the report,
+> once its case is decided (coarse: still not which sanction). Their appeal is its own (`by_reporter`), beside the
+> sanctioned account's, with the same window, deduplication and reads. It never reverses anything: upheld, the decision
+> stands; **overturned, the case goes back to review** (`triaged`, its report `UNDER_REVIEW` again) for a new
+> decision, the earlier one and its enforcement standing until then. Guests' appeals wait for the guest-mode question
+> (#681).
+>
 > **Client reports (`SubmitReport`).** Anyone may report (DSA Art. 16), so the RPC is open to every client
 > session, member **or guest** (edge `member_or_guest`). The **reporter** is the verified token (a member's account,
 > or `guest:<id>`), never a request field; a mesh call has no reporter and is refused (`MOD-6007`). The client sends

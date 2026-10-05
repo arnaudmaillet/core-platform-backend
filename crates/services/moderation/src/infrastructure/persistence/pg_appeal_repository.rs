@@ -27,8 +27,8 @@ impl AppealRepository for PgAppealRepository {
         sqlx::query(
             r#"
             INSERT INTO appeals (
-                id, decision_id, actor_id, statement, status, filed_at, resolved_at, outcome
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                id, decision_id, actor_id, statement, status, filed_at, resolved_at, outcome, appellant
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
             ON CONFLICT (id) DO UPDATE SET
                 status      = EXCLUDED.status,
                 resolved_at = EXCLUDED.resolved_at,
@@ -43,6 +43,7 @@ impl AppealRepository for PgAppealRepository {
         .bind(appeal.filed_at())
         .bind(appeal.resolved_at())
         .bind(appeal.outcome())
+        .bind(appeal.appellant().as_str())
         .execute(self.tx.pool())
         .await
         .map_err(storage_err)?;
@@ -55,8 +56,8 @@ impl AppealRepository for PgAppealRepository {
         sqlx::query(
             r#"
             INSERT INTO appeals (
-                id, decision_id, actor_id, statement, status, filed_at, resolved_at, outcome
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                id, decision_id, actor_id, statement, status, filed_at, resolved_at, outcome, appellant
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
             ON CONFLICT (decision_id, actor_id) DO NOTHING
             "#,
         )
@@ -68,6 +69,7 @@ impl AppealRepository for PgAppealRepository {
         .bind(appeal.filed_at())
         .bind(appeal.resolved_at())
         .bind(appeal.outcome())
+        .bind(appeal.appellant().as_str())
         .execute(self.tx.pool())
         .await
         .map_err(storage_err)?;

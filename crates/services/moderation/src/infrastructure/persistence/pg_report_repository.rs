@@ -1,9 +1,10 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use postgres_storage::TransactionManager;
 
 use crate::application::port::{FiledReport, ReportCursor, ReportRepository};
 use crate::domain::aggregate::Report;
-use crate::domain::value_object::{ActorId, CaseId, ReporterKind};
+use crate::domain::value_object::{ActorId, CaseId, ReporterKind, SubjectRef};
 use crate::error::ModerationError;
 
 use super::model::FiledReportRow;
@@ -64,7 +65,14 @@ impl ReportRepository for PgReportRepository {
             r#"
             SELECT r.id, r.reporter_kind, r.reporter_id, r.entity_type, r.entity_id,
                    r.actor_id, r.surface, r.category, r.reason, r.reported_at,
-                   c.status AS case_status
+                   c.status AS case_status,
+                   CASE WHEN c.status IN ('actioned', 'dismissed') THEN (
+                       SELECT d.id FROM decisions d
+                       WHERE d.entity_type = r.entity_type AND d.entity_id = r.entity_id
+                         AND d.actor_id = r.actor_id AND d.decided_at >= r.reported_at
+                       ORDER BY d.decided_at DESC
+                       LIMIT 1
+                   ) END AS decision_id
             FROM reports r
             LEFT JOIN cases c ON c.id = r.case_id
             WHERE r.reporter_kind = $1 AND r.reporter_id = $2
@@ -82,5 +90,33 @@ impl ReportRepository for PgReportRepository {
         .await
         .map_err(storage_err)?;
         rows.into_iter().map(FiledReport::try_from).collect()
+    }
+
+    async fn reported_before(
+        &self,
+        kind: ReporterKind,
+        reporter_id: &ActorId,
+        subject: &SubjectRef,
+        by: DateTime<Utc>,
+    ) -> Result<bool, ModerationError> {
+        sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM reports
+                WHERE reporter_kind = $1 AND reporter_id = $2
+                  AND entity_type = $3 AND entity_id = $4 AND actor_id = $5
+                  AND reported_at <= $6
+            )
+            "#,
+        )
+        .bind(kind.as_str())
+        .bind(reporter_id.as_uuid())
+        .bind(subject.entity_type().as_str())
+        .bind(subject.entity_id())
+        .bind(subject.actor_id().as_uuid())
+        .bind(by)
+        .fetch_one(self.tx.pool())
+        .await
+        .map_err(storage_err)
     }
 }

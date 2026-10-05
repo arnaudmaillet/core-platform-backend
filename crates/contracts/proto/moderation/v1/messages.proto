@@ -99,6 +99,10 @@ message AppealView {
     // The reviewer's reasons once resolved (UPHELD / OVERTURNED), told to the
     // appellant (DSA Art. 20(4)–(5)); empty before.
     string                      outcome      = 7;
+    // Filed by a member who reported the content (DSA Art. 20(1)), not the
+    // sanctioned account. Overturned, the case goes back to review; it never
+    // reverses an enforcement.
+    bool                        by_reporter  = 8;
 }
 
 // ── Screen · Plane C (the narrow, fail-closed pre-publish gate) ───────────────
@@ -295,6 +299,10 @@ message ReportView {
     string                      reason      = 5;
     ReportStatus                status      = 6;
     google.protobuf.Timestamp   reported_at = 7;
+    // Once the case is decided (actioned or dismissed): the decision, which a
+    // member reporter may appeal with FileAppeal (DSA Art. 20(1)). Coarse on
+    // purpose: the reporter still never learns which sanction applied.
+    string                      decision_id = 8;
 }
 
 message ListMyReportsResponse {

@@ -66,6 +66,9 @@ service ModerationService {
     // File an appeal against a decision (subject to the appeal window and
     // appealability of the category). One appeal per decision and appellant:
     // filing again returns the existing appeal. Past the window: MOD-5003.
+    // The appellant (actor_id, the caller on the edge) is the sanctioned account,
+    // or a member who reported the content before the decision (the report's
+    // ReportView.decision_id); anyone else gets NOT_FOUND.
     rpc FileAppeal(FileAppealRequest) returns (FileAppealResponse);
 
     // The caller's own appeals, newest first, each with its status and, once
