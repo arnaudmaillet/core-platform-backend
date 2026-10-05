@@ -53,6 +53,20 @@ enum InteractionKind {
     INTERACTION_KIND_MESSAGE     = 3;
 }
 
+// Why CheckInteraction refused (#656). Mesh only: the asking service decides
+// what the actor learns, and never tells a blocked actor of the block.
+enum InteractionRefusal {
+    // Not refused.
+    INTERACTION_REFUSAL_UNSPECIFIED = 0;
+    // A block, either way.
+    INTERACTION_REFUSAL_BLOCKED     = 1;
+    // The target's audience for this kind is no one.
+    INTERACTION_REFUSAL_NO_ONE      = 2;
+    // The target's audience (followers / mutuals) excludes the actor: chat
+    // turns a message into a request.
+    INTERACTION_REFUSAL_AUDIENCE    = 3;
+}
+
 // Who may see one of a profile's relationship lists (followers, following).
 enum ListAudience {
     // On a SetListPrivacy request: leave this list unchanged.
