@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::event::{
-    DomainEvent, FollowRequested, ProfileBlocked, ProfileFollowed, ProfileUnblocked, ProfileUnfollowed,
+    DomainEvent, FollowRequestWithdrawn, FollowRequested, ProfileBlocked, ProfileFollowed, ProfileUnblocked, ProfileUnfollowed,
 };
 use crate::domain::value_object::{ProfileId, RelationStatus};
 use crate::error::SocialGraphError;
@@ -139,6 +139,9 @@ impl Relation {
             return Ok(FollowOutcome::Requested { requested_at: now });
         }
         let cleared_request = self.actor_requested_target_at.take();
+        if let Some(requested_at) = cleared_request {
+            self.announce_withdrawal(self.actor_id, self.target_id, requested_at, now);
+        }
         self.start_following(now, false);
         Ok(FollowOutcome::Followed { followed_at: now, cleared_request })
     }
@@ -165,7 +168,26 @@ impl Relation {
     ///
     /// - [`SocialGraphError::NoFollowRequest`] if none is pending.
     pub fn withdraw_request(&mut self) -> Result<DateTime<Utc>, SocialGraphError> {
-        self.take_request()
+        let requested_at = self.take_request()?;
+        self.announce_withdrawal(self.actor_id, self.target_id, requested_at, Utc::now());
+        Ok(requested_at)
+    }
+
+    /// `requester`'s request to `owner`, made at `requested_at`, is gone
+    /// without becoming a follow: its notice is retracted downstream.
+    fn announce_withdrawal(
+        &mut self,
+        requester:    ProfileId,
+        owner:        ProfileId,
+        requested_at: DateTime<Utc>,
+        now:          DateTime<Utc>,
+    ) {
+        self.pending_events.push(DomainEvent::FollowRequestWithdrawn(FollowRequestWithdrawn {
+            actor_id:     requester,
+            target_id:    owner,
+            requested_at,
+            withdrawn_at: now,
+        }));
     }
 
     fn take_request(&mut self) -> Result<DateTime<Utc>, SocialGraphError> {
@@ -237,6 +259,12 @@ impl Relation {
         };
         self.actor_blocks_target = true;
         let now = Utc::now();
+        if let Some(requested_at) = severed.actor_request {
+            self.announce_withdrawal(self.actor_id, self.target_id, requested_at, now);
+        }
+        if let Some(requested_at) = severed.target_request {
+            self.announce_withdrawal(self.target_id, self.actor_id, requested_at, now);
+        }
         self.pending_events.push(DomainEvent::ProfileBlocked(ProfileBlocked {
             actor_id:              self.actor_id,
             target_id:             self.target_id,
@@ -360,9 +388,15 @@ mod tests {
 
     #[test]
     fn a_withdrawn_request_leaves_nothing() {
-        let mut r = relation(RelationContext { actor_requested_target_at: Some(Utc::now()), ..none() });
+        let requested_at = Utc::now();
+        let mut r = relation(RelationContext { actor_requested_target_at: Some(requested_at), ..none() });
         r.withdraw_request().unwrap();
         assert_eq!(r.status(), RelationStatus::None);
+        assert!(
+            matches!(r.take_events().as_slice(), [DomainEvent::FollowRequestWithdrawn(e)]
+                if e.actor_id == r.actor_id && e.target_id == r.target_id && e.requested_at == requested_at),
+            "the request's notice is retracted"
+        );
         assert!(matches!(r.withdraw_request().unwrap_err(), SocialGraphError::NoFollowRequest { .. }));
     }
 
@@ -375,6 +409,11 @@ mod tests {
         let outcome = r.follow(false).unwrap();
         assert!(matches!(outcome, FollowOutcome::Followed { cleared_request: Some(at), .. } if at == requested_at));
         assert_eq!(r.status(), RelationStatus::Following);
+        assert!(matches!(
+            r.take_events().as_slice(),
+            [DomainEvent::FollowRequestWithdrawn(w), DomainEvent::ProfileFollowed(f)]
+                if w.requested_at == requested_at && !f.via_request
+        ));
     }
 
     #[test]
@@ -386,6 +425,14 @@ mod tests {
         });
         let severed = r.block().unwrap();
         assert!(severed.actor_request.is_some() && severed.target_request.is_some());
+        // Both requests' notices are retracted: each names its own requester.
+        let (actor, target) = (r.actor_id, r.target_id);
+        assert!(matches!(
+            r.take_events().as_slice(),
+            [DomainEvent::FollowRequestWithdrawn(mine), DomainEvent::FollowRequestWithdrawn(theirs), DomainEvent::ProfileBlocked(_)]
+                if mine.actor_id == actor && mine.target_id == target
+                    && theirs.actor_id == target && theirs.target_id == actor
+        ));
         assert!(matches!(r.follow(true).unwrap_err(), SocialGraphError::BlockGateDenied { .. }));
     }
 }

@@ -194,7 +194,7 @@ commenters, ≤ 100 per call); `Unrestrict` lifts it, `ListRestricted` pages the
 | Topic | Trigger | Key | Consumers |
 |---|---|---|---|
 | `social-graph.followed` | `Follow` success, or `ApproveFollowRequest` (`via_request: true`) | `{actor}:{target}` | `timeline` (fan-out), `notification` (new follower / request accepted) |
-| `social-graph.follow_requested` | `Follow` of a private profile: a pending request (#755) | `{actor}:{target}` | `notification` (the owner is told). `{actor_id, target_id, requested_at}` |
+| `social-graph.follow_requested` | `Follow` of a private profile: a pending request (#755); and `FollowRequestWithdrawn` when a pending request goes without becoming a follow — cancelled, declined, cut by a block (either direction), or moot when the actor follows the profile once public. Same topic and key, so a withdrawal is never read before its request | `{actor}:{target}` | `notification` (the owner is told; a withdrawal retracts that notice). `{actor_id, target_id, requested_at}` (+ `withdrawn_at` on a withdrawal) |
 | `social-graph.unfollowed` | `Unfollow` success | `{actor}:{target}` | `timeline` (pruning) |
 | `social-graph.blocked` | `Block` success | `{actor}:{target}` | content filtering, notification suppression |
 | `social-graph.author_tier_changed` | a follow/unfollow crosses a follower-count tier boundary | `{profile}` | `profile` (persists tier → re-emits on `profile.v1.events` for `post` to denormalize → `timeline`/`geo-discovery` fan-out routing). `{profile_id, new_tier, follower_count, changed_at_ms}` |

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 5df2a5eba74dafd1934ce174f65e304d654a38ed5e6ff64b6152391a037e91d8
+  source_sha256: 758b1d66cb28f588e31bf16cc93ec0229238bccd1850f5b5bc953dd112a42b31
   translated_at: 2026-10-05
   status: complete
 ---
@@ -215,7 +215,7 @@ pas prévenue et rien n'est rompu. Table `social_graph.restrictions` (partitionn
 | Topic | Trigger | Key | Consumers |
 |---|---|---|---|
 | `social-graph.followed` | `Follow` success, or `ApproveFollowRequest` (`via_request: true`) | `{actor}:{target}` | `timeline` (fan-out), `notification` (new follower / request accepted) |
-| `social-graph.follow_requested` | `Follow` of a private profile: a pending request (#755) | `{actor}:{target}` | `notification` (the owner is told). `{actor_id, target_id, requested_at}` |
+| `social-graph.follow_requested` | `Follow` of a private profile: a pending request (#755); and `FollowRequestWithdrawn` when a pending request goes without becoming a follow — cancelled, declined, cut by a block (either direction), or moot when the actor follows the profile once public. Same topic and key, so a withdrawal is never read before its request | `{actor}:{target}` | `notification` (the owner is told; a withdrawal retracts that notice). `{actor_id, target_id, requested_at}` (+ `withdrawn_at` on a withdrawal) |
 | `social-graph.unfollowed` | `Unfollow` success | `{actor}:{target}` | `timeline` (pruning) |
 | `social-graph.blocked` | `Block` success | `{actor}:{target}` | content filtering, notification suppression |
 | `social-graph.author_tier_changed` | un follow/unfollow franchit un seuil de palier (follower count) | `{profile}` | `profile` (persiste le palier → ré-émet sur `profile.v1.events` pour que `post` le dénormalise → routage de fan-out `timeline`/`geo-discovery`). `{profile_id, new_tier, follower_count, changed_at_ms}` |

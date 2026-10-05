@@ -51,6 +51,15 @@ pub trait NotificationRepository: Send + Sync + 'static {
         created_at_ms:   i64,
     ) -> Result<bool, NotificationError>;
 
+    /// Deletes a notification (a retracted one: a withdrawn follow request).
+    /// Absent is fine.
+    async fn delete(
+        &self,
+        profile_id:      &ProfileId,
+        notification_id: Uuid,
+        created_at_ms:   i64,
+    ) -> Result<(), NotificationError>;
+
     /// Increments the ScyllaDB unread counter for `profile_id` by 1.
     async fn increment_counter(&self, profile_id: &ProfileId) -> Result<(), NotificationError>;
 

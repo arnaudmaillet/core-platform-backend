@@ -119,12 +119,13 @@ impl Validate for WithdrawFollowRequestCommand {
 }
 
 pub struct WithdrawFollowRequestHandler {
-    repo: Arc<dyn SocialGraphRepository>,
+    repo:      Arc<dyn SocialGraphRepository>,
+    publisher: Arc<dyn EventPublisher>,
 }
 
 impl WithdrawFollowRequestHandler {
-    pub fn new(repo: Arc<dyn SocialGraphRepository>) -> Self {
-        Self { repo }
+    pub fn new(repo: Arc<dyn SocialGraphRepository>, publisher: Arc<dyn EventPublisher>) -> Self {
+        Self { repo, publisher }
     }
 }
 
@@ -136,6 +137,11 @@ impl CommandHandler<WithdrawFollowRequestCommand> for WithdrawFollowRequestHandl
         let (requester, target) = ids(&cmd.requester_id, &cmd.target_id)?;
         let mut relation = self.repo.load_relation(&requester, &target).await?;
         let requested_at = relation.withdraw_request()?;
-        self.repo.delete_follow_request(&requester, &target, requested_at).await
+        self.repo.delete_follow_request(&requester, &target, requested_at).await?;
+        // Its notice is retracted (best-effort, like the request's event).
+        for event in relation.take_events() {
+            let _ = self.publisher.publish(&event).await;
+        }
+        Ok(())
     }
 }
