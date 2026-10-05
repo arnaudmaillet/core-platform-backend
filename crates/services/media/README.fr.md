@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: b77a544da343a6b7e0afe946cb7651ff5399010b2dc8694332178a99872977e7
+  source_sha256: 80c59b43beabf8a2039c60c95bc01d7c6108f4bff03d983ba785ef50c083151b
   translated_at: 2026-10-05
   status: complete
 ---
@@ -173,6 +173,7 @@ service MediaService {
   // Métadonnées d'asset
   rpc GetAsset          (GetAssetRequest)          returns (GetAssetResponse);
   rpc DeleteAsset       (DeleteAssetRequest)       returns (DeleteAssetResponse);
+  rpc ListAssetsByOwner (ListAssetsByOwnerRequest) returns (ListAssetsByOwnerResponse); // mesh uniquement
   // Plan C — résolution de diffusion (lecture chaude ; URLs CDN / signées)
   rpc ResolveDelivery      (ResolveDeliveryRequest)      returns (ResolveDeliveryResponse);
   rpc BatchResolveDelivery (BatchResolveDeliveryRequest) returns (BatchResolveDeliveryResponse);
@@ -180,6 +181,13 @@ service MediaService {
   rpc Reprocess         (ReprocessRequest)         returns (ReprocessResponse);
 }
 ```
+
+**Les assets d'un compte (#653).** `ListAssetsByOwner(owner_id, limit, page_token, url_ttl_secs)` est
+**mesh uniquement** (jamais sur l'edge) : l'export de données RGPD liste chaque asset qu'un compte possède
+(non supprimé), par id (index `(owner_id, id)`, migration 0002), chacun avec un téléchargement signé de son
+**original**, valable `url_ttl_secs` (60 s – 7 jours, le plafond de S3 ; signé contre l'endpoint public).
+Un asset non diffusable (en traitement, en échec, en quarantaine) vient sans URL — un fichier en
+quarantaine n'est jamais remis.
 
 > **Règle de contrat / wire :** **aucun message `media.v1` ne porte de charge utile
 > `bytes`.** Les uploads sont courtés via des URLs de stockage objet pré-signées ;

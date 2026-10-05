@@ -18,7 +18,8 @@ use crate::application::command::{
     ProcessAssetCommand, ProcessAssetHandler,
 };
 use crate::application::query::{
-    DeliveredMediaView, GetAssetHandler, GetAssetQuery, ResolveDeliveryHandler, ResolveDeliveryQuery,
+    DeliveredMediaView, GetAssetHandler, GetAssetQuery, ListAssetsByOwnerHandler, ListAssetsByOwnerQuery,
+    ResolveDeliveryHandler, ResolveDeliveryQuery,
 };
 use crate::domain::aggregate::{Asset, Rendition};
 use crate::domain::value_object::{
@@ -38,6 +39,8 @@ pub struct MediaServiceHandler {
     process: Arc<ProcessAssetHandler>,
     get: Arc<GetAssetHandler>,
     resolve: Arc<ResolveDeliveryHandler>,
+    /// The GDPR export's listing (#653); `None` answers UNIMPLEMENTED.
+    by_owner: Option<Arc<ListAssetsByOwnerHandler>>,
 }
 
 impl MediaServiceHandler {
@@ -49,7 +52,51 @@ impl MediaServiceHandler {
         get: Arc<GetAssetHandler>,
         resolve: Arc<ResolveDeliveryHandler>,
     ) -> Self {
-        Self { issue, commit, delete, process, get, resolve }
+        Self { issue, commit, delete, process, get, resolve, by_owner: None }
+    }
+
+    /// Enables `ListAssetsByOwner` (#653).
+    pub fn with_list_by_owner(mut self, handler: Arc<ListAssetsByOwnerHandler>) -> Self {
+        self.by_owner = Some(handler);
+        self
+    }
+
+    /// Mesh only (#653): an account's assets with signed downloads.
+    pub async fn list_assets_by_owner(
+        &self,
+        request: Request<proto::ListAssetsByOwnerRequest>,
+    ) -> Result<Response<proto::ListAssetsByOwnerResponse>, Status> {
+        let handler = self.by_owner.as_ref().ok_or_else(|| Status::unimplemented("listing by owner is not enabled"))?;
+        let req = request.into_inner();
+        let limit = i64::from(req.limit.clamp(1, 500));
+        let after = Some(req.page_token).filter(|t| !t.is_empty());
+        let query = ListAssetsByOwnerQuery {
+            owner_id: OwnerId::try_from(req.owner_id.as_str()).map_err(to_status)?,
+            limit,
+            after: after.as_deref().map(AssetId::try_from).transpose().map_err(to_status)?,
+            url_ttl: chrono::Duration::seconds(req.url_ttl_secs),
+        };
+        let owned = handler.handle(Envelope::new(Uuid::now_v7(), query)).await.map_err(to_status)?;
+        let next_page_token = match owned.last() {
+            Some(last) if owned.len() == limit as usize => last.asset.id().as_str(),
+            _ => String::new(),
+        };
+        Ok(Response::new(proto::ListAssetsByOwnerResponse {
+            assets: owned
+                .iter()
+                .map(|o| proto::OwnedAsset {
+                    asset: Some(asset_to_proto(&o.asset)),
+                    download_url: o.download.as_ref().map(|d| d.url.clone()).unwrap_or_default(),
+                    download_expires_at_ms: o
+                        .download
+                        .as_ref()
+                        .and_then(|d| d.expires_at)
+                        .map(|at| at.timestamp_millis())
+                        .unwrap_or_default(),
+                })
+                .collect(),
+            next_page_token,
+        }))
     }
 
     pub async fn issue_upload_ticket(

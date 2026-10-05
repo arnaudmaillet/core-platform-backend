@@ -131,6 +131,29 @@ message GetAssetResponse {
     Asset  asset = 1;
 }
 
+message ListAssetsByOwnerRequest {
+    string  owner_id      = 1;
+    int32   limit         = 2;
+    // The `next_page_token` of the previous page (empty: the first).
+    string  page_token    = 3;
+    // How long each download URL lives (clamped to 60 s – 7 days).
+    int64   url_ttl_secs  = 4;
+}
+
+// One asset of the account and, when deliverable, its original's download.
+message OwnedAsset {
+    Asset   asset                    = 1;
+    // Empty when the asset is not deliverable.
+    string  download_url             = 2;
+    int64   download_expires_at_ms   = 3;
+}
+
+message ListAssetsByOwnerResponse {
+    repeated OwnedAsset assets          = 1;
+    // Empty on the last page.
+    string              next_page_token = 2;
+}
+
 message DeleteAssetRequest {
     string  asset_id = 1;
     // The requesting actor (edge-resolved); must own the asset.

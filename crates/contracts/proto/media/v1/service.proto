@@ -48,6 +48,12 @@ service MediaService {
     // ResolveDelivery for URLs).
     rpc GetAsset(GetAssetRequest) returns (GetAssetResponse);
 
+    // An account's assets (not deleted), paged by id, each with a signed
+    // download of its original (valid `url_ttl_secs`, 60 s – 7 days; none for
+    // an asset that is not deliverable). Mesh only (never on the edge): the
+    // GDPR data export (#653).
+    rpc ListAssetsByOwner(ListAssetsByOwnerRequest) returns (ListAssetsByOwnerResponse);
+
     // Owner-initiated hard delete. Refused (PERMISSION_DENIED, MED-7003) while a
     // legal hold is active.
     rpc DeleteAsset(DeleteAssetRequest) returns (DeleteAssetResponse);

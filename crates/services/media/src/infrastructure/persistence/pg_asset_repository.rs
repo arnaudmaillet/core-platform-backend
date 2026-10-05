@@ -4,7 +4,7 @@ use sqlx::types::Json;
 
 use crate::application::port::AssetRepository;
 use crate::domain::aggregate::Asset;
-use crate::domain::value_object::{AssetId, ContentHash};
+use crate::domain::value_object::{AssetId, ContentHash, OwnerId};
 use crate::error::MediaError;
 
 use super::storage_err;
@@ -70,6 +70,26 @@ impl AssetRepository for PgAssetRepository {
             "SELECT doc FROM assets WHERE content_hash = $1 AND state <> 'deleted'",
         )
         .bind(hash.as_str())
+        .fetch_all(self.tx.pool())
+        .await
+        .map_err(storage_err)?;
+        Ok(rows.into_iter().map(|r| r.doc.0).collect())
+    }
+
+    async fn list_by_owner(
+        &self,
+        owner: &OwnerId,
+        limit: i64,
+        after: Option<&AssetId>,
+    ) -> Result<Vec<Asset>, MediaError> {
+        let rows = sqlx::query_as::<_, AssetDocRow>(
+            "SELECT doc FROM assets \
+             WHERE owner_id = $1 AND state <> 'deleted' AND ($2::uuid IS NULL OR id > $2) \
+             ORDER BY id LIMIT $3",
+        )
+        .bind(owner.as_uuid())
+        .bind(after.map(AssetId::as_uuid))
+        .bind(limit.clamp(1, 500))
         .fetch_all(self.tx.pool())
         .await
         .map_err(storage_err)?;

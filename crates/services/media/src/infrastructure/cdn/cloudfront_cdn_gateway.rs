@@ -62,6 +62,17 @@ impl CdnGateway for CloudFrontCdnGateway {
         }
     }
 
+    async fn signed_download(
+        &self,
+        key: &StorageKey,
+        ttl: chrono::Duration,
+        now: DateTime<Utc>,
+    ) -> Result<ResolvedUrl, MediaError> {
+        let ttl = ttl.clamp(chrono::Duration::seconds(60), chrono::Duration::days(7));
+        let url = self.store.presign_get_public(key.as_str(), ttl.to_std().unwrap_or(StdDuration::from_secs(60)));
+        Ok(ResolvedUrl { url: url.to_string(), expires_at: Some(now + ttl) })
+    }
+
     async fn invalidate(&self, keys: &[StorageKey]) -> Result<(), MediaError> {
         // Takedown-only path: content-addressed immutability means this never
         // fires on an edit, only on delete / quarantine.

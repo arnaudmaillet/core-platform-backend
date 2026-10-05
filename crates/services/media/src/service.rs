@@ -234,3 +234,16 @@ fn build_consumer(
         .with_context(|| format!("build dead-letter producer for {topic}"))?;
     Ok((consumer, producer))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An account's assets with long-lived downloads are the GDPR export's
+    /// (#653): never on the edge.
+    #[test]
+    fn listing_by_owner_is_mesh_only() {
+        let method = "/media.v1.MediaService/ListAssetsByOwner";
+        assert!(MediaService::EDGE_POLICY.iter().all(|rule| rule.method != method));
+    }
+}
