@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 607f9248050b07df244507797686d9abd36ae7e5516aa5e04d51de7bd22353eb
-  translated_at: 2026-10-05
+  source_sha256: e6f5c5703bd622250180826c8f1b9296ad5fc80f2c8aa2f61357a95528ffb44c
+  translated_at: 2026-10-06
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -162,6 +162,9 @@ service ProfileService {
   rpc GetProfileByHandle(GetProfileByHandleRequest) returns (ProfileView);
   rpc CheckHandleAvailability(CheckHandleAvailabilityRequest) returns (CheckHandleAvailabilityResponse);
   rpc ListProfilesByAccount(ListProfilesByAccountRequest) returns (ListProfilesByAccountResponse);
+  rpc GetShareToken(GetShareTokenRequest) returns (ShareTokenResponse);        // #661 le jeton QR / lien de partage du propriétaire (22 caractères URL-safe), émis à la première demande
+  rpc RotateShareToken(RotateShareTokenRequest) returns (ShareTokenResponse);  // #661 le révoque pour un nouveau : l'ancien ne se résout plus, immédiatement
+  rpc ResolveShareToken(ResolveShareTokenRequest) returns (ProfileView);       // #661 public_read : le profil tel que le lecteur peut le voir ; NOT_FOUND si révoqué, inactif, ou `by_qr` désactivé (le propriétaire le résout toujours)
 }
 ```
 

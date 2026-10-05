@@ -104,4 +104,14 @@ service ProfileService {
 
     // Paginated list of all profiles owned by an account.
     rpc ListProfilesByAccount(ListProfilesByAccountRequest) returns (ListProfilesByAccountResponse);
+
+    // A profile's QR code / share link (#661): a random token, revocable,
+    // independent of the handle. The owner gets theirs (issued on first ask)
+    // and rotates it — the old one stops resolving at once.
+    rpc GetShareToken(GetShareTokenRequest) returns (ShareTokenResponse);
+    rpc RotateShareToken(RotateShareTokenRequest) returns (ShareTokenResponse);
+    // Anyone resolves a scanned token to the profile, as they may see it —
+    // NOT_FOUND for a malformed or revoked token, a profile that is not
+    // active, or one whose owner turned "reachable by QR / shared link" off.
+    rpc ResolveShareToken(ResolveShareTokenRequest) returns (ProfileView);
 }

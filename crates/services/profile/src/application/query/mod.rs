@@ -14,3 +14,5 @@ pub use verification::{
     GetVerificationRequestHandler, GetVerificationRequestQuery, ListPendingVerificationsHandler,
     ListPendingVerificationsQuery,
 };
+pub mod share_token;
+pub use share_token::{GetShareTokenQuery, ResolveShareTokenQuery, RotateShareTokenCommand, ShareTokenHandler};
