@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 9baf271fcc14a26140099ccdb74d17c7306749cfe3efcba0ef95fb8a7a8ca332
+  source_sha256: 73f74eb6891d250fddb57c1cf542f9f015b71ceca4811c43db07eb118a6d6f4a
   translated_at: 2026-10-05
   status: complete
 ---
@@ -71,6 +71,10 @@ gRPC ─► ProfileServiceHandler ─► Command bus            Query bus ─►
 effectue une invalidation de cache à l'échelle de la flotte, sans interruption, lors d'une migration de
 schéma. **Réservation par tombstone :** un handle supprimé est bloqué 30 jours via `tombstoned_at`,
 empêchant le détournement rapide d'identité (`handle_is_available()` l'impose à la couche application).
+Ensuite, la réservation reprend le tombstone par une seconde LWT (`UPDATE … IF tombstoned_at < now − 30 d`),
+sans tâche de GC. `CreateProfile` réserve le handle **avant** d'écrire le profil : une course perdue
+n'écrit rien (pas de ligne orpheline, pas de `pids` parasite), et une écriture en échec rend la
+réservation (`DELETE … IF profile_id = ?`).
 
 > **Invariants** (et où ils sont imposés) : unicité du handle via LWT `IF NOT EXISTS` sur
 > `profile_handles` ; concurrence optimiste via LWT `IF version = ?` sur `profiles` (→ `PRF-4001`,

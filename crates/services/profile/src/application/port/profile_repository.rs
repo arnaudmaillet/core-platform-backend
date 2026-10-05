@@ -5,6 +5,9 @@ use crate::domain::aggregate::Profile;
 use crate::domain::value_object::{AccountId, Handle, ProfileId};
 use crate::error::ProfileError;
 
+/// Days a released handle stays reserved before anyone may claim it again.
+pub const HANDLE_RESERVATION_DAYS: i64 = 30;
+
 /// Lightweight read model used by the `profiles_by_account` index table.
 ///
 /// Deliberately excludes bio, website, custom_links, and masking details
@@ -51,8 +54,9 @@ pub trait ProfileRepository: Send + Sync + 'static {
         page_token: Option<&str>,
     ) -> Result<(Vec<ProfileSummary>, Option<String>), ProfileError>;
 
-    /// Attempts to atomically claim `handle` via ScyllaDB LWT.
-    /// Returns `false` if the handle row already exists (taken or tombstoned).
+    /// Attempts to atomically claim `handle` via ScyllaDB LWT: a free handle, or
+    /// one released more than [`HANDLE_RESERVATION_DAYS`] ago (its tombstone is
+    /// taken over). Returns `false` if it is held or still reserved.
     async fn claim_handle(
         &self,
         handle: &Handle,
@@ -62,6 +66,10 @@ pub trait ProfileRepository: Send + Sync + 'static {
 
     /// Marks a handle as tombstoned (30-day reservation after release).
     async fn tombstone_handle(&self, handle: &Handle) -> Result<(), ProfileError>;
+
+    /// Undoes [`claim_handle`](Self::claim_handle) when what followed it failed:
+    /// drops the claim only if `profile_id` still holds it (LWT).
+    async fn release_handle_claim(&self, handle: &Handle, profile_id: ProfileId) -> Result<(), ProfileError>;
 
     /// Returns `true` if the handle is available for claiming.
     ///

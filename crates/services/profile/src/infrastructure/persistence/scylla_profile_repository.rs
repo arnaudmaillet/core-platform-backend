@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
 
-use crate::application::port::{ProfileRepository, ProfileSummary};
+use crate::application::port::{ProfileRepository, ProfileSummary, HANDLE_RESERVATION_DAYS};
 use crate::domain::aggregate::Profile;
 use crate::domain::entity::ProfileLink;
 use crate::domain::value_object::{AccountId, BusinessInfo, Handle, ProfileId};
@@ -457,11 +457,39 @@ impl ProfileRepository for ScyllaProfileRepository {
         let result = self.client.session
             .execute_unpaged(stmt, (handle.as_str().to_owned(), profile_id.as_uuid(), account_id.as_uuid(), now))
             .await.map_err(scylla_err)?;
-
-        lwt_applied(
+        if lwt_applied(
             result.into_rows_result().map_err(|e| row_err("claim_ltw_rows", e))?,
             "claim_ltw_deser",
+        )? {
+            return Ok(true);
+        }
+
+        // The row exists: take it over only if it is a tombstone past its
+        // reservation (a null `tombstoned_at` — a live claim — never matches).
+        let cutoff = Self::dt_ms(Utc::now() - chrono::Duration::days(HANDLE_RESERVATION_DAYS));
+        let stmt = self.strict_stmt(
+            "UPDATE profile.profile_handles \
+             SET profile_id = ?, account_id = ?, created_at = ?, tombstoned_at = null \
+             WHERE handle = ? IF tombstoned_at < ?",
+        );
+        let result = self.client.session
+            .execute_unpaged(
+                stmt,
+                (profile_id.as_uuid(), account_id.as_uuid(), now, handle.as_str().to_owned(), cutoff),
+            )
+            .await.map_err(scylla_err)?;
+        lwt_applied(
+            result.into_rows_result().map_err(|e| row_err("reclaim_ltw_rows", e))?,
+            "reclaim_ltw_deser",
         )
+    }
+
+    async fn release_handle_claim(&self, handle: &Handle, profile_id: ProfileId) -> Result<(), ProfileError> {
+        let stmt = self.strict_stmt("DELETE FROM profile.profile_handles WHERE handle = ? IF profile_id = ?");
+        self.client.session
+            .execute_unpaged(stmt, (handle.as_str().to_owned(), profile_id.as_uuid()))
+            .await.map_err(scylla_err)?;
+        Ok(())
     }
 
     async fn tombstone_handle(&self, handle: &Handle) -> Result<(), ProfileError> {
@@ -495,7 +523,7 @@ impl ProfileRepository for ScyllaProfileRepository {
             Some(TombRow { tombstoned_at: None }) => Ok(false),
             Some(TombRow { tombstoned_at: Some(ts) }) => {
                 let days_elapsed = (Utc::now().timestamp_millis() - ts.0) / 86_400_000;
-                Ok(days_elapsed >= 30)
+                Ok(days_elapsed >= HANDLE_RESERVATION_DAYS)
             }
         }
     }

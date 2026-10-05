@@ -96,14 +96,23 @@ impl CommandHandler<CreateProfileCommand> for CreateProfileHandler {
             correlation_id: envelope.correlation_id,
         });
 
-        self.repo.save(&profile).await?;
-        self.repo.save_account_index(&profile).await?;
-
-        // LWT claim — if this returns false another concurrent create raced us.
-        // The profile row is already written; we must surface the conflict.
+        // LWT claim first: a create that loses the race writes nothing (no
+        // orphan profile row, no `profiles_by_account` entry, so no stray `pids`).
         let claimed = self.repo.claim_handle(&handle, profile.id(), account_id).await?;
         if !claimed {
             return Err(ProfileError::HandleAlreadyTaken { handle: handle.as_str().to_owned() });
+        }
+        let saved = match self.repo.save(&profile).await {
+            Ok(()) => self.repo.save_account_index(&profile).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = saved {
+            // Give the handle back; if even that fails, it stays held by a
+            // profile id that does not exist (never resolves) — logged.
+            if let Err(release) = self.repo.release_handle_claim(&handle, profile.id()).await {
+                tracing::error!(error = %release, handle = handle.as_str(), "handle claim not released after a failed create");
+            }
+            return Err(e);
         }
 
         // Publish only after the claim succeeds — a lost race must not emit a

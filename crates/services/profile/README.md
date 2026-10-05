@@ -57,7 +57,10 @@ gRPC ─► ProfileServiceHandler ─► Command bus            Query bus ─►
 **Cache-key versioning.** All keys carry a `v1:` prefix — bumping the suffix performs a zero-downtime
 cache invalidation during schema migrations. **Tombstone reservation:** a deleted handle is blocked
 for 30 days via `tombstoned_at`, preventing rapid identity hijacking (`handle_is_available()` enforces
-it at the application layer).
+it at the application layer). After that, the claim takes the tombstone over with a second LWT
+(`UPDATE … IF tombstoned_at < now − 30 d`), so no GC job is needed. `CreateProfile` claims the handle
+**before** writing the profile: a lost race writes nothing (no orphan row, no stray `pids`), and a
+failed write gives the claim back (`DELETE … IF profile_id = ?`).
 
 > **Invariants** (and where enforced): handle uniqueness via `IF NOT EXISTS` LWT on `profile_handles`;
 > optimistic concurrency via `IF version = ?` LWT on `profiles` (→ `PRF-4001`, retryable); status
