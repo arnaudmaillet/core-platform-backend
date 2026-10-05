@@ -103,7 +103,10 @@ streaming to connected clients).
 unpublishing triggers the `VisibilityWorker` teardown, consuming `chat.conversation.unpublished`
 (DLQ `chat.conversation.unpublished.dlq`) to dismantle audience-plane state.
 
-**Membership.** Join/leave emit `chat.member.joined` / `chat.member.left`.
+**Membership.** Join/leave emit `chat.member.joined` / `chat.member.left`. A public conversation is
+open-join; a private one admits only a profile holding a pending **invitation** (issued by an
+owner/admin, consumed by the join, 7-day TTL). A non-invited joiner is refused as if the conversation
+did not exist (`CHT-1009`, rendered like `CHT-1001`).
 
 ---
 

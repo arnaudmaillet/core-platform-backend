@@ -4,6 +4,7 @@ use crate::domain::event::{
     ConversationCreatedEvent, ConversationPublishedEvent, ConversationUnpublishedEvent, DomainEvent,
     MemberJoinedEvent, MemberLeftEvent,
 };
+use crate::domain::aggregate::{Invitation, Participant};
 use crate::domain::value_object::{
     ConversationId, ConversationKind, ConversationPolicy, MessageId, ProfileId, Role, Visibility,
 };
@@ -28,6 +29,8 @@ use crate::error::ChatError;
 /// - Visibility transitions are monotone guards: you cannot publish a public
 ///   conversation, nor unpublish a private one.
 /// - A `Channel` is born `Public`; a `Group` is born `Private`.
+/// - Joining a `Private` conversation requires a pending [`Invitation`] for the
+///   joiner, issued by an administering member; a `Public` one is open-join.
 ///
 /// Lifecycle transitions buffer a [`DomainEvent`]; drain them with
 /// [`Conversation::take_events`] after persisting, mirroring the `post` service.
@@ -195,6 +198,48 @@ impl Conversation {
         Ok(())
     }
 
+    /// Issues an invitation for `invitee_id` to join, on behalf of `inviter`.
+    ///
+    /// Only an administering member (owner/admin) may invite; anyone else gets
+    /// [`ChatError::NotAuthorized`]. The caller resolves `inviter` from the roster
+    /// (a non-member never reaches this method) and checks that the invitee is
+    /// not already a member.
+    pub fn invite(&self, inviter: &Participant, invitee_id: ProfileId) -> Result<Invitation, ChatError> {
+        if !inviter.can_administer() {
+            return Err(ChatError::NotAuthorized {
+                profile_id:      inviter.profile_id().as_str(),
+                conversation_id: self.id.as_str(),
+            });
+        }
+        Ok(Invitation::issue(invitee_id, inviter.profile_id()))
+    }
+
+    /// Admits `profile_id` as a regular `Member` through a self-service join.
+    ///
+    /// A `Public` conversation is open-join. A `Private` one requires
+    /// `invitation` to be a pending invitation **for this profile**; without it
+    /// the join fails with [`ChatError::ConversationConcealed`], which the edge
+    /// renders exactly like a missing conversation so a non-invited caller
+    /// cannot learn that the private conversation exists. The roster cap is then
+    /// enforced by [`Conversation::admit_member`].
+    pub fn admit_joiner(
+        &mut self,
+        profile_id: ProfileId,
+        invitation: Option<&Invitation>,
+    ) -> Result<(), ChatError> {
+        let invited = invitation.is_some_and(|i| i.invitee_id() == profile_id);
+        if !self.visibility.is_public() && !invited {
+            return Err(self.concealed());
+        }
+        self.admit_member(profile_id, Role::Member)
+    }
+
+    /// The error a caller with no standing in this conversation gets when it is
+    /// `Private`: indistinguishable at the edge from "not found".
+    pub fn concealed(&self) -> ChatError {
+        ChatError::ConversationConcealed { conversation_id: self.id.as_str() }
+    }
+
     /// Releases a profile from the Member Plane. The owner cannot leave (a
     /// conversation always has an owner); ownership transfer is a separate
     /// operation handled at the application layer.
@@ -249,4 +294,105 @@ impl Conversation {
     pub fn public_since(&self) -> Option<MessageId>   { self.public_since }
     pub fn created_at(&self)   -> DateTime<Utc>       { self.created_at }
     pub fn updated_at(&self)   -> DateTime<Utc>       { self.updated_at }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pid() -> ProfileId {
+        ProfileId::from_uuid(uuid::Uuid::now_v7())
+    }
+
+    fn group() -> Conversation {
+        let mut c = Conversation::create(ConversationId::new(), ConversationKind::Group, pid());
+        c.take_events();
+        c
+    }
+
+    fn joined_events(c: &mut Conversation) -> usize {
+        c.take_events().iter().filter(|e| matches!(e, DomainEvent::MemberJoined(_))).count()
+    }
+
+    #[test]
+    fn private_join_without_invitation_is_concealed() {
+        let mut c = group();
+        let err = c.admit_joiner(pid(), None).unwrap_err();
+        assert!(matches!(err, ChatError::ConversationConcealed { .. }), "{err:?}");
+        assert_eq!(c.member_count(), 1, "a refused join must not touch the roster");
+        assert_eq!(joined_events(&mut c), 0);
+    }
+
+    #[test]
+    fn private_join_with_someone_elses_invitation_is_concealed() {
+        let mut c = group();
+        let owner = Participant::new(c.owner_id(), Role::Owner).unwrap();
+        let invitation = c.invite(&owner, pid()).unwrap();
+        let err = c.admit_joiner(pid(), Some(&invitation)).unwrap_err();
+        assert!(matches!(err, ChatError::ConversationConcealed { .. }), "{err:?}");
+        assert_eq!(c.member_count(), 1);
+    }
+
+    #[test]
+    fn private_join_with_own_invitation_is_admitted() {
+        let mut c = group();
+        let owner = Participant::new(c.owner_id(), Role::Owner).unwrap();
+        let invitee = pid();
+        let invitation = c.invite(&owner, invitee).unwrap();
+        assert_eq!(invitation.invitee_id(), invitee);
+        assert_eq!(invitation.inviter_id(), c.owner_id());
+
+        c.admit_joiner(invitee, Some(&invitation)).unwrap();
+        assert_eq!(c.member_count(), 2);
+        assert_eq!(joined_events(&mut c), 1);
+    }
+
+    #[test]
+    fn public_join_is_open() {
+        let mut c = group();
+        c.publish().unwrap();
+        c.take_events();
+        c.admit_joiner(pid(), None).unwrap();
+        assert_eq!(c.member_count(), 2);
+        assert_eq!(joined_events(&mut c), 1);
+    }
+
+    #[test]
+    fn unpublishing_closes_open_join() {
+        let mut c = group();
+        c.publish().unwrap();
+        c.unpublish().unwrap();
+        let err = c.admit_joiner(pid(), None).unwrap_err();
+        assert!(matches!(err, ChatError::ConversationConcealed { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn invited_join_still_respects_the_roster_cap() {
+        let mut c = Conversation::reconstitute(
+            ConversationId::new(),
+            ConversationKind::Group,
+            Visibility::Private,
+            pid(),
+            ConversationKind::Group.max_members(),
+            None,
+            Utc::now(),
+            Utc::now(),
+        );
+        let owner = Participant::new(c.owner_id(), Role::Owner).unwrap();
+        let invitee = pid();
+        let invitation = c.invite(&owner, invitee).unwrap();
+        let err = c.admit_joiner(invitee, Some(&invitation)).unwrap_err();
+        assert!(matches!(err, ChatError::MemberLimitExceeded { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn only_owner_or_admin_may_invite() {
+        let c = group();
+        let admin = Participant::new(pid(), Role::Admin).unwrap();
+        assert!(c.invite(&admin, pid()).is_ok());
+
+        let member = Participant::new(pid(), Role::Member).unwrap();
+        let err = c.invite(&member, pid()).unwrap_err();
+        assert!(matches!(err, ChatError::NotAuthorized { .. }), "{err:?}");
+    }
 }

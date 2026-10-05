@@ -23,7 +23,8 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    CreateConversationCommand, CreateConversationHandler, JoinAsMemberCommand, JoinAsMemberHandler,
+    CreateConversationCommand, CreateConversationHandler, InviteMemberCommand, InviteMemberHandler,
+    JoinAsMemberCommand, JoinAsMemberHandler,
     MarkReadCommand, MarkReadHandler, SendMessageCommand, SendMessageHandler, SubscribeCommand,
     SubscribeHandler, ToggleVisibilityCommand, ToggleVisibilityHandler, UnsubscribeCommand,
     UnsubscribeHandler,
@@ -43,7 +44,8 @@ use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 use crate::infrastructure::grpc::handler::chat_handler::StreamingParams;
 use crate::infrastructure::grpc::handler::ChatServiceHandler;
 use crate::infrastructure::persistence::{
-    ScyllaConversationRepository, ScyllaMemberRepository, ScyllaMessageRepository,
+    ScyllaConversationRepository, ScyllaInvitationRepository, ScyllaMemberRepository,
+    ScyllaMessageRepository,
     ScyllaPresenceSettingsStore, ScyllaSubscriptionRepository,
 };
 use crate::infrastructure::routing::{
@@ -131,6 +133,8 @@ impl App {
         let member_repo = Arc::new(ScyllaMemberRepository::new(Arc::clone(&scylla_client)));
         let subscription_repo =
             Arc::new(ScyllaSubscriptionRepository::new(Arc::clone(&scylla_client)));
+        let invitation_repo =
+            Arc::new(ScyllaInvitationRepository::new(Arc::clone(&scylla_client)));
 
         // ── Cache / routing adapters ─────────────────────────────────────────
         let hot_tail = Arc::new(RedisHotTailCache::new(redis_client.clone()));
@@ -172,6 +176,7 @@ impl App {
                     &message_repo,
                     &member_repo,
                     &subscription_repo,
+                    &invitation_repo,
                 )?
             }
             None => build_command_bus(
@@ -180,6 +185,7 @@ impl App {
                 &message_repo,
                 &member_repo,
                 &subscription_repo,
+                &invitation_repo,
             )?,
         };
 
@@ -268,6 +274,7 @@ fn build_command_bus<EP: EventPublisher>(
     message_repo:      &Arc<ScyllaMessageRepository>,
     member_repo:       &Arc<ScyllaMemberRepository>,
     subscription_repo: &Arc<ScyllaSubscriptionRepository>,
+    invitation_repo:   &Arc<ScyllaInvitationRepository>,
 ) -> Result<InMemoryCommandBus, Box<dyn std::error::Error>> {
     Ok(CommandBusBuilder::new()
         .register::<CreateConversationCommand, _>(CreateConversationHandler {
@@ -288,7 +295,13 @@ fn build_command_bus<EP: EventPublisher>(
         .register::<JoinAsMemberCommand, _>(JoinAsMemberHandler {
             conversation_repo: Arc::clone(conversation_repo),
             member_repo:       Arc::clone(member_repo),
+            invitation_repo:   Arc::clone(invitation_repo),
             publisher:         Arc::clone(&publisher),
+        })?
+        .register::<InviteMemberCommand, _>(InviteMemberHandler {
+            conversation_repo: Arc::clone(conversation_repo),
+            member_repo:       Arc::clone(member_repo),
+            invitation_repo:   Arc::clone(invitation_repo),
         })?
         .register::<SubscribeCommand, _>(SubscribeHandler {
             conversation_repo: Arc::clone(conversation_repo),

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 2de9076adb28bcc7cc737359f87ed886f442fc9987778a5d86210a798c37af6c
-  translated_at: 2026-10-04
+  source_sha256: 1281697d846ad5cc7978e92c6d7e0c26200782b4f03870f840ace0a26ed61b24
+  translated_at: 2026-10-05
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -102,7 +102,9 @@ pour les invités ne touchent jamais Scylla ; elles arrivent par le plan de diff
 > **Invariants** (et où ils sont imposés) : `StreamConversation` exige l'appartenance au roster
 > (`PERMISSION_DENIED` sinon) — imposé à la frontière gRPC ; `StreamPublic` exige `visibility == Public`
 > (`FAILED_PRECONDITION` sinon) ; le flux audience est *structurellement* incapable de transporter
-> présence/saisie/accusés ; le plafond de 500 membres par groupe est un invariant de la couche domaine.
+> présence/saisie/accusés ; le plafond de 500 membres par groupe est un invariant de la couche domaine ;
+> rejoindre une conversation privée exige une invitation en attente (`NOT_FOUND` sinon, voir plus bas) —
+> invariant de la couche domaine.
 
 ---
 
@@ -157,7 +159,8 @@ service ChatService {
   // Lifecycle / membership
   rpc CreateConversation (CreateConversationRequest) returns (CreateConversationResponse);
   rpc ToggleVisibility   (ToggleVisibilityRequest)   returns (CommandResponse);
-  rpc JoinAsMember       (JoinAsMemberRequest)       returns (CommandResponse);
+  rpc JoinAsMember       (JoinAsMemberRequest)       returns (CommandResponse); // private ⇒ invitation required
+  rpc InviteMember       (InviteMemberRequest)       returns (CommandResponse); // owner/admin only
   rpc Subscribe          (SubscribeRequest)          returns (CommandResponse);
   rpc Unsubscribe        (UnsubscribeRequest)        returns (CommandResponse);
   // Messaging
@@ -185,6 +188,18 @@ service ChatService {
 sinon) ; `StreamPublic` exige `visibility == Public` (`FAILED_PRECONDITION` sinon) ; le flux audience
 est structurellement incapable de transporter présence/saisie/accusés. `Heartbeat` et `SendTyping`
 exigent aussi l'appartenance au roster (un non-membre ne peut pas injecter de signaux du Member Plane).
+
+**Rejoindre une conversation privée.** `JoinAsMember` n'est en accès libre que sur une conversation
+**publique**. Sur une conversation **privée** (groupe ou canal), il exige une invitation en attente pour
+l'appelant, émise par un owner/admin via `InviteMember` (un simple membre reçoit `PERMISSION_DENIED`).
+L'invitation est stockée dans `chat.invitations_by_conversation`, expire au bout de **7 jours** (TTL de la
+table ; une nouvelle invitation la renouvelle) et est **consommée** par l'adhésion. Sans invitation,
+l'adhésion échoue en `NOT_FOUND` avec `CHT-1009`, dont le code gRPC et le message sont identiques à
+`CHT-1001` (conversation introuvable) : un tiers ne peut pas distinguer une conversation privée d'une
+conversation inexistante. Un tiers qui appelle `InviteMember` sur une conversation privée reçoit la même
+réponse. La règle est un invariant du domaine (`Conversation::admit_joiner` / `Conversation::invite`) ;
+l'appelant reste lié à son propre profil à la frontière (`edge::require_profile` sur `profile_id` /
+`inviter_id`). Aucun événement n'est encore émis pour une invitation : l'invité en est informé hors bande.
 
 **Réglages de présence (#661).** Un membre qui a désactivé son **statut d'activité** (réglages de
 découvrabilité du profil) n'annonce aucune présence : ni événement en ligne/hors ligne, ni battement. Celui
@@ -224,6 +239,10 @@ le crate partagé `error` :
 | `CHT-3xxx` | events |
 | `CHT-4xxx` | streaming |
 | `CHT-9xxx` | identifiers |
+
+`CHT-1009` (conversation privée que l'appelant ne peut pas voir) est volontairement rendu exactement
+comme `CHT-1001` sur le fil (`NOT_FOUND`, même message) ; le code distinct n'existe que dans les journaux
+serveur.
 
 ---
 
@@ -356,7 +375,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Déploiement, migrations & rollback
 
-- **Migrations :** appliquer `crates/services/chat/migrations/0001…0006.cql` sur le keyspace `chat`
+- **Migrations :** appliquer `crates/services/chat/migrations/0001…0008.cql` sur le keyspace `chat`
   **avant** le premier démarrage / avant de déployer un nouveau binaire.
 - **Pièges liés à l'état :** `CHAT_MESSAGE_BUCKET_HOURS` et `CHAT_AUDIENCE_SHARD_COUNT` doivent être
   **uniformes sur tout le cluster**, et `CHAT_MESSAGE_BUCKET_HOURS` ne doit **jamais changer une fois que
