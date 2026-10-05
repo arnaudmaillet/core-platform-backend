@@ -82,7 +82,12 @@ idempotent, so a redelivered event redoes only what is left. Identical bytes sha
 keys, so **a takedown is about the content**: every asset holding the same bytes is
 quarantined with it (each saved and announced), and a reversal restores them all —
 unless one of them is under a **legal hold** (CSAM evidence), in which case nothing is
-restored. A delete erases public and quarantined copies alike, except objects another
+restored. Each asset records the moderation **enforcements** covering it; a reversal
+lifts only its own, and the bytes come back only once no copy is still covered by
+another enforcement (two decisions on two copies: overturning one keeps the content
+down). A **re-upload of taken-down bytes is quarantined on arrival** (enforcements and
+legal hold carried over), before any rendition is written back to the shared public
+keys. A delete erases public and quarantined copies alike, except objects another
 asset with the same bytes still holds (the legal hold still blocks a delete first).
 
 > **Invariants** (and where enforced): no message carries a `bytes` payload

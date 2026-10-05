@@ -5,6 +5,7 @@ use cqrs::Envelope;
 
 use crate::application::command::ProcessOutcome;
 use crate::application::policy::MediaPolicy;
+use crate::application::command::asset_objects;
 use crate::application::port::{
     AssetRepository, DeliveryCache, EventPublisher, MalwareScanner, ModerationScreen, ScanVerdict,
     VideoTranscoder,
@@ -78,6 +79,13 @@ impl TranscodeAssetHandler {
             asset.mark_failed("malware detected", now)?;
             self.persist_and_publish(&mut asset).await?;
             return Ok(ProcessOutcome::Failed("malware detected".into()));
+        }
+
+        // Bytes that were taken down stay down, whoever uploads them again.
+        if asset_objects::quarantine_if_taken_down(self.assets.as_ref(), &mut asset, now).await? {
+            self.cache.invalidate(&asset.id()).await?;
+            self.persist_and_publish(&mut asset).await?;
+            return Ok(ProcessOutcome::Quarantined);
         }
 
         // 2. Pre-publish moderation screen (fail-closed, hard timeout).

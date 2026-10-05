@@ -311,7 +311,7 @@ impl Harness {
     ) {
         self.moderation
             .handle(
-                Envelope::new(Uuid::now_v7(), ApplyModerationCommand { asset_id, action }),
+                Envelope::new(Uuid::now_v7(), ApplyModerationCommand { asset_id, action, enforcement_id: None }),
                 Utc::now(),
             )
             .await

@@ -696,6 +696,7 @@ impl Fixture {
             renditions: vec![original],
             legal_hold: false,
             prior_state: None,
+            enforcements: Default::default(),
             created_at: t0(),
             updated_at: t0(),
         });

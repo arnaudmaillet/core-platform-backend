@@ -90,3 +90,34 @@ pub(crate) async fn all(
         public.into_iter().map(StorageKey::from_raw).collect(),
     ))
 }
+
+/// A re-upload of bytes that were taken down: when another asset with the same
+/// content hash is quarantined, `asset` is quarantined on arrival — before any
+/// rendition is written back to the shared public keys — carrying over the
+/// enforcements (and a legal hold). `true` when it was.
+pub(crate) async fn quarantine_if_taken_down(
+    assets: &dyn AssetRepository,
+    asset: &mut Asset,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<bool, MediaError> {
+    use crate::domain::value_object::AssetState;
+    let Some(hash) = asset.content_hash().cloned() else { return Ok(false) };
+    let prior: Vec<Asset> = assets
+        .find_by_content_hash(&hash)
+        .await?
+        .into_iter()
+        .filter(|a| a.id() != asset.id() && a.state() == AssetState::Quarantined)
+        .collect();
+    if prior.is_empty() {
+        return Ok(false);
+    }
+    asset.quarantine(now)?;
+    for enforcement in prior.iter().flat_map(|a| a.enforcements().iter()) {
+        asset.cover(enforcement, now);
+    }
+    if prior.iter().any(Asset::legal_hold) {
+        asset.place_legal_hold(now);
+    }
+    tracing::warn!(asset.id = %asset.id(), "a re-upload of taken-down bytes was quarantined on arrival");
+    Ok(true)
+}
