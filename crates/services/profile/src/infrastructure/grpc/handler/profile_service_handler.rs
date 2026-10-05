@@ -266,6 +266,7 @@ where
         request: Request<proto::SetLocationSettingsRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
         edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let minor = edge::principal(&request).is_some_and(|p| p.is_minor());
         let req = request.into_inner();
         let s = req.settings.ok_or_else(|| Status::invalid_argument("settings are required"))?;
         let precision = match proto::LocationPrecision::try_from(s.precision) {
@@ -286,6 +287,7 @@ where
             precision,
             audience,
             on_new_posts: s.on_new_posts,
+            minor,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))

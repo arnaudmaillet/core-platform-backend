@@ -16,6 +16,9 @@ pub struct SetLocationSettingsCommand {
     pub precision:    LocationPrecision,
     pub audience:     Option<LocationAudience>,
     pub on_new_posts: Option<bool>,
+    /// The holder is 13–17 (the edge token's age): their audience is capped
+    /// at mutuals (#657).
+    pub minor:        bool,
 }
 
 impl Command for SetLocationSettingsCommand {}
@@ -64,6 +67,15 @@ impl CommandHandler<SetLocationSettingsCommand> for SetLocationSettingsHandler {
             audience:     cmd.audience.unwrap_or(current.audience),
             on_new_posts: cmd.on_new_posts.unwrap_or(current.on_new_posts),
         };
+        // A minor shares where they are with mutuals at most, whatever they
+        // ask for (UK Children's Code): a wider audience is refused, not
+        // silently narrowed.
+        if cmd.minor && settings.audience != LocationAudience::Mutuals {
+            return Err(ProfileError::DomainViolation {
+                field:   "audience".to_owned(),
+                message: "a holder under 18 shares their location with mutuals at most".to_owned(),
+            });
+        }
         if !profile.set_location_settings(settings, envelope.correlation_id)? {
             return Ok(());
         }
