@@ -76,7 +76,7 @@ impl CommandHandler<CreateProfileCommand> for CreateProfileHandler {
         let profile_kind = ProfileKind::try_from(cmd.profile_kind.as_str())?;
         let locale = Locale::new(&cmd.locale)?;
 
-        if !self.repo.handle_is_available(&handle).await? {
+        if !self.repo.handle_is_available(&handle, None).await? {
             return Err(ProfileError::HandleAlreadyTaken { handle: handle.as_str().to_owned() });
         }
 

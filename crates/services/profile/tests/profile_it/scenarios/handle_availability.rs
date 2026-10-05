@@ -183,6 +183,22 @@ async fn a_verified_profiles_released_handle_is_held_for_good() {
         ))
         .await
         .expect("verify");
+
+    // The verified profile renames away: its old handle is held — for others…
+    use profile::application::command::ChangeHandleCommand;
+    let other = harness::random_handle();
+    let rename = |to: &str| {
+        h.command_bus.dispatch(Envelope::new(
+            Uuid::now_v7(),
+            ChangeHandleCommand { profile_id: id.clone(), new_handle: to.to_owned() },
+        ))
+    };
+    rename(&other).await.expect("rename away");
+    assert_eq!(check(&h, &handle).await, HandleAvailability::Taken(handle.clone()));
+    // …but the profile itself can take it back.
+    rename(&handle).await.expect("rename back to its own held handle");
+    assert_eq!(h.get_by_handle(&handle).await.expect("back").id, id);
+
     harness::dispatch_delete(std::sync::Arc::clone(&h.command_bus), &id).await.expect("delete");
 
     // Even with the tombstone aged past the reservation, it stays taken.

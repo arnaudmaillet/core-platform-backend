@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 85c79ffebf66dbb3d8880fad65cceff6e3267716957bd208384908297a62d68e
+  source_sha256: 6168f7bca50fffae8e8e46d6f4f357c73863d401d1a30d557bbaaf480bc5f67a
   translated_at: 2026-10-05
   status: complete
 ---
@@ -72,7 +72,8 @@ effectue une invalidation de cache à l'échelle de la flotte, sans interruption
 schéma. **Réservation par tombstone :** un handle supprimé est bloqué 30 jours via `tombstoned_at`,
 empêchant le détournement rapide d'identité (`handle_is_available()` l'impose à la couche application) ;
 un handle libéré par un profil **vérifié** est **réservé définitivement** (`profile_handles.held`) :
-personne ne peut reprendre le nom d'une identité vérifiée. Passé les 30 jours, la réservation reprend
+personne ne peut reprendre le nom d'une identité vérifiée — sauf ce profil lui-même, qui peut
+reprendre son propre handle libéré (un renommage inverse, réservé ou non : `IF profile_id = ?`). Passé les 30 jours, la réservation reprend
 un tombstone non réservé par une seconde LWT (`UPDATE … IF tombstoned_at < now − 30 d AND held = null`),
 sans tâche de GC. `CreateProfile` réserve le handle **avant** d'écrire le profil : une course perdue
 n'écrit rien (pas de ligne orpheline, pas de `pids` parasite), et une écriture en échec rend la

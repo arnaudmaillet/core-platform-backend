@@ -48,7 +48,7 @@ impl QueryHandler<CheckHandleAvailabilityQuery> for CheckHandleAvailabilityHandl
             Err(e) => return Ok(HandleAvailability::Invalid(e.to_string())),
         };
         let normalized = handle.as_str().to_owned();
-        Ok(if self.repo.handle_is_available(&handle).await? {
+        Ok(if self.repo.handle_is_available(&handle, None).await? {
             HandleAvailability::Available(normalized)
         } else {
             HandleAvailability::Taken(normalized)

@@ -56,8 +56,8 @@ pub trait ProfileRepository: Send + Sync + 'static {
 
     /// Attempts to atomically claim `handle` via ScyllaDB LWT: a free handle, or
     /// one released more than [`HANDLE_RESERVATION_DAYS`] ago and not held (its
-    /// tombstone is taken over). Returns `false` if it is taken, held or still
-    /// reserved.
+    /// tombstone is taken over), or `profile_id`'s own released handle. Returns
+    /// `false` if it is taken, held or still reserved.
     async fn claim_handle(
         &self,
         handle: &Handle,
@@ -73,11 +73,13 @@ pub trait ProfileRepository: Send + Sync + 'static {
     /// drops the claim only if `profile_id` still holds it (LWT).
     async fn release_handle_claim(&self, handle: &Handle, profile_id: ProfileId) -> Result<(), ProfileError>;
 
-    /// Returns `true` if the handle is available for claiming.
+    /// Returns `true` if the handle is available for claiming by `claimant`
+    /// (`None`: someone new).
     ///
-    /// Available means: no row exists, OR the existing row is tombstoned and the
-    /// 30-day reservation has expired.
-    async fn handle_is_available(&self, handle: &Handle) -> Result<bool, ProfileError>;
+    /// Available means: no row exists, OR the existing row is tombstoned, not
+    /// held, and its 30-day reservation has expired, OR `claimant` is the
+    /// profile that released it (a rename back, held or not).
+    async fn handle_is_available(&self, handle: &Handle, claimant: Option<ProfileId>) -> Result<bool, ProfileError>;
 
     /// Writes a row into `profile.profiles_by_account` for the given profile.
     async fn save_account_index(&self, profile: &Profile) -> Result<(), ProfileError>;

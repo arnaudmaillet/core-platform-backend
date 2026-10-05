@@ -531,9 +531,26 @@ impl ProfileRepository for ScyllaProfileRepository {
                 (profile_id.as_uuid(), account_id.as_uuid(), now, handle.as_str().to_owned(), cutoff),
             )
             .await.map_err(scylla_err)?;
-        lwt_applied(
+        if lwt_applied(
             result.into_rows_result().map_err(|e| row_err("reclaim_ltw_rows", e))?,
             "reclaim_ltw_deser",
+        )? {
+            return Ok(true);
+        }
+
+        // The profile that released it takes its own handle back (a rename
+        // back), held or still reserved — nobody else can.
+        let stmt = self.strict_stmt(
+            "UPDATE profile.profile_handles \
+             SET created_at = ?, tombstoned_at = null, held = null \
+             WHERE handle = ? IF profile_id = ?",
+        );
+        let result = self.client.session
+            .execute_unpaged(stmt, (now, handle.as_str().to_owned(), profile_id.as_uuid()))
+            .await.map_err(scylla_err)?;
+        lwt_applied(
+            result.into_rows_result().map_err(|e| row_err("own_reclaim_ltw_rows", e))?,
+            "own_reclaim_ltw_deser",
         )
     }
 
@@ -563,7 +580,7 @@ impl ProfileRepository for ScyllaProfileRepository {
     }
 
 
-    async fn handle_is_available(&self, handle: &Handle) -> Result<bool, ProfileError> {
+    async fn handle_is_available(&self, handle: &Handle, claimant: Option<ProfileId>) -> Result<bool, ProfileError> {
         #[derive(DeserializeRow)]
         struct TombRow { profile_id: Uuid, tombstoned_at: Option<CqlTimestamp>, held: Option<bool> }
 
@@ -580,7 +597,13 @@ impl ProfileRepository for ScyllaProfileRepository {
 
         match row {
             None => Ok(true),
-            // Released by a verified profile: held for good.
+            // Its own released handle, for the profile that released it.
+            Some(TombRow { profile_id, tombstoned_at: Some(_), .. })
+                if claimant.is_some_and(|c| c.as_uuid() == profile_id) =>
+            {
+                Ok(true)
+            }
+            // Released by a verified profile: held for good (for anyone else).
             Some(TombRow { held: Some(true), .. }) => Ok(false),
             Some(TombRow { profile_id, tombstoned_at: None, .. }) => {
                 // A claim left behind by an interrupted rename is healed, and the

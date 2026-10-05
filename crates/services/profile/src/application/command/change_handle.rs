@@ -55,7 +55,7 @@ impl CommandHandler<ChangeHandleCommand> for ChangeHandleHandler {
             .await?
             .ok_or_else(|| ProfileError::ProfileNotFound { id: cmd.profile_id.clone() })?;
 
-        if !self.repo.handle_is_available(&new_handle).await? {
+        if !self.repo.handle_is_available(&new_handle, Some(profile.id())).await? {
             return Err(ProfileError::HandleAlreadyTaken {
                 handle: new_handle.as_str().to_owned(),
             });
