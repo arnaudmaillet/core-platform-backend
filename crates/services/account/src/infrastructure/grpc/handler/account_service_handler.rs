@@ -14,6 +14,7 @@ use crate::application::command::{
     create_account::CreateAccountCommand,
     deactivate_account::DeactivateAccountCommand,
     enroll_mfa::EnrollMfaCommand,
+    recovery_codes::{ConsumeRecoveryCodeCommand, ReplaceRecoveryCodesCommand},
     reactivate_account::ReactivateAccountCommand,
     record_failed_login::RecordFailedLoginCommand,
     record_login::RecordLoginCommand,
@@ -32,6 +33,7 @@ use crate::application::command::{
 };
 use crate::application::query::{
     get_account_by_id::{AccountView, GetAccountByIdQuery},
+    get_mfa_secret::{GetMfaSecretQuery, MfaSecretView},
     get_account_by_email::GetAccountByEmailQuery,
     get_account_by_phone::GetAccountByPhoneQuery,
     get_account_by_identity_id::GetAccountByIdentityIdQuery,
@@ -204,17 +206,17 @@ where
             .map_err(cqrs_error_to_status)
     }
 
+    /// Mesh only (#649): auth encrypts the seed and hashes the backup codes,
+    /// after the holder proved a first TOTP code.
     pub async fn enroll_mfa(
         &self,
         request: Request<proto::EnrollMfaRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
-        edge::require_account(&request, &request.get_ref().account_id)?;
         let req = request.into_inner();
         let cmd = EnrollMfaCommand {
             account_id: req.account_id.clone(),
             totp_secret_ciphertext: req.totp_secret,
-            // Recovery codes are generated server-side; none are sent via gRPC in this flow.
-            recovery_code_hashes: Vec::new(),
+            recovery_code_hashes: req.recovery_code_hashes,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -223,13 +225,63 @@ where
             .map_err(cqrs_error_to_status)
     }
 
+    /// Mesh only (#649): auth disables MFA after a step-up.
     pub async fn revoke_mfa(
         &self,
         request: Request<proto::RevokeMfaRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
-        edge::require_account(&request, &request.get_ref().account_id)?;
         let req = request.into_inner();
         let cmd = RevokeMfaCommand { account_id: req.account_id.clone() };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_command(&req.account_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    /// Mesh only (#649): the seed's ciphertext, for auth to check a code.
+    pub async fn get_mfa_secret(
+        &self,
+        request: Request<proto::GetMfaSecretRequest>,
+    ) -> Result<Response<proto::MfaSecretView>, Status> {
+        let req = request.into_inner();
+        let view: MfaSecretView = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), GetMfaSecretQuery { account_id: req.account_id }))
+            .await
+            .map_err(cqrs_error_to_status)?;
+        Ok(Response::new(proto::MfaSecretView {
+            account_id: view.account_id,
+            enrolled: view.enrolled,
+            totp_secret: view.totp_secret,
+            recovery_codes_remaining: i32::try_from(view.recovery_codes_remaining).unwrap_or(i32::MAX),
+        }))
+    }
+
+    /// Mesh only (#649): spends a backup code, by its hash.
+    pub async fn consume_recovery_code(
+        &self,
+        request: Request<proto::ConsumeRecoveryCodeRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        let req = request.into_inner();
+        let cmd = ConsumeRecoveryCodeCommand { account_id: req.account_id.clone(), code_hash: req.code_hash };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_command(&req.account_id))
+            .map_err(cqrs_error_to_status)
+    }
+
+    /// Mesh only (#649): a regenerated set of backup codes.
+    pub async fn replace_recovery_codes(
+        &self,
+        request: Request<proto::ReplaceRecoveryCodesRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        let req = request.into_inner();
+        let cmd = ReplaceRecoveryCodesCommand {
+            account_id: req.account_id.clone(),
+            recovery_code_hashes: req.recovery_code_hashes,
+        };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await
@@ -651,6 +703,8 @@ fn account_view_to_proto(v: AccountView) -> proto::AccountView {
         updated_at: Some(dt_to_ts(v.updated_at)),
         age_bracket: age_bracket_to_proto(v.age_bracket),
         date_of_birth: v.date_of_birth.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default(),
+        mfa_enrolled: v.mfa_enrolled,
+        mfa_recovery_codes_remaining: i32::try_from(v.mfa_recovery_codes_remaining).unwrap_or(i32::MAX),
     }
 }
 

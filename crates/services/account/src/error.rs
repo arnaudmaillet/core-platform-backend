@@ -20,6 +20,7 @@ use thiserror::Error;
 /// | ACC-4001 | ConcurrentModification     | 409  | High     | **Yes**   |
 /// | ACC-5001 | MfaAlreadyEnrolled         | 409  | Low      | No        |
 /// | ACC-5002 | MfaNotEnrolled             | 422  | Low      | No        |
+/// | ACC-5003 | RecoveryCodeInvalid        | 422  | Low      | No        |
 /// | ACC-6001 | InvalidKycTransition       | 422  | Medium   | No        |
 /// | ACC-7001 | GdprDeletionAlreadyReq.    | 409  | Low      | No        |
 /// | ACC-7002 | AccountAlreadyAnonymized   | 422  | Low      | No        |
@@ -86,6 +87,10 @@ pub enum AccountError {
 
     #[error("MFA is not enrolled for this account")]
     MfaNotEnrolled,
+
+    /// No unused backup code has that hash (wrong, or already spent).
+    #[error("no unused backup code matches")]
+    RecoveryCodeInvalid,
 
     // ── KYC (ACC-6xxx) ────────────────────────────────────────────────────────
 
@@ -178,6 +183,7 @@ impl AppError for AccountError {
 
             AccountError::MfaAlreadyEnrolled               => "ACC-5001",
             AccountError::MfaNotEnrolled                   => "ACC-5002",
+            AccountError::RecoveryCodeInvalid              => "ACC-5003",
 
             AccountError::InvalidKycTransition { .. }      => "ACC-6001",
 
@@ -272,6 +278,7 @@ impl AppError for AccountError {
             AccountError::ConcurrentModification           => "The account was modified concurrently. Please retry.",
             AccountError::MfaAlreadyEnrolled               => "Multi-factor authentication is already set up.",
             AccountError::MfaNotEnrolled                   => "Multi-factor authentication is not configured.",
+            AccountError::RecoveryCodeInvalid              => "That backup code is not valid.",
             AccountError::InvalidKycTransition { .. }      => "This KYC status transition is not permitted.",
             AccountError::GdprDeletionAlreadyRequested     => "A deletion request has already been submitted.",
             AccountError::AgeBelowMinimum { .. }           => "You are not old enough to use this service.",

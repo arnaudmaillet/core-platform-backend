@@ -79,6 +79,27 @@ where
         self.revoke_mfa(request).await
     }
 
+    async fn get_mfa_secret(
+        &self,
+        request: Request<proto::GetMfaSecretRequest>,
+    ) -> Result<Response<proto::MfaSecretView>, Status> {
+        self.get_mfa_secret(request).await
+    }
+
+    async fn consume_recovery_code(
+        &self,
+        request: Request<proto::ConsumeRecoveryCodeRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.consume_recovery_code(request).await
+    }
+
+    async fn replace_recovery_codes(
+        &self,
+        request: Request<proto::ReplaceRecoveryCodesRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.replace_recovery_codes(request).await
+    }
+
     // ── KYC ───────────────────────────────────────────────────────────────────
 
     async fn update_kyc_status(

@@ -46,11 +46,27 @@ service AccountService {
 
     // ── MFA ───────────────────────────────────────────────────────────────────
 
-    // Store an encrypted TOTP seed and activate MFA for the account.
+    // MFA is auth's (#649): it encrypts the TOTP seed, hashes the backup codes
+    // and checks them; account only keeps them. Every MFA RPC is mesh only —
+    // the holder enrolls and disables through auth, after a step-up.
+
+    // Store an encrypted TOTP seed and its backup codes: MFA is on (ACC-5001
+    // when it already is).
     rpc EnrollMfa(EnrollMfaRequest) returns (CommandResponse);
 
     // Remove all MFA credentials and deactivate MFA enforcement.
     rpc RevokeMfa(RevokeMfaRequest) returns (CommandResponse);
+
+    // The encrypted seed and how many backup codes are left, for auth to check
+    // a code. Never on the edge.
+    rpc GetMfaSecret(GetMfaSecretRequest) returns (MfaSecretView);
+
+    // Spend one backup code (by its hash): it works once. ACC-5003 when no
+    // unused code has that hash, ACC-5002 when MFA is off.
+    rpc ConsumeRecoveryCode(ConsumeRecoveryCodeRequest) returns (CommandResponse);
+
+    // Replace every backup code with a new set (the holder regenerated them).
+    rpc ReplaceRecoveryCodes(ReplaceRecoveryCodesRequest) returns (CommandResponse);
 
     // ── KYC ───────────────────────────────────────────────────────────────────
 

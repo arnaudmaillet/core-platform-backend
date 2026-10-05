@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 2cafbea9bceb3277819eb3110a3e3683db6e3ec89c5370ddeb9dd46701a41116
+  source_sha256: 27ea9f63fab6170e939f806a9f32685333a3a556f4622efac73d354388bca944
   translated_at: 2026-10-05
   status: complete
 ---
@@ -133,6 +133,9 @@ service AccountService {
   rpc ChangePassword (ChangePasswordRequest) returns (CommandResponse);
   rpc EnrollMfa (EnrollMfaRequest) returns (CommandResponse);
   rpc RevokeMfa (RevokeMfaRequest) returns (CommandResponse);
+  rpc GetMfaSecret (GetMfaSecretRequest) returns (MfaSecretView);
+  rpc ConsumeRecoveryCode (ConsumeRecoveryCodeRequest) returns (CommandResponse);
+  rpc ReplaceRecoveryCodes (ReplaceRecoveryCodesRequest) returns (CommandResponse);
   rpc UpdateKycStatus (UpdateKycStatusRequest) returns (CommandResponse);
   rpc SuspendAccount (SuspendAccountRequest) returns (CommandResponse);
   rpc ReactivateAccount (ReactivateAccountRequest) returns (CommandResponse);
@@ -163,11 +166,20 @@ service AccountService {
 > `AccountStatus` `PENDING_VERIFICATION=1…DELETED=5` ; `KycStatus` `NOT_STARTED=1…REJECTED=5` ;
 > `AccountRole` `USER=1…SUPER_ADMIN=6`. **Valeurs par défaut côté handler** pour les champs absents du
 > proto : `RecordFailedLogin.max_attempts=5`, `lockout_duration_secs=900`,
-> `RequestGdprDeletion.retention_days=30`, `EnrollMfa.recovery_code_hashes=[]` (générés côté serveur).
+> `RequestGdprDeletion.retention_days=30`.
 
 **Sécurité à la frontière :** mots de passe stockés en Argon2id uniquement (jamais le clair accepté) ;
-seeds TOTP chiffrés AES-256-GCM (`EncryptedBytes`) ; codes de récupération hachés en Bcrypt ; les champs
-secrets suppriment `Display`/`Debug` et portent `#[serde(skip)]`.
+les champs secrets suppriment `Display`/`Debug` et portent `#[serde(skip)]`.
+
+**La MFA appartient à auth (#649) ; account ne fait que la conserver.** Toutes les RPC MFA sont **mesh
+uniquement** : le titulaire active et désactive la connexion en deux étapes via auth, après un step-up. auth
+chiffre la graine TOTP avec sa propre clé (AES-256-GCM ; account stocke le chiffré sans jamais le lire),
+hache chaque code de secours et vérifie les codes. `EnrollMfa` prend le chiffré et au moins 6 empreintes de
+codes distinctes (`ACC-9001` sinon, `ACC-5001` si la MFA est déjà active). `GetMfaSecret` remet à auth le
+chiffré et le nombre de codes restants. `ConsumeRecoveryCode` dépense un code par son empreinte, une seule
+fois : l'écriture est versionnée, donc de deux dépenses concurrentes l'une échoue, et un code déjà utilisé ou
+inconnu donne `ACC-5003`. `ReplaceRecoveryCodes` prend un jeu régénéré. `AccountView.mfa_enrolled` /
+`mfa_recovery_codes_remaining` indiquent au titulaire où il en est.
 
 ### Ports Rust (contrat hexagonal)
 
@@ -182,7 +194,7 @@ pub trait AccountRepository: Send + Sync + 'static { /* save (CAS), find_by_id, 
 | `AccountNotFound`, `RoleNotAssigned` | `NOT_FOUND` |
 | `IdentityAlreadyRegistered`, `EmailAlreadyRegistered`, `MfaAlreadyEnrolled`, `RoleAlreadyAssigned`, `GdprDeletionAlreadyRequested`, `EmailAlreadyVerified` | `ALREADY_EXISTS` |
 | `ConcurrentModification` | `ABORTED` (**retryable**) |
-| `AccountNotActive`, `InvalidStatusTransition`, `InvalidKycTransition`, `MfaNotEnrolled`, `AccountAlreadyAnonymized` | `FAILED_PRECONDITION` |
+| `AccountNotActive`, `InvalidStatusTransition`, `InvalidKycTransition`, `MfaNotEnrolled`, `RecoveryCodeInvalid`, `AccountAlreadyAnonymized` | `FAILED_PRECONDITION` |
 | `Validation`, `InvalidAccountRole/KycStatus/AccountStatus` | `INVALID_ARGUMENT` |
 | `Storage` | `UNAVAILABLE` |
 

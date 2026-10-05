@@ -27,6 +27,7 @@ use crate::application::command::{
     RecordFailedLoginHandler, RecordLoginCommand, RecordLoginHandler, RequestDataExportCommand,
     RequestDataExportHandler, RequestGdprDeletionCommand, RequestGdprDeletionHandler,
     ResumeDeactivatedAccountCommand, ResumeDeactivatedAccountHandler,
+    ConsumeRecoveryCodeCommand, ConsumeRecoveryCodeHandler, ReplaceRecoveryCodesCommand, ReplaceRecoveryCodesHandler,
     RevokeMfaCommand, RevokeMfaHandler, RevokeRoleCommand, RevokeRoleHandler, SuspendAccountCommand,
     SuspendAccountHandler, UpdateConsentsCommand, UpdateConsentsHandler, UpdateKycStatusCommand, UpdateKycStatusHandler, VerifyEmailCommand,
     VerifyEmailHandler, VerifyPhoneCommand, VerifyPhoneHandler, ChangeEmailCommand, ChangeEmailHandler,
@@ -38,7 +39,7 @@ use crate::application::query::{
     GetAccountByPhoneHandler, GetAccountByPhoneQuery,
     GetAccountByIdentityIdHandler,
     GetAccountByIdentityIdQuery, GetAccountStatusHandler, GetAccountStatusQuery,
-    GetGdprRecordHandler, GetGdprRecordQuery, ListAccountsByStatusHandler,
+    GetGdprRecordHandler, GetGdprRecordQuery, GetMfaSecretHandler, GetMfaSecretQuery, ListAccountsByStatusHandler,
     ListAccountsByStatusQuery,
 };
 use crate::infrastructure::persistence::PgAccountRepository;
@@ -74,6 +75,8 @@ impl App {
                 .register::<ChangePasswordCommand, _>(ChangePasswordHandler::new(Arc::clone(&repository)))?
                 .register::<EnrollMfaCommand, _>(EnrollMfaHandler::new(Arc::clone(&repository)))?
                 .register::<RevokeMfaCommand, _>(RevokeMfaHandler::new(Arc::clone(&repository)))?
+                .register::<ConsumeRecoveryCodeCommand, _>(ConsumeRecoveryCodeHandler::new(Arc::clone(&repository)))?
+                .register::<ReplaceRecoveryCodesCommand, _>(ReplaceRecoveryCodesHandler::new(Arc::clone(&repository)))?
                 .register::<UpdateKycStatusCommand, _>(UpdateKycStatusHandler::new(Arc::clone(&repository)))?
                 .register::<SuspendAccountCommand, _>(SuspendAccountHandler::new(Arc::clone(&repository)))?
                 .register::<ReactivateAccountCommand, _>(ReactivateAccountHandler::new(Arc::clone(&repository)))?
@@ -100,6 +103,7 @@ impl App {
                 .register::<GetAccountByPhoneQuery, _>(GetAccountByPhoneHandler::new(Arc::clone(&repository)))?
                 .register::<GetAccountStatusQuery, _>(GetAccountStatusHandler::new(Arc::clone(&repository)))?
                 .register::<GetGdprRecordQuery, _>(GetGdprRecordHandler::new(Arc::clone(&repository)))?
+                .register::<GetMfaSecretQuery, _>(GetMfaSecretHandler::new(Arc::clone(&repository)))?
                 .register::<ListAccountsByStatusQuery, _>(ListAccountsByStatusHandler::new(Arc::clone(&repository)))?
                 .build(),
         );

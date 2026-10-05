@@ -37,6 +37,19 @@ message AccountView {
     // ISO 8601 (YYYY-MM-DD); empty when none is on file. Private: the holder's
     // own view (edge) or the mesh.
     string                          date_of_birth        = 17;
+    // Two-step sign-in is on (#649): a TOTP app, plus backup codes.
+    bool                            mfa_enrolled         = 18;
+    // Unused backup codes left (0 when MFA is off).
+    int32                           mfa_recovery_codes_remaining = 19;
+}
+
+// The holder's MFA material, for auth only (mesh): never on the edge.
+message MfaSecretView {
+    string  account_id               = 1;
+    bool    enrolled                 = 2;
+    // auth's ciphertext of the TOTP seed (empty when not enrolled).
+    bytes   totp_secret              = 3;
+    int32   recovery_codes_remaining = 4;
 }
 
 // GDPR record: the holder's own (client edge, account_id = the caller) or any
@@ -123,8 +136,26 @@ message ChangePasswordRequest {
 
 message EnrollMfaRequest {
     string  account_id   = 1;
-    // AES-256-GCM encrypted TOTP seed bytes.
+    // AES-256-GCM encrypted TOTP seed bytes (auth's key; account never reads it).
     bytes   totp_secret  = 2;
+    // A hash of each one-time backup code (at least 6), as auth computes it:
+    // account matches them exactly and never sees a code.
+    repeated string recovery_code_hashes = 3;
+}
+
+message GetMfaSecretRequest {
+    string account_id = 1;
+}
+
+message ConsumeRecoveryCodeRequest {
+    string account_id = 1;
+    string code_hash  = 2;
+}
+
+message ReplaceRecoveryCodesRequest {
+    string          account_id           = 1;
+    // At least 6, as for EnrollMfa.
+    repeated string recovery_code_hashes = 2;
 }
 
 message RevokeMfaRequest {

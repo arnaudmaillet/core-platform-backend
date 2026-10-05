@@ -35,6 +35,10 @@ pub struct AccountView {
     pub last_login_at: Option<DateTime<Utc>>,
     pub is_locked: bool,
     pub mfa_enforced: bool,
+    /// Two-step sign-in is on (#649).
+    pub mfa_enrolled: bool,
+    /// Unused backup codes left (0 when MFA is off).
+    pub mfa_recovery_codes_remaining: usize,
     pub version: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -71,6 +75,8 @@ impl From<&Account> for AccountView {
             last_login_at: a.last_login_at(),
             is_locked: a.is_locked(),
             mfa_enforced: a.mfa().enforced(),
+            mfa_enrolled: a.mfa().is_enrolled(),
+            mfa_recovery_codes_remaining: if a.mfa().is_enrolled() { a.mfa().recovery_codes().len() } else { 0 },
             version: a.version(),
             created_at: a.created_at(),
             updated_at: a.updated_at(),
