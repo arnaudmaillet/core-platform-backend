@@ -27,7 +27,7 @@ producer's `DOMAIN.md §8`.
 
 | Topic | Producer | Consumers |
 |---|---|---|
-| `account.v1.events` | `account` | `audit`, `profile` |
+| `account.v1.events` | `account` | `audit`, `auth`, `profile` |
 | `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `comment`, `chat` |
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |

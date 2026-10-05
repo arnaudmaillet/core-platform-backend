@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 0654cb005baa007bb80d5797f8654201aa26572758f5a884ff1e7239c988e464
+  source_sha256: 7982baee59c2f5974f128bae19d14731269e7e29f7025c45578d6203cf7a9d30
   translated_at: 2026-10-05
   status: complete
 ---
@@ -40,7 +40,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 
 | Topic | Producer | Consumers |
 |---|---|---|
-| `account.v1.events` | `account` | `audit`, `profile` |
+| `account.v1.events` | `account` | `audit`, `auth`, `profile` |
 | `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `comment`, `chat` |
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |

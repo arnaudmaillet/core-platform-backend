@@ -5,6 +5,7 @@
 //! as `Arc<dyn …>`.
 
 pub mod account_directory;
+pub mod account_eraser;
 pub mod credential_admin;
 pub mod event_publisher;
 pub mod federated_nonce_store;
@@ -22,6 +23,7 @@ pub mod verification;
 pub use account_directory::{
     AccountActivation, AccountDirectory, AccountSnapshot, EmailHolder, NewAccount, SignUpConsent,
 };
+pub use account_eraser::{AccountEraser, ErasedAccount};
 pub use credential_admin::CredentialAdmin;
 pub use event_publisher::EventPublisher;
 pub use federated_nonce_store::FederatedNonceStore;

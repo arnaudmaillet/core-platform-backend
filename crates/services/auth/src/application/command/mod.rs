@@ -1,6 +1,7 @@
 pub mod change_password;
 mod credentials;
 pub mod federated_nonce;
+pub mod erase_account;
 pub mod guest_retention;
 pub mod login;
 pub mod member_session;
@@ -15,6 +16,7 @@ pub mod verify_credentials;
 pub use change_password::{ChangePasswordCommand, ChangePasswordHandler, ChangePasswordOutcome};
 pub use credentials::STEP_UP_WINDOW_SECS;
 pub use federated_nonce::{FederatedNonces, NonceBoundVerifier, StartedFederatedSignIn, FEDERATED_NONCE_TTL_SECS};
+pub use erase_account::AccountErasure;
 pub use guest_retention::GuestRetention;
 pub use login::{IssuedSession, LoginCommand, LoginHandler};
 pub use logout::{LogoutCommand, LogoutHandler, LogoutOutcome};

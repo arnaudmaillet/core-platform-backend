@@ -17,9 +17,9 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler, LogoutAllSessionsHandler, LogoutHandler,
-    MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler, StartGuestSessionHandler, VerificationCodes,
-    VerifyCredentialsHandler,
+    AccountErasure, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler, LogoutAllSessionsHandler,
+    LogoutHandler, MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler, StartGuestSessionHandler,
+    VerificationCodes, VerifyCredentialsHandler,
 };
 use crate::application::port::{
     AccountDirectory, CredentialAdmin, EventPublisher, FederatedTokenVerifier, GuestRegistry,
@@ -44,7 +44,7 @@ use crate::infrastructure::idp::{
     UnconfiguredCredentialAdmin,
 };
 use crate::infrastructure::persistence::{
-    PgGuestRegistry, PgRefreshTokenRepository, PgSessionRepository, PgSubjectLinkRepository,
+    PgAccountEraser, PgGuestRegistry, PgRefreshTokenRepository, PgSessionRepository, PgSubjectLinkRepository,
 };
 use crate::infrastructure::token::Es256TokenMinter;
 
@@ -99,6 +99,9 @@ pub struct App {
     /// Deletes guest data past `AUTH_GUEST_RETENTION_DAYS`; spawned by the
     /// runtime adapter.
     pub guest_retention: GuestRetention,
+    /// Erases an account's auth data on `account_deleted` (GDPR Art. 17); fed
+    /// by the account-event consumer the runtime adapter spawns.
+    pub erasure: Arc<AccountErasure>,
 }
 
 impl App {
@@ -308,6 +311,10 @@ impl App {
             federated.spawn_refresh(config.federated_jwks_refresh);
         }
 
+        let erasure = Arc::new(AccountErasure::new(
+            Arc::new(PgAccountEraser::new(tx.clone())),
+            Arc::new(RedisSessionCache::new(redis.clone())),
+        ));
         let guest_retention = GuestRetention::new(
             Arc::new(PgGuestRegistry::new(tx.clone())),
             chrono::Duration::days(config.guest_retention_days),
@@ -345,6 +352,7 @@ impl App {
             jwks_json,
             relay,
             guest_retention,
+            erasure,
         })
     }
 }

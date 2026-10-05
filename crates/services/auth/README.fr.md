@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 7b14a0540e70f0df724ad51fcd0aa9f19b098bf66817641f783c0397c26a381a
+  source_sha256: 35cea51fe6bf988f0e0bda239dad20be23e7a6c6919635572e3ea7cfd8517df7
   translated_at: 2026-10-05
   status: complete
 ---
@@ -20,7 +20,7 @@ i18n:
 > | **Tier** | **TIER-0** — chaque requête authentifiée dépend des jetons émis par ce service |
 > | **Déployable** | `crates/apps/auth-server` (crate bibliothèque : `crates/services/auth`) |
 > | **Stockage** | PostgreSQL/CockroachDB (db `auth`) · Redis Cluster (sessions/blacklist) |
-> | **Asynchrone** | publie `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked) · ne consomme rien |
+> | **Asynchrone** | publie `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked) · consomme `account.v1.events` (`account_deleted` → effacement RGPD) |
 > | **Appelants amont** | gateway / edge, clients utilisateurs (login & refresh) |
 > | **Dépendances aval** | Keycloak (IdP), `account` (gRPC, SoR d'identité), PostgreSQL, Redis Cluster |
 > | **SLO** | `<TODO: 99.95%>` dispo · login p99 `<TODO>` · refresh p99 `<TODO>` |
@@ -155,6 +155,17 @@ suivant (l'e-mail continue de fonctionner) et auth journalise une `error` (à al
 dépense mensuelle SNS (≈ limite / 30 / prix d'un SMS), pour que la limite de SNS ne soit jamais ce
 qui coupe les SMS pour le mois.
 
+### Effacement de compte (RGPD art. 17)
+
+Quand `account` supprime un compte au terme de son délai de grâce, il publie `account_deleted` ; le
+consumer d'auth (`auth-account-events`, sur le `run_consumer` partagé : retry, DLQ, commit manuel)
+coupe alors les jetons du compte (nouvelle génération) et supprime définitivement ce qu'auth détient
+sur lui : ses sessions et refresh tokens (appareil, IP), ses liens d'identité (pour une identité par
+code e-mail ou téléphone, le sujet **est** l'adresse), et l'invité qu'il était avant l'inscription,
+avec les sessions de cet invité (sur chaque shard ; index `idx_guest_principals_upgraded`).
+Idempotent : un rejeu ne supprime rien de plus. L'identité est ensuite libre : se reconnecter avec elle
+ne trouve aucun compte et peut s'inscrire à nouveau.
+
 ### Identifiants et step-up
 
 Le mot de passe ne vit que chez l'IdP. `ChangePassword` (edge **authenticated**, membres) prouve le
@@ -239,7 +250,7 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `account` (gRPC) | résolution compte + gating actif au `Login` (un compte désactivé par son titulaire est réactivé : `ResumeDeactivatedAccount`, `reactivated = true`) | `Login` échoue | **Dur** pour les nouvelles connexions |
 | PostgreSQL | registre sessions + refresh + liens | écritures `Refresh`/`Logout` échouent | **Dur** pour refresh/révocation |
 | Redis Cluster | carte de génération + blacklist (chemin chaud) | contrôles de révocation dégradés | **Souple** — la génération se reconstruit depuis Postgres ; une entrée blacklist manquée expire avec le jeton |
-| Kafka | émission `auth.v1.events` | événements non émis | **Souple** — best-effort ; repli sur le log publisher |
+| Kafka | émission `auth.v1.events` · consommation `account.v1.events` (groupe `auth-account-events`) | événements non émis · effacements en attente (le consumer reprend à son offset commité) | **Souple** — best-effort ; repli sur le log publisher |
 
 **Amont — rayon d'impact si `auth` tombe :**
 

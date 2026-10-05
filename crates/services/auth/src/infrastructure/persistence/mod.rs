@@ -13,11 +13,13 @@
 //! mapping a zero-row update to [`AuthError::ConcurrentModification`].
 
 pub mod model;
+pub mod pg_account_eraser;
 pub mod pg_guest_registry;
 pub mod pg_refresh_token_repository;
 pub mod pg_session_repository;
 pub mod pg_subject_link_repository;
 
+pub use pg_account_eraser::PgAccountEraser;
 pub use pg_guest_registry::PgGuestRegistry;
 pub use pg_refresh_token_repository::PgRefreshTokenRepository;
 pub use pg_session_repository::PgSessionRepository;
