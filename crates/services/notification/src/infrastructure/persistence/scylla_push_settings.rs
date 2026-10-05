@@ -9,7 +9,7 @@ use scylla::DeserializeRow;
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
 use uuid::Uuid;
 
-use crate::application::port::{DeviceRegistry, PreferenceStore};
+use crate::application::port::{DeviceRegistry, PreferenceStore, TokenHolder};
 use crate::domain::device::{Device, DevicePlatform, PushEnvironment};
 use crate::domain::preferences::NotificationPreferences;
 use crate::domain::value_object::ProfileId;
@@ -176,6 +176,25 @@ impl DeviceRegistry for ScyllaPushSettings {
             (device.token.as_str(), profile.as_uuid(), device.device_id.as_str(), account),
         )
         .await
+    }
+
+    async fn token_holders(&self, token: &str) -> Result<Vec<TokenHolder>, NotificationError> {
+        let holders: Vec<TokenRow> = self
+            .client
+            .session
+            .execute_unpaged(
+                self.fast("SELECT profile_id, device_id, account_id FROM notification.push_device_tokens WHERE push_token = ?"),
+                (token,),
+            )
+            .await
+            .map_err(scylla_err)?
+            .into_rows_result()
+            .map_err(|e| row_err("push_device_tokens", e))?
+            .rows::<TokenRow>()
+            .map_err(|e| row_err("push_device_tokens", e))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| row_err("push_device_tokens", e))?;
+        Ok(holders.into_iter().map(|h| TokenHolder { account_id: h.account_id, device_id: h.device_id }).collect())
     }
 
     async fn unregister(&self, profile: &ProfileId, device_id: &str) -> Result<(), NotificationError> {

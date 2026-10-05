@@ -161,6 +161,12 @@ impl EdgePrincipal {
         edge::is_minor(&self.0.raw_claims)
     }
 
+    /// The device the session is bound to (the token's `did`, from the
+    /// client's `DeviceContext.device_id` at login); `None` when it sent none.
+    pub fn device_id(&self) -> Option<&str> {
+        self.0.raw_claims.extra.get(edge::EDGE_DEVICE_CLAIM).and_then(|v| v.as_str()).filter(|d| !d.is_empty())
+    }
+
     /// `true` only when the token says 18+ (an unknown age is not known to be
     /// an adult): what may lift a teen default.
     pub fn is_adult(&self) -> bool {
@@ -373,6 +379,23 @@ mod tests {
             permissions: vec![],
             raw_claims: raw,
         }))
+    }
+
+    #[test]
+    fn the_session_device_comes_from_the_did_claim() {
+        let mut raw: OidcClaims =
+            serde_json::from_value(json!({ "sub": "acct-1", "exp": 4_102_444_800_i64 })).unwrap();
+        let principal = |raw: OidcClaims| {
+            EdgePrincipal::new(Arc::new(CurrentPrincipal {
+                user_id: PrincipalId::new("acct-1"),
+                tenant_id: None,
+                permissions: vec![],
+                raw_claims: raw,
+            }))
+        };
+        assert_eq!(principal(raw.clone()).device_id(), None);
+        raw.extra.insert("did".into(), json!("ios-install-1"));
+        assert_eq!(principal(raw).device_id(), Some("ios-install-1"));
     }
 
     #[test]

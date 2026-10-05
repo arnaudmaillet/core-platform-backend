@@ -126,7 +126,13 @@ yet** (no APNs credentials). Every RPC but `ResolvePushTargets` is edge `authent
 - `RegisterDevice(device_id, token, platform, environment, timezone)` — call it on every launch. A token
   registered for another **account** leaves that account's profiles (a handed-over phone never gets the
   old account's pushes); a device's new token replaces its old one. Tables `push_devices` (by profile)
-  and `push_device_tokens` (by token).
+  and `push_device_tokens` (by token). **Bound to the device (#725):** `device_id` is the id the session
+  sent at login (`DeviceContext.device_id`, the token's `did`): on the edge another id is
+  `PERMISSION_DENIED`, and a client may take a token held by another account only when its session's
+  `did` is the device that registered it — any other session, **including one bound to no device**, is
+  refused (`NTF-2004`, `ALREADY_EXISTS`). The holder decides, not the caller, so skipping `did` at login
+  skips nothing: a token only moves between accounts on its own phone, and a leaked token cannot be
+  pulled into someone else's account. The mesh, and holders with no device recorded, keep the old rule.
 - Preferences (`notification_preferences`, one JSON document per profile): push and email per category
   (likes, comments, mentions, new followers, follow requests, messages, posts from followed accounts,
   places nearby, wallet), a pause (≤ 8 h), quiet hours read in the holder's IANA zone. Defaults: every

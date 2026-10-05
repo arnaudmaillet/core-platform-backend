@@ -45,6 +45,19 @@ pub struct RegisterDeviceCommand {
     pub timezone:    Option<String>,
     /// The holder's age (edge token `age`; unknown over the mesh).
     pub age:         HolderAge,
+    /// Who registers: a client on the edge (and the device its session is
+    /// bound to, if any), or the mesh.
+    pub caller:      RegistrationCaller,
+}
+
+/// Who calls `RegisterDevice`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegistrationCaller {
+    /// A trusted service: the token moves between accounts as before.
+    Mesh,
+    /// A client session, with the device it is bound to (the token's `did`) —
+    /// `None` when its client sent none at login.
+    Edge { session_device: Option<String> },
 }
 
 impl Command for RegisterDeviceCommand {}
@@ -76,6 +89,28 @@ impl CommandHandler<RegisterDeviceCommand> for RegisterDeviceHandler {
             return Err(violation("token", format!("1–{MAX_TOKEN_LEN} characters, no spaces")));
         }
         check_time_zone(cmd.timezone.as_deref())?;
+
+        // A push token belongs to one installation. A client may take it from
+        // another account only from the device that registered it, proved by
+        // its session (`did`): the account changed on the phone. Anyone else —
+        // another device, or a session bound to no device at all — is refused,
+        // so someone else's leaked token cannot be pulled into this account
+        // (they would stop getting their own pushes, and get this account's).
+        // The rule follows the holder, not the caller: skipping `did` at login
+        // does not skip it. A holder with no device recorded keeps the old rule.
+        if let RegistrationCaller::Edge { session_device } = &cmd.caller {
+            let taken_elsewhere = self.devices.token_holders(&cmd.token).await?.into_iter().any(|holder| {
+                holder.account_id.as_deref() != Some(cmd.account_id.as_str())
+                    && holder
+                        .device_id
+                        .as_deref()
+                        .filter(|d| !d.is_empty())
+                        .is_some_and(|d| session_device.as_deref() != Some(d))
+            });
+            if taken_elsewhere {
+                return Err(NotificationError::PushTokenOnAnotherDevice);
+            }
+        }
 
         let device = Device {
             device_id:     cmd.device_id.clone(),

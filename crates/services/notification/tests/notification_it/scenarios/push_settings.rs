@@ -8,7 +8,7 @@ use tonic::Request;
 use uuid::Uuid;
 
 use notification::application::command::push_settings::RegisterDeviceCommand;
-use notification::application::command::push_settings::UpdatePreferencesCommand;
+use notification::application::command::push_settings::{RegistrationCaller, UpdatePreferencesCommand};
 use notification::domain::device::{DevicePlatform, PushEnvironment};
 use notification::domain::preferences::{HolderAge, QuietHours};
 
@@ -115,6 +115,7 @@ async fn a_token_registered_for_another_account_leaves_the_previous_one() {
         environment: PushEnvironment::Production,
         timezone:    None,
         age:         HolderAge::Adult,
+        caller:      RegistrationCaller::Mesh,
     };
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), as_account(&alice, "acct-a"))).await.expect("alice");
     assert_eq!(targets(&h, &alice, proto::PushCategory::Messages).await.1, vec![token.clone()]);
@@ -137,6 +138,7 @@ async fn a_teens_first_registration_writes_quiet_hours() {
         environment: PushEnvironment::Sandbox,
         timezone:    Some("Europe/Paris".into()),
         age:         HolderAge::Teen,
+        caller:      RegistrationCaller::Mesh,
     };
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("register");
 
@@ -164,6 +166,7 @@ async fn teen_quiet_hours_lift_at_18_unless_the_holder_chose_them() {
         environment: PushEnvironment::Production,
         timezone:    None,
         age,
+        caller:      RegistrationCaller::Mesh,
     };
     let quiet = |profile: String| {
         let h = &h;
@@ -199,5 +202,92 @@ async fn teen_quiet_hours_lift_at_18_unless_the_holder_chose_them() {
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), set)).await.expect("set");
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), register(&chosen, HolderAge::Adult))).await.expect("adult");
     assert!(quiet(chosen).await, "their own choice stays");
+}
+
+fn from_session(profile: &str, account: &str, device: &str, token: &str, session_device: Option<&str>) -> RegisterDeviceCommand {
+    RegisterDeviceCommand {
+        profile_id:   profile.to_owned(),
+        account_id:   account.to_owned(),
+        device_id:    device.to_owned(),
+        token:        token.to_owned(),
+        platform:     DevicePlatform::Ios,
+        environment:  PushEnvironment::Production,
+        timezone:     None,
+        age:          HolderAge::Adult,
+        caller:       RegistrationCaller::Edge { session_device: session_device.map(str::to_owned) },
+    }
+}
+
+fn bound(profile: &str, account: &str, device: &str, token: &str) -> RegisterDeviceCommand {
+    from_session(profile, account, device, token, Some(device))
+}
+
+/// #725: from a session bound to its device, a push token only moves between
+/// accounts on the device it was registered from; another device's token is
+/// refused (NTF-2004) and stays with its holder.
+#[tokio::test]
+async fn a_push_token_moves_between_accounts_only_on_its_own_device() {
+    use error::AppError;
+
+    let h = TestHarness::start().await;
+    let (alice, bob, mallory, token) = (id(), id(), id(), id());
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), bound(&alice, "acct-a", "phone-1", &token))).await.expect("alice");
+
+    // Another device claims alice's token: refused, alice keeps her pushes.
+    let err = h
+        .command_bus
+        .dispatch(Envelope::new(Uuid::now_v7(), bound(&mallory, "acct-m", "phone-9", &token)))
+        .await
+        .unwrap_err();
+    assert_eq!(err.error_code(), "NTF-2004");
+    assert_eq!(targets(&h, &alice, proto::PushCategory::Messages).await.1, vec![token.clone()]);
+
+    // A session bound to no device at all (its client skipped `did` at login)
+    // is refused too: the holder decides, not the caller.
+    let err = h
+        .command_bus
+        .dispatch(Envelope::new(Uuid::now_v7(), from_session(&mallory, "acct-m", "phone-1", &token, None)))
+        .await
+        .unwrap_err();
+    assert_eq!(err.error_code(), "NTF-2004", "a did-less session cannot take a device-bound token");
+    assert_eq!(targets(&h, &alice, proto::PushCategory::Messages).await.1, vec![token.clone()]);
+
+    // Bob signs in on alice's phone: the token moves to bob.
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), bound(&bob, "acct-b", "phone-1", &token))).await.expect("same phone");
+    assert!(targets(&h, &alice, proto::PushCategory::Messages).await.1.is_empty());
+    assert_eq!(targets(&h, &bob, proto::PushCategory::Messages).await.1, vec![token]);
+}
+
+/// On the edge the device is the session's: a request for another device id
+/// is refused before anything is stored.
+#[tokio::test]
+async fn the_edge_registers_only_the_sessions_device() {
+    let h = TestHarness::start().await;
+    let profile = id();
+    let raw: auth_context::OidcClaims = serde_json::from_value(serde_json::json!({
+        "sub": "acct-edge", "exp": 4_102_444_800_i64, "did": "ios-install-1", "pids": [profile.clone()]
+    }))
+    .unwrap();
+    let principal = transport::grpc::edge::EdgePrincipal::new(std::sync::Arc::new(auth_context::CurrentPrincipal {
+        user_id: auth_context::PrincipalId::new("acct-edge"),
+        tenant_id: None,
+        permissions: vec![],
+        raw_claims: raw,
+    }));
+    let request = |device_id: &str| {
+        let mut request = Request::new(proto::RegisterDeviceRequest {
+            profile_id: profile.clone(),
+            device_id: device_id.to_owned(),
+            token: id(),
+            platform: proto::DevicePlatform::Ios as i32,
+            environment: proto::PushEnvironment::Production as i32,
+            timezone: String::new(),
+        });
+        request.extensions_mut().insert(principal.clone());
+        request
+    };
+    let status = h.handler.register_device(request("another-device")).await.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::PermissionDenied);
+    h.handler.register_device(request("ios-install-1")).await.expect("its own device");
 }
 

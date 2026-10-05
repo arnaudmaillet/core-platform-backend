@@ -17,7 +17,7 @@ use crate::application::query::{
     list_notifications::ListNotificationsQuery,
 };
 use crate::application::command::push_settings::{
-    RegisterDeviceCommand, UnregisterDeviceCommand, UpdatePreferencesCommand,
+    RegisterDeviceCommand, RegistrationCaller, UnregisterDeviceCommand, UpdatePreferencesCommand,
 };
 use crate::application::query::push_settings::{GetPreferencesQuery, PushTargets, ResolvePushTargetsQuery};
 use crate::domain::device::{DevicePlatform, PushEnvironment};
@@ -183,6 +183,19 @@ where
         edge::require_profile(&request, &request.get_ref().profile_id)?;
         let principal = edge::principal(&request);
         let account_id = principal.map(|p| p.account_id().to_owned()).unwrap_or_default();
+        // A session bound to a device registers that device only (its `did`).
+        let session_device = principal.and_then(|p| p.device_id());
+        if let Some(did) = session_device
+            && request.get_ref().device_id != did
+        {
+            return Err(Status::permission_denied("device_id must be this session's device"));
+        }
+        // On the edge the token's holder decides (see RegisterDeviceHandler);
+        // over the mesh nothing changes.
+        let caller = match principal {
+            Some(_) => RegistrationCaller::Edge { session_device: session_device.map(str::to_owned) },
+            None => RegistrationCaller::Mesh,
+        };
         let age = holder_age(principal);
         let req = request.into_inner();
         let cmd = RegisterDeviceCommand {
@@ -194,6 +207,7 @@ where
             environment: environment_from_proto(req.environment)?,
             timezone:    Some(req.timezone).filter(|z| !z.is_empty()),
             age,
+            caller,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
