@@ -7,6 +7,10 @@ import "chat/v1/messages.proto";
 service ChatService {
     // ── Lifecycle / membership ──────────────────────────────────────────────
     rpc CreateConversation (CreateConversationRequest) returns (CreateConversationResponse);
+    // Direct messages (#656): the conversation with one other profile, and
+    // the recipient's answer to a message request.
+    rpc OpenDirectConversation  (OpenDirectConversationRequest)  returns (OpenDirectConversationResponse);
+    rpc RespondToMessageRequest (RespondToMessageRequestRequest) returns (CommandResponse);
     rpc ToggleVisibility   (ToggleVisibilityRequest)   returns (CommandResponse);
     // Joining a PRIVATE conversation requires a pending invitation (issued by
     // an owner/admin via InviteMember); without one the call fails NOT_FOUND,

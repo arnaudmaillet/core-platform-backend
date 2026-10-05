@@ -18,7 +18,7 @@ use crate::infrastructure::persistence::statement::{fast, row_err, scylla_err, s
 use crate::infrastructure::persistence::time::{to_cql, to_utc};
 
 const HISTORY_COLS: &str =
-    "created_at, message_id, sender_id, content_type, body, media_ref, reply_to";
+    "created_at, message_id, sender_id, content_type, body, media_ref, reply_to, withheld";
 
 /// ScyllaDB adapter for the time-bucketed message log
 /// (`chat.messages_by_conversation`).
@@ -124,8 +124,8 @@ impl MessageRepository for ScyllaMessageRepository {
             &self.client,
             "INSERT INTO chat.messages_by_conversation \
              (conversation_id, bucket, created_at, message_id, sender_id, content_type, \
-              body, media_ref, reply_to) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              body, media_ref, reply_to, withheld) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         );
         self.client
             .session
@@ -141,6 +141,8 @@ impl MessageRepository for ScyllaMessageRepository {
                     m.content().as_str(),
                     m.media_ref(),
                     m.reply_to().map(|r| r.as_uuid()),
+                    // NULL unless withheld: the column stays sparse.
+                    m.withheld().then_some(true),
                 ),
             )
             .await
@@ -210,5 +212,6 @@ fn message_summary(r: MessageRow) -> Result<MessageSummary, ChatError> {
         media_ref:    r.media_ref,
         reply_to:     r.reply_to,
         created_at:   to_utc(r.created_at),
+        withheld:     r.withheld.unwrap_or(false),
     })
 }

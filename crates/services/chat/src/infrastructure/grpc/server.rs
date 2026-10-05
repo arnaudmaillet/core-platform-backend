@@ -40,9 +40,10 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let backends = Backends {
-        scylla: ScyllaConfig::from_env(),
-        redis:  RedisConfig::from_env(),
-        kafka:  Some(KafkaClientConfig::from_env()),
+        scylla:           ScyllaConfig::from_env(),
+        redis:            RedisConfig::from_env(),
+        kafka:            Some(KafkaClientConfig::from_env()),
+        interaction_gate: crate::service::interaction_gate_from_env().map_err(|e| e.to_string())?,
     };
 
     let app = App::build(&app_config, backends).await?;

@@ -12,6 +12,9 @@ pub const GROUP_MAX_MEMBERS: u16 = 500;
 /// of this roster.
 pub const CHANNEL_MAX_BROADCASTERS: u16 = 200;
 
+/// A direct conversation is between exactly two profiles (#656).
+pub const DIRECT_MEMBERS: u16 = 2;
+
 /// Immutable topology of a conversation.
 ///
 /// Stored as `tinyint` in ScyllaDB and mapped to the proto enum ordinal. Per the
@@ -23,11 +26,15 @@ pub const CHANNEL_MAX_BROADCASTERS: u16 = 200;
 ///   presence, typing indicators, and individual read-receipts.
 /// - `Channel`: strictly asymmetric `1 -> N` broadcast, passive reading, zero
 ///   presence overhead, unbounded audience.
+/// - `Direct`: one-to-one messages between two profiles (#656), unique per pair,
+///   never public, with the group's presence loops. A recipient whose settings
+///   do not admit the sender gets it as a message request first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ConversationKind {
     Group   = 0,
     Channel = 1,
+    Direct  = 2,
 }
 
 impl ConversationKind {
@@ -39,13 +46,14 @@ impl ConversationKind {
         match self {
             Self::Group   => "group",
             Self::Channel => "channel",
+            Self::Direct  => "direct",
         }
     }
 
     /// Whether this topology carries the high-frequency presence loops (presence,
     /// typing, read-receipts) on its Member Plane. Channels never do.
     pub fn presence_capable(self) -> bool {
-        matches!(self, Self::Group)
+        matches!(self, Self::Group | Self::Direct)
     }
 
     /// Upper bound on the Member Plane roster for this topology. Always `Some`:
@@ -55,6 +63,7 @@ impl ConversationKind {
         match self {
             Self::Group   => GROUP_MAX_MEMBERS,
             Self::Channel => CHANNEL_MAX_BROADCASTERS,
+            Self::Direct  => DIRECT_MEMBERS,
         }
     }
 }
@@ -66,6 +75,7 @@ impl TryFrom<i8> for ConversationKind {
         match v {
             0 => Ok(Self::Group),
             1 => Ok(Self::Channel),
+            2 => Ok(Self::Direct),
             n => Err(ChatError::UnknownConversationKind { kind: n.to_string() }),
         }
     }
@@ -78,6 +88,7 @@ impl TryFrom<&str> for ConversationKind {
         match s {
             "group"   => Ok(Self::Group),
             "channel" => Ok(Self::Channel),
+            "direct"  => Ok(Self::Direct),
             other     => Err(ChatError::UnknownConversationKind { kind: other.to_owned() }),
         }
     }

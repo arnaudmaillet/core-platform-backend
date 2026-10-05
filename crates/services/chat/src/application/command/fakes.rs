@@ -10,45 +10,72 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::application::port::{
-    ConversationRepository, EventPublisher, InvitationRepository, MemberRepository,
-    MessageRepository, MessageSummary, SubscriptionRepository,
+    ConversationRepository, EventPublisher, InteractionGate, InvitationRepository, MemberRepository,
+    MessageRepository, MessageSummary, MessageVerdict, SubscriptionRepository,
 };
-use crate::domain::aggregate::{Conversation, Invitation, Message, Participant};
+use crate::domain::aggregate::{Conversation, Direct, Invitation, Message, Participant};
 use crate::domain::event::{DomainEvent, MessageEvent};
 use crate::domain::value_object::{
-    ConversationId, ConversationKind, MessageId, ProfileId, Role, Visibility,
+    ConversationId, ConversationKind, MessageId, MessageRequest, ProfileId, Role, Visibility,
 };
 use crate::error::ChatError;
 
-type ConversationState = (
-    ConversationKind,
-    Visibility,
-    ProfileId,
-    u16,
-    Option<MessageId>,
-    DateTime<Utc>,
-    DateTime<Utc>,
-);
+#[derive(Clone, Copy)]
+struct ConversationState {
+    kind:         ConversationKind,
+    visibility:   Visibility,
+    owner:        ProfileId,
+    member_count: u16,
+    public_since: Option<MessageId>,
+    direct:       Option<Direct>,
+    request_sent: bool,
+    created_at:   DateTime<Utc>,
+    updated_at:   DateTime<Utc>,
+}
 
 #[derive(Default)]
-pub struct FakeConversations(Mutex<HashMap<ConversationId, ConversationState>>);
+pub struct FakeConversations {
+    rows:  Mutex<HashMap<ConversationId, ConversationState>>,
+    pairs: Mutex<HashMap<(Uuid, Uuid), ConversationId>>,
+}
 
 impl FakeConversations {
     fn put(&self, c: &Conversation) {
-        self.0.lock().unwrap().insert(
+        let mut rows = self.rows.lock().unwrap();
+        let request_sent = rows.get(&c.id()).is_some_and(|s| s.request_sent);
+        rows.insert(
             c.id(),
-            (c.kind(), c.visibility(), c.owner_id(), c.member_count(), c.public_since(), c.created_at(), c.updated_at()),
+            ConversationState {
+                kind:         c.kind(),
+                visibility:   c.visibility(),
+                owner:        c.owner_id(),
+                member_count: c.member_count(),
+                public_since: c.public_since(),
+                direct:       c.direct(),
+                request_sent,
+                created_at:   c.created_at(),
+                updated_at:   c.updated_at(),
+            },
         );
     }
 
     fn load(&self, id: &ConversationId) -> Option<Conversation> {
-        self.0.lock().unwrap().get(id).map(|&(kind, vis, owner, count, since, created, updated)| {
-            Conversation::reconstitute(*id, kind, vis, owner, count, since, created, updated)
+        self.rows.lock().unwrap().get(id).map(|s| {
+            Conversation::reconstitute(
+                *id, s.kind, s.visibility, s.owner, s.member_count, s.public_since, s.direct, s.created_at, s.updated_at,
+            )
         })
     }
 
     pub fn member_count(&self, id: &ConversationId) -> u16 {
-        self.0.lock().unwrap()[id].3
+        self.rows.lock().unwrap()[id].member_count
+    }
+
+    /// Sets a direct conversation's request as is (e.g. a decline back-dated).
+    pub fn force_request(&self, id: &ConversationId, request: MessageRequest) {
+        if let Some(direct) = self.rows.lock().unwrap().get_mut(id).and_then(|s| s.direct.as_mut()) {
+            direct.request = request;
+        }
     }
 }
 
@@ -66,6 +93,62 @@ impl ConversationRepository for FakeConversations {
 
     async fn find(&self, id: &ConversationId) -> Result<Option<Conversation>, ChatError> {
         Ok(self.load(id))
+    }
+
+    async fn claim_direct(&self, a: &ProfileId, b: &ProfileId, proposed: ConversationId) -> Result<ConversationId, ChatError> {
+        let key = if a.as_uuid() < b.as_uuid() { (a.as_uuid(), b.as_uuid()) } else { (b.as_uuid(), a.as_uuid()) };
+        Ok(*self.pairs.lock().unwrap().entry(key).or_insert(proposed))
+    }
+
+    async fn insert_direct(&self, c: &Conversation) -> Result<bool, ChatError> {
+        if self.rows.lock().unwrap().contains_key(&c.id()) {
+            return Ok(false);
+        }
+        self.put(c);
+        Ok(true)
+    }
+
+    async fn transition_request(&self, id: &ConversationId, from: MessageRequest, to: MessageRequest) -> Result<bool, ChatError> {
+        let mut rows = self.rows.lock().unwrap();
+        let Some(state) = rows.get_mut(id) else { return Ok(false) };
+        let Some(direct) = state.direct.as_mut() else { return Ok(false) };
+        if direct.request.as_tinyint() != from.as_tinyint() {
+            return Ok(false);
+        }
+        if matches!(from, MessageRequest::Declined { .. }) {
+            state.request_sent = false;
+        }
+        direct.request = to;
+        Ok(true)
+    }
+
+    async fn claim_request_message(&self, id: &ConversationId) -> Result<bool, ChatError> {
+        let mut rows = self.rows.lock().unwrap();
+        let Some(state) = rows.get_mut(id) else { return Ok(false) };
+        Ok(!std::mem::replace(&mut state.request_sent, true))
+    }
+}
+
+/// The interaction gate, scripted per (actor, recipient); everyone else is
+/// allowed.
+#[derive(Default)]
+pub struct ScriptedGate(Mutex<HashMap<(ProfileId, ProfileId), MessageVerdict>>);
+
+impl ScriptedGate {
+    /// `actor` → `recipient` gets `verdict`; a block (`Silenced`) holds both ways.
+    pub fn set(&self, actor: ProfileId, recipient: ProfileId, verdict: MessageVerdict) {
+        let mut verdicts = self.0.lock().unwrap();
+        verdicts.insert((actor, recipient), verdict);
+        if verdict == MessageVerdict::Silenced {
+            verdicts.insert((recipient, actor), verdict);
+        }
+    }
+}
+
+#[async_trait]
+impl InteractionGate for ScriptedGate {
+    async fn may_message(&self, actor: &ProfileId, recipient: &ProfileId) -> Result<MessageVerdict, ChatError> {
+        Ok(self.0.lock().unwrap().get(&(*actor, *recipient)).copied().unwrap_or(MessageVerdict::Allowed))
     }
 }
 
@@ -199,8 +282,9 @@ impl EventPublisher for FakePublisher {
 /// history read was served with (`None` = full member history).
 #[derive(Default)]
 pub struct FakeMessages {
-    inserts: Mutex<usize>,
-    floors:  Mutex<Vec<Option<i64>>>,
+    inserts:  Mutex<usize>,
+    floors:   Mutex<Vec<Option<i64>>>,
+    withheld: Mutex<Vec<bool>>,
 }
 
 impl FakeMessages {
@@ -211,12 +295,18 @@ impl FakeMessages {
     pub fn floors(&self) -> Vec<Option<i64>> {
         self.floors.lock().unwrap().clone()
     }
+
+    /// Whether each inserted message was withheld, in order.
+    pub fn withheld(&self) -> Vec<bool> {
+        self.withheld.lock().unwrap().clone()
+    }
 }
 
 #[async_trait]
 impl MessageRepository for FakeMessages {
-    async fn insert(&self, _: &Message) -> Result<(), ChatError> {
+    async fn insert(&self, m: &Message) -> Result<(), ChatError> {
         *self.inserts.lock().unwrap() += 1;
+        self.withheld.lock().unwrap().push(m.withheld());
         Ok(())
     }
 

@@ -121,6 +121,7 @@ New-message reads for guests never hit Scylla at all; they arrive over the broad
 | ScyllaDB (keyspace `chat`) | durable message/member/subscription log | writes + cold history fail | **Hard** — `UNAVAILABLE` |
 | Redis Cluster | hot-tail cache + sharded real-time routing + presence | live fan-out + presence stop; history still served from Scylla | **Soft** — durable path unaffected |
 | Kafka | domain + visibility events | events not emitted; guests not torn down on unpublish | **Soft** — `SendMessage` still succeeds |
+| `social-graph` (`CheckInteraction`, mesh) | who may message whom (#656) | direct conversations and invitations refused | **Fail closed** — `UNAVAILABLE` (`CHT-5001`, retryable); groups and channels unaffected |
 
 **Upstream — who depends on `chat` (blast radius if `chat` fails):**
 
@@ -142,6 +143,8 @@ New-message reads for guests never hit Scylla at all; they arrive over the broad
 service ChatService {
   // Lifecycle / membership
   rpc CreateConversation (CreateConversationRequest) returns (CreateConversationResponse);
+  rpc OpenDirectConversation  (OpenDirectConversationRequest)  returns (OpenDirectConversationResponse); // #656
+  rpc RespondToMessageRequest (RespondToMessageRequestRequest) returns (CommandResponse);                // #656
   rpc ToggleVisibility   (ToggleVisibilityRequest)   returns (CommandResponse);
   rpc JoinAsMember       (JoinAsMemberRequest)       returns (CommandResponse); // private ⇒ invitation required
   rpc InviteMember       (InviteMemberRequest)       returns (CommandResponse); // owner/admin only
@@ -166,13 +169,13 @@ service ChatService {
 
 **A profile's conversations (#653).** `ListConversationsByMember(member_id, limit, page_token)` is
 **mesh only** (never on the edge): the GDPR data export lists the conversations a profile is a member of
-(id, role, joined_at; paged by conversation id), then reads each one's history as that member
+(id, role, joined_at, kind; paged by conversation id), then reads each one's history as that member
 (`GetHistory`). It reads `chat.conversations_by_member`, the reverse of the roster, written and deleted
 with `members_by_conversation` in one LOGGED BATCH. Memberships from before that table existed are
 indexed by an opt-in, idempotent backfill at startup (`CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER=true`).
 
 > **Wire / enum contract:** proto enum values are **0-based and equal the domain `tinyint`**
-> (`CONVERSATION_KIND_GROUP=0`, `…CHANNEL=1`; `VISIBILITY_PRIVATE=0`, `…PUBLIC=1`; `ROLE_OWNER=0…GUEST=4`;
+> (`CONVERSATION_KIND_GROUP=0`, `…CHANNEL=1`, `…DIRECT=2`; `VISIBILITY_PRIVATE=0`, `…PUBLIC=1`; `ROLE_OWNER=0…GUEST=4`;
 > `CONTENT_TYPE_TEXT=0…SYSTEM=2`). No `UNSPECIFIED` sentinel — the gRPC layer casts directly with no
 > off-by-one mapping.
 
@@ -220,6 +223,35 @@ sees its own; its unread state is unchanged). The settings are projected from `p
 (`ProfileDiscoverySettingsChanged`, group `chat-presence-settings`, from the earliest offset) into
 `chat.presence_settings`; when they cannot be read, presence and receipts are withheld (fail closed).
 
+**Direct messages and message requests (#656).** A `DIRECT` conversation is between two profiles,
+**unique per pair** (`chat.direct_conversations`, claimed with an LWT so two concurrent openers share
+it), never public, never joined or invited into, with the group's presence loops. It is opened with
+`OpenDirectConversation(profile_id, peer_id)` — `CreateConversation` refuses the kind — and the peer's
+message settings decide, through social-graph's mesh-only `CheckInteraction(MESSAGE)`:
+
+| Peer's verdict for the opener | Opening | The opener's messages |
+|---|---|---|
+| allowed | open (`request = false`) | delivered |
+| audience excludes them (followers / mutuals), or a temporary limit holds them (#669) | a **request** | **one**, waiting in the peer's requests; more fail `CHT-1010` |
+| messages from no one | refused, `PERMISSION_DENIED` (`CHT-1011`) | refused |
+| a block, either way | a request, never answered | **withheld**: shown to the sender only |
+
+The recipient accepts by replying, by opening the conversation themselves, or with
+`RespondToMessageRequest(accept = true)`. A decline is **silent**: the requester keeps seeing the request
+pending (`CHT-1010` on a second message) and may not ask again for **30 days**. A **blocked sender sees
+exactly the same** as a sender whose request is pending or declined — same answers, word for word — and
+their messages are withheld: stored with `withheld = true`, returned by `GetHistory` to their sender
+only, dropped from every other member's stream, never cached nor fanned to an audience, never delivered
+even after an unblock. Once open, a conversation stays open whatever the peer's settings become; a
+block withholds again. No presence, typing or read receipts flow either way before a request is
+answered (`MarkRead` keeps nothing). Request transitions and the one message are compare-and-set
+(`IF request_state = ?`, `IF request_sent = false`), so concurrent taps never send two. `InviteMember`
+applies the invitee's settings too: messages from no one ⇒ `CHT-1011`; a block ⇒ answered as invited,
+nothing stored; a followers / mutuals audience still allows it (an invitation is the invitee's consent).
+`chat.message.sent` carries `withheld` and `request`, so a future push consumer delivers neither.
+social-graph unreachable ⇒ `UNAVAILABLE` (`CHT-5001`): fail closed. Without
+`CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT`, direct messages are off and invitations unchecked.
+
 ### Rust ports (hexagonal contract)
 
 ```rust
@@ -249,6 +281,7 @@ shared `error` crate:
 | `CHT-2xxx` | validation |
 | `CHT-3xxx` | events |
 | `CHT-4xxx` | streaming |
+| `CHT-5xxx` | peer services (`CHT-5001`: social-graph's interaction check unavailable — retryable) |
 | `CHT-9xxx` | identifiers |
 
 `CHT-1009` (private conversation the caller may not see) is deliberately rendered exactly like
@@ -256,6 +289,10 @@ shared `error` crate:
 Every conversation-scoped RPC returns it to an outsider of a private conversation, so `CHT-1007`
 (not a member) and `CHT-1008` (not public) only ever reach members or outsiders of a public
 conversation.
+
+Direct messages (#656): `CHT-1010` (a request's one message is spent — also the answer to a declined
+or blocked sender, by design), `CHT-1011` (the peer takes messages from no one; never the answer to a
+block), `CHT-1012` (no request from someone else to answer).
 
 ---
 
@@ -361,6 +398,8 @@ async fn main() -> anyhow::Result<()> {
 | `CHAT_AUDIENCE_SHARD_COUNT` | No | `16` | Number of Audience-Plane sharded channels a public conversation spreads across. **Must be uniform across the fleet.** |
 | `CHAT_PRESENCE_TTL_SECS` | No | `30` | Presence liveness window (also reused as the audience-shard heartbeat TTL). |
 | `CHAT_TYPING_TTL_SECS` | No | `6` | Typing-indicator expiry (short by design). |
+| `CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT` | No | unset | social-graph's mesh gRPC (`CheckInteraction`, #656). Unset: direct messages off (`CHT-5001`), invitations unchecked. |
+| `CHAT_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `CHAT_SOCIAL_GRAPH_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Its request and connect timeouts. |
 
 ### Inherited infrastructure variables
 
@@ -385,7 +424,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Deployment, Migrations & Rollback
 
-- **Migrations:** apply `crates/services/chat/migrations/0001…0008.cql` against the `chat` keyspace
+- **Migrations:** apply `crates/services/chat/migrations/0001…0010.cql` against the `chat` keyspace
   **before** first start / before rolling a new binary.
 - **Stateful gotchas:** `CHAT_MESSAGE_BUCKET_HOURS` and `CHAT_AUDIENCE_SHARD_COUNT` must be **uniform
   cluster-wide**, and `CHAT_MESSAGE_BUCKET_HOURS` must **never change after data exists** — divergent

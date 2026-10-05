@@ -11,6 +11,7 @@
 //! phases.
 
 pub mod cache;
+pub mod client;
 pub mod event;
 pub mod grpc;
 pub mod persistence;

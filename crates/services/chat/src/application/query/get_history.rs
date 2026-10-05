@@ -90,10 +90,13 @@ where
             return Err(conversation.concealed());
         };
 
-        let (messages, next_cursor) = self
+        let (mut messages, next_cursor) = self
             .message_repo
             .list_history(&conversation_id, limit, cursor, floor_created_at_ms)
             .await?;
+        // A withheld message is its sender's alone (#656). The cursor stays
+        // the store's, so a page may come back short, never skip.
+        messages.retain(|m| m.visible_to(requester_id.as_uuid()));
 
         let next_page_token = next_cursor.map(|(ts, id)| encode_cursor(ts, id));
 

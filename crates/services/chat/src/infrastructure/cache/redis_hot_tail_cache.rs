@@ -162,5 +162,7 @@ fn decode(raw: &str) -> Result<MessageSummary, ChatError> {
         reply_to,
         created_at:   DateTime::from_timestamp_millis(cm.created_at_ms)
             .unwrap_or(DateTime::UNIX_EPOCH),
+        // A withheld message is never cached (see `MessageFanout`).
+        withheld:     false,
     })
 }

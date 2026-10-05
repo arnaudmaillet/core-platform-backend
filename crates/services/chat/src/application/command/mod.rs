@@ -1,4 +1,5 @@
 pub mod create_conversation;
+pub mod direct;
 #[cfg(test)]
 pub(crate) mod fakes;
 pub mod invite_member;
@@ -9,10 +10,11 @@ pub mod subscribe;
 pub mod toggle_visibility;
 
 pub use create_conversation::{CreateConversationCommand, CreateConversationHandler};
+pub use direct::{Admission, DirectConversations, DirectMessaging, OpenedDirect};
 pub use invite_member::{InviteMemberCommand, InviteMemberHandler};
 pub use join_as_member::{JoinAsMemberCommand, JoinAsMemberHandler};
 pub use mark_read::{MarkReadCommand, MarkReadHandler};
-pub use send_message::{SendMessageCommand, SendMessageHandler};
+pub use send_message::{SendMessageCommand, SendMessageHandler, SendMessages, SentMessage};
 pub use subscribe::{
     SubscribeCommand, SubscribeHandler, UnsubscribeCommand, UnsubscribeHandler,
 };

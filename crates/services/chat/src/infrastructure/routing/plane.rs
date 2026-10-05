@@ -15,9 +15,17 @@ pub struct MessageFrame {
     pub media_ref:     Option<String>,
     pub reply_to:      Option<String>,
     pub created_at_ms: i64,
+    /// Its sender's alone (#656): every other member's stream drops it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub withheld:      bool,
 }
 
 impl MessageFrame {
+    /// May the member `reader` see this frame on their stream?
+    pub fn visible_to(&self, reader: &str) -> bool {
+        !self.withheld || self.sender_id == reader
+    }
+
     pub fn from_summary(s: &MessageSummary) -> Self {
         Self {
             message_id:    s.message_id.to_string(),
@@ -27,6 +35,7 @@ impl MessageFrame {
             media_ref:     s.media_ref.clone(),
             reply_to:      s.reply_to.map(|u| u.to_string()),
             created_at_ms: s.created_at.timestamp_millis(),
+            withheld:      s.withheld,
         }
     }
 }

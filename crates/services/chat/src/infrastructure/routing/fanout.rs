@@ -73,9 +73,16 @@ where
         message:         &MessageSummary,
         now_ms:          i64,
     ) -> Result<(), ChatError> {
-        self.hot_tail.push(conversation_id, message, self.hot_tail_cap).await?;
-
         let event = PlaneEvent::Message(MessageFrame::from_summary(message));
+
+        // A withheld message (#656) reaches only its sender's own streams:
+        // the member channel, where every other stream drops it. Never the
+        // cache, never the audience.
+        if message.withheld {
+            return self.broadcaster.broadcast_member(conversation_id, &event).await;
+        }
+
+        self.hot_tail.push(conversation_id, message, self.hot_tail_cap).await?;
 
         self.broadcaster.broadcast_member(conversation_id, &event).await?;
 

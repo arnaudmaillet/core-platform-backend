@@ -11,6 +11,9 @@ package chat.v1;
 enum ConversationKind {
     CONVERSATION_KIND_GROUP   = 0; // symmetric N<->N mesh, bounded, with presence
     CONVERSATION_KIND_CHANNEL = 1; // asymmetric 1->N broadcast, no presence
+    // One-to-one messages between two profiles (#656), unique per pair, never
+    // public. Opened with OpenDirectConversation, never CreateConversation.
+    CONVERSATION_KIND_DIRECT  = 2;
 }
 
 // Mutable visibility — the Private/Public toggle.

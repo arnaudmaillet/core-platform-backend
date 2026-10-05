@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::domain::aggregate::Conversation;
-use crate::domain::value_object::ConversationId;
+use crate::domain::value_object::{ConversationId, MessageRequest, ProfileId};
 use crate::error::ChatError;
 
 /// Persistence port for the [`Conversation`] aggregate (`chat.conversations`).
@@ -20,4 +20,21 @@ pub trait ConversationRepository: Send + Sync + 'static {
 
     /// Reconstitutes the aggregate by id, or `None` if it does not exist.
     async fn find(&self, id: &ConversationId) -> Result<Option<Conversation>, ChatError>;
+
+    /// The direct conversation between `a` and `b` (#656): the existing one's
+    /// id, or `proposed` once it is claimed for the pair — whichever of two
+    /// concurrent openers wins, both get the same id. Order-insensitive.
+    async fn claim_direct(&self, a: &ProfileId, b: &ProfileId, proposed: ConversationId) -> Result<ConversationId, ChatError>;
+
+    /// Inserts a new direct conversation unless its row exists; `false` when
+    /// another opener's insert won (re-read it).
+    async fn insert_direct(&self, conversation: &Conversation) -> Result<bool, ChatError>;
+
+    /// Moves a direct conversation's request from `from` to `to`, only if it
+    /// is still in `from`'s state (compare-and-set); `false` when it moved on.
+    /// Leaving a decline starts a fresh request: its one message unused.
+    async fn transition_request(&self, id: &ConversationId, from: MessageRequest, to: MessageRequest) -> Result<bool, ChatError>;
+
+    /// Spends a pending request's one message; `false` when it is spent.
+    async fn claim_request_message(&self, id: &ConversationId) -> Result<bool, ChatError>;
 }

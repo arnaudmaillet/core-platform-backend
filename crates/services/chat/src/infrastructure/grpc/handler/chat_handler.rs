@@ -14,18 +14,17 @@ use uuid::Uuid;
 use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
-use crate::application::access::deny_non_member;
 use crate::application::command::{
-    CreateConversationCommand, InviteMemberCommand, JoinAsMemberCommand, MarkReadCommand,
-    SendMessageCommand, SubscribeCommand, ToggleVisibilityCommand, UnsubscribeCommand,
+    CreateConversationCommand, DirectMessaging, InviteMemberCommand, JoinAsMemberCommand, MarkReadCommand,
+    SendMessageCommand, SendMessages, SubscribeCommand, ToggleVisibilityCommand, UnsubscribeCommand,
 };
 use crate::application::port::{
-    Membership,
     ConversationRepository, MemberRepository, MessageSummary, PresenceSettingsStore, PresenceStore,
     ReceiptStore, RoutingRegistry,
 };
 use crate::application::query::{
-    GetHistoryQuery, ListConversationsByMemberQuery, ListMembersQuery, ListSubscriptionsQuery, MemberView as QueryMemberView,
+    GetHistoryQuery, ListConversationsByMemberQuery, ListMembersQuery, ListSubscriptionsQuery, MemberConversation,
+    MemberView as QueryMemberView,
 };
 use crate::domain::value_object::{ContentType, ConversationId, MessageId, ProfileId};
 use crate::error::ChatError;
@@ -64,6 +63,10 @@ pub struct ChatServiceHandler<CB, QB> {
     conversation_repo: Arc<dyn ConversationRepository>,
     member_repo:       Arc<dyn MemberRepository>,
     presence_settings: Arc<dyn PresenceSettingsStore>,
+    /// Sends (and says whether a message is withheld, #656).
+    sender:            Arc<dyn SendMessages>,
+    /// Direct conversations and message requests (#656).
+    direct:            Arc<dyn DirectMessaging>,
     params:            StreamingParams,
 }
 
@@ -86,6 +89,8 @@ where
         conversation_repo: Arc<dyn ConversationRepository>,
         member_repo:       Arc<dyn MemberRepository>,
         presence_settings: Arc<dyn PresenceSettingsStore>,
+        sender:            Arc<dyn SendMessages>,
+        direct:            Arc<dyn DirectMessaging>,
         params:            StreamingParams,
     ) -> Self {
         Self {
@@ -101,27 +106,64 @@ where
             conversation_repo,
             member_repo,
             presence_settings,
+            sender,
+            direct,
             params,
         }
     }
 
-    /// Member-Plane access (stream, presence, typing) is for roster members only.
-    /// A non-member gets `PERMISSION_DENIED` on a public conversation and
-    /// `NOT_FOUND` — byte-identical to a missing one — on a private conversation.
-    async fn require_member(&self, conversation_id: &ConversationId, member_id: &ProfileId) -> Result<(), Status> {
-        let member = self
-            .member_repo
-            .find(conversation_id, member_id)
-            .await
-            .map_err(chat_err_to_status)?;
-        if member.is_none() {
-            let denied = deny_non_member(&*self.conversation_repo, conversation_id, *member_id).await;
+    /// Member-Plane access (stream, presence, typing, receipts) is for roster
+    /// members only: a non-member gets `PERMISSION_DENIED` on a public
+    /// conversation and `NOT_FOUND` — byte-identical to a missing one — on a
+    /// private one. Answers whether the member-plane signals flow: not on a
+    /// direct conversation whose request is unanswered (#656).
+    async fn require_member_signals(&self, conversation_id: &ConversationId, member_id: &ProfileId) -> Result<bool, Status> {
+        let (member, conversation) = tokio::join!(
+            self.member_repo.find(conversation_id, member_id),
+            self.conversation_repo.find(conversation_id),
+        );
+        let conversation = conversation.map_err(chat_err_to_status)?;
+        if member.map_err(chat_err_to_status)?.is_none() {
+            let denied = match conversation {
+                Some(c) => c.deny_outsider(*member_id),
+                None => ChatError::ConversationNotFound { conversation_id: conversation_id.as_str() },
+            };
             return Err(chat_err_to_status(denied));
         }
-        Ok(())
+        Ok(conversation.is_none_or(|c| c.signals_flow()))
     }
 
     // ── Commands ────────────────────────────────────────────────────────────
+
+    async fn open_direct_conversation(
+        &self,
+        request: Request<proto::OpenDirectConversationRequest>,
+    ) -> Result<Response<proto::OpenDirectConversationResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let opened = self
+            .direct
+            .open(parse_profile(&req.profile_id)?, parse_profile(&req.peer_id)?)
+            .await
+            .map_err(chat_err_to_status)?;
+        Ok(Response::new(proto::OpenDirectConversationResponse {
+            conversation_id: opened.conversation_id.as_str(),
+            request:         opened.request,
+        }))
+    }
+
+    async fn respond_to_message_request(
+        &self,
+        request: Request<proto::RespondToMessageRequestRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        self.direct
+            .respond(parse_conversation(&req.conversation_id)?, parse_profile(&req.profile_id)?, req.accept)
+            .await
+            .map_err(chat_err_to_status)?;
+        Ok(ok_response())
+    }
 
     async fn create_conversation(
         &self,
@@ -236,10 +278,7 @@ where
         };
 
         // Durable write (and Kafka seam) first.
-        self.command_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
-            .await
-            .map_err(cqrs_to_status)?;
+        let sent = self.sender.send(&cmd).await.map_err(chat_err_to_status)?;
 
         // Then the best-effort real-time fork (hot-tail cache + both planes).
         // A failure here does not fail the RPC — the message is already durable.
@@ -257,6 +296,7 @@ where
                 media_ref,
                 reply_to:     reply_to.and_then(|s| Uuid::parse_str(&s).ok()),
                 created_at:   now,
+                withheld:     sent.withheld,
             };
             if let Err(e) = self
                 .fanout
@@ -276,6 +316,13 @@ where
     ) -> Result<Response<proto::CommandResponse>, Status> {
         edge::require_profile(&request, &request.get_ref().member_id)?;
         let req = request.into_inner();
+
+        // No read receipts before a request is answered (#656): nothing kept,
+        // nothing told.
+        let conversation_id = parse_conversation(&req.conversation_id)?;
+        if !self.require_member_signals(&conversation_id, &parse_profile(&req.member_id)?).await? {
+            return Ok(ok_response());
+        }
 
         let cmd = MarkReadCommand {
             conversation_id: req.conversation_id.clone(),
@@ -313,7 +360,9 @@ where
         let req = request.into_inner();
         let conversation_id = parse_conversation(&req.conversation_id)?;
         let member_id       = parse_profile(&req.member_id)?;
-        self.require_member(&conversation_id, &member_id).await?;
+        if !self.require_member_signals(&conversation_id, &member_id).await? {
+            return Ok(ok_response());
+        }
         let now             = Utc::now().timestamp_millis();
 
         let _ = self
@@ -334,9 +383,9 @@ where
         let req = request.into_inner();
         let conversation_id = parse_conversation(&req.conversation_id)?;
         let member_id       = parse_profile(&req.member_id)?;
-        self.require_member(&conversation_id, &member_id).await?;
-        // Activity status off: nothing to announce.
-        if !self.presence_settings.get_or_withheld(&member_id).await.activity_status {
+        let signals = self.require_member_signals(&conversation_id, &member_id).await?;
+        // Activity status off, or a request unanswered: nothing to announce.
+        if !signals || !self.presence_settings.get_or_withheld(&member_id).await.activity_status {
             return Ok(ok_response());
         }
         let now             = Utc::now().timestamp_millis();
@@ -450,22 +499,23 @@ where
         let req = request.into_inner();
         let limit = req.limit.clamp(1, 500);
         let query = ListConversationsByMemberQuery { member_id: req.member_id, limit, after: non_empty(req.page_token) };
-        let memberships: Vec<Membership> = self
+        let memberships: Vec<MemberConversation> = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
         let next_page_token = match memberships.last() {
-            Some(last) if memberships.len() == limit as usize => last.conversation_id.as_uuid().to_string(),
+            Some(last) if memberships.len() == limit as usize => last.membership.conversation_id.as_uuid().to_string(),
             _ => String::new(),
         };
         Ok(Response::new(proto::ListConversationsByMemberResponse {
             memberships: memberships
                 .into_iter()
                 .map(|m| proto::MembershipView {
-                    conversation_id: m.conversation_id.as_uuid().to_string(),
-                    role:            m.role.as_tinyint() as i32,
-                    joined_at_ms:    m.joined_at.timestamp_millis(),
+                    conversation_id: m.membership.conversation_id.as_uuid().to_string(),
+                    role:            m.membership.role.as_tinyint() as i32,
+                    joined_at_ms:    m.membership.joined_at.timestamp_millis(),
+                    kind:            m.kind.map_or(0, |k| k.as_tinyint() as i32),
                 })
                 .collect(),
             next_page_token,
@@ -484,15 +534,16 @@ where
         let member_id       = parse_profile(&req.member_id)?;
 
         // Authorization: Member-Plane access requires roster membership.
-        self.require_member(&conversation_id, &member_id).await?;
+        let signals = self.require_member_signals(&conversation_id, &member_id).await?;
 
         // Pod-level Redis subscription (refcounted) + local fan-out receiver.
         self.attach.attach_member(&conversation_id).await.map_err(chat_err_to_status)?;
         let rx = self.member_registry.subscribe(&conversation_id);
 
         // Announce presence and keep it alive for the duration of the stream —
-        // unless the member turned activity status off (#661).
-        let announce = self.presence_settings.get_or_withheld(&member_id).await.activity_status;
+        // unless the member turned activity status off (#661), or the request
+        // is unanswered (#656).
+        let announce = signals && self.presence_settings.get_or_withheld(&member_id).await.activity_status;
         let heartbeat = if announce {
             let now = Utc::now().timestamp_millis();
             let _ = self
@@ -520,10 +571,13 @@ where
             heartbeat,
         };
 
-        let mapped = BroadcastStream::new(rx).filter_map(|res| match res {
-            Ok(event) => Some(Ok(proto::StreamConversationResponse {
-                event: Some(plane_to_chat_event(&event)),
-            })),
+        // A withheld message is its sender's alone (#656).
+        let reader = member_id.as_str();
+        let mapped = BroadcastStream::new(rx).filter_map(move |res| match res {
+            Ok(event) => match event.as_ref() {
+                PlaneEvent::Message(frame) if !frame.visible_to(&reader) => None,
+                _ => Some(Ok(proto::StreamConversationResponse { event: Some(plane_to_chat_event(&event)) })),
+            },
             Err(_lagged) => Some(Err(Status::data_loss(
                 "stream lagged: re-poll GetHistory to recover missed messages",
             ))),
@@ -770,6 +824,20 @@ where
         request: Request<proto::CreateConversationRequest>,
     ) -> Result<Response<proto::CreateConversationResponse>, Status> {
         self.create_conversation(request).await
+    }
+
+    async fn open_direct_conversation(
+        &self,
+        request: Request<proto::OpenDirectConversationRequest>,
+    ) -> Result<Response<proto::OpenDirectConversationResponse>, Status> {
+        self.open_direct_conversation(request).await
+    }
+
+    async fn respond_to_message_request(
+        &self,
+        request: Request<proto::RespondToMessageRequestRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.respond_to_message_request(request).await
     }
 
     async fn toggle_visibility(

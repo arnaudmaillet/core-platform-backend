@@ -23,6 +23,9 @@ pub struct Message {
     media_ref:       Option<String>,
     /// The message this one replies to, if any (threaded replies).
     reply_to:        Option<MessageId>,
+    /// Shown to its sender only (#656): its recipient blocks them, or they
+    /// block the recipient. The sender sees it sent, as any other.
+    withheld:        bool,
     created_at:      DateTime<Utc>,
 }
 
@@ -62,8 +65,14 @@ impl Message {
             content,
             media_ref,
             reply_to,
+            withheld: false,
             created_at: Utc::now(),
         })
+    }
+
+    /// Withholds the message from everyone but its sender (#656).
+    pub fn withhold(&mut self) {
+        self.withheld = true;
     }
 
     /// Reconstitutes a message from a persisted row.
@@ -86,6 +95,7 @@ impl Message {
             content,
             media_ref,
             reply_to,
+            withheld: false,
             created_at,
         }
     }
@@ -97,5 +107,6 @@ impl Message {
     pub fn content(&self)         -> &MessageContent  { &self.content }
     pub fn media_ref(&self)       -> Option<&str>     { self.media_ref.as_deref() }
     pub fn reply_to(&self)        -> Option<MessageId> { self.reply_to }
+    pub fn withheld(&self)        -> bool             { self.withheld }
     pub fn created_at(&self)      -> DateTime<Utc>    { self.created_at }
 }

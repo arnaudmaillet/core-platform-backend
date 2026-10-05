@@ -23,14 +23,14 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    CreateConversationCommand, CreateConversationHandler, InviteMemberCommand, InviteMemberHandler,
-    JoinAsMemberCommand, JoinAsMemberHandler,
-    MarkReadCommand, MarkReadHandler, SendMessageCommand, SendMessageHandler, SubscribeCommand,
+    CreateConversationCommand, CreateConversationHandler, DirectConversations, DirectMessaging, InviteMemberCommand,
+    InviteMemberHandler, JoinAsMemberCommand, JoinAsMemberHandler,
+    MarkReadCommand, MarkReadHandler, SendMessageHandler, SendMessages, SubscribeCommand,
     SubscribeHandler, ToggleVisibilityCommand, ToggleVisibilityHandler, UnsubscribeCommand,
     UnsubscribeHandler,
 };
 use crate::application::port::{
-    ConversationRepository, EventPublisher, HotTailCache, MemberRepository, PresenceSettingsStore,
+    ConversationRepository, EventPublisher, HotTailCache, InteractionGate, MemberRepository, PresenceSettingsStore,
     PresenceStore, ReceiptStore, RoutingRegistry,
 };
 use crate::application::query::{
@@ -58,10 +58,14 @@ use crate::infrastructure::worker::{PresenceSettingsWorker, VisibilityWorker};
 ///
 /// `kafka` is optional: its presence selects the durable publisher and enables
 /// the [`VisibilityWorker`]; its absence selects the in-process log publisher.
+///
+/// `interaction_gate` decides who may message whom (#656). Without it, direct
+/// conversations are off (`CHT-5001`) and group invitations unchecked.
 pub struct Backends {
-    pub scylla: ScyllaConfig,
-    pub redis:  RedisConfig,
-    pub kafka:  Option<KafkaClientConfig>,
+    pub scylla:           ScyllaConfig,
+    pub redis:            RedisConfig,
+    pub kafka:            Option<KafkaClientConfig>,
+    pub interaction_gate: Option<Arc<dyn InteractionGate>>,
 }
 
 /// The tuning surface threaded through the graph. Production fills this from
@@ -118,7 +122,7 @@ impl App {
         config:   &AppConfig,
         backends: Backends,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let Backends { scylla, redis, kafka } = backends;
+        let Backends { scylla, redis, kafka, interaction_gate } = backends;
 
         // ── Storage clients ──────────────────────────────────────────────────
         let scylla_client = Arc::new(ScyllaSessionBuilder::new(scylla).build().await?);
@@ -169,26 +173,19 @@ impl App {
         ));
 
         // ── CQRS buses (publisher derived from Kafka presence) ───────────────
-        let command_bus = match &kafka {
+        let repos = Repos {
+            conversation_repo: &conversation_repo,
+            message_repo:      &message_repo,
+            member_repo:       &member_repo,
+            subscription_repo: &subscription_repo,
+            invitation_repo:   &invitation_repo,
+        };
+        let commands = match &kafka {
             Some(cfg) => {
                 let producer = KafkaProducerBuilder::new(ProducerConfig::new(cfg.clone())).build()?;
-                build_command_bus(
-                    Arc::new(KafkaEventPublisher::new(producer)),
-                    &conversation_repo,
-                    &message_repo,
-                    &member_repo,
-                    &subscription_repo,
-                    &invitation_repo,
-                )?
+                build_commands(Arc::new(KafkaEventPublisher::new(producer)), &repos, interaction_gate)?
             }
-            None => build_command_bus(
-                Arc::new(LogEventPublisher),
-                &conversation_repo,
-                &message_repo,
-                &member_repo,
-                &subscription_repo,
-                &invitation_repo,
-            )?,
+            None => build_commands(Arc::new(LogEventPublisher), &repos, interaction_gate)?,
         };
 
         let query_bus = QueryBusBuilder::new()
@@ -203,7 +200,8 @@ impl App {
                 member_repo:       Arc::clone(&member_repo),
             })?
             .register::<ListConversationsByMemberQuery, _>(ListConversationsByMemberHandler {
-                member_repo: Arc::clone(&member_repo),
+                conversation_repo: Arc::clone(&conversation_repo),
+                member_repo:       Arc::clone(&member_repo),
             })?
             .register::<ListSubscriptionsQuery, _>(ListSubscriptionsHandler {
                 subscription_repo: Arc::clone(&subscription_repo),
@@ -242,7 +240,7 @@ impl App {
         };
 
         let handler = ChatServiceHandler::new(
-            command_bus,
+            commands.bus,
             query_bus,
             Arc::clone(&fanout) as Arc<dyn Fanout>,
             Arc::clone(&plane_subscriber) as Arc<dyn PlaneAttach>,
@@ -254,6 +252,8 @@ impl App {
             Arc::clone(&conversation_repo) as Arc<dyn ConversationRepository>,
             Arc::clone(&member_repo) as Arc<dyn MemberRepository>,
             Arc::clone(&presence_settings),
+            commands.sender,
+            commands.direct,
             params,
         );
 
@@ -273,26 +273,48 @@ impl App {
     }
 }
 
-/// Builds the command bus generically over the event publisher so the same wiring
-/// serves both the durable Kafka-backed run and the log-backed run.
-fn build_command_bus<EP: EventPublisher>(
-    publisher:         Arc<EP>,
-    conversation_repo: &Arc<ScyllaConversationRepository>,
-    message_repo:      &Arc<ScyllaMessageRepository>,
-    member_repo:       &Arc<ScyllaMemberRepository>,
-    subscription_repo: &Arc<ScyllaSubscriptionRepository>,
-    invitation_repo:   &Arc<ScyllaInvitationRepository>,
-) -> Result<InMemoryCommandBus, Box<dyn std::error::Error>> {
-    Ok(CommandBusBuilder::new()
+/// The repositories the command side is wired over.
+struct Repos<'a> {
+    conversation_repo: &'a Arc<ScyllaConversationRepository>,
+    message_repo:      &'a Arc<ScyllaMessageRepository>,
+    member_repo:       &'a Arc<ScyllaMemberRepository>,
+    subscription_repo: &'a Arc<ScyllaSubscriptionRepository>,
+    invitation_repo:   &'a Arc<ScyllaInvitationRepository>,
+}
+
+/// The command side: the bus, plus the two services whose answers the gRPC
+/// layer needs (how a message goes out; the direct conversation opened).
+struct Commands {
+    bus:    InMemoryCommandBus,
+    sender: Arc<dyn SendMessages>,
+    direct: Arc<dyn DirectMessaging>,
+}
+
+/// Builds the command side generically over the event publisher so the same
+/// wiring serves both the durable Kafka-backed run and the log-backed run.
+fn build_commands<EP: EventPublisher>(
+    publisher: Arc<EP>,
+    repos:     &Repos<'_>,
+    gate:      Option<Arc<dyn InteractionGate>>,
+) -> Result<Commands, Box<dyn std::error::Error>> {
+    let Repos { conversation_repo, message_repo, member_repo, subscription_repo, invitation_repo } = *repos;
+    let sender: Arc<dyn SendMessages> = Arc::new(SendMessageHandler {
+        conversation_repo: Arc::clone(conversation_repo),
+        member_repo:       Arc::clone(member_repo),
+        message_repo:      Arc::clone(message_repo),
+        publisher:         Arc::clone(&publisher),
+        gate:              gate.clone(),
+    });
+    let direct: Arc<dyn DirectMessaging> = Arc::new(DirectConversations {
+        conversation_repo: Arc::clone(conversation_repo),
+        member_repo:       Arc::clone(member_repo),
+        publisher:         Arc::clone(&publisher),
+        gate:              gate.clone(),
+    });
+    let bus = CommandBusBuilder::new()
         .register::<CreateConversationCommand, _>(CreateConversationHandler {
             conversation_repo: Arc::clone(conversation_repo),
             member_repo:       Arc::clone(member_repo),
-            publisher:         Arc::clone(&publisher),
-        })?
-        .register::<SendMessageCommand, _>(SendMessageHandler {
-            conversation_repo: Arc::clone(conversation_repo),
-            member_repo:       Arc::clone(member_repo),
-            message_repo:      Arc::clone(message_repo),
             publisher:         Arc::clone(&publisher),
         })?
         .register::<ToggleVisibilityCommand, _>(ToggleVisibilityHandler {
@@ -310,6 +332,7 @@ fn build_command_bus<EP: EventPublisher>(
             conversation_repo: Arc::clone(conversation_repo),
             member_repo:       Arc::clone(member_repo),
             invitation_repo:   Arc::clone(invitation_repo),
+            gate,
         })?
         .register::<SubscribeCommand, _>(SubscribeHandler {
             conversation_repo: Arc::clone(conversation_repo),
@@ -323,5 +346,6 @@ fn build_command_bus<EP: EventPublisher>(
             conversation_repo: Arc::clone(conversation_repo),
             member_repo:       Arc::clone(member_repo),
         })?
-        .build())
+        .build();
+    Ok(Commands { bus, sender, direct })
 }

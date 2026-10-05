@@ -17,4 +17,8 @@ pub struct ConversationRow {
     pub public_since:    Option<Uuid>,
     pub created_at:      CqlTimestamp,
     pub updated_at:      CqlTimestamp,
+    pub peer_id:         Option<Uuid>,
+    pub request_state:   Option<i8>,
+    pub requester_id:    Option<Uuid>,
+    pub declined_at:     Option<CqlTimestamp>,
 }
