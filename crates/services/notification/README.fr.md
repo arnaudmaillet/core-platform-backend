@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: e71942373859f51b099d6a852e2085a41d2d819c75bc9e3da2dd03cef86e7640
+  source_sha256: 32a3f7796bb1c94dca6ee51e31e6ec38e88aac4bc90a67d78605cfd4e1e41989
   translated_at: 2026-10-05
   status: complete
 ---
@@ -147,7 +147,10 @@ et liées à `profile_id`.
   suivis, lieux à proximité, portefeuille), une pause (≤ 8 h), des heures calmes lues dans le fuseau IANA du
   titulaire. Par défaut : tous les push activés, tous les e-mails désactivés ; **13–17 ans : heures calmes
   22:00–07:00** (d'après l'`age` du jeton en lecture, et écrites au premier `RegisterDevice` d'un adolescent
-  pour que l'émetteur les applique). L'e-mail marketing est le consentement `marketing` du compte
+  pour que l'émetteur les applique). Enregistrées comme le défaut adolescent, elles se lèvent dès que le
+  jeton dit `18+` : au `RegisterDevice` suivant sur l'edge (l'app rafraîchit son appareil au lancement) ou
+  à un appel de préférences. Les heures calmes choisies par le titulaire restent ; un âge inconnu (le mesh,
+  pas de date de naissance) ne change rien. L'e-mail marketing est le consentement `marketing` du compte
   (`account.v1.UpdateConsents`), pas un second interrupteur ici.
 - `ResolvePushTargets(profile_id, category)` (mesh) est ce que l'émetteur de push interrogera : les
   appareils, ou `allowed = false` quand la catégorie est désactivée, qu'une pause court ou que ce sont les

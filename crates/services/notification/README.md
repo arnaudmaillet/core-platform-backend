@@ -131,7 +131,10 @@ yet** (no APNs credentials). Every RPC but `ResolvePushTargets` is edge `authent
   (likes, comments, mentions, new followers, follow requests, messages, posts from followed accounts,
   places nearby, wallet), a pause (≤ 8 h), quiet hours read in the holder's IANA zone. Defaults: every
   push on, every email off; **13–17: quiet hours 22:00–07:00** (from the token's `age` on reads, and
-  written at a teen's first `RegisterDevice` so the sender applies them). Marketing email is the
+  written at a teen's first `RegisterDevice` so the sender applies them). Stored as the teen default,
+  they lift once the token says `18+`: at the next edge `RegisterDevice` (the app refreshes its device at
+  launch) or preferences call. Quiet hours the holder set themselves stay; an unknown age (the mesh, no
+  date of birth) changes nothing. Marketing email is the
   account's `marketing` consent (`account.v1.UpdateConsents`), not a second toggle here.
 - `ResolvePushTargets(profile_id, category)` (mesh) is what the push sender will ask: the devices, or
   `allowed = false` when the category is off, a pause runs or it is quiet hours.

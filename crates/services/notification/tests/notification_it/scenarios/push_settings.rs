@@ -8,7 +8,9 @@ use tonic::Request;
 use uuid::Uuid;
 
 use notification::application::command::push_settings::RegisterDeviceCommand;
+use notification::application::command::push_settings::UpdatePreferencesCommand;
 use notification::domain::device::{DevicePlatform, PushEnvironment};
+use notification::domain::preferences::{HolderAge, QuietHours};
 
 use crate::notification_it::harness::{proto, TestHarness};
 
@@ -112,7 +114,7 @@ async fn a_token_registered_for_another_account_leaves_the_previous_one() {
         platform:    DevicePlatform::Ios,
         environment: PushEnvironment::Production,
         timezone:    None,
-        minor:       false,
+        age:         HolderAge::Adult,
     };
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), as_account(&alice, "acct-a"))).await.expect("alice");
     assert_eq!(targets(&h, &alice, proto::PushCategory::Messages).await.1, vec![token.clone()]);
@@ -134,7 +136,7 @@ async fn a_teens_first_registration_writes_quiet_hours() {
         platform:    DevicePlatform::Ios,
         environment: PushEnvironment::Sandbox,
         timezone:    Some("Europe/Paris".into()),
-        minor:       true,
+        age:         HolderAge::Teen,
     };
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("register");
 
@@ -149,3 +151,53 @@ async fn a_teens_first_registration_writes_quiet_hours() {
     assert!(quiet.enabled);
     assert_eq!((quiet.start_minute, quiet.end_minute), (22 * 60, 7 * 60));
 }
+
+#[tokio::test]
+async fn teen_quiet_hours_lift_at_18_unless_the_holder_chose_them() {
+    let h = TestHarness::start().await;
+    let register = |profile: &str, age: HolderAge| RegisterDeviceCommand {
+        profile_id:  profile.to_owned(),
+        account_id:  "acct-teen".into(),
+        device_id:   "phone".into(),
+        token:       format!("token-{profile}"),
+        platform:    DevicePlatform::Ios,
+        environment: PushEnvironment::Production,
+        timezone:    None,
+        age,
+    };
+    let quiet = |profile: String| {
+        let h = &h;
+        async move {
+            h.handler
+                .get_notification_preferences(Request::new(proto::GetNotificationPreferencesRequest { profile_id: profile }))
+                .await
+                .expect("get")
+                .into_inner()
+                .quiet_hours
+                .is_some_and(|q| q.enabled)
+        }
+    };
+
+    // The default: a mesh refresh (age unknown) leaves it; the app's refresh
+    // once the token says 18+ lifts it.
+    let (defaulted, chosen) = (id(), id());
+    for profile in [&defaulted, &chosen] {
+        h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), register(profile, HolderAge::Teen))).await.expect("teen");
+    }
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), register(&defaulted, HolderAge::Unknown))).await.expect("mesh");
+    assert!(quiet(defaulted.clone()).await, "unknown age: unchanged");
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), register(&defaulted, HolderAge::Adult))).await.expect("adult");
+    assert!(!quiet(defaulted).await, "lifted at 18");
+
+    // Set by the teen themselves: kept at 18.
+    let set = UpdatePreferencesCommand {
+        profile_id:  chosen.clone(),
+        age:         HolderAge::Teen,
+        quiet_hours: Some(QuietHours::new(23 * 60, 6 * 60)),
+        ..Default::default()
+    };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), set)).await.expect("set");
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), register(&chosen, HolderAge::Adult))).await.expect("adult");
+    assert!(quiet(chosen).await, "their own choice stays");
+}
+

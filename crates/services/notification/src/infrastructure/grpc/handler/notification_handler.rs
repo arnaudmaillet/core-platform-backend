@@ -21,7 +21,7 @@ use crate::application::command::push_settings::{
 };
 use crate::application::query::push_settings::{GetPreferencesQuery, PushTargets, ResolvePushTargetsQuery};
 use crate::domain::device::{DevicePlatform, PushEnvironment};
-use crate::domain::preferences::{NotificationPreferences, PushCategory, QuietHours};
+use crate::domain::preferences::{HolderAge, NotificationPreferences, PushCategory, QuietHours};
 use crate::domain::value_object::ProfileId;
 
 // ── Proto inclusion ───────────────────────────────────────────────────────────
@@ -183,7 +183,7 @@ where
         edge::require_profile(&request, &request.get_ref().profile_id)?;
         let principal = edge::principal(&request);
         let account_id = principal.map(|p| p.account_id().to_owned()).unwrap_or_default();
-        let minor = principal.is_some_and(|p| p.is_minor());
+        let age = holder_age(principal);
         let req = request.into_inner();
         let cmd = RegisterDeviceCommand {
             profile_id:  req.profile_id,
@@ -193,7 +193,7 @@ where
             platform:    platform_from_proto(req.platform)?,
             environment: environment_from_proto(req.environment)?,
             timezone:    Some(req.timezone).filter(|z| !z.is_empty()),
-            minor,
+            age,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -221,8 +221,8 @@ where
         request: Request<proto::GetNotificationPreferencesRequest>,
     ) -> Result<Response<proto::NotificationPreferences>, Status> {
         edge::require_profile(&request, &request.get_ref().profile_id)?;
-        let minor = edge::principal(&request).is_some_and(|p| p.is_minor());
-        self.preferences_of(request.into_inner().profile_id, minor).await
+        let age = holder_age(edge::principal(&request));
+        self.preferences_of(request.into_inner().profile_id, age).await
     }
 
     pub async fn update_notification_preferences(
@@ -230,7 +230,7 @@ where
         request: Request<proto::UpdateNotificationPreferencesRequest>,
     ) -> Result<Response<proto::NotificationPreferences>, Status> {
         edge::require_profile(&request, &request.get_ref().profile_id)?;
-        let minor = edge::principal(&request).is_some_and(|p| p.is_minor());
+        let age = holder_age(edge::principal(&request));
         let req = request.into_inner();
         let mut push = Vec::with_capacity(req.categories.len());
         let mut email = Vec::with_capacity(req.categories.len());
@@ -250,7 +250,7 @@ where
         let quiet_hours = req.quiet_hours.map(quiet_hours_from_proto).transpose()?;
         let cmd = UpdatePreferencesCommand {
             profile_id: req.profile_id.clone(),
-            minor,
+            age,
             push,
             email,
             pause,
@@ -261,7 +261,7 @@ where
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await
             .map_err(cqrs_to_status)?;
-        self.preferences_of(req.profile_id, minor).await
+        self.preferences_of(req.profile_id, age).await
     }
 
     /// Mesh-only (absent from the edge policy): the push sender asks.
@@ -294,13 +294,23 @@ where
         }))
     }
 
-    async fn preferences_of(&self, profile_id: String, minor: bool) -> Result<Response<proto::NotificationPreferences>, Status> {
+    async fn preferences_of(&self, profile_id: String, age: HolderAge) -> Result<Response<proto::NotificationPreferences>, Status> {
         let preferences: NotificationPreferences = self
             .query_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), GetPreferencesQuery { profile_id, minor }))
+            .dispatch(Envelope::new(Uuid::now_v7(), GetPreferencesQuery { profile_id, age }))
             .await
             .map_err(cqrs_to_status)?;
         Ok(Response::new(preferences_to_proto(&preferences)))
+    }
+}
+
+/// The holder's age from the edge token; unknown over the mesh or without a
+/// date of birth.
+fn holder_age(principal: Option<&edge::EdgePrincipal>) -> HolderAge {
+    match principal {
+        Some(p) if p.is_minor() => HolderAge::Teen,
+        Some(p) if p.is_adult() => HolderAge::Adult,
+        _ => HolderAge::Unknown,
     }
 }
 

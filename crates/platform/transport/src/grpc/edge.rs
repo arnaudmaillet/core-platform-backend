@@ -161,6 +161,12 @@ impl EdgePrincipal {
         edge::is_minor(&self.0.raw_claims)
     }
 
+    /// `true` only when the token says 18+ (an unknown age is not known to be
+    /// an adult): what may lift a teen default.
+    pub fn is_adult(&self) -> bool {
+        edge::age_bracket(&self.0.raw_claims) == Some(edge::AGE_ADULT)
+    }
+
     /// `true` when the token carries `permission`.
     pub fn has_permission(&self, permission: &str) -> bool {
         self.0.has_permission(permission)

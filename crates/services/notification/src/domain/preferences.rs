@@ -69,6 +69,18 @@ impl QuietHours {
     }
 }
 
+/// What the caller knows of the holder's age (the edge token's `age`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HolderAge {
+    /// 13–17: the teen defaults apply.
+    Teen,
+    /// 18+: a teen default still stored lifts.
+    Adult,
+    /// No token (the mesh) or no date of birth: nothing changes.
+    #[default]
+    Unknown,
+}
+
 /// The longest pause the holder may ask for (the app offers 15 min – 8 h).
 pub const MAX_PAUSE: Duration = Duration::hours(8);
 
@@ -83,6 +95,9 @@ pub struct NotificationPreferences {
     pub email_on:     BTreeSet<PushCategory>,
     pub paused_until: Option<DateTime<Utc>>,
     pub quiet_hours:  Option<QuietHours>,
+    /// The quiet hours are the 13–17 default, not the holder's choice: they
+    /// lift once the holder is 18 ([`Self::for_age`]).
+    pub teen_quiet_hours: bool,
     /// IANA zone the quiet hours are read in (UTC when unknown).
     pub timezone:     Option<String>,
 }
@@ -90,12 +105,28 @@ pub struct NotificationPreferences {
 impl NotificationPreferences {
     /// The defaults for a 13–17 holder: quiet hours 22:00–07:00.
     pub fn teen() -> Self {
-        Self { quiet_hours: Some(QuietHours::TEEN), ..Self::default() }
+        Self { quiet_hours: Some(QuietHours::TEEN), teen_quiet_hours: true, ..Self::default() }
     }
 
     /// The defaults for a holder with nothing stored.
-    pub fn defaults(minor: bool) -> Self {
-        if minor { Self::teen() } else { Self::default() }
+    pub fn defaults(age: HolderAge) -> Self {
+        if age == HolderAge::Teen { Self::teen() } else { Self::default() }
+    }
+
+    /// The preferences for a holder of `age`: the teen quiet hours lift once
+    /// they are known to be 18 (quiet hours they chose themselves stay).
+    pub fn for_age(mut self, age: HolderAge) -> Self {
+        if age == HolderAge::Adult && self.teen_quiet_hours {
+            self.quiet_hours = None;
+            self.teen_quiet_hours = false;
+        }
+        self
+    }
+
+    /// The holder sets their quiet hours (`None`: off); they are theirs now.
+    pub fn set_quiet_hours(&mut self, quiet: Option<QuietHours>) {
+        self.quiet_hours = quiet;
+        self.teen_quiet_hours = false;
     }
 
     pub fn push_on(&self, category: PushCategory) -> bool {
@@ -190,9 +221,27 @@ mod tests {
     }
 
     #[test]
+    fn teen_quiet_hours_lift_at_18_but_chosen_ones_stay() {
+        let teen = NotificationPreferences::defaults(HolderAge::Teen);
+        // Still a teen, or an age nobody told us: unchanged.
+        assert_eq!(teen.clone().for_age(HolderAge::Teen), teen);
+        assert_eq!(teen.clone().for_age(HolderAge::Unknown), teen);
+        // 18: the default lifts.
+        let adult = teen.clone().for_age(HolderAge::Adult);
+        assert_eq!(adult.quiet_hours, None);
+        assert!(!adult.teen_quiet_hours);
+
+        // Set by the holder (even the same hours): theirs, kept at 18.
+        let mut chosen = teen;
+        chosen.set_quiet_hours(Some(QuietHours::TEEN));
+        assert_eq!(chosen.clone().for_age(HolderAge::Adult).quiet_hours, Some(QuietHours::TEEN));
+    }
+
+    #[test]
     fn teens_get_quiet_hours_by_default_and_emails_start_off() {
-        assert_eq!(NotificationPreferences::defaults(true).quiet_hours, Some(QuietHours::TEEN));
-        assert_eq!(NotificationPreferences::defaults(false).quiet_hours, None);
+        assert_eq!(NotificationPreferences::defaults(HolderAge::Teen).quiet_hours, Some(QuietHours::TEEN));
+        assert_eq!(NotificationPreferences::defaults(HolderAge::Adult).quiet_hours, None);
+        assert_eq!(NotificationPreferences::defaults(HolderAge::Unknown).quiet_hours, None);
         assert!(PushCategory::ALL.iter().all(|c| !NotificationPreferences::default().email_on(*c)));
     }
 
