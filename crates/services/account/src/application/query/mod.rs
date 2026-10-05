@@ -1,3 +1,4 @@
+pub mod find_profiles_by_contacts;
 pub mod get_account_by_email;
 pub mod get_account_by_id;
 pub mod get_account_by_phone;
@@ -14,6 +15,9 @@ pub use get_gdpr_record::GdprRecordView;
 pub use list_accounts_by_status::AccountListView;
 
 // ── Query types ───────────────────────────────────────────────────────────────
+pub use find_profiles_by_contacts::{
+    FindProfilesByContactsHandler, FindProfilesByContactsQuery, FoundProfile, MAX_CONTACT_HASHES,
+};
 pub use get_account_by_email::{GetAccountByEmailHandler, GetAccountByEmailQuery};
 pub use get_account_by_id::{GetAccountByIdHandler, GetAccountByIdQuery};
 pub use get_account_by_phone::{GetAccountByPhoneHandler, GetAccountByPhoneQuery};

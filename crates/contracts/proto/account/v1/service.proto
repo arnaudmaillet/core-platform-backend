@@ -163,4 +163,13 @@ service AccountService {
 
     // Paginated list of accounts filtered by lifecycle status (admin / ops).
     rpc ListAccountsByStatus(ListAccountsByStatusRequest) returns (ListAccountsByStatusResponse);
+
+    // Find the profiles of one's address book (#661): SHA-256 hashes of the
+    // contacts' normalized email addresses (lower-cased, trimmed) and phone
+    // numbers (E.164), at most 1000 per call; nothing of them is kept. A
+    // contact matches an active account's verified email / phone, then its
+    // active profiles that are findable that way (profile discovery
+    // settings), never blocked either way, never the caller's own. Edge:
+    // the caller's account.
+    rpc FindProfilesByContacts(FindProfilesByContactsRequest) returns (FindProfilesByContactsResponse);
 }

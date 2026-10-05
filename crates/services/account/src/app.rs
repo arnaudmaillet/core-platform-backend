@@ -33,8 +33,9 @@ use crate::application::command::{
     VerifyEmailHandler, VerifyPhoneCommand, VerifyPhoneHandler, ChangeEmailCommand, ChangeEmailHandler,
     ChangePhoneCommand, ChangePhoneHandler,
 };
-use crate::application::port::{AccountRepository, EventPublisher, ExportStore};
+use crate::application::port::{AccountRepository, ContactIndex, EventPublisher, ExportStore, ProfileDirectory};
 use crate::application::query::{
+    FindProfilesByContactsHandler, FindProfilesByContactsQuery,
     GetAccountByEmailHandler, GetAccountByEmailQuery, GetAccountByIdHandler, GetAccountByIdQuery,
     GetAccountByPhoneHandler, GetAccountByPhoneQuery,
     GetAccountByIdentityIdHandler,
@@ -51,6 +52,8 @@ pub struct App {
     pub command_bus: Arc<InMemoryCommandBus>,
     pub query_bus:   Arc<InMemoryQueryBus>,
     pub repository:  Arc<dyn AccountRepository>,
+    /// The accounts' contacts by hash (#661), for index-level scenarios.
+    pub contacts:    Arc<dyn ContactIndex>,
 }
 
 impl App {
@@ -60,20 +63,21 @@ impl App {
         pool: PgPool,
         publisher: Arc<dyn EventPublisher>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::build_with_exports(pool, publisher, None).await
+        Self::build_with_exports(pool, publisher, None, None).await
     }
 
     /// [`Self::build`], with the GDPR export store (#653) that signs a
-    /// delivered export's link when the record is read.
+    /// delivered export's link when the record is read, and the profile
+    /// directory contact matching reads (#661; without it, `ACC-7006`).
     pub async fn build_with_exports(
         pool: PgPool,
         publisher: Arc<dyn EventPublisher>,
         exports: Option<Arc<dyn ExportStore>>,
+        directory: Option<Arc<dyn ProfileDirectory>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let repository: Arc<dyn AccountRepository> = Arc::new(PgAccountRepository::new(
-            TransactionManager::new(pool),
-            publisher,
-        ));
+        let pg = Arc::new(PgAccountRepository::new(TransactionManager::new(pool), publisher));
+        let repository: Arc<dyn AccountRepository> = Arc::clone(&pg) as Arc<dyn AccountRepository>;
+        let contacts: Arc<dyn ContactIndex> = pg;
 
         let command_bus = Arc::new(
             CommandBusBuilder::new()
@@ -118,9 +122,13 @@ impl App {
                 })?
                 .register::<GetMfaSecretQuery, _>(GetMfaSecretHandler::new(Arc::clone(&repository)))?
                 .register::<ListAccountsByStatusQuery, _>(ListAccountsByStatusHandler::new(Arc::clone(&repository)))?
+                .register::<FindProfilesByContactsQuery, _>(FindProfilesByContactsHandler::new(
+                    Arc::clone(&contacts),
+                    directory,
+                ))?
                 .build(),
         );
 
-        Ok(Self { command_bus, query_bus, repository })
+        Ok(Self { command_bus, query_bus, repository, contacts })
     }
 }

@@ -229,6 +229,9 @@ services:
       <<: *base-env
       PG_TOPOLOGY: single
       DATABASE_URL: postgres://core:core@postgres:5432/account
+      # Contact matching (#661) and the GDPR export read these over the mesh.
+      ACCOUNT_PROFILE_GRPC_ENDPOINT: http://profile-server:50052
+      ACCOUNT_SOCIAL_GRAPH_GRPC_ENDPOINT: http://social-graph-server:50053
     ports:
       - "50059:50059"
     depends_on:

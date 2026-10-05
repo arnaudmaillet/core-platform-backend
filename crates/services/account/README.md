@@ -144,6 +144,7 @@ service AccountService {
   rpc GetGdprRecord (GetGdprRecordRequest) returns (GdprRecordView);          // the holder's own on the edge
   rpc UpdateConsents (UpdateConsentsRequest) returns (GdprRecordView);         // GDPR Art. 7 consents + history
   rpc ListAccountsByStatus (ListAccountsByStatusRequest) returns (ListAccountsByStatusResponse);
+  rpc FindProfilesByContacts (FindProfilesByContactsRequest) returns (FindProfilesByContactsResponse); // #661, the caller's own account on the edge
 }
 ```
 
@@ -155,6 +156,17 @@ service AccountService {
 
 **Security at the boundary:** passwords stored as Argon2id only (plaintext never accepted); secret fields
 suppress `Display`/`Debug` and carry `#[serde(skip)]`.
+
+**Finding one's contacts (#661).** `FindProfilesByContacts(account_id, email_sha256[], phone_sha256[])`
+takes SHA-256 hashes of an address book's contacts — lower-cased, trimmed email addresses and E.164
+phone numbers — at most 1000 per call, and **keeps none of them**. A hash matches an **active**
+account's **verified** email / phone: the hashes are generated columns (`account_contact_sha256`,
+migration 0007) indexed for verified contacts only, so they follow every write. The matched accounts'
+profiles are then read over the mesh (profile, as the mesh: status and discovery settings) and kept when
+active and findable through that channel (`by_email` / `by_phone`), never the caller's own, never one
+the caller's profiles block or are blocked by (social-graph `CheckAccess`, a missing answer counts as
+hidden). Each result names the hash it came from, so the app shows the contact. Profile or
+social-graph unreachable ⇒ `ACC-7006` (`UNAVAILABLE`, retryable).
 
 **GDPR data export (#653, Art. 15/20).** `RequestDataExport` marks the export pending; the **export
 pass** (`ExportDueData`) then builds, per pending account, a ZIP of JSON files — the holder's own

@@ -12,3 +12,4 @@ mod email_lookup;
 mod change_contact;
 mod mfa;
 mod data_export;
+mod contact_matching;

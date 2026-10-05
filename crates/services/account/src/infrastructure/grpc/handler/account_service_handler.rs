@@ -32,6 +32,7 @@ use crate::application::command::{
     verify_phone::VerifyPhoneCommand,
 };
 use crate::application::query::{
+    find_profiles_by_contacts::{FindProfilesByContactsQuery, FoundProfile},
     get_account_by_id::{AccountView, GetAccountByIdQuery},
     get_mfa_secret::{GetMfaSecretQuery, MfaSecretView},
     get_account_by_email::GetAccountByEmailQuery,
@@ -605,6 +606,42 @@ where
         edge::require_account(&request, &request.get_ref().account_id)?;
         let req = request.into_inner();
         self.gdpr_record(req.account_id).await.map(Response::new)
+    }
+
+    /// The profiles of the caller's address book (#661). Edge: the caller's
+    /// own account.
+    pub async fn find_profiles_by_contacts(
+        &self,
+        request: Request<proto::FindProfilesByContactsRequest>,
+    ) -> Result<Response<proto::FindProfilesByContactsResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let query = FindProfilesByContactsQuery {
+            account_id:   req.account_id,
+            email_hashes: req.email_sha256,
+            phone_hashes: req.phone_sha256,
+        };
+        let found: Vec<FoundProfile> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_error_to_status)?;
+        Ok(Response::new(proto::FindProfilesByContactsResponse {
+            profiles: found
+                .into_iter()
+                .map(|f| proto::ContactProfile {
+                    contact_sha256: f.hash,
+                    channel:        match f.channel {
+                        crate::application::port::ContactChannel::Email => proto::ContactChannel::Email,
+                        crate::application::port::ContactChannel::Phone => proto::ContactChannel::Phone,
+                    } as i32,
+                    profile_id:     f.profile.profile_id,
+                    handle:         f.profile.handle,
+                    display_name:   f.profile.display_name,
+                    avatar_url:     f.profile.avatar_url.unwrap_or_default(),
+                })
+                .collect(),
+        }))
     }
 
     pub async fn update_consents(

@@ -272,3 +272,28 @@ message ListAccountsByStatusResponse {
     repeated AccountView    accounts    = 1;
     int64                   total       = 2;
 }
+
+// ── Contact matching (#661) ───────────────────────────────────────────────────
+
+message FindProfilesByContactsRequest {
+    string         account_id   = 1;
+    // SHA-256 (32 bytes) of each lower-cased, trimmed email address.
+    repeated bytes email_sha256 = 2;
+    // SHA-256 (32 bytes) of each E.164 phone number (e.g. "+33612345678").
+    repeated bytes phone_sha256 = 3;
+}
+
+// A profile found through one of the caller's contacts.
+message ContactProfile {
+    // The hash the app sent, so it can name the contact.
+    bytes          contact_sha256 = 1;
+    ContactChannel channel        = 2;
+    string         profile_id     = 3;
+    string         handle         = 4;
+    string         display_name   = 5;
+    string         avatar_url     = 6;
+}
+
+message FindProfilesByContactsResponse {
+    repeated ContactProfile profiles = 1;
+}

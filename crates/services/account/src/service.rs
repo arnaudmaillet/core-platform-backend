@@ -17,6 +17,7 @@ use tonic_reflection::server::Builder as ReflectionBuilder;
 
 use crate::app::App;
 use crate::application::command::{AnonymizeDueAccounts, ExportDueData, PeerExportSources};
+use crate::infrastructure::directory::MeshProfileDirectory;
 use crate::infrastructure::export::{ExportStoreConfig, MeshEndpoints, MeshExportPeers, S3ExportStore};
 use crate::infrastructure::worker::export_pass::run_export_pass;
 use crate::infrastructure::worker::gdpr_janitor::run_gdpr_janitor;
@@ -60,6 +61,7 @@ impl Service for AccountService {
         authenticated("/account.v1.AccountService/RequestDataExport"),
         // The holder's own GDPR record and consents (GDPR Art. 7, 15).
         authenticated("/account.v1.AccountService/GetGdprRecord"),
+        authenticated("/account.v1.AccountService/FindProfilesByContacts"),
         authenticated("/account.v1.AccountService/UpdateConsents"),
         authenticated("/account.v1.AccountService/GetAccountById"),
         authenticated("/account.v1.AccountService/GetAccountStatus"),
@@ -89,10 +91,16 @@ impl Service for AccountService {
         };
 
         // `PgPool` is `Arc`-backed: one clone serves the app graph, one the probe.
+        // Contact matching (#661) reads profile and social-graph over the mesh
+        // (the export's endpoints).
+        let endpoints = MeshEndpoints::from_env();
+        let directory = MeshProfileDirectory::new(&endpoints.profile, &endpoints.social_graph)
+            .map_err(|e| anyhow::anyhow!("account profile directory: {e}"))?;
         let app = App::build_with_exports(
             pool.clone(),
             publisher,
             exports.clone().map(|store| store as Arc<dyn ExportStore>),
+            Some(Arc::new(directory)),
         )
         .await
         .map_err(|e| anyhow::anyhow!("account app build: {e}"))?;

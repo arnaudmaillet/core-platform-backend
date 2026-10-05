@@ -536,3 +536,36 @@ impl AccountRepository for PgAccountRepository {
         Ok(ids.into_iter().map(AccountId::from_uuid).collect())
     }
 }
+
+/// Contact matching (#661): the generated hash columns, indexed for verified
+/// contacts (migration 0007). Active accounts only.
+#[async_trait]
+impl crate::application::port::ContactIndex for PgAccountRepository {
+    async fn match_contacts(
+        &self,
+        email_hashes: &[Vec<u8>],
+        phone_hashes: &[Vec<u8>],
+    ) -> Result<Vec<crate::application::port::ContactMatch>, AccountError> {
+        use crate::application::port::{ContactChannel, ContactMatch};
+        let rows: Vec<(uuid::Uuid, String, Vec<u8>)> = sqlx::query_as(
+            "SELECT id, 'email', email_sha256 FROM accounts \
+             WHERE email_verified AND status = 'active' AND email_sha256 = ANY($1) \
+             UNION ALL \
+             SELECT id, 'phone', phone_sha256 FROM accounts \
+             WHERE phone_verified AND status = 'active' AND phone_sha256 = ANY($2)",
+        )
+        .bind(email_hashes)
+        .bind(phone_hashes)
+        .fetch_all(self.tx_manager.pool())
+        .await
+        .map_err(|e| AccountError::Storage(StorageError::from(e)))?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, channel, hash)| ContactMatch {
+                account_id: crate::domain::value_object::AccountId::from_uuid(id),
+                channel: if channel == "phone" { ContactChannel::Phone } else { ContactChannel::Email },
+                hash,
+            })
+            .collect())
+    }
+}
