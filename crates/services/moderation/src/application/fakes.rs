@@ -277,8 +277,42 @@ impl AppealRepository for InMemoryAppealRepository {
         Ok(())
     }
 
+    async fn file(&self, appeal: &Appeal) -> Result<Appeal, ModerationError> {
+        if let Some(existing) = self.find_for(&appeal.decision_id(), &appeal.actor_id()).await? {
+            return Ok(existing);
+        }
+        self.save(appeal).await?;
+        Ok(self.appeals.lock().unwrap()[&appeal.id()].clone())
+    }
+
     async fn find_by_id(&self, id: &AppealId) -> Result<Option<Appeal>, ModerationError> {
         Ok(self.appeals.lock().unwrap().get(id).cloned())
+    }
+
+    async fn find_for(&self, decision: &DecisionId, appellant: &ActorId) -> Result<Option<Appeal>, ModerationError> {
+        Ok(self
+            .appeals
+            .lock()
+            .unwrap()
+            .values()
+            .find(|a| a.decision_id() == *decision && a.actor_id() == *appellant)
+            .cloned())
+    }
+
+    async fn list_for_appellant(
+        &self,
+        appellant: &ActorId,
+        after: Option<crate::application::port::AppealCursor>,
+        limit: usize,
+    ) -> Result<Vec<Appeal>, ModerationError> {
+        let mut mine: Vec<Appeal> =
+            self.appeals.lock().unwrap().values().filter(|a| a.actor_id() == *appellant).cloned().collect();
+        mine.sort_by_key(|a| std::cmp::Reverse((a.filed_at(), a.id().as_uuid())));
+        Ok(mine
+            .into_iter()
+            .filter(|a| after.is_none_or(|c| (a.filed_at(), a.id().as_uuid()) < (c.filed_at, c.id.as_uuid())))
+            .take(limit)
+            .collect())
     }
 }
 
@@ -651,7 +685,7 @@ impl Fixture {
     }
 
     pub fn statement_of_reasons_handler(&self) -> super::query::GetStatementOfReasonsHandler {
-        super::query::GetStatementOfReasonsHandler::new(Arc::clone(&self.decisions) as _)
+        super::query::GetStatementOfReasonsHandler::new(Arc::clone(&self.decisions) as _, Arc::clone(&self.appeals) as _)
     }
 
     pub fn submit_report_handler(&self) -> super::command::SubmitReportHandler {

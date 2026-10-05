@@ -1,10 +1,19 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::event::{AppealResolved, DomainEvent};
 use crate::domain::value_object::{ActorId, AppealId, AppealStatus, DecisionId};
 use crate::error::ModerationError;
+
+/// How long after a decision it may be appealed: DSA Art. 20(1) requires at
+/// least six months. Past it, `FileAppeal` answers `AppealWindowClosed`.
+pub const APPEAL_WINDOW: Duration = Duration::days(183);
+
+/// When a decision taken at `decided_at` stops being appealable.
+pub fn appealable_until(decided_at: DateTime<Utc>) -> DateTime<Utc> {
+    decided_at + APPEAL_WINDOW
+}
 
 /// The **Appeal** aggregate — a challenge to a [`Decision`].
 ///
@@ -24,6 +33,9 @@ pub struct Appeal {
     status: AppealStatus,
     filed_at: DateTime<Utc>,
     resolved_at: Option<DateTime<Utc>>,
+    /// The reviewer's reasons once resolved, told to the appellant (DSA Art.
+    /// 20(4)–(5)).
+    outcome: Option<String>,
 
     #[serde(skip)]
     pending_events: Vec<DomainEvent>,
@@ -53,6 +65,7 @@ impl Appeal {
             status: AppealStatus::Filed,
             filed_at,
             resolved_at: None,
+            outcome: None,
             pending_events: Vec::new(),
         })
     }
@@ -67,6 +80,7 @@ impl Appeal {
         status: AppealStatus,
         filed_at: DateTime<Utc>,
         resolved_at: Option<DateTime<Utc>>,
+        outcome: Option<String>,
     ) -> Self {
         Self {
             id,
@@ -76,6 +90,7 @@ impl Appeal {
             status,
             filed_at,
             resolved_at,
+            outcome,
             pending_events: Vec::new(),
         }
     }
@@ -110,6 +125,11 @@ impl Appeal {
         self.resolved_at
     }
 
+    /// The reviewer's reasons, once resolved.
+    pub fn outcome(&self) -> Option<&str> {
+        self.outcome.as_deref()
+    }
+
     // ─── Commands ────────────────────────────────────────────────────────────
 
     /// Moves a filed appeal into review.
@@ -118,13 +138,22 @@ impl Appeal {
     }
 
     /// Resolves the appeal: `overturn = true` overturns the decision, `false`
-    /// upholds it. Emits [`AppealResolved`].
+    /// upholds it, for the reasons in `rationale` (told to the appellant).
+    /// Emits [`AppealResolved`].
     pub fn resolve(
         &mut self,
         overturn: bool,
+        rationale: impl Into<String>,
         now: DateTime<Utc>,
         correlation_id: Uuid,
     ) -> Result<(), ModerationError> {
+        let rationale = rationale.into();
+        if rationale.trim().is_empty() {
+            return Err(ModerationError::DomainViolation {
+                field: "appeal.rationale".into(),
+                message: "a resolved appeal must state its reasons".into(),
+            });
+        }
         let target = if overturn {
             AppealStatus::Overturned
         } else {
@@ -132,6 +161,7 @@ impl Appeal {
         };
         self.transition_to(target)?;
         self.resolved_at = Some(now);
+        self.outcome = Some(rationale);
         self.pending_events.push(DomainEvent::AppealResolved(AppealResolved {
             appeal_id: self.id,
             decision_id: self.decision_id,
@@ -193,8 +223,9 @@ mod tests {
     fn overturn_emits_event() {
         let mut a = appeal();
         a.start_review().unwrap();
-        a.resolve(true, t0(), Uuid::now_v7()).unwrap();
+        a.resolve(true, "the post was satire", t0(), Uuid::now_v7()).unwrap();
         assert_eq!(a.status(), AppealStatus::Overturned);
+        assert_eq!(a.outcome(), Some("the post was satire"));
         let events = a.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type(), "moderation.appeal_resolved");
@@ -203,17 +234,33 @@ mod tests {
     #[test]
     fn uphold_directly_from_filed_is_allowed() {
         let mut a = appeal();
-        a.resolve(false, t0(), Uuid::now_v7()).unwrap();
+        a.resolve(false, "it was harassment", t0(), Uuid::now_v7()).unwrap();
         assert_eq!(a.status(), AppealStatus::Upheld);
     }
 
     #[test]
     fn cannot_resolve_twice() {
         let mut a = appeal();
-        a.resolve(false, t0(), Uuid::now_v7()).unwrap();
+        a.resolve(false, "stands", t0(), Uuid::now_v7()).unwrap();
         assert!(matches!(
-            a.resolve(true, t0(), Uuid::now_v7()).unwrap_err(),
+            a.resolve(true, "changed my mind", t0(), Uuid::now_v7()).unwrap_err(),
             ModerationError::AppealAlreadyResolved
         ));
+    }
+
+    #[test]
+    fn a_resolution_states_its_reasons() {
+        let mut a = appeal();
+        assert!(matches!(
+            a.resolve(false, "  ", t0(), Uuid::now_v7()).unwrap_err(),
+            ModerationError::DomainViolation { .. }
+        ));
+        assert_eq!(a.status(), AppealStatus::Filed, "nothing changed");
+    }
+
+    #[test]
+    fn a_decision_is_appealable_for_six_months_at_least() {
+        assert!(APPEAL_WINDOW >= Duration::days(182));
+        assert_eq!(appealable_until(t0()), t0() + Duration::days(183));
     }
 }

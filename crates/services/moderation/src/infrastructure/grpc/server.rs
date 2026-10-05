@@ -25,6 +25,13 @@ impl ModerationService for ModerationServiceHandler {
         self.list_my_reports(request).await
     }
 
+    async fn list_my_appeals(
+        &self,
+        request: Request<proto::ListMyAppealsRequest>,
+    ) -> Result<Response<proto::ListMyAppealsResponse>, Status> {
+        self.list_my_appeals(request).await
+    }
+
     async fn open_case(
         &self,
         request: Request<proto::OpenCaseRequest>,

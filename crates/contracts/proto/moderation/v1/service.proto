@@ -64,8 +64,14 @@ service ModerationService {
     // ── Appeals ───────────────────────────────────────────────────────────────
 
     // File an appeal against a decision (subject to the appeal window and
-    // appealability of the category).
+    // appealability of the category). One appeal per decision and appellant:
+    // filing again returns the existing appeal. Past the window: MOD-5003.
     rpc FileAppeal(FileAppealRequest) returns (FileAppealResponse);
+
+    // The caller's own appeals, newest first, each with its status and, once
+    // resolved, the reviewer's reasons (DSA Art. 20(4)–(5)). The appellant is
+    // the caller's token.
+    rpc ListMyAppeals(ListMyAppealsRequest) returns (ListMyAppealsResponse);
 
     // Resolve an appeal: uphold the original decision, or overturn it (which
     // records a reversal decision and reverses the enforcement).

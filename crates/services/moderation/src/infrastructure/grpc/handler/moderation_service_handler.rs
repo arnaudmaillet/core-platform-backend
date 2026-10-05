@@ -16,7 +16,8 @@ use crate::application::command::{
 use crate::application::port::ContentHash;
 use crate::application::query::{
     GetEnforcementStateHandler, GetEnforcementStateQuery, GetStatementOfReasonsHandler,
-    GetStatementOfReasonsQuery, ListMyReportsHandler, ListMyReportsQuery, ListQueueHandler,
+    GetStatementOfReasonsQuery, ListMyAppealsHandler, ListMyAppealsQuery, ListMyReportsHandler,
+    ListMyReportsQuery, ListQueueHandler,
     ListQueueQuery, MyReport, StatementOfReasons,
 };
 use crate::domain::aggregate::{Appeal, Case, Decision, EnforcementAction};
@@ -46,6 +47,7 @@ pub struct ModerationServiceHandler {
     enforcement_state: Arc<GetEnforcementStateHandler>,
     submit_report: Arc<SubmitReportHandler>,
     list_my_reports: Arc<ListMyReportsHandler>,
+    list_my_appeals: Arc<ListMyAppealsHandler>,
 }
 
 impl ModerationServiceHandler {
@@ -62,6 +64,7 @@ impl ModerationServiceHandler {
         enforcement_state: Arc<GetEnforcementStateHandler>,
         submit_report: Arc<SubmitReportHandler>,
         list_my_reports: Arc<ListMyReportsHandler>,
+        list_my_appeals: Arc<ListMyAppealsHandler>,
     ) -> Self {
         Self {
             screen,
@@ -75,6 +78,7 @@ impl ModerationServiceHandler {
             enforcement_state,
             submit_report,
             list_my_reports,
+            list_my_appeals,
         }
     }
 
@@ -248,6 +252,26 @@ impl ModerationServiceHandler {
         Ok(Response::new(proto::FileAppealResponse { appeal: Some(appeal_view(&appeal)) }))
     }
 
+    /// The caller's own appeals (edge, members): the appellant is the token.
+    pub async fn list_my_appeals(
+        &self,
+        request: Request<proto::ListMyAppealsRequest>,
+    ) -> Result<Response<proto::ListMyAppealsResponse>, Status> {
+        let principal = edge::principal(&request).ok_or_else(|| Status::unauthenticated("an account is required"))?;
+        let appellant = ActorId::try_from(principal.account_id()).map_err(status)?;
+        let req = request.into_inner();
+        let query = ListMyAppealsQuery {
+            appellant,
+            page_token: (!req.page_token.is_empty()).then_some(req.page_token),
+            page_size: usize::try_from(req.page_size).unwrap_or(0),
+        };
+        let page = self.list_my_appeals.handle(Self::envelope(query)).await.map_err(status)?;
+        Ok(Response::new(proto::ListMyAppealsResponse {
+            appeals: page.appeals.iter().map(appeal_view).collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+        }))
+    }
+
     pub async fn resolve_appeal(
         &self,
         request: Request<proto::ResolveAppealRequest>,
@@ -274,8 +298,11 @@ impl ModerationServiceHandler {
         &self,
         request: Request<proto::GetStatementOfReasonsRequest>,
     ) -> Result<Response<proto::GetStatementOfReasonsResponse>, Status> {
+        // The reader's own appeal of the decision comes with it (edge only).
+        let reader = edge::principal(&request).and_then(|p| ActorId::try_from(p.account_id()).ok());
         let query = GetStatementOfReasonsQuery {
             decision_id: DecisionId::try_from(request.get_ref().decision_id.as_str()).map_err(status)?,
+            reader,
         };
         let sor = self.statement_of_reasons.handle(Self::envelope(query)).await.map_err(status)?;
         // On the edge only the sanctioned account reads its statement (DSA Art.
@@ -433,6 +460,7 @@ fn appeal_view(a: &Appeal) -> proto::AppealView {
         statement: a.statement().to_owned(),
         filed_at: Some(to_ts(a.filed_at())),
         resolved_at: a.resolved_at().map(to_ts),
+        outcome: a.outcome().unwrap_or_default().to_owned(),
     }
 }
 
@@ -448,6 +476,8 @@ fn statement_to_proto(s: &StatementOfReasons) -> proto::StatementOfReasons {
         automated: s.automated,
         territorial_eu: false,
         decided_at: Some(to_ts(s.decided_at)),
+        appealable_until: s.appealable_until.map(to_ts),
+        appeal: s.appeal.as_ref().map(appeal_view),
     }
 }
 

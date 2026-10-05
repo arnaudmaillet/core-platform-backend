@@ -76,12 +76,38 @@ pub trait PenaltyRepository: Send + Sync + 'static {
     async fn save(&self, ledger: &PenaltyLedger) -> Result<(), ModerationError>;
 }
 
-/// Persistence for the [`Appeal`] aggregate.
+/// A position in an appellant's newest-first appeal list: the last appeal of
+/// the previous page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppealCursor {
+    pub filed_at: DateTime<Utc>,
+    pub id: AppealId,
+}
+
+/// Persistence for the [`Appeal`] aggregate. One appeal per (decision,
+/// appellant).
 #[async_trait]
 pub trait AppealRepository: Send + Sync + 'static {
+    /// Upserts an appeal's state (its resolution).
     async fn save(&self, appeal: &Appeal) -> Result<(), ModerationError>;
 
+    /// Files a new appeal unless the appellant already appealed that decision;
+    /// returns the stored one either way (race-safe: concurrent files of the
+    /// same appeal store one).
+    async fn file(&self, appeal: &Appeal) -> Result<Appeal, ModerationError>;
+
     async fn find_by_id(&self, id: &AppealId) -> Result<Option<Appeal>, ModerationError>;
+
+    /// The appellant's appeal of a decision, if any.
+    async fn find_for(&self, decision: &DecisionId, appellant: &ActorId) -> Result<Option<Appeal>, ModerationError>;
+
+    /// The appellant's appeals, newest first, after `after`.
+    async fn list_for_appellant(
+        &self,
+        appellant: &ActorId,
+        after: Option<AppealCursor>,
+        limit: usize,
+    ) -> Result<Vec<Appeal>, ModerationError>;
 }
 
 /// A position in a reporter's newest-first report list: the last report of the
