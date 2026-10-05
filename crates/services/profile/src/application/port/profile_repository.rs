@@ -55,8 +55,9 @@ pub trait ProfileRepository: Send + Sync + 'static {
     ) -> Result<(Vec<ProfileSummary>, Option<String>), ProfileError>;
 
     /// Attempts to atomically claim `handle` via ScyllaDB LWT: a free handle, or
-    /// one released more than [`HANDLE_RESERVATION_DAYS`] ago (its tombstone is
-    /// taken over). Returns `false` if it is held or still reserved.
+    /// one released more than [`HANDLE_RESERVATION_DAYS`] ago and not held (its
+    /// tombstone is taken over). Returns `false` if it is taken, held or still
+    /// reserved.
     async fn claim_handle(
         &self,
         handle: &Handle,
@@ -64,8 +65,9 @@ pub trait ProfileRepository: Send + Sync + 'static {
         account_id: AccountId,
     ) -> Result<bool, ProfileError>;
 
-    /// Marks a handle as tombstoned (30-day reservation after release).
-    async fn tombstone_handle(&self, handle: &Handle) -> Result<(), ProfileError>;
+    /// Marks a handle as tombstoned (30-day reservation after release). A
+    /// `held` handle — released by a verified profile — is never claimable again.
+    async fn tombstone_handle(&self, handle: &Handle, held: bool) -> Result<(), ProfileError>;
 
     /// Undoes [`claim_handle`](Self::claim_handle) when what followed it failed:
     /// drops the claim only if `profile_id` still holds it (LWT).

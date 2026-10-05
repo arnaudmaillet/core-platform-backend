@@ -125,10 +125,11 @@ impl ScyllaProfileRepository {
     /// The LWT only fires if the row is still that profile's live claim and is
     /// older than [`STALE_CLAIM_GRACE_SECS`] (never a rename in flight). Best
     /// effort: a failure is logged and the next read retries.
-    async fn heal_stale_claim(&self, handle: &Handle, profile_id: ProfileId) {
+    /// A verified profile's old handle is held (as on a rename that completed).
+    async fn heal_stale_claim(&self, handle: &Handle, profile_id: ProfileId, verified: bool) {
         let cutoff = Self::dt_ms(Utc::now() - chrono::Duration::seconds(STALE_CLAIM_GRACE_SECS));
         let stmt = self.strict_stmt(
-            "UPDATE profile.profile_handles SET tombstoned_at = ? \
+            "UPDATE profile.profile_handles SET tombstoned_at = ?, held = ? \
              WHERE handle = ? IF profile_id = ? AND tombstoned_at = null AND created_at < ?",
         );
         let healed = self
@@ -136,7 +137,13 @@ impl ScyllaProfileRepository {
             .session
             .execute_unpaged(
                 stmt,
-                (Self::dt_ms(Utc::now()), handle.as_str().to_owned(), profile_id.as_uuid(), cutoff),
+                (
+                    Self::dt_ms(Utc::now()),
+                    verified.then_some(true),
+                    handle.as_str().to_owned(),
+                    profile_id.as_uuid(),
+                    cutoff,
+                ),
             )
             .await
             .map_err(scylla_err)
@@ -383,7 +390,7 @@ impl ProfileRepository for ScyllaProfileRepository {
 
         match self.find_by_id(&profile_id).await? {
             Some(profile) if profile.handle() != handle => {
-                self.heal_stale_claim(handle, profile_id).await;
+                self.heal_stale_claim(handle, profile_id, profile.verified()).await;
                 Ok(None)
             }
             found => Ok(found),
@@ -516,7 +523,7 @@ impl ProfileRepository for ScyllaProfileRepository {
         let stmt = self.strict_stmt(
             "UPDATE profile.profile_handles \
              SET profile_id = ?, account_id = ?, created_at = ?, tombstoned_at = null \
-             WHERE handle = ? IF tombstoned_at < ?",
+             WHERE handle = ? IF tombstoned_at < ? AND held = null",
         );
         let result = self.client.session
             .execute_unpaged(
@@ -538,23 +545,30 @@ impl ProfileRepository for ScyllaProfileRepository {
         Ok(())
     }
 
-    async fn tombstone_handle(&self, handle: &Handle) -> Result<(), ProfileError> {
+    async fn tombstone_handle(&self, handle: &Handle, held: bool) -> Result<(), ProfileError> {
         let now = Self::dt_ms(Utc::now());
-        let stmt = self.strict_stmt(
-            "UPDATE profile.profile_handles SET tombstoned_at = ? WHERE handle = ?",
-        );
-        self.client.session
-            .execute_unpaged(stmt, (now, handle.as_str().to_owned()))
-            .await.map_err(scylla_err)?;
+        let (cql, held) = if held {
+            ("UPDATE profile.profile_handles SET tombstoned_at = ?, held = ? WHERE handle = ?", Some(true))
+        } else {
+            ("UPDATE profile.profile_handles SET tombstoned_at = ? WHERE handle = ?", None)
+        };
+        let stmt = self.strict_stmt(cql);
+        let session = &self.client.session;
+        match held {
+            Some(held) => session.execute_unpaged(stmt, (now, held, handle.as_str().to_owned())).await,
+            None => session.execute_unpaged(stmt, (now, handle.as_str().to_owned())).await,
+        }
+        .map_err(scylla_err)?;
         Ok(())
     }
 
+
     async fn handle_is_available(&self, handle: &Handle) -> Result<bool, ProfileError> {
         #[derive(DeserializeRow)]
-        struct TombRow { profile_id: Uuid, tombstoned_at: Option<CqlTimestamp> }
+        struct TombRow { profile_id: Uuid, tombstoned_at: Option<CqlTimestamp>, held: Option<bool> }
 
         let stmt = self.fast_stmt(
-            "SELECT profile_id, tombstoned_at FROM profile.profile_handles WHERE handle = ?",
+            "SELECT profile_id, tombstoned_at, held FROM profile.profile_handles WHERE handle = ?",
         );
         let result = self.client.session
             .execute_unpaged(stmt, (handle.as_str().to_owned(),))
@@ -566,14 +580,16 @@ impl ProfileRepository for ScyllaProfileRepository {
 
         match row {
             None => Ok(true),
-            Some(TombRow { profile_id, tombstoned_at: None }) => {
+            // Released by a verified profile: held for good.
+            Some(TombRow { held: Some(true), .. }) => Ok(false),
+            Some(TombRow { profile_id, tombstoned_at: None, .. }) => {
                 // A claim left behind by an interrupted rename is healed, and the
                 // handle then enters its reservation (not available yet).
                 let profile_id = ProfileId::from_uuid(profile_id);
                 if let Some(profile) = self.find_by_id(&profile_id).await?
                     && profile.handle() != handle
                 {
-                    self.heal_stale_claim(handle, profile_id).await;
+                    self.heal_stale_claim(handle, profile_id, profile.verified()).await;
                 }
                 Ok(false)
             }

@@ -80,7 +80,7 @@ impl CommandHandler<ChangeHandleCommand> for ChangeHandleHandler {
             return Err(e);
         }
         // The profile now carries the new handle: release the old one.
-        self.repo.tombstone_handle(&old_handle).await?;
+        self.repo.tombstone_handle(&old_handle, profile.verified()).await?;
 
         for event in profile.drain_events() {
             self.publisher.publish(&event).await?;
