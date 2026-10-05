@@ -138,6 +138,14 @@ impl SocialGraphService for GraphServer {
             req.candidate_ids.into_iter().filter(|c| restrictions.contains(&(req.owner_id.clone(), c.clone()))).collect();
         Ok(Response::new(social_graph_api::ListRestrictedAmongResponse { restricted_ids }))
     }
+
+    /// Suggestions (#661) are not comment's concern: none.
+    async fn suggest_profiles(
+        &self,
+        _request: Request<social_graph_api::SuggestProfilesRequest>,
+    ) -> Result<Response<social_graph_api::SuggestProfilesResponse>, Status> {
+        Ok(Response::new(social_graph_api::SuggestProfilesResponse::default()))
+    }
     async fn follow(&self, _: Request<social_graph_api::FollowRequest>) -> Result<Response<social_graph_api::CommandResponse>, Status> {
         Err(Status::unimplemented("Follow"))
     }
