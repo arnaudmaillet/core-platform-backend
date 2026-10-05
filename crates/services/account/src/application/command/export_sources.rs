@@ -4,7 +4,8 @@
 //! direct (one-to-one) conversation is exported in full (it is between the
 //! two of them); in a group or channel, only the holder's own messages — the
 //! others' are placeholders (what they wrote is another member's data). Being
-//! direct is the conversation's kind, never its current roster size.
+//! direct is the conversation's kind, never its current roster size. A group
+//! the holder left (#656) is in too: its own messages up to the departure.
 
 use std::sync::Arc;
 
@@ -40,15 +41,21 @@ impl ExportSources for PeerExportSources {
             files.push(ExportFile::json(format!("{dir}/reactions.json"), &json!(self.peers.reactions(&profile_id).await?)));
             files.push(ExportFile::json(format!("{dir}/social.json"), &self.peers.social(&profile_id).await?));
             for conversation in self.peers.conversations(&profile_id).await? {
-                let members = self.peers.members(&conversation.conversation_id, &profile_id).await?;
-                let messages = self.peers.messages(&conversation.conversation_id, &profile_id).await?;
+                // A left conversation's roster is no longer the holder's to read.
+                let members = if conversation.left {
+                    None
+                } else {
+                    Some(self.peers.members(&conversation.conversation_id, &profile_id).await?.len())
+                };
+                let messages = self.peers.messages(&conversation, &profile_id).await?;
                 files.push(ExportFile::json(
                     format!("{dir}/conversations/{}.json", conversation.conversation_id),
                     &json!({
                         "conversation_id": conversation.conversation_id,
                         "membership": conversation.membership,
                         "direct": conversation.direct,
-                        "members": members.len(),
+                        "left": conversation.left,
+                        "members": members,
                         "messages": shown(messages, &profile_id, conversation.direct),
                     }),
                 ));
@@ -106,21 +113,27 @@ mod tests {
             Ok(json!({ "following": [], "followers": [], "blocks": [] }))
         }
         async fn conversations(&self, _: &str) -> Result<Vec<ConversationExport>, AccountError> {
-            Ok([("dm", true), ("group", false), ("shrunk", false), ("channel", false)]
+            Ok([("dm", true), ("group", false), ("shrunk", false), ("channel", false), ("left", false)]
                 .map(|(id, direct)| ConversationExport {
                     conversation_id: id.into(),
                     membership: json!({ "role": "MEMBER" }),
                     direct,
+                    left: id == "left",
                 })
                 .to_vec())
         }
         async fn members(&self, conversation: &str, _: &str) -> Result<Vec<String>, AccountError> {
+            assert_ne!(conversation, "left", "a left conversation's roster is never read");
             Ok(match conversation {
                 "dm" | "shrunk" | "channel" => vec!["me".into(), "friend".into()],
                 _ => vec!["me".into(), "a".into(), "b".into()],
             })
         }
-        async fn messages(&self, _: &str, _: &str) -> Result<Vec<MessageExport>, AccountError> {
+        async fn messages(&self, conversation: &ConversationExport, _: &str) -> Result<Vec<MessageExport>, AccountError> {
+            if conversation.left {
+                // As chat's GetFormerMemberHistory gives it: others reduced.
+                return Ok(vec![message("me", 1, "before I left"), message("", 2, "")]);
+            }
             Ok(vec![message("me", 1, "hi"), message("friend", 2, "their secret"), message("gone", 3, "departed")])
         }
         async fn media(&self, _: &AccountId, ttl: Duration) -> Result<Vec<serde_json::Value>, AccountError> {
@@ -159,5 +172,13 @@ mod tests {
             let text = conversation.to_string();
             assert!(!text.contains("their secret") && !text.contains("departed"), "{shielded}: others' words never leave");
         }
+
+        // A group the holder left: its own messages, others' as placeholders,
+        // no roster read.
+        let left = file(&files, "profiles/me/conversations/left.json");
+        assert_eq!(left["left"], true);
+        assert!(left["members"].is_null());
+        assert_eq!(left["messages"][0]["body"], "before I left");
+        assert_eq!(left["messages"][1], json!({ "from": "another member", "created_at_ms": 2 }));
     }
 }
