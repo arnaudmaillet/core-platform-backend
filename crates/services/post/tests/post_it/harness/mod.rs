@@ -227,7 +227,17 @@ impl TestHarness {
         self.query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
-                GetPostQuery { post_id: post_id.to_owned(), viewer, mature },
+                GetPostQuery { post_id: post_id.to_owned(), viewer, mature, as_author: None },
+            ))
+            .await
+    }
+
+    /// Reads a single post as `viewer`, on `as_author`'s behalf (the export).
+    pub async fn get_on_behalf(&self, post_id: &str, viewer: Viewer, as_author: &str) -> Result<Post, CqrsError> {
+        self.query_bus
+            .dispatch(Envelope::new(
+                Uuid::now_v7(),
+                GetPostQuery { post_id: post_id.to_owned(), viewer, mature: true, as_author: Some(as_author.to_owned()) },
             ))
             .await
     }

@@ -166,7 +166,10 @@ The setting comes from profile's `ProfileLocationSettingsChanged`, projected int
 the read rather than show the point. Its **audience** (followers / mutuals, #657) shows the location
 only to a reader who follows / is mutual with the author — told by the same `CheckAccess` call that
 decides the post's visibility (`follows` / `mutual`). Anyone else, an anonymous reader and the mesh
-(which reads for no one in particular) get the post without its location.
+(which reads for no one in particular) get the post without its location. The GDPR export reads
+the holder's own posts over the mesh with `GetPostRequest.as_author_id` set to the holder: their own
+point, whatever their sharing — honoured only from the mesh and only for the post's author (an edge
+caller's field is dropped before the query).
 
 ### Error contract (`PST-xxxx`)
 

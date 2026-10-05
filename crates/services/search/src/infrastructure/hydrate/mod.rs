@@ -59,6 +59,7 @@ impl GrpcSourceHydrator {
         let view = match client
             .get_post(GetPostRequest {
                 post_id: content_ref.id.clone(),
+                ..Default::default()
             })
             .await
         {
@@ -120,7 +121,7 @@ impl GrpcSourceHydrator {
 #[async_trait]
 impl SourceHydrator for GrpcSourceHydrator {
     async fn reinstated_post(&self, post_id: &str) -> Result<SourceEvent, SearchError> {
-        let view = match self.post.clone().get_post(GetPostRequest { post_id: post_id.to_owned() }).await {
+        let view = match self.post.clone().get_post(GetPostRequest { post_id: post_id.to_owned(), ..Default::default() }).await {
             Ok(resp) => resp.into_inner(),
             Err(status) if status.code() == Code::NotFound => {
                 return Ok(deleted(EntityKind::Post, post_id.to_owned()));

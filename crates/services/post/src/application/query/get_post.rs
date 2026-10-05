@@ -16,6 +16,10 @@ pub struct GetPostQuery {
     /// The reader is cleared for mature content (not a guest, not 13–17): an
     /// age-gated post is not found otherwise.
     pub mature:  bool,
+    /// The mesh reads on the author's behalf (the GDPR export): their own
+    /// location, as they see it. Honoured for [`Viewer::Internal`] only, and
+    /// only when it names the post's author.
+    pub as_author: Option<String>,
 }
 
 impl Query for GetPostQuery {
@@ -79,7 +83,10 @@ impl<R: PostRepository> QueryHandler<GetPostQuery> for GetPostHandler<R> {
         // included (fail closed: a store error fails the read). Its audience
         // (#657) takes only a reader who follows / is mutual with the author:
         // never the mesh, which reads for no one in particular.
-        if let Some(point) = post.location().filter(|_| !query.viewer.is_author(post.profile_id())) {
+        let on_authors_behalf = query.viewer == Viewer::Internal
+            && query.as_author.as_deref().is_some_and(|a| a == post.profile_id().as_str());
+        let as_author = query.viewer.is_author(post.profile_id()) || on_authors_behalf;
+        if let Some(point) = post.location().filter(|_| !as_author) {
             let sharing = self.locations.get(post.profile_id()).await?;
             let in_audience = match (sharing.audience, access) {
                 (LocationAudience::Everyone, _) => true,

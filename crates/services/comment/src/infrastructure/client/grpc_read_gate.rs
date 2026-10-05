@@ -181,7 +181,7 @@ impl ReadGate for GrpcReadGate {
         let view = match self
             .post
             .clone()
-            .get_post(GetPostRequest { post_id: post_id.as_str() })
+            .get_post(GetPostRequest { post_id: post_id.as_str(), ..Default::default() })
             .await
         {
             Ok(response) => response.into_inner(),
@@ -246,7 +246,7 @@ impl ReadGate for GrpcReadGate {
         let view = match self
             .post
             .clone()
-            .get_post(GetPostRequest { post_id: post_id.as_str() })
+            .get_post(GetPostRequest { post_id: post_id.as_str(), ..Default::default() })
             .await
         {
             Ok(response) => response.into_inner(),
@@ -308,7 +308,7 @@ impl ReadGate for GrpcReadGate {
     }
 
     async fn post_author(&self, post_id: &PostId) -> Result<Option<ProfileId>, CommentError> {
-        match self.post.clone().get_post(GetPostRequest { post_id: post_id.as_str() }).await {
+        match self.post.clone().get_post(GetPostRequest { post_id: post_id.as_str(), ..Default::default() }).await {
             Ok(response) => Ok(ProfileId::try_from(response.into_inner().profile_id.as_str()).ok()),
             Err(status) if status.code() == Code::NotFound => Ok(None),
             Err(status) => Err(unavailable(status)),

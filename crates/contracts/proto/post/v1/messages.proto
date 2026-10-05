@@ -138,6 +138,11 @@ message ListRecentlyDeletedResponse {
 
 message GetPostRequest {
     string post_id = 1;
+    // Mesh only (the GDPR data export, #653): read the post as its author —
+    // the location as the author sees it, whatever their sharing (#657).
+    // Honoured only from a mesh caller and only when it names the post's
+    // author; ignored on the edge.
+    string as_author_id = 2;
 }
 
 message ListPostsByProfileRequest {
