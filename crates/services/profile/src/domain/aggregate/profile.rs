@@ -174,14 +174,14 @@ impl Profile {
                 correlation_id: params.correlation_id,
             }));
         }
-        if params.discovery != DiscoverySettings::default() {
-            profile.pending_events.push(DomainEvent::DiscoverySettingsChanged(DiscoverySettingsChanged {
-                profile_id: id,
-                settings: params.discovery,
-                occurred_at: now,
-                correlation_id: params.correlation_id,
-            }));
-        }
+        // Always: social-graph suggests only a profile announced suggestible
+        // (#661, fails closed), and a teen's says it is not.
+        profile.pending_events.push(DomainEvent::DiscoverySettingsChanged(DiscoverySettingsChanged {
+            profile_id: id,
+            settings: params.discovery,
+            occurred_at: now,
+            correlation_id: params.correlation_id,
+        }));
         if params.visibility == ProfileVisibility::Private {
             profile.pending_events.push(DomainEvent::VisibilityChanged(VisibilityChanged {
                 profile_id: id,

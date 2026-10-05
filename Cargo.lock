@@ -5794,6 +5794,7 @@ dependencies = [
  "cqrs",
  "error",
  "fred",
+ "futures",
  "http",
  "profile",
  "prost-types",

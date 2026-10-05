@@ -3,7 +3,8 @@
 //!
 //! Left out: oneself, the profiles one already follows, a block either way,
 //! private and hidden profiles (one does not follow them, so their content is
-//! not visible), and anyone who turned "appear in suggestions" off. A
+//! not visible), and anyone not announced suggestible — fails closed: a
+//! profile whose settings were never projected is not suggested either. A
 //! profile not known to be 18+ never turns it on (profile locks it), so a
 //! teen is never suggested.
 
@@ -11,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cqrs::{Envelope, Query, QueryHandler};
+use futures::{StreamExt, TryStreamExt};
 
 use crate::application::port::SocialGraphRepository;
 use crate::domain::access::ContentAccess;
@@ -23,6 +25,8 @@ const MAX_SOURCES: i32 = 100;
 const PER_SOURCE: i32 = 200;
 /// Candidates checked (one bulk access check: social-graph's target cap).
 const MAX_CANDIDATES: usize = 100;
+/// Source reads in flight.
+const READS_IN_FLIGHT: usize = 16;
 /// Most suggestions per call.
 pub const MAX_SUGGESTIONS: i32 = 50;
 
@@ -61,12 +65,16 @@ impl QueryHandler<SuggestProfilesQuery> for SuggestProfilesHandler {
         let limit = q.limit.clamp(1, MAX_SUGGESTIONS) as usize;
 
         let (following, _) = self.repo.list_following(&me, MAX_SOURCES, None).await?;
+        let sources: Vec<ProfileId> = following.iter().map(|source| source.profile_id).collect();
+        let repo = &self.repo;
+        let lists: Vec<_> = futures::stream::iter(sources)
+            .map(|source| async move { repo.list_following(&source, PER_SOURCE, None).await.map(|(edges, _)| edges) })
+            .buffer_unordered(READS_IN_FLIGHT)
+            .try_collect()
+            .await?;
         let mut counts: HashMap<ProfileId, u32> = HashMap::new();
-        for source in &following {
-            let (theirs, _) = self.repo.list_following(&source.profile_id, PER_SOURCE, None).await?;
-            for edge in theirs {
-                *counts.entry(edge.profile_id).or_default() += 1;
-            }
+        for edge in lists.into_iter().flatten() {
+            *counts.entry(edge.profile_id).or_default() += 1;
         }
         counts.remove(&me);
         for followed in &following {
@@ -87,7 +95,7 @@ impl QueryHandler<SuggestProfilesQuery> for SuggestProfilesHandler {
             .filter(|(id, _)| {
                 facts.access(std::slice::from_ref(&me), id) == ContentAccess::Visible
                     && !facts.private.contains(id)
-                    && !facts.unsuggestible.contains(id)
+                    && facts.suggestible.contains(id)
                     && !facts.follows.contains(&(me, *id))
             })
             .take(limit)

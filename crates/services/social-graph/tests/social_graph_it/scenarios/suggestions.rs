@@ -32,6 +32,10 @@ async fn friends_of_friends_ranked_and_filtered() {
     }
     h.follow(&b, &popular).await;
 
+    // Announced suggestible, as profile does at creation (#661, fails closed).
+    for profile in [&popular, &known, &already, &blocked, &private, &hidden, &opted_out] {
+        h.audience(profile, AudienceFact::Suggestible(true)).await;
+    }
     h.block(&blocked, &me).await;
     h.audience(&private, AudienceFact::Private(true)).await;
     h.audience(&hidden, AudienceFact::Hidden(true)).await;
@@ -44,6 +48,11 @@ async fn friends_of_friends_ranked_and_filtered() {
     h.audience(&opted_out, AudienceFact::Suggestible(true)).await;
     let found = suggest(&h, &me).await;
     assert!(found.iter().any(|(id, _)| *id == opted_out));
+
+    // Never announced (a lagging or lost creation event): not suggested.
+    let silent = p();
+    h.follow(&a, &silent).await;
+    assert!(!suggest(&h, &me).await.iter().any(|(id, _)| *id == silent), "fails closed");
 
     // Nobody followed: nothing to suggest.
     assert!(suggest(&h, &p()).await.is_empty());
