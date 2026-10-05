@@ -108,7 +108,7 @@ impl<L: ReactionLedger> ReactionWriteBehindWorker<L> {
                 let post_id    = PostId::try_from(e.post_id.as_str())?;
                 let profile_id = ProfileId::try_from(e.profile_id.as_str())?;
 
-                self.ledger.remove(&post_id, &profile_id).await?;
+                self.ledger.remove(&post_id, &profile_id, e.event_at_ms).await?;
 
                 tracing::debug!(
                     post_id    = %post_id,

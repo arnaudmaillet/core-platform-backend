@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: dacd342be9e83b15cfc2415afbd0d975df5476a0b792fac43b8065c86af0430c
+  source_sha256: a57a02f92d7bfd718193dda0e40bd01513c38cec181be1c5e9745ea5a7613755
   translated_at: 2026-10-05
   status: complete
 ---
@@ -53,7 +53,7 @@ WRITE PATH (hot, <5ms): gRPC ─► Upsert/RemoveReaction, RecordView/Share
                            ─► RedisScoreStore (Lua EVAL / INCR, one round-trip)
                            ─► KafkaProducer(engagement.reactions, key post_id:profile_id)
 
-WRITE-BEHIND (async): ReactionWriteBehindWorker  (consumes engagement.reactions → Scylla post_reactions, idempotent)
+WRITE-BEHIND (async): ReactionWriteBehindWorker  (consumes engagement.reactions → Scylla post_reactions, idempotent ; chaque écriture porte l'heure de son événement : le dernier événement l'emporte, quel que soit l'ordre d'arrivée)
                       CounterFlushWorker (every 5s) (DirtyPostTracker → Redis GETSET 0 → Scylla counters)
                       CommentEventConsumer (consumes comment.created/deleted → Redis INCR/DECR + Scylla counter)
 

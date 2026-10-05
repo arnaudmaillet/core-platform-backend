@@ -52,10 +52,34 @@ async fn a_profiles_reactions_page_by_post_and_follow_the_ledger() {
     assert_eq!(first[1].reacted_at_ms, 3_000);
 
     // Removed from both tables at once.
-    ledger.remove(&posts[0], &me).await.unwrap();
+    ledger.remove(&posts[0], &me, 4_000).await.unwrap();
     let after = ledger.list_by_profile(&me, 10, None).await.unwrap();
     assert_eq!(after.len(), 4);
     assert!(ledger.scan_for_recovery(&posts[0]).await.unwrap().iter().all(|r| r.profile_id != Uuid::parse_str(&me.as_str()).unwrap()));
+}
+
+/// The latest event wins, whatever order its write lands in: a late older
+/// event never overwrites a newer kind, nor revives a removed reaction, and a
+/// reaction made after a removal survives it.
+#[tokio::test]
+async fn the_latest_event_wins_whatever_order_the_writes_land_in() {
+    let (ledger, _) = ledger().await;
+    let me = ProfileId::try_from(Uuid::now_v7().to_string().as_str()).unwrap();
+    let kind_of = |rows: Vec<engagement::application::port::ProfileReaction>, p: &PostId| {
+        rows.into_iter().find(|r| &r.post_id == p).map(|r| r.kind)
+    };
+
+    let p = post();
+    ledger.upsert(&p, &me, ReactionKind::Clap, 1, 2_000).await.unwrap();
+    ledger.upsert(&p, &me, ReactionKind::Heart, 1, 1_000).await.unwrap(); // older, landing late
+    assert_eq!(kind_of(ledger.list_by_profile(&me, 10, None).await.unwrap(), &p), Some(ReactionKind::Clap));
+
+    ledger.remove(&p, &me, 3_000).await.unwrap();
+    ledger.upsert(&p, &me, ReactionKind::Fire, 1, 2_500).await.unwrap(); // before the removal, late
+    assert_eq!(kind_of(ledger.list_by_profile(&me, 10, None).await.unwrap(), &p), None);
+
+    ledger.upsert(&p, &me, ReactionKind::Fire, 1, 4_000).await.unwrap(); // after the removal
+    assert_eq!(kind_of(ledger.list_by_profile(&me, 10, None).await.unwrap(), &p), Some(ReactionKind::Fire));
 }
 
 #[tokio::test]
@@ -63,12 +87,20 @@ async fn reactions_from_before_the_index_are_found_after_the_backfill() {
     let (ledger, client) = ledger().await;
     let me = ProfileId::try_from(Uuid::now_v7().to_string().as_str()).unwrap();
     let p = post();
-    ledger.upsert(&p, &me, ReactionKind::Rocket, 1, 5_000).await.unwrap();
+    // A reaction from before the index: in the post's ledger only (no index
+    // row, and no tombstone either — the backfill writes at the reaction's
+    // own time, which a later removal would rightly outrank).
     client
         .session
         .execute_unpaged(
-            "DELETE FROM engagement.reactions_by_profile WHERE profile_id = ?",
-            (Uuid::parse_str(&me.as_str()).unwrap(),),
+            "INSERT INTO engagement.post_reactions (post_id, profile_id, kind, weight, reacted_at) \
+             VALUES (?, ?, ?, 1, ?) USING TIMESTAMP 5000000",
+            (
+                Uuid::parse_str(&p.as_str()).unwrap(),
+                Uuid::parse_str(&me.as_str()).unwrap(),
+                ReactionKind::Rocket.as_tinyint(),
+                scylla::value::CqlTimestamp(5_000),
+            ),
         )
         .await
         .unwrap();
