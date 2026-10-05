@@ -82,8 +82,10 @@ pub const PRODUCERS: &[(&str, &str)] = &[
 /// Every Kafka subscription in the fleet, paired with its consuming service.
 /// A topic may have several consumers.
 pub const CONSUMERS: &[(&str, &str)] = &[
-    // account lifecycle → compliance plane + profile projection
+    // account lifecycle → compliance plane + profile projection + auth's GDPR
+    // erasure (account_deleted → sessions, identity links, guest records)
     ("account.v1.events", "audit"),
+    ("account.v1.events", "auth"),
     ("account.v1.events", "profile"),
     // profile lifecycle → search index, post author-tier denormalization,
     // social-graph audience projection (access check), geo-discovery authors'

@@ -116,6 +116,12 @@ impl Service for AuthService {
         );
         tokio::spawn(app.guest_retention.clone().run(retention_interval));
 
+        // GDPR erasure: account_deleted → auth deletes what it holds about the
+        // account. Only with a broker (local runs without one skip it).
+        if std::env::var("KAFKA_BROKERS").is_ok_and(|b| !b.trim().is_empty()) {
+            spawn_account_event_consumer(Arc::clone(&app.erasure));
+        }
+
         Ok(Self { app })
     }
 
@@ -135,4 +141,41 @@ impl Service for AuthService {
         routes.add_service(AuthServiceServer::new(self.app.handler));
         Ok(())
     }
+}
+
+/// Backoff before respawning the account-event consumer after its runner returns.
+const CONSUMER_RESPAWN_BACKOFF: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The supervised account-event consumer: rebuilt and restarted after a backoff
+/// whenever the runner returns (stream end, broker or dead-letter failure).
+fn spawn_account_event_consumer(erasure: Arc<crate::application::command::AccountErasure>) {
+    use transport::kafka::config::{ConsumerConfig, ProducerConfig};
+    use transport::kafka::consumer::KafkaConsumerBuilder;
+    use transport::kafka::producer::KafkaProducerBuilder;
+
+    use crate::infrastructure::consumer::{run_account_event_consumer, ACCOUNT_EVENTS_GROUP, ACCOUNT_EVENTS_TOPIC};
+
+    tokio::spawn(async move {
+        loop {
+            let kafka = KafkaClientConfig::from_env();
+            let built = KafkaConsumerBuilder::new(ConsumerConfig::new(kafka.clone(), ACCOUNT_EVENTS_GROUP))
+                .subscribe(ACCOUNT_EVENTS_TOPIC)
+                .build()
+                .map_err(|e| e.to_string())
+                .and_then(|consumer| {
+                    KafkaProducerBuilder::new(ProducerConfig::new(kafka))
+                        .build()
+                        .map(|producer| (consumer, producer))
+                        .map_err(|e| e.to_string())
+                });
+            match built {
+                Ok((consumer, producer)) => {
+                    run_account_event_consumer(consumer, Arc::clone(&erasure), producer).await;
+                    tracing::warn!("account event consumer exited; respawning after backoff");
+                }
+                Err(error) => tracing::error!(%error, "failed to build the account event consumer; retrying"),
+            }
+            tokio::time::sleep(CONSUMER_RESPAWN_BACKOFF).await;
+        }
+    });
 }

@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-0** — every authenticated request depends on tokens this service issues |
 > | **Deployable** | `crates/apps/auth-server` (library crate: `crates/services/auth`) |
 > | **Datastores** | PostgreSQL/CockroachDB (db `auth`) · Redis Cluster (sessions/blacklist) |
-> | **Async** | publishes `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked) · consumes nothing |
+> | **Async** | publishes `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked) · consumes `account.v1.events` (`account_deleted` → GDPR erasure) |
 > | **Upstream callers** | gateway / edge, end-user clients (login & refresh) |
 > | **Downstream deps** | Keycloak (IdP), `account` (gRPC, identity SoR), PostgreSQL, Redis Cluster |
 > | **SLO** | `<TODO: 99.95%>` avail · login p99 `<TODO>` · refresh p99 `<TODO>` |
@@ -134,6 +134,21 @@ is refunded. Once either is spent, SMS codes answer `UNAVAILABLE` `AUT-5016` unt
 (email keeps working) and auth logs an `error` (alert on it). Size it against the SNS monthly
 spend limit (≈ limit / 30 / price per SMS), so SNS's own limit is never what stops SMS for the month.
 
+### Account erasure (GDPR Art. 17)
+
+When `account` deletes an account at the end of its grace period it publishes `account_deleted`;
+auth's consumer (`auth-account-events`, on the shared `run_consumer`: retry, DLQ, manual commit)
+then cuts the account's tokens (a new generation), deletes the account's **IdP user** (Keycloak
+Admin API, `DELETE users/{id}`: its email, username and password hash — for every link to the
+fleet's IdP; Apple / Google and code identities have none) **before** anything local, since the
+link is the only record of the IdP user id (an IdP failure aborts untouched and the event is
+retried; without the admin client configured, such erasures retry until it is), and hard-deletes
+what auth holds about it: its
+sessions and refresh tokens (device, IP), its identity links (for an email or phone code identity
+the subject **is** the address), and the guest it was before signing up with that guest's sessions
+(every shard; index `idx_guest_principals_upgraded`). Idempotent: a replay deletes nothing more.
+Afterwards the identity is free: signing in with it again finds no account and may sign up.
+
 ### Credentials and step-up
 
 The password lives at the IdP only. `ChangePassword` (edge **authenticated**, members) proves the
@@ -217,7 +232,7 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | `account` (gRPC) | resolve account + gate active on `Login` (a self-deactivated account is resumed: `ResumeDeactivatedAccount`, `reactivated = true`) | `Login` fails | **Hard** for new logins |
 | PostgreSQL | session + refresh-token + link ledger | `Refresh`/`Logout` writes fail | **Hard** for refresh/revocation |
 | Redis Cluster | generation map + blacklist (hot path) | revocation checks degrade | **Soft** — generation rebuilds from Postgres; a missed blacklist entry expires with the token |
-| Kafka | `auth.v1.events` emission | events not emitted | **Soft** — best-effort; falls back to the log publisher |
+| Kafka | `auth.v1.events` emission · `account.v1.events` consumption (group `auth-account-events`) | events not emitted · erasures wait (the consumer resumes from its committed offset) | **Soft** — best-effort; falls back to the log publisher |
 
 **Upstream — blast radius if `auth` fails:**
 

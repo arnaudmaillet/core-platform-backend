@@ -4,6 +4,7 @@
 //! The composition root (Phase 5) selects and injects them.
 
 pub mod cache;
+pub mod consumer;
 pub mod directory;
 pub mod event;
 pub mod grpc;

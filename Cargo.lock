@@ -340,6 +340,7 @@ dependencies = [
 name = "auth"
 version = "0.1.0"
 dependencies = [
+ "account",
  "account-api",
  "anyhow",
  "async-trait",

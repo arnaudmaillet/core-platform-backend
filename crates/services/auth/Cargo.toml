@@ -79,6 +79,7 @@ http      = { workspace = true }
 integration-auth = []
 
 [dev-dependencies]
+account      = { workspace = true }
 # `Router::oneshot` in the JWKS endpoint tests.
 tower = { workspace = true }
 # Async runtime for the application-layer handler tests (#[tokio::test]).

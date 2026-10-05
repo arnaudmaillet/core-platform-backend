@@ -624,6 +624,8 @@ impl EventPublisher for RecordingEventPublisher {
 pub struct StubCredentialAdmin {
     set: Mutex<Vec<(IdpSubject, String)>>,
     refuse: Mutex<Option<String>>,
+    deleted: Mutex<Vec<IdpSubject>>,
+    idp_down: std::sync::atomic::AtomicBool,
 }
 
 impl StubCredentialAdmin {
@@ -635,6 +637,16 @@ impl StubCredentialAdmin {
     /// Refuse every new password as the IdP policy would.
     pub fn refuse_with(&self, reason: &str) {
         *self.refuse.lock().unwrap() = Some(reason.to_owned());
+    }
+
+    /// The IdP users deleted so far.
+    pub fn deleted_users(&self) -> Vec<IdpSubject> {
+        self.deleted.lock().unwrap().clone()
+    }
+
+    /// Makes the IdP unreachable (or reachable again).
+    pub fn idp_down(&self, down: bool) {
+        self.idp_down.store(down, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -649,6 +661,14 @@ impl CredentialAdmin for StubCredentialAdmin {
             return Err(AuthError::PasswordRejected { reason });
         }
         self.set.lock().unwrap().push((subject.clone(), new_password.to_owned()));
+        Ok(())
+    }
+
+    async fn delete_user(&self, subject: &IdpSubject) -> Result<(), AuthError> {
+        if self.idp_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AuthError::IdpUnavailable);
+        }
+        self.deleted.lock().unwrap().push(subject.clone());
         Ok(())
     }
 }

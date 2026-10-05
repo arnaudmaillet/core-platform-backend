@@ -171,6 +171,22 @@ impl CredentialAdmin for KeycloakCredentialAdmin {
             s => Err(self.admin_failure(s)),
         }
     }
+
+    async fn delete_user(&self, subject: &IdpSubject) -> Result<(), AuthError> {
+        let token = self.service_token().await?;
+        let response = self
+            .http
+            .delete(self.user_url(subject))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|_| AuthError::IdpUnavailable)?;
+        match response.status() {
+            // Deleted now, or already gone (a replayed erasure).
+            s if s.is_success() || s == StatusCode::NOT_FOUND => Ok(()),
+            s => Err(self.admin_failure(s)),
+        }
+    }
 }
 
 /// [`CredentialAdmin`] when no admin client is configured: changing a password
@@ -184,6 +200,10 @@ impl CredentialAdmin for UnconfiguredCredentialAdmin {
     }
 
     async fn set_password(&self, _subject: &IdpSubject, _new_password: &str) -> Result<(), AuthError> {
+        Err(AuthError::CredentialManagementUnavailable)
+    }
+
+    async fn delete_user(&self, _subject: &IdpSubject) -> Result<(), AuthError> {
         Err(AuthError::CredentialManagementUnavailable)
     }
 }
@@ -206,6 +226,17 @@ mod tests {
     struct Fake {
         grants: Arc<AtomicUsize>,
         last_password: Arc<Mutex<Option<String>>>,
+        deleted: Arc<Mutex<Vec<String>>>,
+    }
+
+    async fn delete(State(fake): State<Fake>, Path(id): Path<String>) -> AxumStatus {
+        let mut deleted = fake.deleted.lock().unwrap();
+        if id == "u-1" && !deleted.contains(&id) {
+            deleted.push(id);
+            AxumStatus::NO_CONTENT
+        } else {
+            AxumStatus::NOT_FOUND
+        }
     }
 
     async fn token(State(fake): State<Fake>) -> Json<serde_json::Value> {
@@ -243,7 +274,7 @@ mod tests {
     async fn serve(fake: Fake) -> String {
         let app = Router::new()
             .route("/realms/r/protocol/openid-connect/token", post(token))
-            .route("/admin/realms/r/users/{id}", get(user))
+            .route("/admin/realms/r/users/{id}", get(user).delete(delete))
             .route("/admin/realms/r/users/{id}/reset-password", put(reset))
             .with_state(fake);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -266,6 +297,17 @@ mod tests {
 
     fn subject(id: &str) -> IdpSubject {
         IdpSubject::new("https://idp/realms/r", id).unwrap()
+    }
+
+    #[tokio::test]
+    async fn deleting_a_user_is_idempotent() {
+        let fake = Fake::default();
+        let admin = admin(&serve(fake.clone()).await);
+        admin.delete_user(&subject("u-1")).await.unwrap();
+        // Already gone (a replayed erasure), and never existed: both done.
+        admin.delete_user(&subject("u-1")).await.unwrap();
+        admin.delete_user(&subject("nobody")).await.unwrap();
+        assert_eq!(*fake.deleted.lock().unwrap(), vec!["u-1".to_owned()]);
     }
 
     #[tokio::test]

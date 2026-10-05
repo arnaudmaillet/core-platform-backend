@@ -18,4 +18,8 @@ pub trait CredentialAdmin: Send + Sync + 'static {
     /// Sets `subject`'s password. [`AuthError::PasswordRejected`] when the IdP's
     /// password policy refuses it.
     async fn set_password(&self, subject: &IdpSubject, new_password: &str) -> Result<(), AuthError>;
+
+    /// Deletes `subject`'s IdP user (GDPR erasure: its email, username and
+    /// password hash). Idempotent: an unknown user is `Ok`.
+    async fn delete_user(&self, subject: &IdpSubject) -> Result<(), AuthError>;
 }
