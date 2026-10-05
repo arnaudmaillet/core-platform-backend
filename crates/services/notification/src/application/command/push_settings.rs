@@ -45,6 +45,9 @@ pub struct RegisterDeviceCommand {
     pub timezone:    Option<String>,
     /// The holder's age (edge token `age`; unknown over the mesh).
     pub age:         HolderAge,
+    /// `device_id` is the device the session is bound to (the edge token's
+    /// `did`): the token then only moves between accounts on that device.
+    pub device_bound: bool,
 }
 
 impl Command for RegisterDeviceCommand {}
@@ -76,6 +79,22 @@ impl CommandHandler<RegisterDeviceCommand> for RegisterDeviceHandler {
             return Err(violation("token", format!("1–{MAX_TOKEN_LEN} characters, no spaces")));
         }
         check_time_zone(cmd.timezone.as_deref())?;
+
+        // A push token belongs to one installation. From a session bound to its
+        // device, the token may move from another account only when it was
+        // registered from this same device (the account changed on the phone),
+        // never from another device: someone else's leaked token cannot be
+        // pulled into this account (they would stop getting their own pushes,
+        // and get this account's).
+        if cmd.device_bound {
+            let taken_elsewhere = self.devices.token_holders(&cmd.token).await?.into_iter().any(|holder| {
+                holder.account_id.as_deref() != Some(cmd.account_id.as_str())
+                    && holder.device_id.as_deref().is_some_and(|d| !d.is_empty() && d != cmd.device_id)
+            });
+            if taken_elsewhere {
+                return Err(NotificationError::PushTokenOnAnotherDevice);
+            }
+        }
 
         let device = Device {
             device_id:     cmd.device_id.clone(),

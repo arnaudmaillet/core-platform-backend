@@ -102,7 +102,11 @@ message StreamNotificationsResponse {
 // account leaves that account's profiles.
 message RegisterDeviceRequest {
     string          profile_id  = 1;
-    // The install's own id (iOS identifierForVendor), ≤ 128 chars.
+    // The install's own id, ≤ 128 chars: the same one the session sent at login
+    // (auth.v1.DeviceContext.device_id, the token's `did`). On the edge a
+    // session bound to a device registers that device only (PERMISSION_DENIED
+    // otherwise), and a token registered from another device for another
+    // account is refused (NTF-2004).
     string          device_id   = 2;
     // The APNs / FCM token, ≤ 512 chars.
     string          token       = 3;

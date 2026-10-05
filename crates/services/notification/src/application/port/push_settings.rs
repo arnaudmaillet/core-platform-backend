@@ -18,6 +18,16 @@ pub trait DeviceRegistry: Send + Sync + 'static {
 
     /// The profile's devices.
     async fn devices(&self, profile: &ProfileId) -> Result<Vec<Device>, NotificationError>;
+
+    /// Who the push `token` is registered for: each (account, device id).
+    async fn token_holders(&self, token: &str) -> Result<Vec<TokenHolder>, NotificationError>;
+}
+
+/// A registration of a push token: the account and the device it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenHolder {
+    pub account_id: Option<String>,
+    pub device_id:  Option<String>,
 }
 
 /// The holders' notification preferences.

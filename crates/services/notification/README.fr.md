@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 5755e6cf29eac546c34a4fc558a1185ee90c60b1cfcb01545dcffc3f53fc28f6
+  source_sha256: fdcb5213930337510ca6e6a755cabb66548e4efb1318b4135ee957d9a5eac4e2
   translated_at: 2026-10-05
   status: complete
 ---
@@ -141,7 +141,12 @@ et liées à `profile_id`.
 - `RegisterDevice(device_id, token, platform, environment, timezone)` — à appeler à chaque lancement. Un
   jeton enregistré pour un autre **compte** quitte les profils de ce compte (un téléphone transmis ne
   reçoit jamais les push de l'ancien compte) ; le nouveau jeton d'un appareil remplace l'ancien. Tables
-  `push_devices` (par profil) et `push_device_tokens` (par jeton).
+  `push_devices` (par profil) et `push_device_tokens` (par jeton). **Lié à l'appareil (#725) :** `device_id`
+  est l'identifiant envoyé par la session à la connexion (`DeviceContext.device_id`, le `did` du jeton) :
+  en périphérie un autre identifiant donne `PERMISSION_DENIED`, et un jeton enregistré depuis **un autre
+  appareil** pour un autre compte est refusé (`NTF-2004`, `ALREADY_EXISTS`) — un jeton ne change de compte
+  que sur son propre téléphone, si bien qu'un jeton divulgué ne peut pas être capté par un autre compte. Une
+  session sans `did` (et le mesh) garde l'ancienne règle.
 - Préférences (`notification_preferences`, un document JSON par profil) : push et e-mail par catégorie
   (j'aime, commentaires, mentions, nouveaux abonnés, demandes d'abonnement, messages, posts des comptes
   suivis, lieux à proximité, portefeuille), une pause (≤ 8 h), des heures calmes lues dans le fuseau IANA du

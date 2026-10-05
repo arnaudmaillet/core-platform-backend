@@ -183,6 +183,14 @@ where
         edge::require_profile(&request, &request.get_ref().profile_id)?;
         let principal = edge::principal(&request);
         let account_id = principal.map(|p| p.account_id().to_owned()).unwrap_or_default();
+        // A session bound to a device registers that device only (its `did`).
+        let session_device = principal.and_then(|p| p.device_id());
+        if let Some(did) = session_device
+            && request.get_ref().device_id != did
+        {
+            return Err(Status::permission_denied("device_id must be this session's device"));
+        }
+        let device_bound = session_device.is_some();
         let age = holder_age(principal);
         let req = request.into_inner();
         let cmd = RegisterDeviceCommand {
@@ -194,6 +202,7 @@ where
             environment: environment_from_proto(req.environment)?,
             timezone:    Some(req.timezone).filter(|z| !z.is_empty()),
             age,
+            device_bound,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))

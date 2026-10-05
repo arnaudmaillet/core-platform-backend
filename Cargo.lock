@@ -3433,6 +3433,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "auth-context",
  "chrono",
  "chrono-tz",
  "cqrs",

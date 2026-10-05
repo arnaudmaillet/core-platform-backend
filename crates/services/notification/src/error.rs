@@ -37,6 +37,11 @@ pub enum NotificationError {
     #[error("invalid page token: '{token}'")]
     InvalidPageToken { token: String },
 
+    /// The push token is registered from another device, for another account:
+    /// a token only moves between accounts on the device it belongs to.
+    #[error("this push token belongs to another device")]
+    PushTokenOnAnotherDevice,
+
     // ── NTF-3xxx: Kafka / event errors ────────────────────────────────────────
     #[error("failed to publish notification event to Kafka: {message}")]
     EventPublishFailed { message: String },
@@ -88,6 +93,7 @@ impl AppError for NotificationError {
             Self::UnknownNotificationKind { .. } => "NTF-2001",
             Self::UnknownSubjectKind { .. }      => "NTF-2002",
             Self::InvalidPageToken { .. }        => "NTF-2003",
+            Self::PushTokenOnAnotherDevice       => "NTF-2004",
 
             Self::EventPublishFailed { .. }   => "NTF-3001",
 
@@ -113,7 +119,8 @@ impl AppError for NotificationError {
             Self::Validation(e) => e.http_status(),
 
             Self::NotificationNotFound { .. } => StatusCode::NOT_FOUND,
-            Self::AlreadyRead { .. }          => StatusCode::CONFLICT,
+            Self::AlreadyRead { .. }
+            | Self::PushTokenOnAnotherDevice => StatusCode::CONFLICT,
 
             Self::SenderBlocked { .. }
             | Self::SelfNotification { .. } => StatusCode::UNPROCESSABLE_ENTITY,
@@ -155,6 +162,8 @@ impl AppError for NotificationError {
             | Self::UnknownSubjectKind { .. }
             | Self::InvalidPageToken { .. }
             | Self::DomainViolation { .. } => Severity::Medium,
+
+            Self::PushTokenOnAnotherDevice => Severity::Medium,
 
             Self::NotificationNotFound { .. }
             | Self::AlreadyRead { .. }
@@ -209,6 +218,9 @@ impl AppError for NotificationError {
 
             Self::InvalidPageToken { .. } =>
                 "The pagination token is invalid or expired.",
+
+            Self::PushTokenOnAnotherDevice =>
+                "This device cannot receive notifications for this account.",
 
             Self::InvalidNotificationId(_) => "The notification ID is not valid.",
             Self::InvalidProfileId(_)      => "The profile ID is not valid.",
