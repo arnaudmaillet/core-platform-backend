@@ -71,7 +71,13 @@ RPC is **off by default** (`AUTH_GUEST_SESSIONS_ENABLED`; the local fleet turns 
 `SignUp` (edge **public**) creates an account from a native **Sign in with Apple / Google**
 id_token. auth verifies the token itself against the provider's JWKS (signature, issuer, audience =
 the app's client ids `AUTH_APPLE_AUDIENCES` / `AUTH_GOOGLE_AUDIENCES`, expiry, nonce — the raw nonce
-or its SHA-256 hex); a provider with no client id is off (`AUT-5009`). The request also carries the
+or its SHA-256 hex); a provider with no client id is off (`AUT-5009`). **The nonce is the
+server's:** the app first calls `StartFederatedSignIn` (edge **public**) for a single-use nonce (32
+random bytes, base64url; Redis `auth:{fnonce:<sha256>}`, 10 min), hands it (Apple: its SHA-256 hex)
+to the provider, and sends it back raw; `SignUp` / `Login` redeem it once the token verified, so a
+stolen id_token cannot be replayed within its lifetime. Until every client does,
+`AUTH_FEDERATED_NONCE_REQUIRED=false` (the default) only logs a nonce the server did not issue; `true`
+refuses it (`AUT-5008`). The request also carries the
 **date of birth** (under the minimum age → `AUT-6005`, nothing created), the **consent** (policy
 version, data processing required, marketing, analytics) and the **home country**. The account is
 created through `account` (`CreateAccount` → `VerifyEmail` when the provider vouches for the
@@ -227,6 +233,7 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | `AUTH_ACCOUNT_RPC_TIMEOUT_MS` · `AUTH_ACCOUNT_CONNECT_TIMEOUT_MS` | Per-request / connect deadlines on the `account` channel (login hot path — fail fast, never hang) | `2000` · `2000` |
 | `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Request / connect deadlines on Keycloak HTTP calls (token exchange) | `5000` · `2000` |
 | `AUTH_GUEST_SESSIONS_ENABLED` | `StartGuestSession` kill switch. **Off by default**: it writes a session per call with no credential, so keep it off wherever the abuse controls (per-IP / per-device limits, App Attest) are not in front of it. Off → `AUT-1005` (`PERMISSION_DENIED`). | `false` |
+| `AUTH_FEDERATED_NONCE_REQUIRED` | An id_token `SignUp` / `Login` must redeem a nonce from `StartFederatedSignIn` (else `AUT-5008`). Off: a client-made nonce is only logged — turn on once every client calls `StartFederatedSignIn`. | `false` |
 | `AUTH_APPLE_AUDIENCES` · `AUTH_GOOGLE_AUDIENCES` | Comma-separated client ids an Apple / Google id_token must be minted for (`aud`: the app's bundle / services ids; Google OAuth client ids). Empty = that provider's sign-in is off (`AUT-5009`). | — |
 | `AUTH_FEDERATED_JWKS_TIMEOUT_MS` | Deadline on fetching a provider's JWKS. | `3000` |
 | `AUTH_VERIFICATION_SENDER` | How one-time codes are sent: `smtp` (Amazon SES), `log` (local runs only — the code is logged), unset = off (`AUT-5012`). | — |

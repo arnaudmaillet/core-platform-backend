@@ -45,6 +45,11 @@ pub struct AuthConfig {
     /// the abuse controls (per-IP / per-device limits, App Attest — B5) are not
     /// in front of it yet. The local fleet turns it on.
     pub guest_sessions_enabled: bool,
+    /// `AUTH_FEDERATED_NONCE_REQUIRED` (default **false**): an id_token SignUp /
+    /// Login must carry a nonce from StartFederatedSignIn (single use). Off, a
+    /// client-generated nonce is only logged — turn it on once every client
+    /// calls StartFederatedSignIn.
+    pub federated_nonce_required: bool,
     /// Native Sign in with Apple / Google: the app's client ids a provider's
     /// id_token must be minted for (`aud`). Empty = that provider is off.
     pub apple_audiences: Vec<String>,
@@ -122,6 +127,8 @@ impl AuthConfig {
             idp_http_timeout: env_ms("AUTH_IDP_HTTP_TIMEOUT_MS", 5_000),
             idp_connect_timeout: env_ms("AUTH_IDP_CONNECT_TIMEOUT_MS", 2_000),
             guest_sessions_enabled: std::env::var("AUTH_GUEST_SESSIONS_ENABLED")
+                .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes")),
+            federated_nonce_required: std::env::var("AUTH_FEDERATED_NONCE_REQUIRED")
                 .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes")),
             apple_audiences: env_list("AUTH_APPLE_AUDIENCES"),
             google_audiences: env_list("AUTH_GOOGLE_AUDIENCES"),

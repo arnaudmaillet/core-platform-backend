@@ -7,6 +7,7 @@
 pub mod account_directory;
 pub mod credential_admin;
 pub mod event_publisher;
+pub mod federated_nonce_store;
 pub mod federated_token_verifier;
 pub mod guest_registry;
 pub mod identity_provider;
@@ -23,6 +24,7 @@ pub use account_directory::{
 };
 pub use credential_admin::CredentialAdmin;
 pub use event_publisher::EventPublisher;
+pub use federated_nonce_store::FederatedNonceStore;
 pub use federated_token_verifier::{FederatedIdentity, FederatedTokenVerifier};
 pub use guest_registry::{GuestRecord, GuestRegistry};
 pub use identity_provider::{AuthnGrant, IdentityProvider, NormalizedClaims};

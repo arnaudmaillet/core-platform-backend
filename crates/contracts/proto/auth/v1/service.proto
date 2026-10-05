@@ -50,6 +50,12 @@ service AuthService {
     // address / number (RESOURCE_EXHAUSTED with `retry-after-secs`).
     rpc StartVerification(StartVerificationRequest) returns (StartVerificationResponse);
 
+    // A single-use nonce for a native Sign in with Apple / Google (edge:
+    // public). The app passes it (Apple: its SHA-256 hex) to the provider, then
+    // the raw value in `IdTokenGrant.nonce`: SignUp / Login consume it, so an
+    // id_token cannot be replayed within its lifetime.
+    rpc StartFederatedSignIn(StartFederatedSignInRequest) returns (StartFederatedSignInResponse);
+
     // Start an anonymous GUEST session for an app installation (guest mode:
     // browse before sign-up). No account is created. The edge token carries
     // sub = "guest:<guest_id>", kind = "guest", perms = ["read:public"], no

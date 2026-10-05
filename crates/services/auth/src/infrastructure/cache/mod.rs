@@ -8,8 +8,10 @@
 //!   per-address send budget (see [`redis_verification_store`]).
 
 pub mod keys;
+pub mod redis_nonce_store;
 pub mod redis_session_cache;
 pub mod redis_verification_store;
 
+pub use redis_nonce_store::RedisNonceStore;
 pub use redis_session_cache::RedisSessionCache;
 pub use redis_verification_store::RedisVerificationStore;

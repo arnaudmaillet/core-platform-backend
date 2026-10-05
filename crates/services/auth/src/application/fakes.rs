@@ -930,3 +930,21 @@ impl super::port::CodeSender for RecordingCodeSender {
         Ok(())
     }
 }
+
+/// Server-issued sign-in nonces, in memory.
+#[derive(Default)]
+pub struct InMemoryNonceStore {
+    issued: Mutex<std::collections::HashSet<String>>,
+}
+
+#[async_trait]
+impl super::port::FederatedNonceStore for InMemoryNonceStore {
+    async fn issue(&self, nonce_hash: &str, _ttl: Duration) -> Result<(), AuthError> {
+        self.issued.lock().unwrap().insert(nonce_hash.to_owned());
+        Ok(())
+    }
+
+    async fn consume(&self, nonce_hash: &str) -> Result<bool, AuthError> {
+        Ok(self.issued.lock().unwrap().remove(nonce_hash))
+    }
+}
