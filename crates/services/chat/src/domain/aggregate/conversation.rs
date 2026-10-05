@@ -240,6 +240,20 @@ impl Conversation {
         ChatError::ConversationConcealed { conversation_id: self.id.as_str() }
     }
 
+    /// The error for an Audience-Plane request (subscribe / public stream) on a
+    /// conversation that is **not public**. A member already knows it exists and
+    /// gets the precise [`ChatError::ConversationNotPublic`]; anyone else gets
+    /// [`concealed`](Self::concealed). Callers must pass `is_member` for a
+    /// profile **bound to the caller** — an unverified id would let anyone probe
+    /// someone else's membership.
+    pub fn deny_audience(&self, is_member: bool) -> ChatError {
+        if is_member {
+            ChatError::ConversationNotPublic { conversation_id: self.id.as_str() }
+        } else {
+            self.concealed()
+        }
+    }
+
     /// The error for `profile_id`, which is **not on the roster**, attempting a
     /// member-only operation. A `Public` conversation is discoverable, so the
     /// caller gets the precise [`ChatError::NotAMember`]; a `Private` one is
@@ -417,6 +431,13 @@ mod tests {
         let c = group();
         let err = c.deny_outsider(pid());
         assert!(matches!(err, ChatError::ConversationConcealed { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn audience_denial_is_precise_only_for_members() {
+        let c = group();
+        assert!(matches!(c.deny_audience(true), ChatError::ConversationNotPublic { .. }));
+        assert!(matches!(c.deny_audience(false), ChatError::ConversationConcealed { .. }));
     }
 
     #[test]
