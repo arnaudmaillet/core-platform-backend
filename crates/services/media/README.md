@@ -151,6 +151,7 @@ service MediaService {
   // Asset metadata
   rpc GetAsset          (GetAssetRequest)          returns (GetAssetResponse);
   rpc DeleteAsset       (DeleteAssetRequest)       returns (DeleteAssetResponse);
+  rpc ListAssetsByOwner (ListAssetsByOwnerRequest) returns (ListAssetsByOwnerResponse); // mesh only
   // Plane C — delivery resolution (hot read; CDN / signed URLs)
   rpc ResolveDelivery      (ResolveDeliveryRequest)      returns (ResolveDeliveryResponse);
   rpc BatchResolveDelivery (BatchResolveDeliveryRequest) returns (BatchResolveDeliveryResponse);
@@ -158,6 +159,13 @@ service MediaService {
   rpc Reprocess         (ReprocessRequest)         returns (ReprocessResponse);
 }
 ```
+
+**An account's assets (#653).** `ListAssetsByOwner(owner_id, limit, page_token, url_ttl_secs)` is
+**mesh only** (never on the edge): the GDPR data export lists every asset an account owns (not deleted),
+by id (index `(owner_id, id)`, migration 0002), each with a signed download of its **original**, valid
+`url_ttl_secs` (60 s – 7 days, S3's cap; signed against the public endpoint). An asset that is not
+deliverable (processing, failed, quarantined) comes without a URL — a quarantined file is never handed
+out.
 
 > **Wire / contract rule:** **no `media.v1` message carries a `bytes` payload.**
 > Uploads are brokered via pre-signed object-store URLs; delivery is brokered via

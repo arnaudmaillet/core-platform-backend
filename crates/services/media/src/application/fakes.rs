@@ -44,7 +44,7 @@ pub fn t0() -> DateTime<Utc> {
 /// shares one content hash.
 pub const TEST_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
-fn owner() -> OwnerId {
+pub fn owner() -> OwnerId {
     OwnerId::from_uuid(Uuid::from_u128(7))
 }
 
@@ -107,6 +107,26 @@ impl AssetRepository for InMemoryAssetRepository {
             .values()
             .find(|a| a.state() == AssetState::Ready && a.content_hash() == Some(hash))
             .cloned())
+    }
+
+    async fn list_by_owner(
+        &self,
+        owner: &crate::domain::value_object::OwnerId,
+        limit: i64,
+        after: Option<&AssetId>,
+    ) -> Result<Vec<Asset>, MediaError> {
+        let mut mine: Vec<Asset> = self
+            .assets
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|a| a.owner_id() == *owner && a.state() != AssetState::Deleted)
+            .filter(|a| after.is_none_or(|after| a.id().as_uuid() > after.as_uuid()))
+            .cloned()
+            .collect();
+        mine.sort_by_key(|a| a.id().as_uuid());
+        mine.truncate(limit.clamp(1, 500) as usize);
+        Ok(mine)
     }
 }
 
@@ -254,6 +274,15 @@ impl CdnGateway for RecordingCdnGateway {
             url: format!("https://cdn.local/{}", key.as_str()),
             expires_at,
         })
+    }
+
+    async fn signed_download(
+        &self,
+        key: &StorageKey,
+        ttl: Duration,
+        now: DateTime<Utc>,
+    ) -> Result<ResolvedUrl, MediaError> {
+        Ok(ResolvedUrl { url: format!("https://signed.local/{}?ttl={}", key.as_str(), ttl.num_seconds()), expires_at: Some(now + ttl) })
     }
 
     async fn invalidate(&self, keys: &[StorageKey]) -> Result<(), MediaError> {

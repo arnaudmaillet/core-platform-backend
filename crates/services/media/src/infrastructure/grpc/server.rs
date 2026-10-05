@@ -37,6 +37,13 @@ impl MediaService for MediaServiceHandler {
         self.get_asset(request).await
     }
 
+    async fn list_assets_by_owner(
+        &self,
+        request: Request<proto::ListAssetsByOwnerRequest>,
+    ) -> Result<Response<proto::ListAssetsByOwnerResponse>, Status> {
+        self.list_assets_by_owner(request).await
+    }
+
     async fn delete_asset(
         &self,
         request: Request<proto::DeleteAssetRequest>,

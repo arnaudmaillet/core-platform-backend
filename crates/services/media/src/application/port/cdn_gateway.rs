@@ -27,6 +27,16 @@ pub trait CdnGateway: Send + Sync + 'static {
         now: DateTime<Utc>,
     ) -> Result<ResolvedUrl, MediaError>;
 
+    /// A signed download URL for `key` valid `ttl` from `now` — longer-lived
+    /// than delivery's, for a GDPR export's archive (#653; S3 caps it at 7
+    /// days).
+    async fn signed_download(
+        &self,
+        key: &StorageKey,
+        ttl: chrono::Duration,
+        now: DateTime<Utc>,
+    ) -> Result<ResolvedUrl, MediaError>;
+
     /// Invalidates edge caches for these keys — the takedown-only path (delete /
     /// quarantine). Content-addressed immutability means this never fires on edit.
     async fn invalidate(&self, keys: &[StorageKey]) -> Result<(), MediaError>;

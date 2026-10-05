@@ -26,7 +26,7 @@ use crate::application::port::{
     AssetRepository, CdnGateway, DeliveryCache, EventPublisher, ImageProcessor, MalwareScanner,
     MediaProbe, ModerationScreen, ObjectStore, VideoTranscoder,
 };
-use crate::application::query::{GetAssetHandler, ResolveDeliveryHandler};
+use crate::application::query::{GetAssetHandler, ListAssetsByOwnerHandler, ResolveDeliveryHandler};
 use crate::application::MediaPolicy;
 use crate::config::MediaConfig;
 use crate::infrastructure::cache::RedisDeliveryCache;
@@ -102,7 +102,8 @@ impl App {
             Arc::clone(&deps.cache),
             Arc::clone(&deps.cdn),
         ));
-        MediaServiceHandler::new(issue, commit, delete, process, get, resolve)
+        let by_owner = Arc::new(ListAssetsByOwnerHandler::new(Arc::clone(&deps.assets), Arc::clone(&deps.cdn)));
+        MediaServiceHandler::new(issue, commit, delete, process, get, resolve).with_list_by_owner(by_owner)
     }
 
     /// Builds the process + moderation handlers shared between the gRPC handler and

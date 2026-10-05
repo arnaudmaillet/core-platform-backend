@@ -97,6 +97,7 @@ pub struct Harness {
     moderation: ApplyModerationHandler,
     get: GetAssetHandler,
     resolve: ResolveDeliveryHandler,
+    by_owner: media::application::query::ListAssetsByOwnerHandler,
     pub store: Arc<S3Client>,
     pub screen: Arc<ConfigurableScreen>,
     http: reqwest::Client,
@@ -195,9 +196,11 @@ impl Harness {
         let moderation =
             ApplyModerationHandler::new(assets.clone(), object_store, cdn.clone(), cache.clone(), publisher);
         let get = GetAssetHandler::new(assets.clone());
+        let by_owner = media::application::query::ListAssetsByOwnerHandler::new(assets.clone(), cdn.clone());
         let resolve = ResolveDeliveryHandler::new(assets, cache, cdn);
 
         Self {
+            by_owner,
             issue,
             issue_dedup,
             commit,
@@ -275,6 +278,21 @@ impl Harness {
     pub async fn process(&self, asset_id: AssetId) -> Result<ProcessOutcome, MediaError> {
         self.process
             .handle(Envelope::new(Uuid::now_v7(), ProcessAssetCommand { asset_id }), Utc::now())
+            .await
+    }
+
+    /// The harness owner's assets, by id, with downloads valid `ttl` (#653).
+    pub async fn list_by_owner(
+        &self,
+        limit: i64,
+        after: Option<AssetId>,
+        ttl: chrono::Duration,
+    ) -> Result<Vec<media::application::query::OwnedAsset>, MediaError> {
+        self.by_owner
+            .handle_at(
+                media::application::query::ListAssetsByOwnerQuery { owner_id: self.owner, limit, after, url_ttl: ttl },
+                chrono::Utc::now(),
+            )
             .await
     }
 
