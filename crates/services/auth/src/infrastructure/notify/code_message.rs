@@ -46,6 +46,30 @@ pub fn lockout_notice_message(locale: Option<&str>) -> (String, String) {
     }
 }
 
+/// The email telling the holder that the account's email (`email_changed`) or
+/// phone number was just changed (#651), so a takeover is visible to them.
+pub fn contact_changed_notice_message(email_changed: bool, locale: Option<&str>) -> (String, String) {
+    if locale.is_some_and(|l| l.to_ascii_lowercase().starts_with("fr")) {
+        let what = if email_changed { "adresse e-mail" } else { "numéro de téléphone" };
+        (
+            format!("Ton {what} a été modifié"),
+            format!(
+                "Le {what} de ton compte vient d'être modifié.\n\nSi c'était toi, tu n'as rien à faire. Sinon, \
+                 sécurise ton compte tout de suite : change ton mot de passe et contacte-nous depuis l'app.\n"
+            ),
+        )
+    } else {
+        let what = if email_changed { "email address" } else { "phone number" };
+        (
+            format!("Your {what} was changed"),
+            format!(
+                "The {what} on your account was just changed.\n\nIf it was you, there is nothing to do. If \
+                 not, secure your account now: change your password and contact us from the app.\n"
+            ),
+        )
+    }
+}
+
 /// The SMS text for `code` (short: one segment).
 pub fn sms_message(code: &str, minutes: i64, locale: Option<&str>) -> String {
     if locale.is_some_and(|l| l.to_ascii_lowercase().starts_with("fr")) {
@@ -82,4 +106,13 @@ mod tests {
         let (subject, body) = code_message("123456", 10, None);
         assert!(subject.contains("is your code") && body.contains("Your code: 123456"));
     }
+
+    #[test]
+    fn the_contact_changed_notice_names_what_changed_in_the_holders_language() {
+        let (subject, body) = contact_changed_notice_message(true, Some("fr-FR"));
+        assert!(subject.contains("adresse e-mail") && body.contains("sécurise"), "{subject} / {body}");
+        let (subject, _) = contact_changed_notice_message(false, None);
+        assert_eq!(subject, "Your phone number was changed");
+    }
 }
+

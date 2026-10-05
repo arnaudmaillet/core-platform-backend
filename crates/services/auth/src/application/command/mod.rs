@@ -1,3 +1,4 @@
+pub mod change_contact;
 pub mod change_password;
 mod credentials;
 pub mod federated_nonce;
@@ -13,6 +14,7 @@ pub mod start_guest_session;
 pub mod verification;
 pub mod verify_credentials;
 
+pub use change_contact::{ChangeContactCommand, ChangeContactHandler, ChangedContact};
 pub use change_password::{ChangePasswordCommand, ChangePasswordHandler, ChangePasswordOutcome};
 pub use credentials::STEP_UP_WINDOW_SECS;
 pub use federated_nonce::{FederatedNonces, NonceBoundVerifier, StartedFederatedSignIn, FEDERATED_NONCE_TTL_SECS};

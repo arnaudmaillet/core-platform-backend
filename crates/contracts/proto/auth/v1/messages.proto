@@ -332,3 +332,21 @@ message VerifyCredentialsResponse {
     // How long step-up-gated RPCs accept this proof.
     int64   step_up_expires_in  = 3;
 }
+
+// ── Contact change (#651) ─────────────────────────────────────────────────────
+
+message ChangeContactRequest {
+    // The challenge StartVerification opened for the new address, and its code.
+    string  challenge_id = 1;
+    string  code         = 2;
+    // BCP-47; the notice to the old address is written in it.
+    string  locale       = 3;
+}
+
+message ChangeContactResponse {
+    // EMAIL or SMS: which address changed.
+    VerificationChannel channel     = 1;
+    // The address now on the account, normalized.
+    string              destination = 2;
+}
+

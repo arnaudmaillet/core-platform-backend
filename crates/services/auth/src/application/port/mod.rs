@@ -21,7 +21,7 @@ pub mod token_minter;
 pub mod verification;
 
 pub use account_directory::{
-    AccountActivation, AccountDirectory, AccountSnapshot, EmailHolder, NewAccount, SignUpConsent,
+    AccountActivation, AccountDirectory, AccountSnapshot, ContactDetails, EmailHolder, NewAccount, SignUpConsent,
 };
 pub use account_eraser::{AccountEraser, ErasedAccount};
 pub use credential_admin::CredentialAdmin;

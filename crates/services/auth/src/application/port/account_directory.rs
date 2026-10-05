@@ -32,6 +32,13 @@ pub struct AccountSnapshot {
     pub age_bracket: Option<AgeBracket>,
 }
 
+/// An account's addresses, as `account` holds them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContactDetails {
+    pub email: Option<String>,
+    pub phone: Option<String>,
+}
+
 /// The consent given at sign-up.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignUpConsent {
@@ -100,4 +107,18 @@ pub trait AccountDirectory: Send + Sync + 'static {
 
     /// The account holding `phone` (E.164), if any.
     async fn find_by_phone(&self, phone: &str) -> Result<Option<EmailHolder>, AuthError>;
+
+    /// The account's email and phone now (#651: the old address is told of a
+    /// change).
+    async fn contact(&self, account_id: &AccountId) -> Result<ContactDetails, AuthError>;
+
+    /// Replaces the account's email (`Email`) or phone (`Sms`) with
+    /// `destination`, which its holder just proved. Another account's address:
+    /// [`AuthError::EmailAlreadyRegistered`] / [`AuthError::PhoneAlreadyRegistered`].
+    async fn change_contact(
+        &self,
+        account_id: &AccountId,
+        channel: super::VerificationChannel,
+        destination: &str,
+    ) -> Result<(), AuthError>;
 }

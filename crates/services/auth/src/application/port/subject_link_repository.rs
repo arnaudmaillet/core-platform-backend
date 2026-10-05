@@ -19,4 +19,8 @@ pub trait SubjectLinkRepository: Send + Sync + 'static {
 
     /// Every IdP subject linked to an account (how it signs in).
     async fn find_by_account(&self, account_id: &AccountId) -> Result<Vec<SubjectLink>, AuthError>;
+
+    /// Removes the link of `subject` (absent is fine): a passwordless account's
+    /// address changed (#651), so its old address no longer signs it in.
+    async fn delete(&self, subject: &IdpSubject) -> Result<(), AuthError>;
 }

@@ -96,4 +96,15 @@ impl SubjectLinkRepository for PgSubjectLinkRepository {
         }
         Ok(())
     }
+
+    #[instrument(name = "auth.subject_link.delete", skip(self), fields(subject = %subject))]
+    async fn delete(&self, subject: &IdpSubject) -> Result<(), AuthError> {
+        sqlx::query("DELETE FROM subject_links WHERE issuer = $1 AND subject = $2")
+            .bind(subject.issuer())
+            .bind(subject.subject())
+            .execute(self.tx.pool())
+            .await
+            .map_err(storage)?;
+        Ok(())
+    }
 }

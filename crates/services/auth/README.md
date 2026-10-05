@@ -159,6 +159,16 @@ the caller's stays). New passwords: 8–128 characters and not the current one (
 then the realm policy (`AUT-5006`, its rule in the message). Without the admin client configured the
 credential RPCs answer `UNAVAILABLE` (`AUT-5005`).
 
+**Changing one's email or phone (#651).** `ChangeContact(challenge_id, code)` (edge **authenticated**,
+members, behind the step-up below): the holder first sends a code to the new address with
+`StartVerification`, then proves it here. Everything that signs them in follows, in this order — the
+IdP user's email for a password account (Keycloak Admin API; its login name too when that was the
+email; another IdP user's address is `AUT-6006`), the account (`account.ChangeEmail` / `ChangePhone`,
+mesh; another account's address is `AUT-6006` / `AUT-6007`), and the passwordless code link
+(`urn:core-platform:email|phone`, re-keyed in `subject_links`: the new address signs in, the old one no
+longer does). Apple / Google links keep their own email. The email on file before is told (an email
+notice, never an SMS: a phone change tells the email); SMS codes keep their country list and budgets.
+
 **Step-up.** A token minted right after a credential proof — `Login`, or `VerifyCredentials`
 (re-prove the password; an MFA code is refused with `AUT-5007` until enrolment exists) — carries
 `auth_time`; a refreshed one does not. Destructive RPCs elsewhere call

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use transport::grpc::edge;
 use crate::application::command::{
-    ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, IssuedSession, LoginCommand, LoginHandler,
+    ChangeContactCommand, ChangeContactHandler, ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, IssuedSession, LoginCommand, LoginHandler,
     LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutCommand, LogoutHandler,
     RefreshCommand, RefreshHandler, SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome,
     StartGuestSessionCommand, StartGuestSessionHandler, StartVerificationCommand, VerificationCodes,
@@ -44,6 +44,7 @@ pub struct AuthServiceHandler {
     verify_credentials: Arc<VerifyCredentialsHandler>,
     sign_up: Option<Arc<SignUpHandler>>,
     codes: Option<Arc<VerificationCodes>>,
+    change_contact: Option<Arc<ChangeContactHandler>>,
     nonces: Option<Arc<FederatedNonces>>,
     /// Proxies appending to `X-Forwarded-For` in front of the edge
     /// (`GRPC_TRUSTED_PROXY_HOPS`), to find the client's address.
@@ -75,6 +76,7 @@ impl AuthServiceHandler {
             verify_credentials,
             sign_up: None,
             codes: None,
+            change_contact: None,
             nonces: None,
             trusted_proxy_hops: transport::grpc::client_ip::DEFAULT_TRUSTED_PROXY_HOPS,
         }
@@ -89,6 +91,48 @@ impl AuthServiceHandler {
     /// The caller's address as the transport saw it (`None` when unknown).
     fn client_ip<T>(&self, request: &Request<T>) -> Option<String> {
         transport::grpc::client_ip::request_client_ip(request, self.trusted_proxy_hops).map(|ip| ip.to_string())
+    }
+
+    /// Enables ChangeContact (#651).
+    pub fn with_change_contact(mut self, handler: Arc<ChangeContactHandler>) -> Self {
+        self.change_contact = Some(handler);
+        self
+    }
+
+    /// Edge `authenticated` + a recent credential proof (#651): the caller's
+    /// email or phone becomes the address a `StartVerification` code proved.
+    pub async fn change_contact(
+        &self,
+        request: Request<proto::ChangeContactRequest>,
+    ) -> Result<Response<proto::ChangeContactResponse>, Status> {
+        let handler = self
+            .change_contact
+            .as_ref()
+            .ok_or_else(|| Status::unimplemented("changing an email or phone is not enabled"))?;
+        // A takeover vector: only right after the holder proved a credential.
+        edge::require_recent_auth(&request, edge::STEP_UP_MAX_AGE_SECS)?;
+        let (account_id, session_id) = caller(&request)?;
+        let client_ip = self.client_ip(&request);
+        let req = request.into_inner();
+        let cmd = ChangeContactCommand {
+            account_id,
+            session_id,
+            challenge_id: req.challenge_id,
+            code: req.code,
+            client_ip,
+            locale: Some(req.locale).filter(|l| !l.is_empty()),
+        };
+        let changed = handler
+            .handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::ChangeContactResponse {
+            channel: match changed.channel {
+                VerificationChannel::Email => proto::VerificationChannel::Email,
+                VerificationChannel::Sms => proto::VerificationChannel::Sms,
+            } as i32,
+            destination: changed.destination,
+        }))
     }
 
     /// Enables StartVerification (email one-time codes).

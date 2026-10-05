@@ -22,4 +22,10 @@ pub trait CredentialAdmin: Send + Sync + 'static {
     /// Deletes `subject`'s IdP user (GDPR erasure: its email, username and
     /// password hash). Idempotent: an unknown user is `Ok`.
     async fn delete_user(&self, subject: &IdpSubject) -> Result<(), AuthError>;
+
+    /// Sets `subject`'s email (verified: its holder just proved it, #651), and
+    /// its login name when that was the old email, so password sign-in and
+    /// the IdP's own mail follow the new address.
+    /// [`AuthError::EmailAlreadyRegistered`] when another IdP user has it.
+    async fn set_email(&self, subject: &IdpSubject, email: &str) -> Result<(), AuthError>;
 }
