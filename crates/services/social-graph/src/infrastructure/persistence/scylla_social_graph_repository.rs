@@ -376,6 +376,22 @@ impl SocialGraphRepository for ScyllaSocialGraphRepository {
         build_follow_page(rows, limit)
     }
 
+    async fn count_follow_requests(&self, target_id: &ProfileId) -> Result<u64, SocialGraphError> {
+        // One partition (the owner's inbox): pending requests are few.
+        let stmt = self.fast_stmt("SELECT COUNT(*) FROM social_graph.follow_requests WHERE target_id = ?");
+        let (count,): (i64,) = self
+            .client
+            .session
+            .execute_unpaged(stmt, (target_id.as_uuid(),))
+            .await
+            .map_err(scylla_err)?
+            .into_rows_result()
+            .map_err(|e| row_err("count_follow_requests:rows", e))?
+            .single_row::<(i64,)>()
+            .map_err(|e| row_err("count_follow_requests:row", e))?;
+        Ok(count.max(0) as u64)
+    }
+
     // ── persist_follow ────────────────────────────────────────────────────────
 
     async fn persist_follow(

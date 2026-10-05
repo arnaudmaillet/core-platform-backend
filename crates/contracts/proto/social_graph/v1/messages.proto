@@ -158,6 +158,9 @@ message ListFollowRequestsResponse {
     // Requesters, newest first; `followed_at` is when they asked.
     repeated EdgeSummary requests        = 1;
     string               next_page_token = 2;
+    // How many requests are pending in all — on the first page only (no
+    // page_token), so a screen can show the number without reading every page.
+    optional int64       pending_count   = 3;
 }
 
 // The owner of `owner_id` answers `requester_id`'s request.

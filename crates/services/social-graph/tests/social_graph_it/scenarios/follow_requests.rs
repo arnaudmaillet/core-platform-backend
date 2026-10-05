@@ -8,15 +8,16 @@ use uuid::Uuid;
 use social_graph::application::command::{
     ApproveFollowRequestCommand, AudienceFact, BlockProfileCommand, WithdrawFollowRequestCommand,
 };
-use social_graph::application::query::{GetRelationStatusQuery, ListFollowRequestsQuery};
+use social_graph::application::query::{FollowRequestsPage, GetRelationStatusQuery, ListFollowRequestsQuery};
 use social_graph::domain::value_object::{ProfileId, RelationStatus};
 
 use crate::social_graph_it::harness::{self, ContentAccess, TestHarness};
 
 async fn requests(h: &TestHarness, owner: &ProfileId) -> Vec<ProfileId> {
     let query = ListFollowRequestsQuery { owner_id: owner.as_str(), limit: 100, page_token: None };
-    let (edges, _) = h.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.unwrap();
-    edges.into_iter().map(|e| e.profile_id).collect()
+    let page: FollowRequestsPage = h.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.unwrap();
+    assert_eq!(page.pending, Some(page.requests.len() as u64), "the first page counts them all");
+    page.requests.into_iter().map(|e| e.profile_id).collect()
 }
 
 async fn status(h: &TestHarness, actor: &ProfileId, target: &ProfileId) -> RelationStatus {
@@ -90,3 +91,24 @@ async fn a_private_profile_lets_in_only_the_requests_its_owner_approves() {
     assert!(requests(&h, &owner).await.is_empty());
     assert_eq!(h.followers(&owner).await, vec![approved]);
 }
+
+/// The first page counts every pending request (#755: the privacy screen shows
+/// the number); later pages do not count again.
+#[tokio::test]
+async fn the_first_page_tells_how_many_requests_are_pending() {
+    let h = TestHarness::start().await;
+    let owner = harness::random_profile();
+    h.audience(&owner, AudienceFact::Private(true)).await;
+    for _ in 0..3 {
+        h.follow(&harness::random_profile(), &owner).await;
+    }
+    let page = |page_token| ListFollowRequestsQuery { owner_id: owner.as_str(), limit: 2, page_token };
+    let first: FollowRequestsPage = h.query_bus.dispatch(Envelope::new(Uuid::now_v7(), page(None))).await.unwrap();
+    assert_eq!(first.requests.len(), 2);
+    assert_eq!(first.pending, Some(3));
+    let second: FollowRequestsPage =
+        h.query_bus.dispatch(Envelope::new(Uuid::now_v7(), page(first.next_page_token))).await.unwrap();
+    assert_eq!(second.requests.len(), 1);
+    assert_eq!(second.pending, None);
+}
+

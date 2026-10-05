@@ -68,6 +68,9 @@ pub trait SocialGraphRepository: Send + Sync + 'static {
         page_token: Option<&str>,
     ) -> Result<(Vec<FollowEdge>, Option<String>), SocialGraphError>;
 
+    /// How many requests to `target_id` are pending.
+    async fn count_follow_requests(&self, target_id: &ProfileId) -> Result<u64, SocialGraphError>;
+
     /// Writes a follow edge across three tables atomically as an unlogged batch:
     ///   - `following`     INSERT (follower_id, followed_at, followee_id)
     ///   - `followers`     INSERT (followee_id, followed_at, follower_id)

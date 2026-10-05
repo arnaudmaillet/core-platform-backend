@@ -17,7 +17,17 @@ pub struct ListFollowRequestsQuery {
 }
 
 impl Query for ListFollowRequestsQuery {
-    type Response = (Vec<FollowEdge>, Option<String>);
+    type Response = FollowRequestsPage;
+}
+
+/// A page of pending requests.
+#[derive(Debug, Clone)]
+pub struct FollowRequestsPage {
+    pub requests: Vec<FollowEdge>,
+    pub next_page_token: Option<String>,
+    /// How many are pending in all — on the first page only (#755: the
+    /// privacy screen shows the number without reading every page).
+    pub pending: Option<u64>,
 }
 
 pub struct ListFollowRequestsHandler {
@@ -36,10 +46,16 @@ impl QueryHandler<ListFollowRequestsQuery> for ListFollowRequestsHandler {
     async fn handle(
         &self,
         envelope: Envelope<ListFollowRequestsQuery>,
-    ) -> Result<(Vec<FollowEdge>, Option<String>), Self::Error> {
+    ) -> Result<FollowRequestsPage, Self::Error> {
         let q = &envelope.payload;
         let owner_id = ProfileId::try_from(q.owner_id.as_str())?;
         let limit = q.limit.clamp(1, 100) as i32;
-        self.repo.list_follow_requests(&owner_id, limit, q.page_token.as_deref()).await
+        let (requests, next_page_token) =
+            self.repo.list_follow_requests(&owner_id, limit, q.page_token.as_deref()).await?;
+        let pending = match q.page_token {
+            None => Some(self.repo.count_follow_requests(&owner_id).await?),
+            Some(_) => None,
+        };
+        Ok(FollowRequestsPage { requests, next_page_token, pending })
     }
 }
