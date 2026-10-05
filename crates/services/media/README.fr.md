@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: facbd522374315194584b2eda81d4ee3ad22e1c720cb99defd095af8a3a9392a
+  source_sha256: b77a544da343a6b7e0afe946cb7651ff5399010b2dc8694332178a99872977e7
   translated_at: 2026-10-05
   status: complete
 ---
@@ -100,9 +100,15 @@ idempotente : un événement rejoué ne refait que ce qui reste. Des octets iden
 partagent leurs clés, donc **un retrait porte sur le contenu** : tout asset aux mêmes
 octets est mis en quarantaine avec lui (chacun enregistré et annoncé), et une
 annulation les rétablit tous — sauf si l'un d'eux est sous **conservation légale**
-(preuve CSAM), auquel cas rien n'est rétabli. Une suppression efface les copies
-publiques comme en quarantaine, sauf les objets qu'un autre asset aux mêmes octets
-détient encore (la conservation légale bloque toujours une suppression d'abord).
+(preuve CSAM), auquel cas rien n'est rétabli. Chaque asset enregistre les **mesures de
+modération** qui le couvrent ; une annulation ne lève que la sienne, et les octets ne
+reviennent que lorsqu'aucune copie n'est plus couverte par une autre mesure (deux
+décisions sur deux copies : en annuler une laisse le contenu retiré). Un **ré-upload
+d'octets retirés est mis en quarantaine dès son arrivée** (mesures et conservation légale
+reprises), avant qu'aucun rendu ne soit réécrit sur les clés publiques partagées. Une
+suppression efface les copies publiques comme en quarantaine, sauf les objets qu'un
+autre asset aux mêmes octets détient encore (la conservation légale bloque toujours une
+suppression d'abord).
 
 > **Invariants** (et où ils sont appliqués) : aucun message ne porte de charge
 > utile `bytes` (revue proto + règle de contrat `media-api`) ; les transitions

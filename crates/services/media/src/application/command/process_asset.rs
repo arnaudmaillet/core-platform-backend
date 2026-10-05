@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use cqrs::Envelope;
 
 use crate::application::policy::MediaPolicy;
+use crate::application::command::asset_objects;
 use crate::application::port::{
     AssetRepository, DeliveryCache, EventPublisher, ImageProcessor, MalwareScanner, ModerationScreen,
     ScanVerdict,
@@ -86,6 +87,13 @@ impl ProcessAssetHandler {
             asset.mark_failed("malware detected", now)?;
             self.persist_and_publish(&mut asset).await?;
             return Ok(ProcessOutcome::Failed("malware detected".into()));
+        }
+
+        // Bytes that were taken down stay down, whoever uploads them again.
+        if asset_objects::quarantine_if_taken_down(self.assets.as_ref(), &mut asset, now).await? {
+            self.cache.invalidate(&asset.id()).await?;
+            self.persist_and_publish(&mut asset).await?;
+            return Ok(ProcessOutcome::Quarantined);
         }
 
         // 2. Pre-publish moderation screen (fail-closed, hard timeout).
@@ -181,6 +189,39 @@ mod tests {
         assert_eq!(asset.state(), AssetState::Quarantined);
         assert!(!asset.legal_hold(), "a non-CSAM block does not place a legal hold");
         assert_eq!(fx.publisher.event_types(), vec!["media.asset_quarantined"]);
+    }
+
+    #[tokio::test]
+    async fn a_re_upload_of_taken_down_bytes_is_quarantined_on_arrival() {
+        use crate::application::command::{ApplyModerationCommand, ModerationAction};
+        let fx = Fixture::new();
+        let (first, _) = fx.ready_asset(MediaKind::PostImage).await;
+        fx.apply_moderation_handler()
+            .handle(
+                Envelope::new(Uuid::now_v7(), ApplyModerationCommand {
+                    asset_id: first,
+                    action: ModerationAction::Quarantine,
+                    enforcement_id: Some("enf-1".into()),
+                }),
+                t0(),
+            )
+            .await
+            .unwrap();
+        {
+            let mut held = fx.assets.find_by_id(&first).await.unwrap().unwrap();
+            held.place_legal_hold(t0());
+            fx.assets.save(&held).await.unwrap();
+        }
+
+        // The same bytes again (the fake probe hashes every upload alike).
+        let again = fx.uploaded_asset(MediaKind::PostImage).await;
+        let out = fx.process_handler().handle(Envelope::new(Uuid::now_v7(), ProcessAssetCommand { asset_id: again }), t0()).await.unwrap();
+        assert_eq!(out, ProcessOutcome::Quarantined);
+        let asset = fx.assets.find_by_id(&again).await.unwrap().unwrap();
+        assert_eq!(asset.state(), AssetState::Quarantined);
+        assert!(asset.renditions().is_empty(), "nothing written back to the public keys");
+        assert!(asset.legal_hold(), "the evidence hold carries over");
+        assert_eq!(asset.enforcements().iter().collect::<Vec<_>>(), vec!["enf-1"]);
     }
 
     #[tokio::test]

@@ -23,6 +23,10 @@ pub enum ModerationAction {
 pub struct ApplyModerationCommand {
     pub asset_id: AssetId,
     pub action: ModerationAction,
+    /// The moderation enforcement applied or reversed. A reversal lifts only
+    /// its own: copies still covered by another enforcement stay quarantined.
+    /// `None` (an event without one): a reversal restores as before.
+    pub enforcement_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +102,9 @@ impl ApplyModerationHandler {
             ModerationAction::Quarantine => {
                 for asset in &mut group {
                     asset.quarantine(now)?;
+                    if let Some(enforcement) = &cmd.enforcement_id {
+                        asset.cover(enforcement, now);
+                    }
                 }
                 self.persist(&mut group).await?;
                 // The origin stops serving, then the edge drops its cached copies.
@@ -123,6 +130,22 @@ impl ApplyModerationHandler {
                     );
                     return Ok(ApplyModerationOutcome { applied: false, state: Some(group[0].state()) });
                 }
+                // A reversal lifts its own enforcement only: while another one
+                // still covers any copy, the shared bytes stay out.
+                if let Some(enforcement) = &cmd.enforcement_id {
+                    let mut still_covered = false;
+                    for asset in group.iter_mut().filter(|a| a.state() == AssetState::Quarantined) {
+                        still_covered |= asset.uncover(enforcement, now);
+                    }
+                    if still_covered {
+                        self.persist(&mut group).await?;
+                        tracing::info!(
+                            asset.id = %group[0].id(),
+                            "restore deferred: another enforcement still covers these bytes"
+                        );
+                        return Ok(ApplyModerationOutcome { applied: false, state: Some(group[0].state()) });
+                    }
+                }
                 let quarantined: Vec<usize> =
                     (0..group.len()).filter(|&i| group[i].state() == AssetState::Quarantined).collect();
                 for &i in &quarantined {
@@ -146,7 +169,7 @@ mod tests {
     use uuid::Uuid;
 
     fn env(asset_id: AssetId, action: ModerationAction) -> Envelope<ApplyModerationCommand> {
-        Envelope::new(Uuid::now_v7(), ApplyModerationCommand { asset_id, action })
+        Envelope::new(Uuid::now_v7(), ApplyModerationCommand { asset_id, action, enforcement_id: None })
     }
 
     #[tokio::test]
@@ -268,6 +291,40 @@ mod tests {
             assert_eq!(fx.assets.find_by_id(&id).await.unwrap().unwrap().state(), AssetState::Ready);
         }
         assert_eq!(fx.store.keys(), stored);
+    }
+
+    #[tokio::test]
+    async fn a_reversal_lifts_only_its_own_enforcement() {
+        let fx = Fixture::new();
+        let (a, _) = fx.ready_asset(MediaKind::PostImage).await;
+        let (b, _) = fx.ready_asset(MediaKind::PostImage).await;
+        publish_objects(&fx, a).await;
+        let with = |asset_id, action, id: &str| {
+            Envelope::new(Uuid::now_v7(), ApplyModerationCommand { asset_id, action, enforcement_id: Some(id.into()) })
+        };
+        // Two decisions, one per copy (both cover the shared bytes).
+        fx.apply_moderation_handler().handle(with(a, ModerationAction::Quarantine, "enf-x"), t0()).await.unwrap();
+        fx.apply_moderation_handler().handle(with(b, ModerationAction::Quarantine, "enf-y"), t0()).await.unwrap();
+        let quarantined = fx.store.keys();
+
+        // X is overturned: Y still stands, nothing comes back.
+        let out = fx.apply_moderation_handler().handle(with(a, ModerationAction::Restore, "enf-x"), t0()).await.unwrap();
+        assert!(!out.applied);
+        for id in [a, b] {
+            let asset = fx.assets.find_by_id(&id).await.unwrap().unwrap();
+            assert_eq!(asset.state(), AssetState::Quarantined);
+            assert_eq!(asset.enforcements().iter().collect::<Vec<_>>(), vec!["enf-y"]);
+        }
+        assert_eq!(fx.store.keys(), quarantined);
+
+        // Y is overturned too: the content comes back.
+        let out = fx.apply_moderation_handler().handle(with(b, ModerationAction::Restore, "enf-y"), t0()).await.unwrap();
+        assert!(out.applied);
+        for id in [a, b] {
+            let asset = fx.assets.find_by_id(&id).await.unwrap().unwrap();
+            assert_eq!(asset.state(), AssetState::Ready);
+            assert!(asset.enforcements().is_empty());
+        }
     }
 
     #[tokio::test]

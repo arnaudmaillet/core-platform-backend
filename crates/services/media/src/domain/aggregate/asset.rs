@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +94,7 @@ pub struct AssetSnapshot {
     pub renditions: Vec<Rendition>,
     pub legal_hold: bool,
     pub prior_state: Option<AssetState>,
+    pub enforcements: BTreeSet<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -127,6 +129,10 @@ pub struct Asset {
     renditions: Vec<Rendition>,
     legal_hold: bool,
     prior_state: Option<AssetState>,
+    /// The moderation enforcements this asset's quarantine answers to (ids);
+    /// empty for a screen block. A reversal lifts only its own.
+    #[serde(default)]
+    enforcements: BTreeSet<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 
@@ -159,6 +165,7 @@ impl Asset {
             renditions: Vec::new(),
             legal_hold: false,
             prior_state: None,
+            enforcements: BTreeSet::new(),
             created_at: now,
             updated_at: now,
             pending_events: Vec::new(),
@@ -182,6 +189,7 @@ impl Asset {
             renditions: s.renditions,
             legal_hold: s.legal_hold,
             prior_state: s.prior_state,
+            enforcements: s.enforcements,
             created_at: s.created_at,
             updated_at: s.updated_at,
             pending_events: Vec::new(),
@@ -392,6 +400,26 @@ impl Asset {
         Ok(())
     }
 
+    /// Records that moderation enforcement `id` covers this (quarantined) asset.
+    pub fn cover(&mut self, enforcement_id: &str, now: DateTime<Utc>) {
+        if self.enforcements.insert(enforcement_id.to_owned()) {
+            self.updated_at = now;
+        }
+    }
+
+    /// Lifts enforcement `id`; `true` if others still cover the asset.
+    pub fn uncover(&mut self, enforcement_id: &str, now: DateTime<Utc>) -> bool {
+        if self.enforcements.remove(enforcement_id) {
+            self.updated_at = now;
+        }
+        !self.enforcements.is_empty()
+    }
+
+    /// The moderation enforcements this asset's quarantine answers to.
+    pub fn enforcements(&self) -> &BTreeSet<String> {
+        &self.enforcements
+    }
+
     /// Invariant 4: reinstates a quarantined asset to its prior state (defaulting to
     /// `Ready`) and emits [`AssetRestored`].
     pub fn restore(&mut self, now: DateTime<Utc>) -> Result<(), MediaError> {
@@ -402,6 +430,7 @@ impl Asset {
             });
         }
         let target = self.prior_state.take().unwrap_or(AssetState::Ready);
+        self.enforcements.clear();
         self.transition(target, now);
         self.emit(DomainEvent::AssetRestored(AssetRestored {
             asset_id: self.id,
@@ -726,6 +755,7 @@ mod tests {
             renditions: a.renditions().to_vec(),
             legal_hold: a.legal_hold(),
             prior_state: None,
+            enforcements: Default::default(),
             created_at: a.created_at(),
             updated_at: a.updated_at(),
         };

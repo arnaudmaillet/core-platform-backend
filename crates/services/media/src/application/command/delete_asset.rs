@@ -128,7 +128,7 @@ mod tests {
         }
         fx.apply_moderation_handler()
             .handle(
-                Envelope::new(Uuid::now_v7(), ApplyModerationCommand { asset_id, action: ModerationAction::Quarantine }),
+                Envelope::new(Uuid::now_v7(), ApplyModerationCommand { asset_id, action: ModerationAction::Quarantine, enforcement_id: None }),
                 t0(),
             )
             .await
