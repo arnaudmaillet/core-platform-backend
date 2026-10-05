@@ -229,7 +229,7 @@ mod tests {
             guest_refresh_token: None,
             client_ip: None,
         };
-        let issued = w.fx.login_handler().handle(Envelope::new(Uuid::now_v7(), cmd), t0()).await.unwrap();
+        let issued = w.fx.login_handler().handle(Envelope::new(Uuid::now_v7(), cmd), t0()).await.unwrap().issued().unwrap();
         let code_link = IdpSubject::new(EMAIL_CODE_ISSUER, "old@example.com").unwrap();
         w.fx.links.save(&SubjectLink::establish(code_link, issued.account_id, t0(), Uuid::now_v7())).await.unwrap();
         w.fx.directory.with_contact(issued.account_id, ContactDetails { email: Some("old@example.com".into()), phone: None });

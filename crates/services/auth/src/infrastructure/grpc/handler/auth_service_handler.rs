@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use transport::grpc::edge;
 use crate::application::command::{
-    ChangeContactCommand, ChangeContactHandler, ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, GuestAttestation, IssuedSession, LoginCommand, LoginHandler,
+    ChangeContactCommand, ChangeContactHandler, ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, GuestAttestation, CompleteLoginCommand, IssuedSession, LoginCommand, LoginHandler, LoginOutcome,
     LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutCommand, LogoutHandler,
     RefreshCommand, RefreshHandler, SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome,
     StartGuestSessionCommand, StartGuestSessionHandler, StartVerificationCommand, VerificationCodes,
@@ -370,18 +370,37 @@ impl AuthServiceHandler {
             client_ip,
         };
 
-        let issued = self
+        let outcome = self
             .login
             .handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now())
             .await
             .map_err(auth_error_to_status)?;
 
-        Ok(Response::new(proto::LoginResponse {
-            account_id: issued.account_id.as_str(),
-            tokens: Some(token_pair(&issued)),
-            first_link: issued.first_link,
-            reactivated: issued.reactivated,
+        Ok(Response::new(match outcome {
+            LoginOutcome::Issued(issued) => login_response(&issued),
+            LoginOutcome::SecondFactorRequired(challenge) => proto::LoginResponse {
+                account_id: challenge.account_id.as_str(),
+                mfa_required: true,
+                mfa_token: challenge.mfa_token,
+                mfa_expires_in: challenge.expires_in_secs,
+                ..Default::default()
+            },
         }))
+    }
+
+    /// The second step of a sign-in (#649).
+    pub async fn complete_login(
+        &self,
+        request: Request<proto::CompleteLoginRequest>,
+    ) -> Result<Response<proto::LoginResponse>, Status> {
+        let req = request.into_inner();
+        let cmd = CompleteLoginCommand { mfa_token: req.mfa_token, code: req.code };
+        let issued = self
+            .login
+            .complete(Envelope::new(Uuid::now_v7(), cmd), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(login_response(&issued)))
     }
 
     pub async fn refresh(
@@ -578,6 +597,16 @@ fn device_from_proto(device: Option<proto::DeviceContext>, client_ip: Option<Str
     }
 }
 
+fn login_response(issued: &IssuedSession) -> proto::LoginResponse {
+    proto::LoginResponse {
+        account_id: issued.account_id.as_str(),
+        tokens: Some(token_pair(issued)),
+        first_link: issued.first_link,
+        reactivated: issued.reactivated,
+        ..Default::default()
+    }
+}
+
 fn token_pair(issued: &IssuedSession) -> proto::TokenPair {
     proto::TokenPair {
         access_token: issued.access_token.clone(),
@@ -619,7 +648,7 @@ fn to_timestamp(dt: DateTime<Utc>) -> prost_types::Timestamp {
 pub fn auth_error_to_status(err: AuthError) -> Status {
     let msg = err.to_string();
     let retryable = err.is_retryable();
-    if let AuthError::VerificationRateLimited { retry_after_secs } = err {
+    if let AuthError::VerificationRateLimited { retry_after_secs } | AuthError::MfaLocked { retry_after_secs } = err {
         let mut status = Status::resource_exhausted(msg);
         if let Ok(value) = retry_after_secs.to_string().parse() {
             status.metadata_mut().insert("retry-after-secs", value);

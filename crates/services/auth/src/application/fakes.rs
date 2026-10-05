@@ -77,6 +77,9 @@ impl IdentityProvider for StubIdentityProvider {
 
 // ─── AccountDirectory ────────────────────────────────────────────────────────
 
+/// (sealed seed, unused backup-code hashes), as `account` keeps them.
+pub type StoredMfa = (Vec<u8>, Vec<String>);
+
 pub struct StubAccountDirectory {
     subjects: Mutex<HashMap<IdpSubject, AccountId>>,
     snapshots: Mutex<HashMap<AccountId, AccountSnapshot>>,
@@ -94,6 +97,8 @@ pub struct StubAccountDirectory {
     contacts: Mutex<HashMap<AccountId, super::port::ContactDetails>>,
     /// When set, `change_contact` fails as if another account won a race.
     refuse_contact_changes: std::sync::atomic::AtomicBool,
+    /// account → (sealed seed, unused backup-code hashes) (#649).
+    mfa: Mutex<HashMap<AccountId, StoredMfa>>,
 }
 
 impl Default for StubAccountDirectory {
@@ -114,7 +119,22 @@ impl StubAccountDirectory {
             provisioned: Mutex::new(Vec::new()),
             contacts: Mutex::new(HashMap::new()),
             refuse_contact_changes: std::sync::atomic::AtomicBool::new(false),
+            mfa: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Turns two-step sign-in on for a known account: `sealed` as the cipher
+    /// sealed the seed, `code_hashes` its backup codes' hashes.
+    pub fn with_mfa(&self, account_id: AccountId, sealed: Vec<u8>, code_hashes: Vec<String>) {
+        self.mfa.lock().unwrap().insert(account_id, (sealed, code_hashes));
+        if let Some(snapshot) = self.snapshots.lock().unwrap().get_mut(&account_id) {
+            snapshot.mfa_enrolled = true;
+        }
+    }
+
+    /// The unused backup-code hashes of an account.
+    pub fn recovery_codes_left(&self, account_id: &AccountId) -> usize {
+        self.mfa.lock().unwrap().get(account_id).map_or(0, |(_, codes)| codes.len())
     }
 
     /// Every later `change_contact` fails (`EmailAlreadyRegistered`).
@@ -187,7 +207,7 @@ impl StubAccountDirectory {
         self.snapshots
             .lock()
             .unwrap()
-            .insert(account_id, AccountSnapshot { activation, permissions, age_bracket: None });
+            .insert(account_id, AccountSnapshot { activation, permissions, age_bracket: None, mfa_enrolled: false });
     }
 }
 
@@ -206,6 +226,7 @@ impl AccountDirectory for StubAccountDirectory {
                 activation: AccountActivation::Active,
                 permissions: Vec::new(),
                 age_bracket: None,
+                mfa_enrolled: false,
             },
         );
         Ok(id)
@@ -217,6 +238,7 @@ impl AccountDirectory for StubAccountDirectory {
             activation: AccountActivation::Active,
             permissions: Vec::new(),
             age_bracket: None,
+            mfa_enrolled: false,
         }))
     }
 
@@ -252,7 +274,7 @@ impl AccountDirectory for StubAccountDirectory {
         self.snapshots
             .lock()
             .unwrap()
-            .insert(id, AccountSnapshot { activation, permissions: Vec::new(), age_bracket: None });
+            .insert(id, AccountSnapshot { activation, permissions: Vec::new(), age_bracket: None, mfa_enrolled: false });
         // Emails and numbers share one index here (a number never looks like an email).
         for key in email.into_iter().chain(account.phone.clone()) {
             self.emails.lock().unwrap().insert(
@@ -301,6 +323,29 @@ impl AccountDirectory for StubAccountDirectory {
             super::port::VerificationChannel::Sms => contact.phone = Some(destination.to_owned()),
         }
         Ok(())
+    }
+
+    async fn mfa_secret(&self, account_id: &AccountId) -> Result<super::port::MfaSecret, AuthError> {
+        Ok(match self.mfa.lock().unwrap().get(account_id) {
+            Some((sealed, codes)) => super::port::MfaSecret {
+                enrolled: true,
+                sealed_seed: sealed.clone(),
+                recovery_codes_remaining: codes.len() as u32,
+            },
+            None => super::port::MfaSecret::default(),
+        })
+    }
+
+    async fn consume_recovery_code(&self, account_id: &AccountId, code_hash: &str) -> Result<bool, AuthError> {
+        let mut mfa = self.mfa.lock().unwrap();
+        let Some((_, codes)) = mfa.get_mut(account_id) else { return Ok(false) };
+        Ok(match codes.iter().position(|c| c == code_hash) {
+            Some(at) => {
+                codes.remove(at);
+                true
+            }
+            None => false,
+        })
     }
 
     async fn resume_deactivated(&self, account_id: &AccountId) -> Result<(), AuthError> {
@@ -757,6 +802,95 @@ impl CredentialAdmin for StubCredentialAdmin {
     }
 }
 
+// ─── Two-step sign-in (#649) ─────────────────────────────────────────────────
+
+/// A cipher for tests: "seals" by prefixing, hashes by tagging. `unkeyed()`
+/// is a deployment without the seed key.
+pub struct FakeSeedCipher {
+    keyed: bool,
+}
+
+impl Default for FakeSeedCipher {
+    fn default() -> Self {
+        Self { keyed: true }
+    }
+}
+
+impl FakeSeedCipher {
+    pub fn unkeyed() -> Self {
+        Self { keyed: false }
+    }
+}
+
+impl super::port::MfaSeedCipher for FakeSeedCipher {
+    fn seal(&self, seed: &[u8]) -> Result<Vec<u8>, AuthError> {
+        if !self.keyed {
+            return Err(AuthError::MfaUnavailable);
+        }
+        Ok([b"sealed:".as_slice(), seed].concat())
+    }
+
+    fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, AuthError> {
+        match (self.keyed, sealed.strip_prefix(b"sealed:".as_slice())) {
+            (true, Some(seed)) => Ok(seed.to_vec()),
+            _ => Err(AuthError::MfaUnavailable),
+        }
+    }
+
+    fn code_hash(&self, normalized_code: &str) -> Result<String, AuthError> {
+        if !self.keyed {
+            return Err(AuthError::MfaUnavailable);
+        }
+        Ok(format!("hash:{normalized_code}"))
+    }
+}
+
+/// Two-step state in memory (TTLs ignored, failures never expire).
+#[derive(Default)]
+pub struct InMemoryMfaStore {
+    pending: Mutex<HashMap<String, super::port::PendingLogin>>,
+    steps: Mutex<std::collections::HashSet<(AccountId, i64)>>,
+    failures: Mutex<HashMap<AccountId, u32>>,
+}
+
+#[async_trait]
+impl super::port::MfaStore for InMemoryMfaStore {
+    async fn save_pending_login(
+        &self,
+        token_hash: &str,
+        login: &super::port::PendingLogin,
+        _ttl_secs: u64,
+    ) -> Result<(), AuthError> {
+        self.pending.lock().unwrap().insert(token_hash.to_owned(), login.clone());
+        Ok(())
+    }
+
+    async fn pending_login(&self, token_hash: &str) -> Result<Option<super::port::PendingLogin>, AuthError> {
+        Ok(self.pending.lock().unwrap().get(token_hash).cloned())
+    }
+
+    async fn take_pending_login(&self, token_hash: &str) -> Result<Option<super::port::PendingLogin>, AuthError> {
+        Ok(self.pending.lock().unwrap().remove(token_hash))
+    }
+
+    async fn claim_step(&self, account: &AccountId, step: i64, _ttl_secs: u64) -> Result<bool, AuthError> {
+        Ok(self.steps.lock().unwrap().insert((*account, step)))
+    }
+
+    /// One increment under the lock: atomic, like the Redis script.
+    async fn reserve_attempt(&self, account: &AccountId, window_secs: u64) -> Result<(u32, i64), AuthError> {
+        let mut failures = self.failures.lock().unwrap();
+        let n = failures.entry(*account).or_insert(0);
+        *n += 1;
+        Ok((*n, window_secs as i64))
+    }
+
+    async fn clear_failures(&self, account: &AccountId) -> Result<(), AuthError> {
+        self.failures.lock().unwrap().remove(account);
+        Ok(())
+    }
+}
+
 // ─── Fixture ─────────────────────────────────────────────────────────────────
 
 /// Bundles concrete fakes and builds handlers wired to them. Handlers receive
@@ -775,6 +909,11 @@ pub struct Fixture {
     pub publisher: Arc<RecordingEventPublisher>,
     pub guests: Arc<InMemoryGuestRegistry>,
     pub policy: SessionPolicy,
+    /// Two-step sign-in (#649): the cipher seals with a prefix; turn it on for
+    /// an account with [`Fixture::enroll_mfa`].
+    pub mfa_cipher: Arc<FakeSeedCipher>,
+    pub mfa_store: Arc<InMemoryMfaStore>,
+    pub mfa: Arc<super::command::MfaVerifier>,
 }
 
 impl Default for Fixture {
@@ -786,10 +925,18 @@ impl Default for Fixture {
 impl Fixture {
     /// Default: IdP returns `(iss, sub)`, directory auto-provisions active accounts.
     pub fn new() -> Self {
+        let directory = Arc::new(StubAccountDirectory::new());
+        let (mfa_cipher, mfa_store) = (Arc::new(FakeSeedCipher::default()), Arc::new(InMemoryMfaStore::default()));
+        let mfa = Arc::new(super::command::MfaVerifier::new(
+            Arc::clone(&directory) as _,
+            Arc::clone(&mfa_cipher) as _,
+            Arc::clone(&mfa_store) as _,
+            super::command::MfaPolicy::default(),
+        ));
         Self {
             idp: Arc::new(StubIdentityProvider::returning("https://idp.test", "sub-123")),
             credentials: Arc::new(StubCredentialAdmin::default()),
-            directory: Arc::new(StubAccountDirectory::new()),
+            directory,
             profiles: Arc::new(StubProfileDirectory::new()),
             links: Arc::new(InMemorySubjectLinkRepository::new()),
             sessions: Arc::new(InMemorySessionRepository::new()),
@@ -799,7 +946,23 @@ impl Fixture {
             publisher: Arc::new(RecordingEventPublisher::new()),
             guests: Arc::new(InMemoryGuestRegistry::default()),
             policy: SessionPolicy::test_default(),
+            mfa_cipher,
+            mfa_store,
+            mfa,
         }
+    }
+
+    /// Turns two-step sign-in on for `account`: returns its TOTP seed; its
+    /// backup codes are `abcde-fghjk` and `mnpqr-stuvw`.
+    pub fn enroll_mfa(&self, account: AccountId) -> crate::domain::value_object::TotpSecret {
+        use super::port::MfaSeedCipher;
+        let seed = crate::domain::value_object::TotpSecret::generate();
+        self.directory.with_mfa(
+            account,
+            self.mfa_cipher.seal(seed.as_bytes()).unwrap(),
+            vec![self.mfa_cipher.code_hash("abcdefghjk").unwrap(), self.mfa_cipher.code_hash("mnpqrstuvw").unwrap()],
+        );
+        seed
     }
 
     pub fn start_guest_handler(&self) -> super::command::StartGuestSessionHandler {
@@ -827,6 +990,7 @@ impl Fixture {
             Arc::clone(&self.publisher) as _,
             self.policy.clone(),
         )
+        .with_mfa(Arc::clone(&self.mfa))
     }
 
     pub fn refresh_handler(&self) -> super::command::RefreshHandler {
@@ -896,6 +1060,7 @@ impl Fixture {
             Arc::clone(&self.minter) as _,
             self.policy.clone(),
         )
+        .with_mfa(Arc::clone(&self.mfa))
     }
 }
 

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a78a5e773902328e655a720a3704ad0767a4f87df6d4f60187eb08574b3b12b9
+  source_sha256: 1db106241f64c055cb98c2104092bed0463dc9dc3863b3d173fb3a8d0151eb09
   translated_at: 2026-10-05
   status: complete
 ---
@@ -219,9 +219,30 @@ aussi quand c'était l'e-mail ; l'adresse d'un autre utilisateur IdP donne `AUT-
 propre e-mail. L'e-mail enregistré avant est prévenu (un e-mail, jamais un SMS : un changement de
 téléphone prévient l'e-mail) ; les codes SMS gardent leur liste de pays et leurs budgets.
 
-**Step-up.** Un jeton émis juste après une preuve d'identifiant — `Login`, ou `VerifyCredentials`
-(re-prouver le mot de passe ; un code MFA est refusé avec `AUT-5007` tant que l'enrôlement n'existe
-pas) — porte `auth_time` ; un jeton rafraîchi non. Les RPC destructives ailleurs appellent
+**Connexion en deux étapes (#649).** Pour un compte qui l'a activée (`mfa_enrolled` d'`account`),
+**toutes** les méthodes de connexion — mot de passe, code e-mail/SMS, Apple, Google — s'arrêtent après
+l'identifiant : `Login` n'émet aucune session (ne réactive aucun compte désactivé, ne crée aucun premier
+lien) et répond `mfa_required` avec un `mfa_token` opaque à usage unique (5 minutes ; seul son SHA-256
+est conservé, `auth:{mfal:…}`). `CompleteLogin(mfa_token, code)` (edge **public** : le jeton fait
+preuve) prend ensuite soit six chiffres de l'application d'authentification du titulaire (TOTP RFC 6238,
+HMAC-SHA1, pas de 30 s, ±1 pas ; chaque pas ne sert **qu'une fois**, `auth:{mfa:<id>}:step:<n>`), soit
+l'un de ses codes de secours (`xxxxx-xxxxx`, dépensé chez `account`). Un mauvais code donne `AUT-5017`
+(`UNAUTHENTICATED`). Chaque tentative est comptée **avant** que le code soit examiné (un seul incrément
+Redis atomique, `auth:{mfa:<id>}:fail`), si bien que des essais parallèles n'obtiennent pas plus de
+tentatives que des essais successifs : au-delà de 5 tentatives en 15 minutes, les codes du compte sont
+bloqués (`AUT-5018`, `RESOURCE_EXHAUSTED` + `retry-after-secs`, même le bon ; un bon code remet le compteur
+à zéro) ; un `mfa_token` inconnu, expiré ou déjà utilisé
+donne `AUT-5021`. La graine TOTP appartient à auth : scellée en AES-256-GCM sous `AUTH_MFA_SEED_KEY`
+(l'identifiant de clé y est apposé, les anciennes clés dans `AUTH_MFA_SEED_KEYS_PREVIOUS`) avant
+qu'`account` ne la conserve ; un code de secours est conservé sous forme de HMAC-SHA-256 avec une clé
+qui en est dérivée. **Sans la clé, la connexion en deux étapes échoue en mode fermé** : un compte qui l'a
+activée ne peut pas se connecter (`AUT-5019`, `UNAVAILABLE`) — la clé ne doit jamais être retirée une
+fois utilisée. L'enrôlement arrive ensuite (#649, partie 3).
+
+**Step-up.** Un jeton émis juste après une preuve d'identifiant — `Login` / `CompleteLogin`, ou
+`VerifyCredentials` (re-prouver le mot de passe, ou donner un code de deux étapes : le step-up d'un
+compte sans mot de passe ; `AUT-5020` si la connexion en deux étapes est désactivée) — porte
+`auth_time` ; un jeton rafraîchi non. Les RPC destructives ailleurs appellent
 `transport::grpc::edge::require_recent_auth` (`auth_time` de moins de 5 min, mesh exempté) et
 répondent sinon `PERMISSION_DENIED` `step_up_required…` ; `account` protège `DeactivateAccount` /
 `RequestGdprDeletion` derrière `ACCOUNT_REQUIRE_STEP_UP`. `VerifyCredentials` ré-émet le jeton
@@ -329,6 +350,7 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_SMS_COUNTRIES` | Pays (ISO 3166-1 alpha-2, séparés par des virgules) vers lesquels les codes SMS peuvent partir ; doit être égal à la liste autorisée de la protect configuration SNS (infra `global/messaging/sms`). Un code inconnu fait échouer le démarrage. | les marchés de lancement (37) |
 | `AUTH_SMS_DAILY_BUDGET` | SMS que le service entier peut envoyer par jour UTC (`0` = aucun) ; au-delà `AUT-5016`. | `50` |
 | `AUTH_SMS_COUNTRY_DAILY_BUDGET` | SMS qu'un pays de destination peut recevoir par jour UTC, vérifié avant celui du service ; au-delà `AUT-5016`. | `25` |
+| `AUTH_MFA_SEED_KEY` · `AUTH_MFA_SEED_KEY_ID` · `AUTH_MFA_SEED_KEYS_PREVIOUS` | Connexion en deux étapes (#649) : la clé AES-256 qui scelle les graines TOTP (32 octets, base64 standard), son identifiant, et les clés retirées (`id:base64,…`) qui ouvrent encore les anciennes graines. Absente → connexion en deux étapes indisponible, en mode fermé (`AUT-5019`). **Ne jamais la retirer une fois utilisée.** Provisionnée par core-platform-infra#27. | — · `k1` · — |
 | `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES_PER_IP` · `_MAX_FAILURES` | Durée de vie d'un code, essais par code, codes par adresse par heure / par jour, délai avant renvoi, codes faux par adresse depuis une IP en 24 h avant verrouillage pour cette IP, et depuis partout avant verrouillage pour tous. | `600` · `5` · `5` · `20` · `30` · `15` · `50` |
 | Postgres / Redis / Kafka | via les `from_env()` des crates de stockage partagées | — |
 

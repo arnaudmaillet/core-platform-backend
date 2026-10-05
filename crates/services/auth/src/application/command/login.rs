@@ -1,16 +1,19 @@
 use std::sync::Arc;
 
+use base64::Engine;
 use chrono::{DateTime, Utc};
 use cqrs::Envelope;
+use rand::RngCore;
 use validate_core::{FieldViolation, Validate};
 
 use crate::application::command::member_session::MemberSessions;
+use crate::application::command::mfa::MfaVerifier;
 use crate::application::command::verification::VerificationCodes;
 use crate::application::ensure_valid;
 use crate::application::policy::SessionPolicy;
 use crate::application::port::{
-    AccountActivation, AccountDirectory, AuthnGrant, EventPublisher, FederatedTokenVerifier, GuestRegistry,
-    IdentityProvider, ProfileDirectory, RefreshTokenRepository, SessionCache, SessionRepository,
+    AccountActivation, AccountDirectory, AccountSnapshot, AuthnGrant, EventPublisher, FederatedTokenVerifier, GuestRegistry,
+    IdentityProvider, PendingLogin, ProfileDirectory, RefreshTokenRepository, SessionCache, SessionRepository,
     SubjectLinkRepository, TokenMinter,
 };
 use crate::domain::aggregate::SubjectLink;
@@ -114,6 +117,9 @@ pub struct LoginHandler {
     guests: Option<Arc<dyn GuestRegistry>>,
     /// Email one-time codes; `None` refuses code grants.
     codes: Option<Arc<VerificationCodes>>,
+    /// Two-step sign-in (#649). `None` (no seed key): an account with it on
+    /// cannot sign in — fail-closed, never skipped.
+    mfa: Option<Arc<MfaVerifier>>,
 }
 
 impl LoginHandler {
@@ -139,7 +145,14 @@ impl LoginHandler {
             federated: None,
             guests: None,
             codes: None,
+            mfa: None,
         }
+    }
+
+    /// Enables the second step for accounts with two-step sign-in on.
+    pub fn with_mfa(mut self, mfa: Arc<MfaVerifier>) -> Self {
+        self.mfa = Some(mfa);
+        self
     }
 
     /// Is this sign-in from a device the account never used (an account that
@@ -203,7 +216,7 @@ impl LoginHandler {
         &self,
         envelope: Envelope<LoginCommand>,
         now: DateTime<Utc>,
-    ) -> Result<IssuedSession, AuthError> {
+    ) -> Result<LoginOutcome, AuthError> {
         ensure_valid(&envelope.payload)?;
         let cmd = envelope.payload;
         let correlation_id = envelope.correlation_id;
@@ -252,11 +265,99 @@ impl LoginHandler {
             }
         };
 
-        // 3. Gate issuance on the account being active; read authoritative perms.
-        //    Signing back in is how a holder undoes their own deactivation: the
-        //    credential was just proven, so the account resumes (a suspension
-        //    is never lifted here).
+        // 3. The account must be one that may sign in (a suspended one never).
         let snapshot = self.directory.lookup(&account_id).await?;
+        if let AccountActivation::Inactive { reason } = &snapshot.activation {
+            return Err(AuthError::AccountNotActive { current: reason.clone() });
+        }
+        let proven = ProvenSignIn {
+            account_id,
+            subject,
+            needs_link,
+            device: cmd.device,
+            guest_refresh_token: cmd.guest_refresh_token,
+        };
+
+        // 4. Two-step sign-in on: nothing happens until the second factor —
+        //    no session, no resumed account, no first link (#649).
+        if snapshot.mfa_enrolled {
+            let mfa = self.mfa.as_ref().ok_or(AuthError::MfaUnavailable)?;
+            return self.challenge(mfa, proven, now).await.map(LoginOutcome::SecondFactorRequired);
+        }
+        self.finish(proven, snapshot, now, correlation_id).await.map(LoginOutcome::Issued)
+    }
+
+    /// The second step (#649): the code for the sign-in `mfa_token` names.
+    /// Wrong codes count against the account (the challenge stays usable
+    /// until it expires or the account locks); the right one issues the
+    /// session, once.
+    pub async fn complete(
+        &self,
+        envelope: Envelope<CompleteLoginCommand>,
+        now: DateTime<Utc>,
+    ) -> Result<IssuedSession, AuthError> {
+        let cmd = envelope.payload;
+        let mfa = self.mfa.as_ref().ok_or(AuthError::MfaUnavailable)?;
+        let token_hash = challenge_hash(&cmd.mfa_token);
+        let pending = mfa.store().pending_login(&token_hash).await?.ok_or(AuthError::MfaChallengeInvalid)?;
+        mfa.check(&pending.account_id, &cmd.code, now).await?;
+        // Single use: of two completions racing, one issues a session.
+        let pending = mfa.store().take_pending_login(&token_hash).await?.ok_or(AuthError::MfaChallengeInvalid)?;
+
+        // The account is re-read: suspended meanwhile, it does not sign in.
+        let snapshot = self.directory.lookup(&pending.account_id).await?;
+        if let AccountActivation::Inactive { reason } = &snapshot.activation {
+            return Err(AuthError::AccountNotActive { current: reason.clone() });
+        }
+        let proven = ProvenSignIn {
+            account_id: pending.account_id,
+            subject: IdpSubject::new(pending.issuer, pending.subject)?,
+            needs_link: pending.needs_link,
+            device: pending.device,
+            guest_refresh_token: pending.guest_refresh_token,
+        };
+        self.finish(proven, snapshot, now, envelope.correlation_id).await
+    }
+
+    /// Parks a proven sign-in until its second factor: the challenge token
+    /// goes to the client, only its hash is kept.
+    async fn challenge(
+        &self,
+        mfa: &MfaVerifier,
+        proven: ProvenSignIn,
+        now: DateTime<Utc>,
+    ) -> Result<MfaChallenge, AuthError> {
+        let mut bytes = [0u8; 32];
+        rand::rng().fill_bytes(&mut bytes);
+        let mfa_token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        let ttl = mfa.policy().challenge_ttl_secs;
+        let pending = PendingLogin {
+            account_id: proven.account_id,
+            issuer: proven.subject.issuer().to_owned(),
+            subject: proven.subject.subject().to_owned(),
+            needs_link: proven.needs_link,
+            device: proven.device,
+            guest_refresh_token: proven.guest_refresh_token,
+            started_at: now,
+        };
+        mfa.store().save_pending_login(&challenge_hash(&mfa_token), &pending, ttl).await?;
+        Ok(MfaChallenge { account_id: proven.account_id, mfa_token, expires_in_secs: ttl as i64 })
+    }
+
+    /// Everything after the credential (and its second factor, if any): a
+    /// deactivated account resumes, a first link is made, the session is
+    /// issued, a new device is announced, the guest this device was retires.
+    async fn finish(
+        &self,
+        proven: ProvenSignIn,
+        snapshot: AccountSnapshot,
+        now: DateTime<Utc>,
+        correlation_id: uuid::Uuid,
+    ) -> Result<IssuedSession, AuthError> {
+        let ProvenSignIn { account_id, subject, needs_link, device, guest_refresh_token } = proven;
+        // Signing back in is how a holder undoes their own deactivation: the
+        // credential was just proven, so the account resumes (a suspension is
+        // never lifted here).
         let age_bracket = snapshot.age_bracket;
         let (permissions, reactivated) = match snapshot.activation {
             AccountActivation::Active => (snapshot.permissions, false),
@@ -269,7 +370,7 @@ impl LoginHandler {
             }
         };
 
-        // 4. Establish the immutable subject → account link on first login.
+        // Establish the immutable subject → account link on first login.
         let mut first_link = false;
         if needs_link {
             let mut link = SubjectLink::establish(subject.clone(), account_id, now, correlation_id);
@@ -280,20 +381,20 @@ impl LoginHandler {
             first_link = true;
         }
 
-        // 5. Issue the session, its refresh token and the edge access token —
-        //    after reading whether this device ever signed in to the account.
-        let new_device = self.is_new_device(&account_id, &cmd.device).await;
-        let (user_agent, ip) = (cmd.device.user_agent().map(str::to_owned), cmd.device.ip_address().map(str::to_owned));
+        // Issue the session, its refresh token and the edge access token —
+        // after reading whether this device ever signed in to the account.
+        let new_device = self.is_new_device(&account_id, &device).await;
+        let (user_agent, ip) = (device.user_agent().map(str::to_owned), device.ip_address().map(str::to_owned));
         let issued = self
             .members
-            .issue(account_id, subject, cmd.device, permissions, age_bracket, now, correlation_id)
+            .issue(account_id, subject, device, permissions, age_bracket, now, correlation_id)
             .await?;
         if new_device {
             self.announce_new_device(account_id, user_agent, ip);
         }
 
-        // 6. The guest this device was is now this member.
-        if let (Some(token), Some(guests)) = (cmd.guest_refresh_token.as_deref(), &self.guests) {
+        // The guest this device was is now this member.
+        if let (Some(token), Some(guests)) = (guest_refresh_token.as_deref(), &self.guests) {
             self.members.retire_guest(guests.as_ref(), token, account_id, now, correlation_id).await;
         }
 
@@ -307,6 +408,62 @@ impl LoginHandler {
             reactivated,
         })
     }
+}
+
+/// A credential proven for an account, before what follows from it.
+struct ProvenSignIn {
+    account_id: AccountId,
+    subject: IdpSubject,
+    needs_link: bool,
+    device: DeviceFingerprint,
+    guest_refresh_token: Option<String>,
+}
+
+/// What a sign-in comes to.
+#[derive(Debug, Clone)]
+pub enum LoginOutcome {
+    /// Signed in.
+    Issued(IssuedSession),
+    /// Two-step sign-in is on: the credential is proven, the session waits for
+    /// the second factor ([`LoginHandler::complete`]).
+    SecondFactorRequired(MfaChallenge),
+}
+
+impl LoginOutcome {
+    /// The session, when the sign-in issued one.
+    pub fn issued(self) -> Option<IssuedSession> {
+        match self {
+            Self::Issued(session) => Some(session),
+            Self::SecondFactorRequired(_) => None,
+        }
+    }
+}
+
+/// A sign-in waiting for its second factor (#649).
+#[derive(Debug, Clone)]
+pub struct MfaChallenge {
+    pub account_id: AccountId,
+    /// Opaque, single use; only its hash is stored.
+    pub mfa_token: String,
+    pub expires_in_secs: i64,
+}
+
+/// The second step: the code (TOTP or backup) for a pending sign-in.
+#[derive(Clone)]
+pub struct CompleteLoginCommand {
+    pub mfa_token: String,
+    pub code: String,
+}
+
+impl std::fmt::Debug for CompleteLoginCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompleteLoginCommand").finish_non_exhaustive()
+    }
+}
+
+fn challenge_hash(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -334,7 +491,7 @@ mod tests {
     #[tokio::test]
     async fn first_login_links_account_and_issues_tokens() {
         let fx = Fixture::new();
-        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap();
+        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
 
         assert!(issued.first_link);
         assert!(!issued.access_token.is_empty());
@@ -348,8 +505,8 @@ mod tests {
     #[tokio::test]
     async fn second_login_same_subject_does_not_relink() {
         let fx = Fixture::new();
-        let first = fx.login_handler().handle(password_login(), t0()).await.unwrap();
-        let second = fx.login_handler().handle(password_login(), t0()).await.unwrap();
+        let first = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
+        let second = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
 
         assert!(first.first_link);
         assert!(!second.first_link, "subject already linked");
@@ -387,14 +544,14 @@ mod tests {
         let account = AccountId::from_uuid(Uuid::now_v7());
         fx.directory.with_account(&subject, account, AccountActivation::Deactivated, vec![]);
 
-        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap();
+        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
 
         assert!(issued.reactivated, "the app welcomes the holder back");
         assert_eq!(fx.directory.resumed(), vec![account]);
         assert_eq!(fx.sessions.count(), 1);
 
         // The next login finds it active: nothing more to resume.
-        let again = fx.login_handler().handle(password_login(), t0()).await.unwrap();
+        let again = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
         assert!(!again.reactivated);
         assert_eq!(fx.directory.resumed(), vec![account]);
     }
@@ -452,7 +609,7 @@ mod tests {
         fx.directory.with_account(&subject, account, AccountActivation::Active, vec![]);
         fx.profiles.with_profiles(account, profiles.clone());
 
-        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap();
+        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
         let claims = fx.minter.verify_access(&issued.access_token).await.unwrap();
         assert_eq!(claims.account_id, account);
         assert_eq!(claims.profile_ids, profiles);
@@ -463,7 +620,7 @@ mod tests {
         let mut fx = Fixture::new();
         fx.profiles = std::sync::Arc::new(crate::application::fakes::StubProfileDirectory::failing());
 
-        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap();
+        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
         let claims = fx.minter.verify_access(&issued.access_token).await.unwrap();
         assert!(claims.profile_ids.is_empty(), "outage degrades to no profile grants");
         assert_eq!(fx.sessions.count(), 1, "the session is still issued");
@@ -472,7 +629,7 @@ mod tests {
     #[tokio::test]
     async fn session_is_issued_under_current_generation() {
         let fx = Fixture::new();
-        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap();
+        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
         let session = fx.sessions.find_by_id(&issued.session_id).await.unwrap().unwrap();
         assert_eq!(session.generation(), Generation::INITIAL);
     }
@@ -513,7 +670,7 @@ mod tests {
         let settle = || tokio::time::sleep(std::time::Duration::from_millis(50));
 
         // The very first sign-in: nothing to compare with, no alert.
-        let first = handler.handle(login(Some("phone")), t0()).await.unwrap();
+        let first = handler.handle(login(Some("phone")), t0()).await.unwrap().issued().unwrap();
         fx.directory.with_contact(first.account_id, ContactDetails { email: Some("me@example.com".into()), phone: None });
         settle().await;
         assert!(sender.login_notices().is_empty());
@@ -534,5 +691,68 @@ mod tests {
         settle().await;
         assert_eq!(sender.login_notices(), vec![told(), told()]);
     }
-}
 
+    /// #649: with two-step sign-in on, a proven password issues nothing — no
+    /// session, no resumed account — until the code; the challenge works once.
+    #[tokio::test]
+    async fn two_step_sign_in_waits_for_the_code_then_issues_once() {
+        use crate::domain::value_object::step_of;
+        let fx = Fixture::new();
+        let first = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
+        let account = first.account_id;
+        let seed = fx.enroll_mfa(account);
+        fx.directory.set_activation(&account, AccountActivation::Deactivated);
+        let sessions_before = fx.sessions.count();
+
+        let LoginOutcome::SecondFactorRequired(challenge) =
+            fx.login_handler().handle(password_login(), t0()).await.unwrap()
+        else {
+            panic!("a second factor is required")
+        };
+        assert_eq!(challenge.account_id, account);
+        assert!(challenge.expires_in_secs > 0 && challenge.mfa_token.len() >= 43);
+        assert_eq!(fx.sessions.count(), sessions_before, "no session before the code");
+        assert!(fx.directory.resumed().is_empty(), "nothing resumes before the code");
+
+        let complete = |code: String| {
+            Envelope::new(Uuid::now_v7(), CompleteLoginCommand { mfa_token: challenge.mfa_token.clone(), code })
+        };
+        let wrong = fx.login_handler().complete(complete("000000".into()), t0()).await.unwrap_err();
+        // (A 1-in-a-million chance the wrong code is right is accepted here.)
+        if !matches!(wrong, AuthError::MfaCodeInvalid) {
+            assert_eq!(seed.code_at(step_of(t0())), "000000", "{wrong:?}");
+        }
+        let issued = fx.login_handler().complete(complete(seed.code_at(step_of(t0()))), t0()).await.unwrap();
+        assert_eq!(issued.account_id, account);
+        assert!(issued.reactivated, "the deactivated account resumed after the code");
+        assert_eq!(fx.sessions.count(), sessions_before + 1);
+
+        let again = fx.login_handler().complete(complete("abcde-fghjk".into()), t0()).await.unwrap_err();
+        assert!(matches!(again, AuthError::MfaChallengeInvalid), "single use: {again:?}");
+        let unknown = Envelope::new(Uuid::now_v7(), CompleteLoginCommand { mfa_token: "nope".into(), code: "abcde-fghjk".into() });
+        assert!(matches!(fx.login_handler().complete(unknown, t0()).await, Err(AuthError::MfaChallengeInvalid)));
+    }
+
+    /// Without the seed key (no MFA wired), an account with it on cannot sign
+    /// in: fail-closed, never a session without the second factor.
+    #[tokio::test]
+    async fn two_step_sign_in_fails_closed_without_the_key() {
+        let fx = Fixture::new();
+        let first = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
+        fx.enroll_mfa(first.account_id);
+        let bare = super::LoginHandler::new(
+            Arc::clone(&fx.idp) as _,
+            Arc::clone(&fx.directory) as _,
+            Arc::clone(&fx.profiles) as _,
+            Arc::clone(&fx.links) as _,
+            Arc::clone(&fx.sessions) as _,
+            Arc::clone(&fx.refresh_tokens) as _,
+            Arc::clone(&fx.cache) as _,
+            Arc::clone(&fx.minter) as _,
+            Arc::clone(&fx.publisher) as _,
+            fx.policy.clone(),
+        );
+        let err = bare.handle(password_login(), t0()).await.unwrap_err();
+        assert!(matches!(err, AuthError::MfaUnavailable), "{err:?}");
+    }
+}

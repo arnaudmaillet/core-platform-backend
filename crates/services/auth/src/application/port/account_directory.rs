@@ -30,6 +30,8 @@ pub struct AccountSnapshot {
     pub permissions: Vec<Permission>,
     /// From the account's date of birth, today; `None` when none is on file.
     pub age_bracket: Option<AgeBracket>,
+    /// Two-step sign-in is on (#649): a sign-in needs a second factor.
+    pub mfa_enrolled: bool,
 }
 
 /// An account's addresses, as `account` holds them.
@@ -121,4 +123,11 @@ pub trait AccountDirectory: Send + Sync + 'static {
         channel: super::VerificationChannel,
         destination: &str,
     ) -> Result<(), AuthError>;
+
+    /// The account's two-step material (#649), for checking a code.
+    async fn mfa_secret(&self, account_id: &AccountId) -> Result<super::MfaSecret, AuthError>;
+
+    /// Spends the backup code hashed `code_hash`: `true` when one matched
+    /// (now spent), `false` when none did (wrong, spent, or MFA off).
+    async fn consume_recovery_code(&self, account_id: &AccountId, code_hash: &str) -> Result<bool, AuthError>;
 }

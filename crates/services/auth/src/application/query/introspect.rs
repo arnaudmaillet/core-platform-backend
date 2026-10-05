@@ -118,7 +118,7 @@ mod tests {
                 client_ip: None,
             },
         );
-        fx.login_handler().handle(env, t0()).await.unwrap()
+        fx.login_handler().handle(env, t0()).await.unwrap().issued().unwrap()
     }
 
     fn introspect_env(token: &str) -> Envelope<IntrospectQuery> {

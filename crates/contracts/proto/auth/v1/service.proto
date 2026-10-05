@@ -31,8 +31,19 @@ service AuthService {
     // Broker credentials/authorization-code to the IdP, establish a session, and
     // return an edge access token + opaque refresh token. Resolves (or, on first
     // login, creates) the IdP-subject → account link and gates issuance on the
-    // account being active.
+    // account being active. With two-step sign-in on (#649) no session is
+    // issued yet: the response carries `mfa_required` and an `mfa_token`, and
+    // CompleteLogin finishes the sign-in.
     rpc Login(LoginRequest) returns (LoginResponse);
+
+    // The second step of a sign-in (#649): the code from the holder's
+    // authenticator app, or one of their backup codes, for the `mfa_token`
+    // Login returned. Issues the session (once). A wrong code is AUT-5017
+    // (UNAUTHENTICATED; the challenge stays usable until it expires); five
+    // wrong codes in 15 minutes lock the account's codes (AUT-5018,
+    // RESOURCE_EXHAUSTED, `retry-after-secs`); an unknown, expired or used
+    // token is AUT-5021 (sign in again).
+    rpc CompleteLogin(CompleteLoginRequest) returns (LoginResponse);
 
     // Rotate the refresh token (single-use) and mint a fresh edge token. Reusing
     // an already-rotated refresh token is treated as compromise and revokes the

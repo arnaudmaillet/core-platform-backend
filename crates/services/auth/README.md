@@ -194,8 +194,26 @@ mesh; another account's address is `AUT-6006` / `AUT-6007`), and the passwordles
 longer does). Apple / Google links keep their own email. The email on file before is told (an email
 notice, never an SMS: a phone change tells the email); SMS codes keep their country list and budgets.
 
-**Step-up.** A token minted right after a credential proof — `Login`, or `VerifyCredentials`
-(re-prove the password; an MFA code is refused with `AUT-5007` until enrolment exists) — carries
+**Two-step sign-in (#649).** For an account with it on (`account`'s `mfa_enrolled`), **every**
+sign-in method — password, email/SMS code, Apple, Google — stops after the credential: `Login` issues
+no session (and resumes no deactivated account, makes no first link) and answers `mfa_required` with an
+opaque, single-use `mfa_token` (5 minutes; only its SHA-256 is kept, `auth:{mfal:…}`). `CompleteLogin
+(mfa_token, code)` (edge **public**: the token is the proof) then takes either six digits from the
+holder's authenticator app (RFC 6238 TOTP, HMAC-SHA1, 30 s steps, ±1 step; each step works **once**,
+`auth:{mfa:<id>}:step:<n>`) or one of their backup codes (`xxxxx-xxxxx`, spent at `account`). A wrong
+code is `AUT-5017` (`UNAUTHENTICATED`). Each code attempt is counted **before** the code is looked at
+(one atomic Redis increment, `auth:{mfa:<id>}:fail`), so parallel guesses get no more tries than
+sequential ones: past 5 attempts in 15 minutes the account's codes are locked (`AUT-5018`,
+`RESOURCE_EXHAUSTED` + `retry-after-secs`, even the right one; a right code resets it); an unknown, expired or
+used `mfa_token` is `AUT-5021`. The TOTP seed is auth's: sealed with AES-256-GCM under
+`AUTH_MFA_SEED_KEY` (the key id stamped on it, older keys in `AUTH_MFA_SEED_KEYS_PREVIOUS`) before
+`account` keeps it; a backup code is kept as an HMAC-SHA-256 under a key derived from it. **Without the
+key, two-step sign-in fails closed**: an account with it on cannot sign in (`AUT-5019`,
+`UNAVAILABLE`) — the key must never be removed once used. Enrolment comes next (#649 part 3).
+
+**Step-up.** A token minted right after a credential proof — `Login` / `CompleteLogin`, or
+`VerifyCredentials` (re-prove the password, or give a two-step code: the step-up of an account without
+a password; `AUT-5020` when two-step sign-in is off) — carries
 `auth_time`; a refreshed one does not. Destructive RPCs elsewhere call
 `transport::grpc::edge::require_recent_auth` (`auth_time` ≤ 5 min old, mesh exempt) and answer
 `PERMISSION_DENIED` `step_up_required…` otherwise; `account` gates `DeactivateAccount` /
@@ -303,6 +321,7 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | `AUTH_SMS_COUNTRIES` | Comma-separated ISO 3166-1 alpha-2 countries SMS codes may go to; must equal the SNS protect allow-list (infra `global/messaging/sms`). An unknown code fails the boot. | the launch markets (37) |
 | `AUTH_SMS_DAILY_BUDGET` | SMS the whole service may send per UTC day (`0` = none); over it `AUT-5016`. | `50` |
 | `AUTH_SMS_COUNTRY_DAILY_BUDGET` | SMS one destination country may receive per UTC day, checked before the service's; over it `AUT-5016`. | `25` |
+| `AUTH_MFA_SEED_KEY` · `AUTH_MFA_SEED_KEY_ID` · `AUTH_MFA_SEED_KEYS_PREVIOUS` | Two-step sign-in (#649): the AES-256 key sealing TOTP seeds (32 bytes, standard base64), its id, and retired keys (`id:base64,…`) still opening older seeds. Unset → two-step sign-in unavailable, fail-closed (`AUT-5019`). **Never remove once used.** Provisioned by core-platform-infra#27. | — · `k1` · — |
 | `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES_PER_IP` · `_MAX_FAILURES` | Code lifetime, tries per code, codes per address an hour / a day, resend cooldown, wrong codes per address from one IP in 24 h before it is locked for that IP, and from anywhere before it is locked for everyone. | `600` · `5` · `5` · `20` · `30` · `15` · `50` |
 | Postgres / Redis / Kafka | via the shared storage crates' own `from_env()` | — |
 

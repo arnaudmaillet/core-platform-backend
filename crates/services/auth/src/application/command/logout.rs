@@ -120,7 +120,7 @@ mod tests {
                 client_ip: None,
             },
         );
-        h.handle(env, t0()).await.unwrap()
+        h.handle(env, t0()).await.unwrap().issued().unwrap()
     }
 
     fn logout_env(session_id: &str) -> Envelope<LogoutCommand> {

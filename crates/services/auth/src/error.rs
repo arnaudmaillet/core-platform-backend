@@ -41,6 +41,12 @@ use thiserror::Error;
 /// | AUT-5014 | VerificationSendFailed       | 503  | High     | **Yes**   |
 /// | AUT-5015 | SmsDestinationNotSupported   | 422  | Low      | No        |
 /// | AUT-5016 | SmsBudgetExhausted           | 503  | **High** | No        |
+/// | AUT-5017 | MfaCodeInvalid               | 401  | Low      | No        |
+/// | AUT-5018 | MfaLocked                    | 429  | Low      | No        |
+/// | AUT-5019 | MfaUnavailable               | 503  | **High** | No        |
+/// | AUT-5020 | MfaNotEnabled                | 422  | Low      | No        |
+/// | AUT-5021 | MfaChallengeInvalid          | 401  | Low      | No        |
+/// | AUT-5022 | MfaAlreadyEnabled            | 409  | Low      | No        |
 /// | AUT-1005 | GuestSessionsDisabled        | 403  | Low      | No        |
 /// | AUT-1006 | DeviceAttestationRequired    | 403  | Low      | No        |
 /// | AUT-1007 | DeviceAttestationInvalid     | 403  | Medium   | No        |
@@ -192,6 +198,32 @@ pub enum AuthError {
     #[error("no more SMS codes can be sent today")]
     SmsBudgetExhausted,
 
+    // ── Two-step sign-in (#649) ───────────────────────────────────────────────
+    /// A TOTP or backup code that does not match (or was already used).
+    #[error("the two-step code is not valid")]
+    MfaCodeInvalid,
+
+    /// Too many wrong two-step codes for this account lately.
+    #[error("too many wrong two-step codes; retry in {retry_after_secs}s")]
+    MfaLocked { retry_after_secs: i64 },
+
+    /// Two-step sign-in cannot be checked here: no seed key is configured.
+    /// Fail-closed — an enrolled account cannot finish signing in.
+    #[error("two-step sign-in is unavailable")]
+    MfaUnavailable,
+
+    /// The account has no two-step sign-in to check a code against.
+    #[error("two-step sign-in is not enabled for this account")]
+    MfaNotEnabled,
+
+    /// The two-step challenge (`mfa_token`) is unknown, expired or used.
+    #[error("the two-step challenge is not valid; sign in again")]
+    MfaChallengeInvalid,
+
+    /// Two-step sign-in is already on.
+    #[error("two-step sign-in is already enabled")]
+    MfaAlreadyEnabled,
+
     // ── Account directory (AUT-6xxx) ──────────────────────────────────────────
     #[error("account is not active; current status: '{current}'")]
     AccountNotActive { current: String },
@@ -292,6 +324,12 @@ impl AppError for AuthError {
             AuthError::VerificationSendFailed => "AUT-5014",
             AuthError::SmsDestinationNotSupported => "AUT-5015",
             AuthError::SmsBudgetExhausted => "AUT-5016",
+            AuthError::MfaCodeInvalid => "AUT-5017",
+            AuthError::MfaLocked { .. } => "AUT-5018",
+            AuthError::MfaUnavailable => "AUT-5019",
+            AuthError::MfaNotEnabled => "AUT-5020",
+            AuthError::MfaChallengeInvalid => "AUT-5021",
+            AuthError::MfaAlreadyEnabled => "AUT-5022",
 
             AuthError::AccountNotActive { .. } => "AUT-6001",
             AuthError::AccountDirectoryUnavailable => "AUT-6002",
@@ -334,9 +372,13 @@ impl AppError for AuthError {
             | AuthError::IdpAuthenticationFailed
             | AuthError::IdpTokenRejected
             | AuthError::IdTokenRejected { .. }
-            | AuthError::VerificationCodeInvalid => StatusCode::UNAUTHORIZED,
+            | AuthError::VerificationCodeInvalid
+            | AuthError::MfaCodeInvalid
+            | AuthError::MfaChallengeInvalid => StatusCode::UNAUTHORIZED,
 
-            AuthError::VerificationRateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
+            AuthError::VerificationRateLimited { .. } | AuthError::MfaLocked { .. } => StatusCode::TOO_MANY_REQUESTS,
+
+            AuthError::MfaAlreadyEnabled => StatusCode::CONFLICT,
 
             AuthError::SubjectAlreadyLinked { .. }
             | AuthError::EmailAlreadyRegistered
@@ -359,7 +401,8 @@ impl AppError for AuthError {
             | AuthError::AccountDirectoryUnavailable
             | AuthError::ProfileDirectoryUnavailable
             | AuthError::VerificationSendFailed
-            | AuthError::SmsBudgetExhausted => StatusCode::SERVICE_UNAVAILABLE,
+            | AuthError::SmsBudgetExhausted
+            | AuthError::MfaUnavailable => StatusCode::SERVICE_UNAVAILABLE,
 
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         }
@@ -380,7 +423,8 @@ impl AppError for AuthError {
             | AuthError::IdpUnavailable
             | AuthError::CredentialManagementUnavailable
             | AuthError::AccountDirectoryUnavailable
-            | AuthError::SmsBudgetExhausted => Severity::High,
+            | AuthError::SmsBudgetExhausted
+            | AuthError::MfaUnavailable => Severity::High,
 
             AuthError::InvalidSessionTransition { .. }
             | AuthError::RefreshTokenAlreadyRotated
@@ -465,6 +509,12 @@ impl AppError for AuthError {
             AuthError::VerificationSendFailed => "We could not send the code. Please try again.",
             AuthError::SmsDestinationNotSupported => "We cannot text a code to this number; please use your email instead.",
             AuthError::SmsBudgetExhausted => "Codes by text message are unavailable right now; please use your email instead.",
+            AuthError::MfaCodeInvalid => "That code is not valid. Check your authenticator app, or use a backup code.",
+            AuthError::MfaLocked { .. } => "Too many wrong codes; please wait a few minutes.",
+            AuthError::MfaUnavailable => "Two-step sign-in is unavailable right now; please try again later.",
+            AuthError::MfaNotEnabled => "Two-step sign-in is not turned on for your account.",
+            AuthError::MfaChallengeInvalid => "This sign-in has expired; please sign in again.",
+            AuthError::MfaAlreadyEnabled => "Two-step sign-in is already on.",
             _ => "A domain constraint was violated.",
         }
     }

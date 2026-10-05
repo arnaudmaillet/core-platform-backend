@@ -19,7 +19,7 @@ use transport::kafka::producer::KafkaProducerBuilder;
 use crate::application::command::{
     AccountErasure, AttestMode, GuestAttestation, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
     LogoutAllSessionsHandler, LogoutHandler, MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler,
-    StartGuestSessionHandler, VerificationCodes, VerifyCredentialsHandler,
+    MfaPolicy, MfaVerifier, StartGuestSessionHandler, VerificationCodes, VerifyCredentialsHandler,
 };
 use crate::application::port::{
     AccountDirectory, CredentialAdmin, EventPublisher, FederatedTokenVerifier, GuestRegistry,
@@ -32,7 +32,11 @@ use crate::application::query::{IntrospectHandler, ListSessionsHandler};
 use crate::application::SessionPolicy;
 use crate::config::AuthConfig;
 use crate::infrastructure::attest::AppAttestVerifier;
-use crate::infrastructure::cache::{RedisDeviceQuota, RedisNonceStore, RedisSessionCache, RedisVerificationStore};
+use crate::infrastructure::cache::{
+    RedisDeviceQuota, RedisMfaStore, RedisNonceStore, RedisSessionCache, RedisVerificationStore,
+};
+use crate::infrastructure::mfa::{AesSeedCipher, UnconfiguredSeedCipher};
+use crate::application::port::MfaSeedCipher;
 use crate::infrastructure::notify::{ChannelCodeSender, LogCodeSender, SmtpCodeSender, SnsCodeSender};
 use crate::application::port::CodeSender;
 use crate::infrastructure::directory::{GrpcAccountDirectory, GrpcProfileDirectory};
@@ -75,6 +79,9 @@ pub struct AppDeps {
     pub nonces: Arc<FederatedNonces>,
     /// App Attest in front of StartGuestSession (B5b); `None` = off.
     pub attestation: Option<Arc<GuestAttestation>>,
+    /// Two-step sign-in (#649): always present — without a seed key its
+    /// cipher fails closed, so an account with it on cannot sign in.
+    pub mfa: Arc<MfaVerifier>,
     pub policy: SessionPolicy,
 }
 
@@ -127,7 +134,8 @@ impl App {
             deps.policy.clone(),
         )
         .with_federated(Arc::clone(&federated), Arc::clone(&deps.guests))
-        .with_codes(Arc::clone(&deps.codes)));
+        .with_codes(Arc::clone(&deps.codes))
+        .with_mfa(Arc::clone(&deps.mfa)));
         let sign_up = Arc::new(SignUpHandler::new(
             Arc::clone(&federated),
             Arc::clone(&deps.directory),
@@ -189,7 +197,8 @@ impl App {
             Arc::clone(&deps.cache),
             Arc::clone(&deps.minter),
             deps.policy.clone(),
-        ));
+        )
+        .with_mfa(Arc::clone(&deps.mfa)));
         let mut start_guest = StartGuestSessionHandler::new(
             Arc::clone(&deps.sessions),
             Arc::clone(&deps.refresh_tokens),
@@ -341,10 +350,26 @@ impl App {
             Arc::new(PgGuestRegistry::new(tx.clone())),
             chrono::Duration::days(config.guest_retention_days),
         );
+        // Two-step sign-in (#649): the seed key from the environment; without
+        // it, enrolment and two-step sign-ins answer UNAVAILABLE.
+        let directory: Arc<dyn AccountDirectory> = Arc::new(GrpcAccountDirectory::new(channel));
+        let seed_cipher: Arc<dyn MfaSeedCipher> = match AesSeedCipher::from_env().map_err(|e| format!("AUTH_MFA_SEED_KEY: {e}"))? {
+            Some(cipher) => Arc::new(cipher),
+            None => {
+                tracing::warn!("AUTH_MFA_SEED_KEY unset: two-step sign-in unavailable (accounts with it on cannot sign in)");
+                Arc::new(UnconfiguredSeedCipher)
+            }
+        };
+        let mfa = Arc::new(MfaVerifier::new(
+            Arc::clone(&directory),
+            seed_cipher,
+            Arc::new(RedisMfaStore::new(redis.clone())),
+            MfaPolicy::default(),
+        ));
         let deps = AppDeps {
             idp: Arc::new(KeycloakIdentityProvider::new(idp_client, config.keycloak)),
             credentials,
-            directory: Arc::new(GrpcAccountDirectory::new(channel)),
+            directory,
             profiles: Arc::new(GrpcProfileDirectory::new(profile_channel)),
             links: Arc::new(PgSubjectLinkRepository::new(tx.clone())),
             sessions: Arc::new(PgSessionRepository::new(tx.clone())),
@@ -379,6 +404,7 @@ impl App {
                     )))
                 }
             },
+            mfa,
             policy: config.policy,
         };
 
@@ -428,6 +454,7 @@ mod tests {
                 true,
             )),
             attestation: None,
+            mfa: Arc::clone(&fx.mfa),
             policy: fx.policy.clone(),
         })
     }
