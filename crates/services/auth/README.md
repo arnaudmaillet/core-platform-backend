@@ -138,7 +138,12 @@ spend limit (≈ limit / 30 / price per SMS), so SNS's own limit is never what s
 
 When `account` deletes an account at the end of its grace period it publishes `account_deleted`;
 auth's consumer (`auth-account-events`, on the shared `run_consumer`: retry, DLQ, manual commit)
-then cuts the account's tokens (a new generation) and hard-deletes what auth holds about it: its
+then cuts the account's tokens (a new generation), deletes the account's **IdP user** (Keycloak
+Admin API, `DELETE users/{id}`: its email, username and password hash — for every link to the
+fleet's IdP; Apple / Google and code identities have none) **before** anything local, since the
+link is the only record of the IdP user id (an IdP failure aborts untouched and the event is
+retried; without the admin client configured, such erasures retry until it is), and hard-deletes
+what auth holds about it: its
 sessions and refresh tokens (device, IP), its identity links (for an email or phone code identity
 the subject **is** the address), and the guest it was before signing up with that guest's sessions
 (every shard; index `idx_guest_principals_upgraded`). Idempotent: a replay deletes nothing more.

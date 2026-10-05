@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 35cea51fe6bf988f0e0bda239dad20be23e7a6c6919635572e3ea7cfd8517df7
+  source_sha256: 9ceb00b89adba0ece21f35ef6a8f8ed95d75474e350c7f84793a7fb4bc1f9b13
   translated_at: 2026-10-05
   status: complete
 ---
@@ -159,7 +159,12 @@ qui coupe les SMS pour le mois.
 
 Quand `account` supprime un compte au terme de son délai de grâce, il publie `account_deleted` ; le
 consumer d'auth (`auth-account-events`, sur le `run_consumer` partagé : retry, DLQ, commit manuel)
-coupe alors les jetons du compte (nouvelle génération) et supprime définitivement ce qu'auth détient
+coupe alors les jetons du compte (nouvelle génération), supprime l'**utilisateur IdP** du compte
+(API Admin Keycloak, `DELETE users/{id}` : son e-mail, son nom d'utilisateur et le hash de son mot de
+passe — pour chaque lien vers l'IdP de la flotte ; Apple / Google et les identités par code n'en ont
+pas) **avant** tout le reste, le lien étant le seul enregistrement de l'id de l'utilisateur IdP (un
+échec de l'IdP interrompt sans rien toucher et l'événement est rejoué ; sans client admin configuré,
+ces effacements sont rejoués jusqu'à ce qu'il le soit), et supprime définitivement ce qu'auth détient
 sur lui : ses sessions et refresh tokens (appareil, IP), ses liens d'identité (pour une identité par
 code e-mail ou téléphone, le sujet **est** l'adresse), et l'invité qu'il était avant l'inscription,
 avec les sessions de cet invité (sur chaque shard ; index `idx_guest_principals_upgraded`).

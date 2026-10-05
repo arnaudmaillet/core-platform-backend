@@ -12,7 +12,7 @@ use auth::application::command::AccountErasure;
 use auth::application::port::ErasedAccount;
 use auth::domain::value_object::AccountId;
 use auth::infrastructure::cache::RedisSessionCache;
-use auth::infrastructure::persistence::PgAccountEraser;
+use auth::infrastructure::persistence::{PgAccountEraser, PgSubjectLinkRepository};
 
 use crate::auth_it::harness::{random_user, Harness};
 
@@ -41,12 +41,16 @@ async fn an_erased_account_leaves_nothing_in_auth() {
     let other = h.login(&random_user()).await.expect("login").tokens.unwrap();
     let other = Uuid::parse_str(&h.introspect(&other.access_token).await.unwrap().account_id).unwrap();
 
+    let tx = TransactionManager::new(h.pool.clone());
     let erasure = AccountErasure::new(
-        Arc::new(PgAccountEraser::new(TransactionManager::new(h.pool.clone()))),
+        Arc::new(PgAccountEraser::new(tx.clone())),
         Arc::new(RedisSessionCache::new(h.redis.clone())),
+        Arc::new(PgSubjectLinkRepository::new(tx)),
+        h.credentials.clone(),
     );
     let erased = erasure.erase(&AccountId::from_uuid(member)).await.unwrap();
     assert_eq!(erased, ErasedAccount { sessions: 2, links: 1, guests: 1 });
+    assert_eq!(h.credentials.deleted.lock().unwrap().len(), 1, "the IdP user is deleted too");
 
     for (sql, id) in [
         ("SELECT COUNT(*) FROM sessions WHERE account_id = $1", member),

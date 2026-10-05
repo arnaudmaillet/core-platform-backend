@@ -73,6 +73,7 @@ impl IdentityProvider for StubIdp {
 #[derive(Default)]
 pub struct StubCredentials {
     pub set: Mutex<Vec<(String, String)>>,
+    pub deleted: Mutex<Vec<String>>,
 }
 
 #[async_trait]
@@ -83,6 +84,11 @@ impl CredentialAdmin for StubCredentials {
 
     async fn set_password(&self, subject: &IdpSubject, new_password: &str) -> Result<(), AuthError> {
         self.set.lock().unwrap().push((subject.subject().to_owned(), new_password.to_owned()));
+        Ok(())
+    }
+
+    async fn delete_user(&self, subject: &IdpSubject) -> Result<(), AuthError> {
+        self.deleted.lock().unwrap().push(subject.subject().to_owned());
         Ok(())
     }
 }

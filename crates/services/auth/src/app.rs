@@ -314,6 +314,8 @@ impl App {
         let erasure = Arc::new(AccountErasure::new(
             Arc::new(PgAccountEraser::new(tx.clone())),
             Arc::new(RedisSessionCache::new(redis.clone())),
+            Arc::new(PgSubjectLinkRepository::new(tx.clone())),
+            Arc::clone(&credentials),
         ));
         let guest_retention = GuestRetention::new(
             Arc::new(PgGuestRegistry::new(tx.clone())),
