@@ -157,11 +157,19 @@ service ChatService {
   rpc GetHistory        (GetHistoryRequest)        returns (GetHistoryResponse);
   rpc ListMembers       (ListMembersRequest)       returns (ListMembersResponse);
   rpc ListSubscriptions (ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
+  rpc ListConversationsByMember (ListConversationsByMemberRequest) returns (ListConversationsByMemberResponse); // mesh only
   // Real-time streams
   rpc StreamConversation (StreamConversationRequest) returns (stream StreamConversationResponse); // members
   rpc StreamPublic       (StreamPublicRequest)       returns (stream StreamPublicResponse);       // audience
 }
 ```
+
+**A profile's conversations (#653).** `ListConversationsByMember(member_id, limit, page_token)` is
+**mesh only** (never on the edge): the GDPR data export lists the conversations a profile is a member of
+(id, role, joined_at; paged by conversation id), then reads each one's history as that member
+(`GetHistory`). It reads `chat.conversations_by_member`, the reverse of the roster, written and deleted
+with `members_by_conversation` in one LOGGED BATCH. Memberships from before that table existed are
+indexed by an opt-in, idempotent backfill at startup (`CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER=true`).
 
 > **Wire / enum contract:** proto enum values are **0-based and equal the domain `tinyint`**
 > (`CONVERSATION_KIND_GROUP=0`, `…CHANNEL=1`; `VISIBILITY_PRIVATE=0`, `…PUBLIC=1`; `ROLE_OWNER=0…GUEST=4`;
@@ -345,6 +353,7 @@ async fn main() -> anyhow::Result<()> {
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `CHAT_MAX_PAGE_SIZE` | No | `50` | Server-enforced cap on `GetHistory`/`ListSubscriptions` page size (prevents full-partition scans). |
+| `CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER` | No | unset | `true`: index every existing membership by member at startup (once; idempotent) — #653. |
 | `CHAT_HOT_TAIL_CACHE_SIZE` | No | `200` | Messages kept in the per-conversation Redis hot-tail cache (read offload). |
 | `CHAT_MESSAGE_BUCKET_HOURS` | No | `24` | Time-bucket width for the Scylla message partition key. **Must be identical cluster-wide** and **never changed after data exists** (writer and reader derive the bucket from it). |
 | `CHAT_MEMBER_STREAM_BUFFER_SIZE` | No | `256` | `broadcast` capacity per active Member-Plane stream; overflow ⇒ `Lagged`. |

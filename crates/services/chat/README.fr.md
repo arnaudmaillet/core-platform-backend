@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 666cfab71d9926f7569b811038aa08dbaeb4ee3604ac5f7d6edf14af8e57a73f
+  source_sha256: 0e237af1ebffa2ad225030ba683c19250b9b16d0b5b0c8b53b8707da7cb171b6
   translated_at: 2026-10-05
   status: complete
 ---
@@ -174,11 +174,20 @@ service ChatService {
   rpc GetHistory        (GetHistoryRequest)        returns (GetHistoryResponse);
   rpc ListMembers       (ListMembersRequest)       returns (ListMembersResponse);
   rpc ListSubscriptions (ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
+  rpc ListConversationsByMember (ListConversationsByMemberRequest) returns (ListConversationsByMemberResponse); // mesh only
   // Real-time streams
   rpc StreamConversation (StreamConversationRequest) returns (stream StreamConversationResponse); // members
   rpc StreamPublic       (StreamPublicRequest)       returns (stream StreamPublicResponse);       // audience
 }
 ```
+
+**Les conversations d'un profil (#653).** `ListConversationsByMember(member_id, limit, page_token)` est
+**mesh uniquement** (jamais sur l'edge) : l'export de données RGPD liste les conversations dont un profil
+est membre (id, rôle, joined_at ; paginé par id de conversation), puis lit l'historique de chacune en tant
+que ce membre (`GetHistory`). Elle lit `chat.conversations_by_member`, l'inverse du roster, écrite et
+supprimée avec `members_by_conversation` dans un même LOGGED BATCH. Les appartenances antérieures à cette
+table sont indexées par un backfill optionnel et idempotent au démarrage
+(`CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER=true`).
 
 > **Contrat de sérialisation / enum :** les valeurs d'enum proto sont **basées sur 0 et égales au
 > `tinyint` du domaine** (`CONVERSATION_KIND_GROUP=0`, `…CHANNEL=1` ; `VISIBILITY_PRIVATE=0`,
@@ -368,6 +377,7 @@ async fn main() -> anyhow::Result<()> {
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `CHAT_MAX_PAGE_SIZE` | No | `50` | Server-enforced cap on `GetHistory`/`ListSubscriptions` page size (prevents full-partition scans). |
+| `CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER` | Non | non défini | `true` : indexe chaque appartenance existante par membre au démarrage (une fois ; idempotent) — #653. |
 | `CHAT_HOT_TAIL_CACHE_SIZE` | No | `200` | Messages kept in the per-conversation Redis hot-tail cache (read offload). |
 | `CHAT_MESSAGE_BUCKET_HOURS` | No | `24` | Time-bucket width for the Scylla message partition key. **Must be identical cluster-wide** and **never changed after data exists** (writer and reader derive the bucket from it). |
 | `CHAT_MEMBER_STREAM_BUFFER_SIZE` | No | `256` | `broadcast` capacity per active Member-Plane stream; overflow ⇒ `Lagged`. |

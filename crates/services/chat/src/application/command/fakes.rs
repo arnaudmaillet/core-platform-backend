@@ -112,6 +112,29 @@ impl MemberRepository for FakeMembers {
         self.remove(c, m);
         Ok(())
     }
+
+    async fn list_by_member(
+        &self,
+        m: &ProfileId,
+        limit: i32,
+        after: Option<&ConversationId>,
+    ) -> Result<Vec<crate::application::port::Membership>, ChatError> {
+        let mut mine: Vec<_> = self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|((c, p), _)| p == m && after.is_none_or(|a| c.as_uuid() > a.as_uuid()))
+            .map(|(&(c, _), &role)| crate::application::port::Membership { conversation_id: c, role, joined_at: Utc::now() })
+            .collect();
+        mine.sort_by_key(|ms| ms.conversation_id.as_uuid());
+        mine.truncate(limit.max(1) as usize);
+        Ok(mine)
+    }
+
+    async fn backfill_member_index(&self) -> Result<u64, ChatError> {
+        Ok(0)
+    }
 }
 
 #[derive(Default)]

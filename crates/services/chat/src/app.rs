@@ -35,7 +35,7 @@ use crate::application::port::{
 };
 use crate::application::query::{
     GetHistoryHandler, GetHistoryQuery, ListMembersHandler, ListMembersQuery,
-    ListSubscriptionsHandler, ListSubscriptionsQuery,
+    ListConversationsByMemberHandler, ListConversationsByMemberQuery, ListSubscriptionsHandler, ListSubscriptionsQuery,
 };
 use crate::infrastructure::cache::{
     RedisHotTailCache, RedisPresenceStore, RedisReceiptStore, RedisRoutingRegistry,
@@ -105,6 +105,8 @@ pub struct App {
     pub member_registry:   Arc<ConversationBroadcastRegistry>,
     pub audience_registry: Arc<ConversationBroadcastRegistry>,
     pub params:            StreamingParams,
+    /// The roster store, for the opt-in member-index backfill (#653).
+    pub member_repo:       Arc<ScyllaMemberRepository>,
 }
 
 impl App {
@@ -200,6 +202,9 @@ impl App {
                 conversation_repo: Arc::clone(&conversation_repo),
                 member_repo:       Arc::clone(&member_repo),
             })?
+            .register::<ListConversationsByMemberQuery, _>(ListConversationsByMemberHandler {
+                member_repo: Arc::clone(&member_repo),
+            })?
             .register::<ListSubscriptionsQuery, _>(ListSubscriptionsHandler {
                 subscription_repo: Arc::clone(&subscription_repo),
                 max_page_size:     config.max_page_size,
@@ -263,6 +268,7 @@ impl App {
             member_registry,
             audience_registry,
             params,
+            member_repo,
         })
     }
 }
