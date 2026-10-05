@@ -15,3 +15,19 @@ pub enum ContentAccess {
     HeaderOnly,
     Hidden,
 }
+
+/// One author, as the reader stands to it: the content access, and whether
+/// the reader follows it / is mutual with it (an author's location
+/// audience, #657).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthorAccess {
+    pub content: ContentAccess,
+    pub follows: bool,
+    pub mutual:  bool,
+}
+
+impl AuthorAccess {
+    pub fn visible(follows: bool, mutual: bool) -> Self {
+        Self { content: ContentAccess::Visible, follows, mutual }
+    }
+}

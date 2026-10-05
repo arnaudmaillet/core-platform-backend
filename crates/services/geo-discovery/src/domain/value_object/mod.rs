@@ -11,14 +11,14 @@ pub mod post_id;
 pub mod retention_ttl;
 pub mod virality_score;
 
-pub use audience::{ContentAccess, Viewer};
+pub use audience::{AuthorAccess, ContentAccess, Viewer};
 pub use author_id::AuthorId;
 pub use author_tier::AuthorTier;
 pub use country::{decide, CountryAccessOutcome, CountryCode, MapScope};
 pub use geo_coordinate::GeoCoordinate;
 pub use h3_index::H3Index;
 pub use h3_resolution::{H3Resolution, zoom_to_resolution};
-pub use location_sharing::{city_point, city_r7, LocationSharing};
+pub use location_sharing::{city_point, city_r7, LocationAudience, LocationSharing};
 pub use map_visibility::{MapVisibility, Suppression, VisibilityChange};
 pub use post_id::PostId;
 pub use retention_ttl::RetentionTtl;

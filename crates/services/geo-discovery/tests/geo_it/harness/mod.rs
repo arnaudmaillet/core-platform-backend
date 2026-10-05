@@ -28,7 +28,7 @@ use geo_discovery::domain::value_object::{GeoCoordinate, H3Index, H3Resolution};
 use geo_discovery::error::GeoDiscoveryError;
 use geo_discovery::infrastructure::persistence::ScyllaTileRepository;
 
-pub use geo_discovery::domain::value_object::{ContentAccess, MapScope, VisibilityChange, Viewer};
+pub use geo_discovery::domain::value_object::{AuthorAccess, ContentAccess, MapScope, VisibilityChange, Viewer};
 
 pub use test_support::await_until;
 
@@ -48,13 +48,19 @@ pub const ZOOM_R9: i32 = 15;
 /// A scripted audience check: every author `Visible` unless set; can fail.
 #[derive(Default)]
 pub struct ScriptedGate {
-    access: Mutex<HashMap<Uuid, ContentAccess>>,
-    down:   Mutex<bool>,
+    access:    Mutex<HashMap<Uuid, ContentAccess>>,
+    /// `(follows, mutual)` per author; absent: neither.
+    relations: Mutex<HashMap<Uuid, (bool, bool)>>,
+    down:      Mutex<bool>,
 }
 
 impl ScriptedGate {
     pub fn set(&self, author: Uuid, access: ContentAccess) {
         self.access.lock().unwrap().insert(author, access);
+    }
+    /// How the reader stands to `author` (#657).
+    pub fn relate(&self, author: Uuid, follows: bool, mutual: bool) {
+        self.relations.lock().unwrap().insert(author, (follows, mutual));
     }
     pub fn set_down(&self, down: bool) {
         *self.down.lock().unwrap() = down;
@@ -63,12 +69,19 @@ impl ScriptedGate {
 
 #[async_trait::async_trait]
 impl AudienceGate for ScriptedGate {
-    async fn access(&self, _: &[String], authors: &[Uuid]) -> Result<HashMap<Uuid, ContentAccess>, GeoDiscoveryError> {
+    async fn access(&self, _: &[String], authors: &[Uuid]) -> Result<HashMap<Uuid, AuthorAccess>, GeoDiscoveryError> {
         if *self.down.lock().unwrap() {
             return Err(GeoDiscoveryError::AccessCheckUnavailable { reason: "scripted outage".into() });
         }
-        let access = self.access.lock().unwrap();
-        Ok(authors.iter().map(|a| (*a, access.get(a).copied().unwrap_or(ContentAccess::Visible))).collect())
+        let (access, relations) = (self.access.lock().unwrap(), self.relations.lock().unwrap());
+        Ok(authors
+            .iter()
+            .map(|a| {
+                let (follows, mutual) = relations.get(a).copied().unwrap_or_default();
+                let content = access.get(a).copied().unwrap_or(ContentAccess::Visible);
+                (*a, AuthorAccess { content, follows, mutual })
+            })
+            .collect())
     }
 }
 

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3e39caebaf32bf3de5196bb32bad31c4a4ac5432439901be3d322dc829434f74
+  source_sha256: 31b7d0dedbcb390c97d2fb713f49312c2567f845659ec36b2a3088a6dce66ba3
   translated_at: 2026-10-05
   status: complete
 ---
@@ -180,7 +180,11 @@ lecteur : le point du post pour l'auteur ; pour tout autre (mesh compris), le po
 centre de sa cellule H3 R5 (~87 km², la bande « ville » de la carte) au niveau ville, et rien en
 mode fantôme. Le réglage vient du `ProfileLocationSettingsChanged` de profile, projeté dans
 `post.author_location_settings`, et s'applique aux posts créés avant son changement. Une erreur du
-magasin fait échouer la lecture plutôt que de montrer le point.
+magasin fait échouer la lecture plutôt que de montrer le point. Son **audience** (abonnés / mutuels,
+#657) ne montre la localisation qu'à un lecteur qui suit l'auteur / lui est mutuel — ce que dit le même
+appel `CheckAccess` qui décide de la visibilité du post (`follows` / `mutual`). Tout autre lecteur, un
+lecteur anonyme et le mesh (qui ne lit pour personne en particulier) reçoivent le post sans sa
+localisation.
 
 ### Contrat d'erreur (`PST-xxxx`)
 

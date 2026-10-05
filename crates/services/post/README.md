@@ -163,7 +163,10 @@ post's own point for the author; for anyone else (the mesh included) the point b
 centre of its H3 R5 cell (~87 km², the map's city band) at city level, and nothing in ghost mode.
 The setting comes from profile's `ProfileLocationSettingsChanged`, projected into
 `post.author_location_settings`, and applies to posts made before it changed. A store error fails
-the read rather than show the point.
+the read rather than show the point. Its **audience** (followers / mutuals, #657) shows the location
+only to a reader who follows / is mutual with the author — told by the same `CheckAccess` call that
+decides the post's visibility (`follows` / `mutual`). Anyone else, an anonymous reader and the mesh
+(which reads for no one in particular) get the post without its location.
 
 ### Error contract (`PST-xxxx`)
 

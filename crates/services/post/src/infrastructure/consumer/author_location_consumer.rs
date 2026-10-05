@@ -8,7 +8,7 @@ use transport::kafka::consumer::{run_consumer, KafkaConsumerHandle, ProcessOutco
 use transport::kafka::producer::KafkaProducerHandle;
 
 use crate::application::port::{AuthorLocationStore, AuthorWindowStore, ReuseDefaults, ReuseRegistry};
-use crate::domain::value_object::{LocationSharing, ProfileId};
+use crate::domain::value_object::{LocationAudience, LocationSharing, ProfileId};
 
 /// Lenient read DTO for `profile.v1.events` (the internally-tagged
 /// `{"type": ...}` stream). Only `ProfileLocationSettingsChanged` and
@@ -25,6 +25,9 @@ struct ProfileV1Event {
     /// `precise` | `city`.
     #[serde(default)]
     precision:  Option<String>,
+    /// `everyone` | `followers` | `mutuals` (#657); absent from older events.
+    #[serde(default)]
+    audience:   Option<String>,
     /// `all` | `six_months` | `one_month` | `three_days`.
     #[serde(default)]
     post_window: Option<String>,
@@ -80,7 +83,13 @@ fn outcome(event: &ProfileV1Event) -> Outcome {
     let Some(ghost) = event.ghost else {
         return Outcome::Poison("no ghost flag".into());
     };
-    Outcome::Record(profile_id, LocationSharing { ghost, city })
+    let audience = match event.audience.as_deref() {
+        None | Some("everyone") => LocationAudience::Everyone,
+        Some("followers") => LocationAudience::Followers,
+        Some("mutuals") => LocationAudience::Mutuals,
+        Some(other) => return Outcome::Poison(format!("audience {other:?}")),
+    };
+    Outcome::Record(profile_id, LocationSharing { ghost, city, audience })
 }
 
 /// Runs the authors' settings projection consumer on the shared at-least-once
@@ -151,7 +160,7 @@ mod tests {
             profile_id: id.clone(),
             ghost: true,
             precision: "city".into(),
-            audience: "everyone".into(),
+            audience: "followers".into(),
             on_new_posts: true,
             occurred_at_ms: 1,
         });
@@ -159,7 +168,7 @@ mod tests {
             outcome(&event),
             Outcome::Record(
                 ProfileId::try_from(id.as_str()).unwrap(),
-                LocationSharing { ghost: true, city: true },
+                LocationSharing { ghost: true, city: true, audience: LocationAudience::Followers },
             ),
         );
 

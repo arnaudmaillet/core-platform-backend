@@ -119,6 +119,8 @@ where
             cards.retain_mut(|c| match sharing.get(&c.author_id) {
                 None => true,
                 Some(s) if s.ghost => false,
+                // Shared precisely (with a restricted audience: Phase 3).
+                Some(s) if !s.city => true,
                 Some(_) => match city_r7(c.h3_index_r7) {
                     Some(r7) => {
                         c.h3_index_r7 = r7;
@@ -133,11 +135,13 @@ where
             });
         }
 
-        // ── Phase 3: the reader's audience (one bulk CheckAccess; fail closed).
+        // ── Phase 3: the reader's audience (one bulk CheckAccess; fail closed),
+        //   then each author's location audience (#657).
         if let Some(visible) = visible_authors(
             self.audience.as_ref(),
             &envelope.payload.viewer,
             cards.iter().map(|c| c.author_id),
+            &sharing,
         )
         .await?
         {

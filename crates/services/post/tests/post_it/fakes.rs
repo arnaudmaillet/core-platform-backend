@@ -55,12 +55,19 @@ pub struct ScriptedGate {
     access: Mutex<std::collections::HashMap<String, post::domain::value_object::ContentAccess>>,
     /// Profiles that take no mentions (#656).
     no_mentions: Mutex<std::collections::HashSet<String>>,
+    /// `(follows, mutual)` of the reader per author (#657); absent: neither.
+    relations: Mutex<std::collections::HashMap<String, (bool, bool)>>,
     down:   Mutex<bool>,
 }
 
 impl ScriptedGate {
     pub fn set(&self, author: &str, access: post::domain::value_object::ContentAccess) {
         self.access.lock().unwrap().insert(author.to_owned(), access);
+    }
+
+    /// How the reader stands to `author` (#657).
+    pub fn relate(&self, author: &str, follows: bool, mutual: bool) {
+        self.relations.lock().unwrap().insert(author.to_owned(), (follows, mutual));
     }
 
     /// `profile` takes no mentions.
@@ -90,6 +97,16 @@ impl post::application::port::AudienceGate for ScriptedGate {
             .get(&author.as_str())
             .copied()
             .unwrap_or(post::domain::value_object::ContentAccess::Visible))
+    }
+
+    async fn access_with_relation(
+        &self,
+        viewers: &[post::domain::value_object::ProfileId],
+        author: &post::domain::value_object::ProfileId,
+    ) -> Result<post::domain::value_object::AuthorAccess, PostError> {
+        let content = self.access(viewers, author).await?;
+        let (follows, mutual) = self.relations.lock().unwrap().get(&author.as_str()).copied().unwrap_or_default();
+        Ok(post::domain::value_object::AuthorAccess { content, follows, mutual })
     }
 
     async fn may_mention(

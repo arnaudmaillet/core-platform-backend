@@ -6,7 +6,7 @@ use social_graph_api::{CheckAccessRequest, CheckInteractionRequest, ContentAcces
 use tonic::transport::Channel;
 
 use crate::application::port::AudienceGate;
-use crate::domain::value_object::{ContentAccess, ProfileId};
+use crate::domain::value_object::{AuthorAccess, ContentAccess, ProfileId};
 use crate::error::PostError;
 
 /// `CheckAccess` client. The channel is `Arc`-backed, so each call clones the
@@ -54,7 +54,12 @@ fn combine(answers: impl IntoIterator<Item = ContentAccess>) -> ContentAccess {
 #[async_trait]
 impl AudienceGate for GrpcAudienceGate {
     async fn access(&self, viewers: &[ProfileId], author: &ProfileId) -> Result<ContentAccess, PostError> {
+        Ok(self.access_with_relation(viewers, author).await?.content)
+    }
+
+    async fn access_with_relation(&self, viewers: &[ProfileId], author: &ProfileId) -> Result<AuthorAccess, PostError> {
         let author_id = author.as_str();
+        let (mut follows, mut mutual) = (false, false);
         // An anonymous reader is one call with no profiles.
         let chunks: Vec<&[ProfileId]> = if viewers.is_empty() {
             vec![&[]]
@@ -74,14 +79,13 @@ impl AudienceGate for GrpcAudienceGate {
                 .await
                 .map_err(|status| PostError::AccessCheckUnavailable { reason: status.to_string() })?
                 .into_inner();
-            let answer = response
-                .targets
-                .iter()
-                .find(|t| t.target_profile_id == author_id)
-                .map(|t| t.access);
-            answers.push(map_access(answer));
+            let target = response.targets.iter().find(|t| t.target_profile_id == author_id);
+            // Any chunk's profile following (or mutual with) the author counts.
+            follows |= target.is_some_and(|t| t.follows);
+            mutual |= target.is_some_and(|t| t.mutual);
+            answers.push(map_access(target.map(|t| t.access)));
         }
-        Ok(combine(answers))
+        Ok(AuthorAccess { content: combine(answers), follows, mutual })
     }
 
     async fn may_mention(&self, author: &ProfileId, mentioned: &ProfileId) -> Result<bool, PostError> {

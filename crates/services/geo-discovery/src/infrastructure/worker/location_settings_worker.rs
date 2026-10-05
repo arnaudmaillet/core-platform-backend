@@ -13,7 +13,7 @@ use transport::kafka::producer::KafkaProducerHandle;
 use uuid::Uuid;
 
 use crate::application::port::LocationSettingsStore;
-use crate::domain::value_object::LocationSharing;
+use crate::domain::value_object::{LocationAudience, LocationSharing};
 use crate::infrastructure::worker::build_dlq_producer;
 
 const TOPIC_PROFILE_EVENTS: &str = "profile.v1.events";
@@ -30,6 +30,9 @@ pub struct ProfileEvent {
     /// `precise` | `city`.
     #[serde(default)]
     precision:  Option<String>,
+    /// `everyone` | `followers` | `mutuals` (#657); absent from older events.
+    #[serde(default)]
+    audience:   Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -54,7 +57,13 @@ fn outcome(event: &ProfileEvent) -> Outcome {
     let Some(ghost) = event.ghost else {
         return Outcome::Poison("no ghost flag".into());
     };
-    Outcome::Record(author, LocationSharing { ghost, city })
+    let audience = match event.audience.as_deref() {
+        None | Some("everyone") => LocationAudience::Everyone,
+        Some("followers") => LocationAudience::Followers,
+        Some("mutuals") => LocationAudience::Mutuals,
+        Some(other) => return Outcome::Poison(format!("audience {other:?}")),
+    };
+    Outcome::Record(author, LocationSharing { ghost, city, audience })
 }
 
 pub struct LocationSettingsWorker {
@@ -143,11 +152,14 @@ mod tests {
             profile_id: id.to_string(),
             ghost: true,
             precision: "city".into(),
-            audience: "everyone".into(),
+            audience: "mutuals".into(),
             on_new_posts: true,
             occurred_at_ms: 1,
         });
-        assert_eq!(outcome(&event), Outcome::Record(id, LocationSharing { ghost: true, city: true }));
+        assert_eq!(
+            outcome(&event),
+            Outcome::Record(id, LocationSharing { ghost: true, city: true, audience: LocationAudience::Mutuals })
+        );
 
         let other = wire(ProfileEventWire::ProfileUpdated { profile_id: id.to_string(), occurred_at_ms: 1 });
         assert_eq!(outcome(&other), Outcome::Skip);

@@ -1,5 +1,6 @@
 //! A post author's location sharing (#657), projected from profile's
-//! `ProfileLocationSettingsChanged`: ghost mode and city-level precision.
+//! `ProfileLocationSettingsChanged`: ghost mode, city-level precision and who
+//! sees the location.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,11 +15,54 @@ pub struct LocationSharing {
     /// City level: others see the author's posts only at the coarse band (R5,
     /// ~87 km²), at the cell's centre — never the point or a finer cell.
     pub city: bool,
+    /// Who sees the author's posts on the map at all.
+    pub audience: LocationAudience,
 }
 
 impl LocationSharing {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+}
+
+/// Who sees where an author's posts were made (#657). Outside it, the posts
+/// leave the reader's map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum LocationAudience {
+    #[default]
+    Everyone,
+    /// Readers following the author.
+    Followers,
+    /// Readers the author follows back.
+    Mutuals,
+}
+
+impl LocationAudience {
+    pub fn as_tinyint(self) -> i8 {
+        match self {
+            Self::Everyone => 0,
+            Self::Followers => 1,
+            Self::Mutuals => 2,
+        }
+    }
+
+    /// The stored value; anything unknown (or absent) is everyone.
+    pub fn from_tinyint(v: Option<i8>) -> Self {
+        match v {
+            Some(1) => Self::Followers,
+            Some(2) => Self::Mutuals,
+            _ => Self::Everyone,
+        }
+    }
+
+    /// Does it take a reader who `follows` the author, and is `mutual` with
+    /// it? A reader nobody knows (the mesh, an anonymous one) neither.
+    pub fn admits(self, follows: bool, mutual: bool) -> bool {
+        match self {
+            Self::Everyone => true,
+            Self::Followers => follows,
+            Self::Mutuals => mutual,
+        }
     }
 }
 
@@ -40,6 +84,20 @@ pub fn city_r7(h3_r7: i64) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_audience_admits_exactly_who_it_names() {
+        use LocationAudience::*;
+        for (audience, stranger, follower, mutual) in
+            [(Everyone, true, true, true), (Followers, false, true, true), (Mutuals, false, false, true)]
+        {
+            assert_eq!(audience.admits(false, false), stranger, "{audience:?}");
+            assert_eq!(audience.admits(true, false), follower, "{audience:?}");
+            assert_eq!(audience.admits(true, true), mutual, "{audience:?}");
+            assert_eq!(LocationAudience::from_tinyint(Some(audience.as_tinyint())), audience);
+        }
+        assert_eq!(LocationAudience::from_tinyint(None), Everyone);
+    }
 
     #[test]
     fn nearby_points_share_one_city_point_and_one_city_cell() {

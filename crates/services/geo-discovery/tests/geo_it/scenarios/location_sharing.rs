@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use geo_discovery::application::port::LocationSettingsStore;
 use geo_discovery::application::query::{QueryTileQuery, QueryTileResult};
-use geo_discovery::domain::value_object::{LocationSharing, MapScope, Viewer};
+use geo_discovery::domain::value_object::{LocationAudience, LocationSharing, MapScope, Viewer};
 
 use crate::geo_it::harness::TestHarness;
 
@@ -39,8 +39,8 @@ async fn ghosts_leave_others_maps_and_city_level_shows_only_coarsely() {
     let city_post = h.index_post_by(citizen, LAT + 0.001, LNG + 0.001, 900.0, "", "").await;
     let open_post = h.index_post_by(open, LAT - 0.001, LNG - 0.001, 900.0, "", "").await;
 
-    h.location.set(ghost, LocationSharing { ghost: true, city: false }).await.unwrap();
-    h.location.set(citizen, LocationSharing { ghost: false, city: true }).await.unwrap();
+    h.location.set(ghost, LocationSharing { ghost: true, ..LocationSharing::default() }).await.unwrap();
+    h.location.set(citizen, LocationSharing { city: true, ..LocationSharing::default() }).await.unwrap();
 
     let reader = Viewer::Profiles(vec![Uuid::now_v7().to_string()]);
     let ids = |r: &QueryTileResult| r.pins.iter().map(|p| p.post_id).collect::<Vec<_>>();
@@ -61,4 +61,39 @@ async fn ghosts_leave_others_maps_and_city_level_shows_only_coarsely() {
     let pin = far.pins.iter().find(|p| p.post_id == city_post).expect("shown at city level");
     assert!((pin.lat, pin.lng) != (LAT + 0.001, LNG + 0.001), "never the post's own point");
     assert!(!ids(&far).contains(&ghost_post));
+}
+
+/// #657: an author whose location audience is followers / mutuals stays on
+/// the map of a reader who follows / is mutual with them, at their precise
+/// point, and leaves everyone else's — strangers, anonymous readers, and the
+/// mesh (it reads for no one in particular: NEARBY).
+#[tokio::test]
+async fn a_restricted_location_audience_keeps_only_whom_it_names() {
+    let h = TestHarness::start().await;
+    let (followers_only, mutuals_only) = (Uuid::now_v7(), Uuid::now_v7());
+    let a = h.index_post_by(followers_only, LAT + 0.002, LNG, 900.0, "", "").await;
+    let b = h.index_post_by(mutuals_only, LAT - 0.002, LNG, 900.0, "", "").await;
+    let audience = |audience| LocationSharing { audience, ..LocationSharing::default() };
+    h.location.set(followers_only, audience(LocationAudience::Followers)).await.unwrap();
+    h.location.set(mutuals_only, audience(LocationAudience::Mutuals)).await.unwrap();
+
+    let ids = |r: &QueryTileResult| r.pins.iter().map(|p| p.post_id).collect::<Vec<_>>();
+    let reader = || Viewer::Profiles(vec![Uuid::now_v7().to_string()]);
+
+    // A stranger, an anonymous reader, the mesh: neither.
+    for viewer in [reader(), Viewer::Profiles(vec![]), Viewer::Internal] {
+        let seen = ids(&radar(&h, 15, viewer).await);
+        assert!(!seen.contains(&a) && !seen.contains(&b));
+    }
+    // A follower: the followers-only author, at its own point.
+    h.gate.relate(followers_only, true, false);
+    h.gate.relate(mutuals_only, true, false);
+    let near = radar(&h, 15, reader()).await;
+    let pin = near.pins.iter().find(|p| p.post_id == a).expect("a follower sees it");
+    assert_eq!((pin.lat, pin.lng), (LAT + 0.002, LNG), "precise: not coarsened");
+    assert!(!ids(&near).contains(&b), "not mutual");
+    // A mutual: both.
+    h.gate.relate(mutuals_only, true, true);
+    let seen = ids(&radar(&h, 15, reader()).await);
+    assert!(seen.contains(&a) && seen.contains(&b));
 }
