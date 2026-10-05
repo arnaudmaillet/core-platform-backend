@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 18c0ceb67c7f4bdf84aac32217930d7e2bf1ad09dba6f96d6b4fe77d41bd58c1
+  source_sha256: 3a8aff3593db6a9a5f34196734c610ef8d86293352cc13caac6f7348ea453245
   translated_at: 2026-10-05
   status: complete
 ---
@@ -177,6 +177,7 @@ service ChatService {
   rpc GetHistory        (GetHistoryRequest)        returns (GetHistoryResponse);
   rpc ListMembers       (ListMembersRequest)       returns (ListMembersResponse);
   rpc ListSubscriptions (ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
+  rpc ListInbox         (ListInboxRequest)         returns (ListInboxResponse);       // #656
   rpc ListConversationsByMember (ListConversationsByMemberRequest) returns (ListConversationsByMemberResponse); // mesh only
   // Real-time streams
   rpc StreamConversation (StreamConversationRequest) returns (stream StreamConversationResponse); // members
@@ -275,6 +276,31 @@ qu'un futur consommateur de notifications push ne remette ni l'un ni l'autre. so
 `UNAVAILABLE` (`CHT-5001`) : fermé par défaut. Sans `CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT`, les messages
 directs sont coupés et les invitations non vérifiées.
 
+**La boîte de réception (#656).** `ListInbox(profile_id, folder, limit, page_token)` liste les
+conversations de l'appelant, de la plus récemment active à la moins active, dans l'un de deux dossiers.
+**INBOX** regroupe les conversations directes acceptées, les groupes et les canaux où l'on écrit ; les
+canaux auxquels on est seulement abonné restent dans `ListSubscriptions`. **REQUESTS** regroupe les
+demandes de messages reçues, sans réponse. Chaque entrée porte :
+- le type, et l'autre membre d'une conversation directe ;
+- la dernière activité ;
+- le dernier message remis (expéditeur, aperçu de 100 caractères) ;
+- `unread` : le dernier message est d'un autre et plus récent que la position de lecture de l'appelant.
+  Une demande reste non lue jusqu'à sa réponse, puisque son destinataire ne garde aucun accusé ;
+- `request` : la demande de l'appelant lui-même, en attente de réponse.
+
+Comment les entrées sont tenues :
+- **Stockage.** Les entrées vivent dans `chat.inbox_entries`, plus `chat.inbox_by_activity` pour le
+  listage (migration 0011). Un déplacement réécrit les deux dans un même LOGGED BATCH.
+- **Écritures.** L'`InboxWorker` les projette depuis les topics de chat : un message remis, un membre qui
+  rejoint ou part, la création d'un groupe. Sans broker, la projection se fait en ligne. Une conversation
+  directe entre dans une boîte avec son premier message remis.
+- **Expéditeurs bloqués.** Un message retenu ne déplace que l'entrée de son expéditeur : un expéditeur
+  bloqué n'atteint jamais les demandes de celui qui l'a bloqué. REQUESTS est aussi revérifié auprès du
+  gate à chaque lecture, si bien qu'un blocage postérieur à une demande la masque aussi. Gate
+  injoignable ⇒ `CHT-5001`.
+- **Réponses.** Accepter déplace l'entrée dans INBOX ; refuser la retire pour celui qui refuse seulement.
+- **Rejeux.** Une entrée ne recule jamais lors d'un rejeu.
+
 ### Ports Rust (contrat hexagonal)
 
 ```rust
@@ -328,18 +354,19 @@ de personne ; jamais la réponse à un blocage), `CHT-1012` (aucune demande d'un
 
 | Topic | Trigger | Key | Consumers |
 |---|---|---|---|
-| `chat.conversation.created` | new conversation created | `conversation_id` | `<TODO>` |
+| `chat.conversation.created` | new conversation created | `conversation_id` | **`chat` lui-même** (InboxWorker) |
 | `chat.conversation.published` | visibility → Public | `conversation_id` | `<TODO>` |
 | `chat.conversation.unpublished` | visibility → Private | `conversation_id` | **`chat` itself** (VisibilityWorker) |
-| `chat.member.joined` | member added to roster | `conversation_id` | `<TODO: notification>` |
-| `chat.member.left` | member removed from roster | `conversation_id` | `<TODO: notification>` |
-| `chat.message.sent` | message durably written | `conversation_id` | `<TODO: notification / timeline>` |
+| `chat.member.joined` | member added to roster | `conversation_id` | **`chat` lui-même** (InboxWorker) |
+| `chat.member.left` | member removed from roster | `conversation_id` | **`chat` lui-même** (InboxWorker) |
+| `chat.message.sent` | message durably written (`withheld`, `request` depuis #656 : un consommateur push doit ignorer les deux) | `conversation_id` | **`chat` lui-même** (InboxWorker) |
 
 **Consomme :**
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `chat.conversation.unpublished` | `chat-visibility-consumer` | every pod tears down guest streams cluster-wide when a conversation goes Private | DLQ `chat.conversation.unpublished.dlq` |
+| `chat.message.sent`, `chat.conversation.created`, `chat.member.joined`, `chat.member.left` | `chat-inbox` | la boîte de réception de chaque membre (#656), depuis l'offset le plus ancien | DLQ `<topic>.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** le VisibilityWorker s'exécute sous `run_consumer` — commit
 > manuel après un résultat terminal, retries bornés avec backoff + jitter, DLQ en cas
@@ -451,7 +478,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Déploiement, migrations & rollback
 
-- **Migrations :** appliquer `crates/services/chat/migrations/0001…0010.cql` sur le keyspace `chat`
+- **Migrations :** appliquer `crates/services/chat/migrations/0001…0011.cql` sur le keyspace `chat`
   **avant** le premier démarrage / avant de déployer un nouveau binaire.
 - **Pièges liés à l'état :** `CHAT_MESSAGE_BUCKET_HOURS` et `CHAT_AUDIENCE_SHARD_COUNT` doivent être
   **uniformes sur tout le cluster**, et `CHAT_MESSAGE_BUCKET_HOURS` ne doit **jamais changer une fois que

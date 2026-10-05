@@ -1,6 +1,7 @@
 pub mod conversation_repository;
 pub mod event_publisher;
 pub mod hot_tail_cache;
+pub mod inbox_store;
 pub mod interaction_gate;
 pub mod invitation_repository;
 pub mod member_repository;
@@ -14,6 +15,7 @@ pub mod subscription_repository;
 pub use conversation_repository::ConversationRepository;
 pub use event_publisher::EventPublisher;
 pub use hot_tail_cache::HotTailCache;
+pub use inbox_store::{Folder, InboxEntry, InboxStore, LastMessage, PREVIEW_CHARS};
 pub use interaction_gate::{InteractionGate, MessageVerdict};
 pub use invitation_repository::InvitationRepository;
 pub use member_repository::{MemberRepository, Membership};

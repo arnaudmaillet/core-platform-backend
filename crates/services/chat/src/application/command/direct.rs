@@ -26,8 +26,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 
+use crate::application::command::inbox::file_answer;
 use crate::application::port::{
-    ConversationRepository, EventPublisher, InteractionGate, MemberRepository, MessageVerdict,
+    ConversationRepository, EventPublisher, InboxStore, InteractionGate, MemberRepository, MessageVerdict,
 };
 use crate::domain::aggregate::{Conversation, Participant};
 use crate::domain::value_object::{ConversationId, MessageRequest, ProfileId, Role};
@@ -68,6 +69,8 @@ pub struct DirectConversations<CR, MR, EP> {
     pub member_repo:       Arc<MR>,
     pub publisher:         Arc<EP>,
     pub gate:              Option<Arc<dyn InteractionGate>>,
+    /// Files an answered request in the recipient's inbox.
+    pub inbox:             Arc<dyn InboxStore>,
 }
 
 impl<CR, MR, EP> DirectConversations<CR, MR, EP>
@@ -131,6 +134,7 @@ where
             Some(requester) if requester != opener => {
                 self.conversation_repo.transition_request(&id, request, MessageRequest::Open).await?;
                 conversation.set_request(MessageRequest::Open);
+                file_answer(&*self.inbox, &opener, &id, true).await?;
                 Ok(OpenedDirect { conversation_id: id, request: false })
             }
             Some(_) => {
@@ -172,7 +176,7 @@ where
             (false, _) => return Ok(()),
         };
         self.conversation_repo.transition_request(&conversation_id, request, to).await?;
-        Ok(())
+        file_answer(&*self.inbox, &profile, &conversation_id, accept).await
     }
 }
 
@@ -245,7 +249,7 @@ pub(crate) async fn admit<CR: ConversationRepository + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::command::fakes::{FakeConversations, FakeMembers, FakePublisher, ScriptedGate};
+    use crate::application::command::fakes::{FakeConversations, FakeInbox, FakeMembers, FakePublisher, ScriptedGate};
 
     struct World {
         conversations: Arc<FakeConversations>,
@@ -261,6 +265,7 @@ mod tests {
             member_repo:       Arc::clone(&members),
             publisher:         Arc::default(),
             gate:              Some(Arc::clone(&gate) as Arc<dyn InteractionGate>),
+            inbox:             Arc::new(FakeInbox::default()),
         };
         World { conversations, members, gate, direct }
     }

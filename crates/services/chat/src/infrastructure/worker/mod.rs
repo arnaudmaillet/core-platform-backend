@@ -1,6 +1,8 @@
+pub mod inbox_worker;
 pub mod presence_settings_worker;
 pub mod visibility_worker;
 
+pub use inbox_worker::{InboxFact, InboxWorker, INBOX_TOPICS};
 pub use presence_settings_worker::PresenceSettingsWorker;
 pub use visibility_worker::VisibilityWorker;
 

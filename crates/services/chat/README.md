@@ -160,6 +160,7 @@ service ChatService {
   rpc GetHistory        (GetHistoryRequest)        returns (GetHistoryResponse);
   rpc ListMembers       (ListMembersRequest)       returns (ListMembersResponse);
   rpc ListSubscriptions (ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
+  rpc ListInbox         (ListInboxRequest)         returns (ListInboxResponse);       // #656
   rpc ListConversationsByMember (ListConversationsByMemberRequest) returns (ListConversationsByMemberResponse); // mesh only
   // Real-time streams
   rpc StreamConversation (StreamConversationRequest) returns (stream StreamConversationResponse); // members
@@ -252,6 +253,29 @@ nothing stored; a followers / mutuals audience still allows it (an invitation is
 social-graph unreachable ⇒ `UNAVAILABLE` (`CHT-5001`): fail closed. Without
 `CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT`, direct messages are off and invitations unchecked.
 
+**The inbox (#656).** `ListInbox(profile_id, folder, limit, page_token)` lists the caller's
+conversations newest activity first, in one of two folders. **INBOX** holds accepted direct
+conversations, groups, and the channels one writes in; subscribed channels stay in `ListSubscriptions`.
+**REQUESTS** holds message requests to the caller, unanswered. Each entry carries:
+- the kind, and the peer of a direct conversation;
+- the last activity;
+- the last delivered message (sender, a 100-character preview);
+- `unread`: someone else's last message, newer than the caller's read position. A request stays
+  unread until it is answered, since its recipient keeps no receipt;
+- `request`: the caller's own request, awaiting an answer.
+
+How the entries are kept:
+- **Storage.** The entries live in `chat.inbox_entries`, plus `chat.inbox_by_activity` for the
+  listing (migration 0011). A move rewrites both in one LOGGED BATCH.
+- **Writes.** The `InboxWorker` projects them from chat's own topics: a delivered message, a member
+  joining or leaving, a group's creation. Without a broker, the projection runs inline. A direct
+  conversation enters an inbox with its first delivered message.
+- **Blocked senders.** A withheld message moves only its sender's entry, so a blocked sender never
+  reaches the blocker's requests. REQUESTS is also re-checked against the gate on every read, so a
+  block that came after a request hides it too. The gate is unreachable ⇒ `CHT-5001`.
+- **Answers.** Accepting moves the entry to INBOX. Declining removes it for the decliner only.
+- **Replays.** An entry never moves back on a replay.
+
 ### Rust ports (hexagonal contract)
 
 ```rust
@@ -304,18 +328,19 @@ block), `CHT-1012` (no request from someone else to answer).
 
 | Topic | Trigger | Key | Consumers |
 |---|---|---|---|
-| `chat.conversation.created` | new conversation created | `conversation_id` | `<TODO>` |
+| `chat.conversation.created` | new conversation created | `conversation_id` | **`chat` itself** (InboxWorker) |
 | `chat.conversation.published` | visibility → Public | `conversation_id` | `<TODO>` |
 | `chat.conversation.unpublished` | visibility → Private | `conversation_id` | **`chat` itself** (VisibilityWorker) |
-| `chat.member.joined` | member added to roster | `conversation_id` | `<TODO: notification>` |
-| `chat.member.left` | member removed from roster | `conversation_id` | `<TODO: notification>` |
-| `chat.message.sent` | message durably written | `conversation_id` | `<TODO: notification / timeline>` |
+| `chat.member.joined` | member added to roster | `conversation_id` | **`chat` itself** (InboxWorker) |
+| `chat.member.left` | member removed from roster | `conversation_id` | **`chat` itself** (InboxWorker) |
+| `chat.message.sent` | message durably written (`withheld`, `request` since #656: a push consumer must skip both) | `conversation_id` | **`chat` itself** (InboxWorker) |
 
 **Consumes:**
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `chat.conversation.unpublished` | `chat-visibility-consumer` | every pod tears down guest streams cluster-wide when a conversation goes Private | DLQ `chat.conversation.unpublished.dlq` |
+| `chat.message.sent`, `chat.conversation.created`, `chat.member.joined`, `chat.member.left` | `chat-inbox` | each member's inbox (#656), from the earliest offset | DLQ `<topic>.dlq` |
 
 > **Runtime contract (mandatory):** the VisibilityWorker runs under `run_consumer` — manual commit
 > after a terminal outcome, bounded retry with backoff + jitter, DLQ on exhaustion/poison, and
@@ -424,7 +449,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Deployment, Migrations & Rollback
 
-- **Migrations:** apply `crates/services/chat/migrations/0001…0010.cql` against the `chat` keyspace
+- **Migrations:** apply `crates/services/chat/migrations/0001…0011.cql` against the `chat` keyspace
   **before** first start / before rolling a new binary.
 - **Stateful gotchas:** `CHAT_MESSAGE_BUCKET_HOURS` and `CHAT_AUDIENCE_SHARD_COUNT` must be **uniform
   cluster-wide**, and `CHAT_MESSAGE_BUCKET_HOURS` must **never change after data exists** — divergent

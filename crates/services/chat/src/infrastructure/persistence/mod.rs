@@ -1,6 +1,7 @@
 pub mod bucket;
 pub mod model;
 pub mod scylla_conversation_repository;
+pub mod scylla_inbox_store;
 pub mod scylla_invitation_repository;
 pub mod scylla_member_repository;
 pub mod scylla_message_repository;
@@ -10,6 +11,7 @@ pub mod statement;
 pub mod time;
 
 pub use scylla_conversation_repository::ScyllaConversationRepository;
+pub use scylla_inbox_store::ScyllaInboxStore;
 pub use scylla_invitation_repository::ScyllaInvitationRepository;
 pub use scylla_member_repository::ScyllaMemberRepository;
 pub use scylla_message_repository::ScyllaMessageRepository;

@@ -10,8 +10,8 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::application::port::{
-    ConversationRepository, EventPublisher, InteractionGate, InvitationRepository, MemberRepository,
-    MessageRepository, MessageSummary, MessageVerdict, SubscriptionRepository,
+    ConversationRepository, EventPublisher, Folder, InboxEntry, InboxStore, InteractionGate, InvitationRepository,
+    MemberRepository, MessageRepository, MessageSummary, MessageVerdict, SubscriptionRepository,
 };
 use crate::domain::aggregate::{Conversation, Direct, Invitation, Message, Participant};
 use crate::domain::event::{DomainEvent, MessageEvent};
@@ -126,6 +126,71 @@ impl ConversationRepository for FakeConversations {
         let mut rows = self.rows.lock().unwrap();
         let Some(state) = rows.get_mut(id) else { return Ok(false) };
         Ok(!std::mem::replace(&mut state.request_sent, true))
+    }
+}
+
+/// Inboxes in memory, with the store's "never move back" rule.
+#[derive(Default)]
+pub struct FakeInbox(Mutex<HashMap<(ProfileId, ConversationId), InboxEntry>>);
+
+impl FakeInbox {
+    pub fn entry(&self, member: &ProfileId, c: &ConversationId) -> Option<InboxEntry> {
+        self.0.lock().unwrap().get(&(*member, *c)).cloned()
+    }
+
+    pub fn folder(&self, member: &ProfileId, folder: Folder) -> Vec<InboxEntry> {
+        let mut entries: Vec<_> = self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|((m, _), e)| m == member && e.folder == folder)
+            .map(|(_, e)| e.clone())
+            .collect();
+        entries.sort_by(|a, b| {
+            b.activity.cmp(&a.activity).then(a.conversation_id.as_uuid().cmp(&b.conversation_id.as_uuid()))
+        });
+        entries
+    }
+}
+
+#[async_trait]
+impl InboxStore for FakeInbox {
+    async fn put(&self, member: &ProfileId, entry: &InboxEntry) -> Result<(), ChatError> {
+        let mut entries = self.0.lock().unwrap();
+        let key = (*member, entry.conversation_id);
+        if entries.get(&key).is_some_and(|old| old.activity > entry.activity) {
+            return Ok(());
+        }
+        entries.insert(key, entry.clone());
+        Ok(())
+    }
+
+    async fn find(&self, member: &ProfileId, c: &ConversationId) -> Result<Option<InboxEntry>, ChatError> {
+        Ok(self.entry(member, c))
+    }
+
+    async fn remove(&self, member: &ProfileId, c: &ConversationId) -> Result<(), ChatError> {
+        self.0.lock().unwrap().remove(&(*member, *c));
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        member: &ProfileId,
+        folder: Folder,
+        limit: i32,
+        after: Option<(i64, ConversationId)>,
+    ) -> Result<Vec<InboxEntry>, ChatError> {
+        let mut entries = self.folder(member, folder);
+        if let Some((ms, id)) = after {
+            entries.retain(|e| {
+                let t = e.activity.timestamp_millis();
+                t < ms || (t == ms && e.conversation_id.as_uuid() > id.as_uuid())
+            });
+        }
+        entries.truncate(limit.max(1) as usize);
+        Ok(entries)
     }
 }
 

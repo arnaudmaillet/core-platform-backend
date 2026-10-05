@@ -42,12 +42,12 @@ producer's `DOMAIN.md §8`.
 | `social-graph.blocked` | `social-graph` | — *(orphan — see below)* |
 | `social-graph.author_tier_changed` | `social-graph` | `profile` |
 | `social-graph.follow_requested` | `social-graph` | `notification` |
-| `chat.conversation.created` | `chat` | — *(orphan — see below)* |
+| `chat.conversation.created` | `chat` | `chat` |
 | `chat.conversation.published` | `chat` | — *(orphan — see below)* |
 | `chat.conversation.unpublished` | `chat` | `chat` |
-| `chat.member.joined` | `chat` | — *(orphan — see below)* |
-| `chat.member.left` | `chat` | — *(orphan — see below)* |
-| `chat.message.sent` | `chat` | — *(orphan — see below)* |
+| `chat.member.joined` | `chat` | `chat` |
+| `chat.member.left` | `chat` | `chat` |
+| `chat.message.sent` | `chat` | `chat` |
 | `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery`, `timeline` |
 | `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline`, `notification` |
 | `auth.v1.events` | `auth` | `audit` |
@@ -71,11 +71,7 @@ producer's `DOMAIN.md §8`.
 |---|---|---|
 | `post.updated` | `post` | No stream consumer — search/timeline/realtime act on post.v1.events PostUpdated; the legacy per-type topic is emitted for completeness. |
 | `social-graph.blocked` | `social-graph` | Block is enforced on the gRPC read path; no stream consumer yet. |
-| `chat.conversation.created` | `chat` | Chat owns its own delivery plane; reserved for future fan-out. |
 | `chat.conversation.published` | `chat` | Chat delivery-plane headroom. |
-| `chat.member.joined` | `chat` | Chat delivery-plane headroom. |
-| `chat.member.left` | `chat` | Chat delivery-plane headroom. |
-| `chat.message.sent` | `chat` | Future realtime/notification consolidation; chat streams to clients directly today. |
 
 <!-- END GENERATED: topic-wiring -->
 
@@ -159,9 +155,9 @@ producer's `DOMAIN.md §8`.
 
 | Event | Means | Emitted when | Consumers & why |
 |---|---|---|---|
-| `chat.conversation.created` / `chat.conversation.published` / `chat.conversation.unpublished` | conversation lifecycle facts | create / publish / unpublish | `VisibilityWorker` (audience-plane teardown), consumers |
-| `chat.member.joined` / `chat.member.left` | membership changed | join/leave | consumers |
-| `chat.message.sent` | a message was committed to the log | send commits | chat's own live plane (**not** consumed by `realtime` — Separate Ways) |
+| `chat.conversation.created` / `chat.conversation.published` / `chat.conversation.unpublished` | conversation lifecycle facts | create / publish / unpublish | `VisibilityWorker` (audience-plane teardown); `InboxWorker` (created: the owner's inbox entry, #656) |
+| `chat.member.joined` / `chat.member.left` | membership changed | join/leave | `InboxWorker` (the member's inbox entry in / out, #656) |
+| `chat.message.sent` | a message was committed to the log; `withheld` (shown to its sender only) and `request` (a message request's one message) since #656 | send commits | `InboxWorker` (each member's inbox entry up front — a withheld message moves only its sender's); chat's own live plane (**not** consumed by `realtime` — Separate Ways). A future push consumer must skip `withheld` and `request` messages |
 
 ## Media — `media.v1.events` (producer: `media`)
 

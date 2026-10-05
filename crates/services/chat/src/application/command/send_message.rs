@@ -257,6 +257,7 @@ mod tests {
             member_repo:       Arc::clone(&f.members),
             publisher:         Arc::clone(&f.publisher),
             gate:              Some(Arc::clone(&gate_dyn)),
+            inbox:             Arc::new(crate::application::command::fakes::FakeInbox::default()),
         };
         let messages = Arc::<FakeMessages>::default();
         let handler = SendMessageHandler {

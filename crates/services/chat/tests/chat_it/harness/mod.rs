@@ -192,6 +192,7 @@ impl TestHarness {
             // UUID-suffixed so parallel scenarios never share a consumer group.
             visibility_consumer_group:   format!("chat-it-visibility-{}", Uuid::now_v7()),
             presence_settings_consumer_group: format!("chat-it-presence-{}", Uuid::now_v7()),
+            inbox_consumer_group:        format!("chat-it-inbox-{}", Uuid::now_v7()),
         };
 
         let App {
@@ -360,6 +361,23 @@ impl TestHarness {
         )
         .await
         .map(|r| r.into_inner().message_id)
+    }
+
+    /// `profile`'s inbox folder (first page of 50).
+    pub async fn inbox(&self, profile: &ProfileId, folder: proto::InboxFolder) -> Vec<proto::InboxEntryView> {
+        ChatService::list_inbox(
+            &self.handler,
+            Request::new(proto::ListInboxRequest {
+                profile_id: profile.as_str(),
+                folder:     folder as i32,
+                limit:      50,
+                page_token: String::new(),
+            }),
+        )
+        .await
+        .expect("list_inbox")
+        .into_inner()
+        .entries
     }
 
     /// The bodies of the history `reader` sees, newest first.

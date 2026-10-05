@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: b79e83530df0b034b3f3edebd9fd23c1a15970daf270714ee9e35454b55a5bce
+  source_sha256: 4180e70826713e3d6c537000fa687acafe39efac64d3922c222a18f6b8ed0849
   translated_at: 2026-10-05
   status: complete
 ---
@@ -55,12 +55,12 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `social-graph.blocked` | `social-graph` | — *(orphan — see below)* |
 | `social-graph.author_tier_changed` | `social-graph` | `profile` |
 | `social-graph.follow_requested` | `social-graph` | `notification` |
-| `chat.conversation.created` | `chat` | — *(orphan — see below)* |
+| `chat.conversation.created` | `chat` | `chat` |
 | `chat.conversation.published` | `chat` | — *(orphan — see below)* |
 | `chat.conversation.unpublished` | `chat` | `chat` |
-| `chat.member.joined` | `chat` | — *(orphan — see below)* |
-| `chat.member.left` | `chat` | — *(orphan — see below)* |
-| `chat.message.sent` | `chat` | — *(orphan — see below)* |
+| `chat.member.joined` | `chat` | `chat` |
+| `chat.member.left` | `chat` | `chat` |
+| `chat.message.sent` | `chat` | `chat` |
 | `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery`, `timeline` |
 | `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline`, `notification` |
 | `auth.v1.events` | `auth` | `audit` |
@@ -84,11 +84,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 |---|---|---|
 | `post.updated` | `post` | No stream consumer — search/timeline/realtime act on post.v1.events PostUpdated; the legacy per-type topic is emitted for completeness. |
 | `social-graph.blocked` | `social-graph` | Block is enforced on the gRPC read path; no stream consumer yet. |
-| `chat.conversation.created` | `chat` | Chat owns its own delivery plane; reserved for future fan-out. |
 | `chat.conversation.published` | `chat` | Chat delivery-plane headroom. |
-| `chat.member.joined` | `chat` | Chat delivery-plane headroom. |
-| `chat.member.left` | `chat` | Chat delivery-plane headroom. |
-| `chat.message.sent` | `chat` | Future realtime/notification consolidation; chat streams to clients directly today. |
 
 <!-- END GENERATED: topic-wiring -->
 
@@ -173,9 +169,9 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 
 | Événement | Signifie | Émis quand | Consommateurs & pourquoi |
 |---|---|---|---|
-| `chat.conversation.created` / `chat.conversation.published` / `chat.conversation.unpublished` | faits de cycle de vie de conversation | création / publication / dépublication | `VisibilityWorker` (démantèlement du plan audience), consommateurs |
-| `chat.member.joined` / `chat.member.left` | l'appartenance a changé | join/leave | consommateurs |
-| `chat.message.sent` | un message a été commité dans le journal | l'envoi commite | plan live propre de chat (**non** consommé par `realtime` — Separate Ways) |
+| `chat.conversation.created` / `chat.conversation.published` / `chat.conversation.unpublished` | faits de cycle de vie de conversation | création / publication / dépublication | `VisibilityWorker` (démantèlement du plan audience) ; `InboxWorker` (created : l'entrée de boîte du propriétaire, #656) |
+| `chat.member.joined` / `chat.member.left` | l'appartenance a changé | join/leave | `InboxWorker` (l'entrée de boîte du membre, ajoutée / retirée, #656) |
+| `chat.message.sent` | un message a été commité dans le journal ; `withheld` (visible de son seul expéditeur) et `request` (le message unique d'une demande) depuis #656 | l'envoi commite | `InboxWorker` (l'entrée de chaque membre remonte en tête — un message retenu ne déplace que celle de son expéditeur) ; plan live propre de chat (**non** consommé par `realtime` — Separate Ways). Un futur consommateur push doit ignorer les messages `withheld` et `request` |
 
 ## Média — `media.v1.events` (producteur : `media`)
 
