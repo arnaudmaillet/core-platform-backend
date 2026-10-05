@@ -17,7 +17,7 @@ use crate::application::query::{
     list_notifications::ListNotificationsQuery,
 };
 use crate::application::command::push_settings::{
-    RegisterDeviceCommand, UnregisterDeviceCommand, UpdatePreferencesCommand,
+    RegisterDeviceCommand, RegistrationCaller, UnregisterDeviceCommand, UpdatePreferencesCommand,
 };
 use crate::application::query::push_settings::{GetPreferencesQuery, PushTargets, ResolvePushTargetsQuery};
 use crate::domain::device::{DevicePlatform, PushEnvironment};
@@ -190,7 +190,12 @@ where
         {
             return Err(Status::permission_denied("device_id must be this session's device"));
         }
-        let device_bound = session_device.is_some();
+        // On the edge the token's holder decides (see RegisterDeviceHandler);
+        // over the mesh nothing changes.
+        let caller = match principal {
+            Some(_) => RegistrationCaller::Edge { session_device: session_device.map(str::to_owned) },
+            None => RegistrationCaller::Mesh,
+        };
         let age = holder_age(principal);
         let req = request.into_inner();
         let cmd = RegisterDeviceCommand {
@@ -202,7 +207,7 @@ where
             environment: environment_from_proto(req.environment)?,
             timezone:    Some(req.timezone).filter(|z| !z.is_empty()),
             age,
-            device_bound,
+            caller,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))

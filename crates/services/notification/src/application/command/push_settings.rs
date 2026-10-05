@@ -45,9 +45,19 @@ pub struct RegisterDeviceCommand {
     pub timezone:    Option<String>,
     /// The holder's age (edge token `age`; unknown over the mesh).
     pub age:         HolderAge,
-    /// `device_id` is the device the session is bound to (the edge token's
-    /// `did`): the token then only moves between accounts on that device.
-    pub device_bound: bool,
+    /// Who registers: a client on the edge (and the device its session is
+    /// bound to, if any), or the mesh.
+    pub caller:      RegistrationCaller,
+}
+
+/// Who calls `RegisterDevice`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegistrationCaller {
+    /// A trusted service: the token moves between accounts as before.
+    Mesh,
+    /// A client session, with the device it is bound to (the token's `did`) —
+    /// `None` when its client sent none at login.
+    Edge { session_device: Option<String> },
 }
 
 impl Command for RegisterDeviceCommand {}
@@ -80,16 +90,22 @@ impl CommandHandler<RegisterDeviceCommand> for RegisterDeviceHandler {
         }
         check_time_zone(cmd.timezone.as_deref())?;
 
-        // A push token belongs to one installation. From a session bound to its
-        // device, the token may move from another account only when it was
-        // registered from this same device (the account changed on the phone),
-        // never from another device: someone else's leaked token cannot be
-        // pulled into this account (they would stop getting their own pushes,
-        // and get this account's).
-        if cmd.device_bound {
+        // A push token belongs to one installation. A client may take it from
+        // another account only from the device that registered it, proved by
+        // its session (`did`): the account changed on the phone. Anyone else —
+        // another device, or a session bound to no device at all — is refused,
+        // so someone else's leaked token cannot be pulled into this account
+        // (they would stop getting their own pushes, and get this account's).
+        // The rule follows the holder, not the caller: skipping `did` at login
+        // does not skip it. A holder with no device recorded keeps the old rule.
+        if let RegistrationCaller::Edge { session_device } = &cmd.caller {
             let taken_elsewhere = self.devices.token_holders(&cmd.token).await?.into_iter().any(|holder| {
                 holder.account_id.as_deref() != Some(cmd.account_id.as_str())
-                    && holder.device_id.as_deref().is_some_and(|d| !d.is_empty() && d != cmd.device_id)
+                    && holder
+                        .device_id
+                        .as_deref()
+                        .filter(|d| !d.is_empty())
+                        .is_some_and(|d| session_device.as_deref() != Some(d))
             });
             if taken_elsewhere {
                 return Err(NotificationError::PushTokenOnAnotherDevice);

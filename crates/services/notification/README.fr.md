@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: fdcb5213930337510ca6e6a755cabb66548e4efb1318b4135ee957d9a5eac4e2
+  source_sha256: 74bf8290a7ea0a0bb98e7052a87f4ac6f4519eb2f5974735700f007da262a84e
   translated_at: 2026-10-05
   status: complete
 ---
@@ -143,10 +143,12 @@ et liées à `profile_id`.
   reçoit jamais les push de l'ancien compte) ; le nouveau jeton d'un appareil remplace l'ancien. Tables
   `push_devices` (par profil) et `push_device_tokens` (par jeton). **Lié à l'appareil (#725) :** `device_id`
   est l'identifiant envoyé par la session à la connexion (`DeviceContext.device_id`, le `did` du jeton) :
-  en périphérie un autre identifiant donne `PERMISSION_DENIED`, et un jeton enregistré depuis **un autre
-  appareil** pour un autre compte est refusé (`NTF-2004`, `ALREADY_EXISTS`) — un jeton ne change de compte
-  que sur son propre téléphone, si bien qu'un jeton divulgué ne peut pas être capté par un autre compte. Une
-  session sans `did` (et le mesh) garde l'ancienne règle.
+  en périphérie un autre identifiant donne `PERMISSION_DENIED`, et un client ne peut prendre un jeton détenu
+  par un autre compte que si le `did` de sa session est l'appareil qui l'a enregistré — toute autre session,
+  **y compris une session liée à aucun appareil**, est refusée (`NTF-2004`, `ALREADY_EXISTS`). Le détenteur
+  décide, pas l'appelant : omettre le `did` à la connexion ne contourne rien ; un jeton ne change de compte
+  que sur son propre téléphone, et un jeton divulgué ne peut pas être capté par un autre compte. Le mesh, et
+  les détenteurs sans appareil enregistré, gardent l'ancienne règle.
 - Préférences (`notification_preferences`, un document JSON par profil) : push et e-mail par catégorie
   (j'aime, commentaires, mentions, nouveaux abonnés, demandes d'abonnement, messages, posts des comptes
   suivis, lieux à proximité, portefeuille), une pause (≤ 8 h), des heures calmes lues dans le fuseau IANA du

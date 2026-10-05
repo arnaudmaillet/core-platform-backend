@@ -8,7 +8,7 @@ use tonic::Request;
 use uuid::Uuid;
 
 use notification::application::command::push_settings::RegisterDeviceCommand;
-use notification::application::command::push_settings::UpdatePreferencesCommand;
+use notification::application::command::push_settings::{RegistrationCaller, UpdatePreferencesCommand};
 use notification::domain::device::{DevicePlatform, PushEnvironment};
 use notification::domain::preferences::{HolderAge, QuietHours};
 
@@ -115,7 +115,7 @@ async fn a_token_registered_for_another_account_leaves_the_previous_one() {
         environment: PushEnvironment::Production,
         timezone:    None,
         age:         HolderAge::Adult,
-        device_bound: false,
+        caller:      RegistrationCaller::Mesh,
     };
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), as_account(&alice, "acct-a"))).await.expect("alice");
     assert_eq!(targets(&h, &alice, proto::PushCategory::Messages).await.1, vec![token.clone()]);
@@ -138,7 +138,7 @@ async fn a_teens_first_registration_writes_quiet_hours() {
         environment: PushEnvironment::Sandbox,
         timezone:    Some("Europe/Paris".into()),
         age:         HolderAge::Teen,
-        device_bound: false,
+        caller:      RegistrationCaller::Mesh,
     };
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("register");
 
@@ -166,7 +166,7 @@ async fn teen_quiet_hours_lift_at_18_unless_the_holder_chose_them() {
         environment: PushEnvironment::Production,
         timezone:    None,
         age,
-        device_bound: false,
+        caller:      RegistrationCaller::Mesh,
     };
     let quiet = |profile: String| {
         let h = &h;
@@ -204,7 +204,7 @@ async fn teen_quiet_hours_lift_at_18_unless_the_holder_chose_them() {
     assert!(quiet(chosen).await, "their own choice stays");
 }
 
-fn bound(profile: &str, account: &str, device: &str, token: &str) -> RegisterDeviceCommand {
+fn from_session(profile: &str, account: &str, device: &str, token: &str, session_device: Option<&str>) -> RegisterDeviceCommand {
     RegisterDeviceCommand {
         profile_id:   profile.to_owned(),
         account_id:   account.to_owned(),
@@ -214,8 +214,12 @@ fn bound(profile: &str, account: &str, device: &str, token: &str) -> RegisterDev
         environment:  PushEnvironment::Production,
         timezone:     None,
         age:          HolderAge::Adult,
-        device_bound: true,
+        caller:       RegistrationCaller::Edge { session_device: session_device.map(str::to_owned) },
     }
+}
+
+fn bound(profile: &str, account: &str, device: &str, token: &str) -> RegisterDeviceCommand {
+    from_session(profile, account, device, token, Some(device))
 }
 
 /// #725: from a session bound to its device, a push token only moves between
@@ -236,6 +240,16 @@ async fn a_push_token_moves_between_accounts_only_on_its_own_device() {
         .await
         .unwrap_err();
     assert_eq!(err.error_code(), "NTF-2004");
+    assert_eq!(targets(&h, &alice, proto::PushCategory::Messages).await.1, vec![token.clone()]);
+
+    // A session bound to no device at all (its client skipped `did` at login)
+    // is refused too: the holder decides, not the caller.
+    let err = h
+        .command_bus
+        .dispatch(Envelope::new(Uuid::now_v7(), from_session(&mallory, "acct-m", "phone-1", &token, None)))
+        .await
+        .unwrap_err();
+    assert_eq!(err.error_code(), "NTF-2004", "a did-less session cannot take a device-bound token");
     assert_eq!(targets(&h, &alice, proto::PushCategory::Messages).await.1, vec![token.clone()]);
 
     // Bob signs in on alice's phone: the token moves to bob.
