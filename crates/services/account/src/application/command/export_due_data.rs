@@ -1,8 +1,9 @@
 //! The GDPR data export pass (#653, Art. 15/20): every account whose export
 //! was asked for and not delivered since gets a ZIP of JSON files — its own
 //! account record (no secrets), then everything the other services hold —
-//! stored privately behind a link valid 7 days, recorded on its GDPR record
-//! (`GdprDataExportCompleted`, without the link, tells auth to email it).
+//! stored privately, its key recorded on the GDPR record (the link, valid 7
+//! days, is signed when the record is read; `GdprDataExportCompleted` tells
+//! auth to email it).
 
 use std::io::Write;
 use std::sync::Arc;
@@ -68,10 +69,8 @@ impl ExportDueData {
         let archive = zip_archive(&files)?;
         let key = format!("exports/{}/{}.zip", id.as_uuid(), Uuid::now_v7());
         self.store.put(&key, archive).await?;
-        let ttl = Duration::days(EXPORT_LINK_TTL_DAYS);
-        let link = self.store.signed_link(&key, ttl)?;
-
-        account.complete_gdpr_data_export(link, now + ttl, Uuid::now_v7())?;
+        // Only the key is kept: the link is signed when the record is read.
+        account.complete_gdpr_data_export(key, now + Duration::days(EXPORT_LINK_TTL_DAYS), Uuid::now_v7())?;
         // Version-checked: a request made meanwhile fails this and is rebuilt.
         self.repo.save(&account).await?;
         Ok(true)

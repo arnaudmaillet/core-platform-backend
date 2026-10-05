@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: c09a4914ab2ee42d349d961b027fb75ba5594e9ef20769141aff63dfede943f4
+  source_sha256: 67b97bb2f78145db6db7d863b5ab82325229f7c42cc8f0a02831888553166339
   translated_at: 2026-10-05
   status: complete
 ---
@@ -177,13 +177,21 @@ JSON — le dossier de compte du titulaire (coordonnées, consentements, réglag
 empreinte de mot de passe, ni matériel MFA, ni champ interne), les fichiers des autres services
 (`ExportSources` : profils, posts, commentaires, réactions, graphe social, conversations, liens vers les
 médias), un `README.txt` — le stocke en privé (`exports/<compte>/<id>.zip`, `S3ExportStore` : clés
-statiques, `ACCOUNT_EXPORT_*`) et inscrit un **lien signé valable 7 jours** dans le dossier RGPD
-(`data_export_url` / `data_export_expires_at`, montré au titulaire et à auth ; masqué tant qu'une demande
-plus récente est en attente). `GdprDataExportCompleted` (sans le lien — c'est un secret) permet à auth de
+statiques, `ACCOUNT_EXPORT_*`) et inscrit sa **clé d'objet** dans le dossier RGPD — jamais un lien signé,
+qui est un secret au porteur : `GetGdprRecord` signe le lien à la lecture pour ce qu'il reste des 7 jours
+(`data_export_url` / `data_export_expires_at`, montré au titulaire et à auth ; aucun tant qu'une demande plus
+récente est en attente, une fois expiré, ou sans le stockage). `GdprDataExportCompleted` (sans le lien — c'est un secret) permet à auth de
 l'envoyer par e-mail. Une source en échec laisse l'export en attente (jamais d'archive partielle) et la
 passe le réessaie (`ACC-7005`) ; l'écriture est versionnée, donc une demande faite pendant la
 construction d'un export est reconstruite. Les comptes en attente viennent d'un index partiel (migration
-0005). Le serveur démarre la passe une fois ses sources mesh branchées (prochain changement #653).
+0005). Les sources sont les RPC **mesh uniquement** des autres services (`MeshExportPeers`, chaque page,
+chaque message converti en JSON via le jeu de descripteurs du service) : par profil son profil, ses posts,
+commentaires (`ListCommentsByAuthor`), réactions (`ListReactionsByProfile`), graphe social et conversations
+(`ListConversationsByMember` + `GetHistory` : une conversation à deux en entier ; dans un groupe ou un canal,
+ses propres messages, ceux des autres en placeholders `{"from": "another member"}`) ; pour le compte, ses
+médias (`ListAssetsByOwner`, liens valables 7 jours). Le serveur lance la passe toutes les
+`ACCOUNT_EXPORT_INTERVAL_SECS` quand le stockage est configuré (`ACCOUNT_EXPORT_BUCKET`,
+core-platform-infra#28).
 
 **La MFA appartient à auth (#649) ; account ne fait que la conserver.** Toutes les RPC MFA sont **mesh
 uniquement** : le titulaire active et désactive la connexion en deux étapes via auth, après un step-up. auth
@@ -289,6 +297,10 @@ async fn main() -> anyhow::Result<()> {
 | `ACCOUNT_GRPC_ADDR` | No | `0.0.0.0:50059` | gRPC bind address. |
 | `ACCOUNT_REQUIRE_STEP_UP` | No | `false` | `DeactivateAccount` et `RequestGdprDeletion` en périphérie exigent une preuve d'identifiant de moins de 5 min (l'`auth_time` du jeton, issu de `auth.v1.Login` / `VerifyCredentials`) ; sinon `PERMISSION_DENIED` `step_up_required…`. À activer une fois que les clients font le step-up. |
 | `ACCOUNT_GDPR_JANITOR_INTERVAL_SECS` | No | `3600` | Fréquence à laquelle account-server anonymise les comptes dont le délai de grâce d'effacement (30 jours) est écoulé ; `0` désactive le janitor. Sûr sur chaque réplique (CAS optimiste). |
+| `ACCOUNT_EXPORT_BUCKET` · `ACCOUNT_EXPORT_S3_ENDPOINT` · `ACCOUNT_EXPORT_S3_PUBLIC_ENDPOINT` · `ACCOUNT_EXPORT_S3_REGION` | Non | non défini · `https://s3.amazonaws.com` · = endpoint · `us-east-1` | Le stockage des exports RGPD (#653). Bucket non défini : les exports restent en attente. |
+| `ACCOUNT_EXPORT_S3_ACCESS_KEY` · `ACCOUNT_EXPORT_S3_SECRET_KEY` | Non | non défini | Clés statiques de ce bucket (un presign de 7 jours exige des identifiants hors session). |
+| `ACCOUNT_EXPORT_INTERVAL_SECS` | Non | `300` | Fréquence de la passe d'export ; `0` la désactive. |
+| `ACCOUNT_{PROFILE,POST,COMMENT,ENGAGEMENT,SOCIAL_GRAPH,CHAT,MEDIA}_GRPC_ENDPOINT` | Non | `http://localhost:<port>` | Les sources mesh de l'export. Une source injoignable laisse l'export en attente. |
 
 > Le réglage complet connexion/timeout/pool vit dans les crates partagés `postgres-storage` et `transport`.
 

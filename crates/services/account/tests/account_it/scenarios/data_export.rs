@@ -10,13 +10,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use cqrs::{CommandBus, Envelope, QueryBus};
+use cqrs::{CommandBus, Envelope};
 use uuid::Uuid;
 
 use account::application::command::request_data_export::RequestDataExportCommand;
 use account::application::command::ExportDueData;
 use account::application::port::{ExportFile, ExportSources};
-use account::application::query::{GdprRecordView, GetGdprRecordQuery};
+use account::application::query::{GdprRecordView, GetGdprRecordHandler, GetGdprRecordQuery};
+use cqrs::QueryHandler;
 use account::domain::value_object::AccountId;
 use account::error::AccountError;
 use account::infrastructure::export::{ExportStoreConfig, S3ExportStore};
@@ -63,9 +64,11 @@ async fn active_account(h: &TestHarness) -> String {
     id
 }
 
-async fn record(h: &TestHarness, id: &str) -> GdprRecordView {
-    h.query_bus
-        .dispatch(Envelope::new(Uuid::now_v7(), GetGdprRecordQuery { account_id: id.to_owned() }))
+/// The GDPR record as the holder reads it: the link signed on read.
+async fn record(h: &TestHarness, store: &Arc<S3ExportStore>, id: &str) -> GdprRecordView {
+    GetGdprRecordHandler::new(Arc::clone(&h.repository))
+        .with_exports(Arc::clone(store) as _)
+        .handle(Envelope::new(Uuid::now_v7(), GetGdprRecordQuery { account_id: id.to_owned() }))
         .await
         .unwrap()
 }
@@ -81,25 +84,35 @@ async fn request_export(h: &TestHarness, id: &str) {
 async fn a_requested_export_is_zipped_stored_and_linked_once() {
     let h = TestHarness::start().await;
     let sources = Arc::new(Sources::default());
-    let pass = ExportDueData::new(Arc::clone(&h.repository), Arc::clone(&sources) as _, Arc::new(store().await));
+    let store = Arc::new(store().await);
+    let pass = ExportDueData::new(Arc::clone(&h.repository), Arc::clone(&sources) as _, Arc::clone(&store) as _);
     let id = active_account(&h).await;
     request_export(&h, &id).await;
-    assert!(record(&h, &id).await.data_export_url.is_none());
+    assert!(record(&h, &store, &id).await.data_export_url.is_none());
 
     // A source down: nothing is delivered, the export stays pending.
     sources.down.store(true, Ordering::SeqCst);
     let failed = pass.run(Utc::now(), 1000).await.unwrap();
     assert!(failed.retried >= 1);
-    assert!(record(&h, &id).await.data_export_url.is_none(), "no partial archive");
+    assert!(record(&h, &store, &id).await.data_export_url.is_none(), "no partial archive");
 
     sources.down.store(false, Ordering::SeqCst);
     let done = pass.run(Utc::now(), 1000).await.unwrap();
     assert!(done.delivered >= 1);
-    let delivered = record(&h, &id).await;
+    let delivered = record(&h, &store, &id).await;
     let link = delivered.data_export_url.clone().expect("a link");
     let expires = delivered.data_export_expires_at.expect("an expiry");
     assert!(expires > Utc::now() + chrono::Duration::days(6), "valid ~7 days: {expires}");
     assert!(delivered.data_export_completed_at.is_some());
+    // No bearer credential at rest: the row holds the object key only.
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT gdpr_data_export_key FROM accounts WHERE id = $1::uuid")
+            .bind(&id)
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    let key = stored.expect("a key");
+    assert!(key.starts_with("exports/") && !key.contains("X-Amz"), "{key}");
 
     // The link serves the archive: the account record (no secret) + the files.
     let bytes = reqwest::get(&link).await.unwrap().bytes().await.unwrap();
@@ -113,10 +126,14 @@ async fn a_requested_export_is_zipped_stored_and_linked_once() {
 
     // Delivered: the next pass leaves it alone; a new request re-opens it.
     let again = pass.run(Utc::now(), 1000).await.unwrap();
-    assert_eq!(record(&h, &id).await.data_export_url.as_deref(), Some(link.as_str()), "not rebuilt: {again:?}");
+    let reread: Option<String> =
+        sqlx::query_scalar("SELECT gdpr_data_export_key FROM accounts WHERE id = $1::uuid").bind(&id).fetch_one(&h.pool).await.unwrap();
+    assert_eq!(reread.as_deref(), Some(key.as_str()), "not rebuilt: {again:?}");
     request_export(&h, &id).await;
-    assert!(record(&h, &id).await.data_export_url.is_none(), "a newer request hides the old link");
+    assert!(record(&h, &store, &id).await.data_export_url.is_none(), "a newer request hides the old link");
     pass.run(Utc::now(), 1000).await.unwrap();
-    let fresh = record(&h, &id).await.data_export_url.expect("a new link");
-    assert_ne!(fresh, link);
+    record(&h, &store, &id).await.data_export_url.expect("a new link");
+    let rebuilt: Option<String> =
+        sqlx::query_scalar("SELECT gdpr_data_export_key FROM accounts WHERE id = $1::uuid").bind(&id).fetch_one(&h.pool).await.unwrap();
+    assert_ne!(rebuilt.as_deref(), Some(key.as_str()), "a new archive");
 }

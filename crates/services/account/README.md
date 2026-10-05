@@ -161,13 +161,20 @@ pass** (`ExportDueData`) then builds, per pending account, a ZIP of JSON files �
 account record (contact details, consents, sign-in settings; **no** password hash, MFA material or
 internal fields), the other services' files (`ExportSources`: profiles, posts, comments, reactions, the
 social graph, conversations, media links), a `README.txt` — stores it privately
-(`exports/<account>/<id>.zip`, `S3ExportStore`: static keys, `ACCOUNT_EXPORT_*`) and records a **signed
-link valid 7 days** on the GDPR record (`data_export_url` / `data_export_expires_at`, shown to the holder
-and to auth; hidden while a newer request is pending). `GdprDataExportCompleted` (without the link — it
+(`exports/<account>/<id>.zip`, `S3ExportStore`: static keys, `ACCOUNT_EXPORT_*`) and records its **object
+key** on the GDPR record — never a signed link, which is a bearer credential: `GetGdprRecord` signs the
+link on read for what is left of the 7 days (`data_export_url` / `data_export_expires_at`, shown to the
+holder and to auth; none while a newer request is pending, once expired, or without the store). `GdprDataExportCompleted` (without the link — it
 is a credential) lets auth email it. A failing source leaves the export pending (never a partial
 archive) and the pass retries it (`ACC-7005`); the save is version-checked, so a request made while an
 export was being built is built anew. Pending accounts come from a partial index (migration 0005). The
-server starts the pass once its mesh sources are wired (next #653 change).
+sources are the other services' **mesh-only** RPCs (`MeshExportPeers`, every page, each message
+transcoded to JSON through the service's own descriptor set): per profile its profile, posts, comments
+(`ListCommentsByAuthor`), reactions (`ListReactionsByProfile`), social graph, and conversations
+(`ListConversationsByMember` + `GetHistory`: a one-to-one conversation in full; in a group or channel the
+holder's own messages, the others' as `{"from": "another member"}` placeholders); for the account its
+media (`ListAssetsByOwner`, links valid 7 days). The server runs the pass every
+`ACCOUNT_EXPORT_INTERVAL_SECS` when the store is configured (`ACCOUNT_EXPORT_BUCKET`, core-platform-infra#28).
 
 **MFA is auth's (#649); account only keeps it.** Every MFA RPC is **mesh only**: the holder enrolls and
 disables two-step sign-in through auth, after a step-up. auth encrypts the TOTP seed with its own key
@@ -271,6 +278,10 @@ async fn main() -> anyhow::Result<()> {
 | `ACCOUNT_GRPC_ADDR` | No | `0.0.0.0:50059` | gRPC bind address. |
 | `ACCOUNT_REQUIRE_STEP_UP` | No | `false` | `DeactivateAccount` and `RequestGdprDeletion` on the edge need a credential proof under 5 min old (the token's `auth_time`, from `auth.v1.Login` / `VerifyCredentials`); otherwise `PERMISSION_DENIED` `step_up_required…`. Turn on once clients step up. |
 | `ACCOUNT_GDPR_JANITOR_INTERVAL_SECS` | No | `3600` | How often account-server anonymizes the accounts whose erasure grace period (30 days) has ended; `0` turns the janitor off. Safe on every replica (optimistic CAS). |
+| `ACCOUNT_EXPORT_BUCKET` · `ACCOUNT_EXPORT_S3_ENDPOINT` · `ACCOUNT_EXPORT_S3_PUBLIC_ENDPOINT` · `ACCOUNT_EXPORT_S3_REGION` | No | unset · `https://s3.amazonaws.com` · = endpoint · `us-east-1` | The GDPR export store (#653). Unset bucket: exports stay pending. |
+| `ACCOUNT_EXPORT_S3_ACCESS_KEY` · `ACCOUNT_EXPORT_S3_SECRET_KEY` | No | unset | Static keys for that bucket (a 7-day presign needs non-session credentials). |
+| `ACCOUNT_EXPORT_INTERVAL_SECS` | No | `300` | How often the export pass runs; `0` turns it off. |
+| `ACCOUNT_{PROFILE,POST,COMMENT,ENGAGEMENT,SOCIAL_GRAPH,CHAT,MEDIA}_GRPC_ENDPOINT` | No | `http://localhost:<port>` | The export's mesh sources. An unreachable one leaves the export pending. |
 
 > Full connection/timeout/pool tuning lives in the shared `postgres-storage` and `transport` crates.
 

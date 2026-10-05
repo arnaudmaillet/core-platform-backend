@@ -699,8 +699,8 @@ impl Account {
         Ok(())
     }
 
-    /// Delivers the requested GDPR data export (#653): its download link, good
-    /// until `expires_at`. Emits [`GdprDataExportCompleted`] (without the
+    /// Delivers the requested GDPR data export (#653): the archive's object
+    /// key, its link handed out until `expires_at`. Emits [`GdprDataExportCompleted`] (without the
     /// link). The save is version-checked, so a request made while the export
     /// was being built (a newer `requested_at`) fails it and is built anew.
     ///
@@ -708,7 +708,7 @@ impl Account {
     /// [`AccountError::DomainViolation`] when no export is pending.
     pub fn complete_gdpr_data_export(
         &mut self,
-        url: String,
+        key: String,
         expires_at: DateTime<Utc>,
         correlation_id: Uuid,
     ) -> Result<(), AccountError> {
@@ -720,7 +720,7 @@ impl Account {
         }
         let now = self.touch_now();
         self.gdpr.data_export_completed_at = Some(now);
-        self.gdpr.data_export_url = Some(url);
+        self.gdpr.data_export_key = Some(key);
         self.gdpr.data_export_expires_at = Some(expires_at);
         self.pending_events.push(DomainEvent::GdprDataExportCompleted(GdprDataExportCompleted {
             account_id: self.id,
@@ -1436,9 +1436,9 @@ mod tests {
 
         account.request_gdpr_data_export(Uuid::now_v7()).unwrap();
         assert!(account.gdpr().has_pending_export());
-        account.complete_gdpr_data_export("https://link/1".into(), expires, Uuid::now_v7()).unwrap();
+        account.complete_gdpr_data_export("exports/a/1.zip".into(), expires, Uuid::now_v7()).unwrap();
         assert!(!account.gdpr().has_pending_export());
-        assert_eq!(account.gdpr().data_export_url(), Some("https://link/1"));
+        assert_eq!(account.gdpr().data_export_key(), Some("exports/a/1.zip"));
         assert!(matches!(
             account.events().last(),
             Some(DomainEvent::GdprDataExportCompleted(e)) if e.expires_at == expires

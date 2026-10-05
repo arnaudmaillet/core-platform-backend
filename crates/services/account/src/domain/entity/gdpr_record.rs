@@ -48,9 +48,10 @@ pub struct GdprRecord {
     /// Timestamp at which the data export was delivered to the account holder.
     pub data_export_completed_at: Option<DateTime<Utc>>,
 
-    /// The delivered export's download link (#653) — a credential, shown to
-    /// the holder only — and when it stops working.
-    pub data_export_url: Option<String>,
+    /// The delivered export's archive (#653): its object key in the private
+    /// store — never a signed link, which is a credential — and when its link
+    /// stops being handed out.
+    pub data_export_key: Option<String>,
     pub data_export_expires_at: Option<DateTime<Utc>>,
 }
 
@@ -79,19 +80,19 @@ impl GdprRecord {
             anonymized_at,
             data_export_requested_at,
             data_export_completed_at,
-            data_export_url: None,
+            data_export_key: None,
             data_export_expires_at: None,
         }
     }
 
-    /// Restores the delivered export's link from persistence (#653).
-    pub fn with_data_export_delivery(mut self, url: Option<String>, expires_at: Option<DateTime<Utc>>) -> Self {
-        self.data_export_url = url;
+    /// Restores the delivered export from persistence (#653).
+    pub fn with_data_export_delivery(mut self, key: Option<String>, expires_at: Option<DateTime<Utc>>) -> Self {
+        self.data_export_key = key;
         self.data_export_expires_at = expires_at;
         self
     }
 
-    pub fn data_export_url(&self) -> Option<&str> { self.data_export_url.as_deref() }
+    pub fn data_export_key(&self) -> Option<&str> { self.data_export_key.as_deref() }
     pub fn data_export_expires_at(&self) -> Option<DateTime<Utc>> { self.data_export_expires_at }
 
     /// An export was asked for and not delivered since (#653).

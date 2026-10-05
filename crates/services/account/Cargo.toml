@@ -15,6 +15,17 @@ rusty-s3 = { workspace = true }
 reqwest  = { workspace = true }
 url      = { workspace = true }
 serde_json = { workspace = true }
+# The export's mesh sources (#653): each service's own messages, transcoded
+# to JSON through its descriptor set (field names as in the proto).
+prost         = { workspace = true }
+prost-reflect = { version = "0.16", features = ["serde"] }
+profile-api      = { workspace = true }
+post-api         = { workspace = true }
+comment-api      = { workspace = true }
+engagement-api   = { workspace = true }
+social-graph-api = { workspace = true }
+chat-api         = { workspace = true }
+media-api        = { workspace = true }
 account-api = { workspace = true }
 # ── Shared platform infrastructure ────────────────────────────────────────────
 error            = { workspace = true }

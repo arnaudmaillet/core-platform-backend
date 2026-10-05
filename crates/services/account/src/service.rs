@@ -16,9 +16,11 @@ use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
 
 use crate::app::App;
-use crate::application::command::AnonymizeDueAccounts;
+use crate::application::command::{AnonymizeDueAccounts, ExportDueData, PeerExportSources};
+use crate::infrastructure::export::{ExportStoreConfig, MeshEndpoints, MeshExportPeers, S3ExportStore};
+use crate::infrastructure::worker::export_pass::run_export_pass;
 use crate::infrastructure::worker::gdpr_janitor::run_gdpr_janitor;
-use crate::application::port::EventPublisher;
+use crate::application::port::{EventPublisher, ExportStore};
 use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 use crate::infrastructure::grpc::handler::account_service_handler::AccountServiceServer;
 use crate::infrastructure::grpc::handler::AccountServiceHandler;
@@ -74,10 +76,43 @@ impl Service for AccountService {
         // a no-op log publisher keeps local/dev runs broker-free.
         let publisher = build_publisher()?;
 
+        // The GDPR data export (#653): on only with a store (ACCOUNT_EXPORT_*);
+        // without it an export request stays pending.
+        let exports = match ExportStoreConfig::from_env() {
+            Some(config) => Some(Arc::new(
+                S3ExportStore::new(config).map_err(|e| anyhow::anyhow!("account export store: {e}"))?,
+            )),
+            None => {
+                tracing::warn!("ACCOUNT_EXPORT_BUCKET unset: GDPR data exports stay pending");
+                None
+            }
+        };
+
         // `PgPool` is `Arc`-backed: one clone serves the app graph, one the probe.
-        let app = App::build(pool.clone(), publisher)
-            .await
-            .map_err(|e| anyhow::anyhow!("account app build: {e}"))?;
+        let app = App::build_with_exports(
+            pool.clone(),
+            publisher,
+            exports.clone().map(|store| store as Arc<dyn ExportStore>),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("account app build: {e}"))?;
+
+        // The export pass: gathers each pending account's data over the mesh
+        // (ACCOUNT_EXPORT_INTERVAL_SECS, default 300; 0 = off).
+        let export_secs = std::env::var("ACCOUNT_EXPORT_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(300);
+        if let (Some(store), true) = (exports, export_secs > 0) {
+            let peers = MeshExportPeers::new(&MeshEndpoints::from_env())
+                .map_err(|e| anyhow::anyhow!("account export peers: {e}"))?;
+            let pass = Arc::new(ExportDueData::new(
+                Arc::clone(&app.repository),
+                Arc::new(PeerExportSources::new(Arc::new(peers))),
+                store,
+            ));
+            tokio::spawn(run_export_pass(pass, std::time::Duration::from_secs(export_secs)));
+        }
 
         // The GDPR janitor: anonymizes accounts whose erasure grace period has
         // ended (ACCOUNT_GDPR_JANITOR_INTERVAL_SECS, default hourly; 0 = off).
