@@ -31,9 +31,14 @@ pub struct ApplyModerationOutcome {
 }
 
 /// Reactively enforces a moderation verdict on the byte plane: a quarantine revokes
-/// delivery (state flip + CDN invalidate + cache drop); a restore reinstates it.
+/// delivery (state flip + cache drop + CDN purge); a restore reinstates it.
 /// This is the content-service side of moderation's enforcement — `media` flips
 /// visibility, it does not decide.
+///
+/// The quarantine is **persisted first**: from then on `ResolveDelivery` stops
+/// handing out URLs whatever the CDN does. The edge purge comes last; if it
+/// fails the error propagates and the consumer redelivers, and the redelivery —
+/// the asset already quarantined, a no-op transition — only purges again.
 pub struct ApplyModerationHandler {
     assets: Arc<dyn AssetRepository>,
     cdn: Arc<dyn CdnGateway>,
@@ -63,26 +68,22 @@ impl ApplyModerationHandler {
         };
 
         match cmd.action {
-            ModerationAction::Quarantine => {
-                asset.quarantine(now)?;
-                // Revoke delivery for every rendition (the takedown path).
-                let keys: Vec<StorageKey> =
-                    asset.renditions().iter().map(|r| r.storage_key().clone()).collect();
-                if !keys.is_empty() {
-                    self.cdn.invalidate(&keys).await?;
-                }
-                self.cache.invalidate(&asset.id()).await?;
-            }
-            ModerationAction::Restore => {
-                asset.restore(now)?;
-                // Drop the (placeholder) cache entry so the next read re-resolves.
-                self.cache.invalidate(&asset.id()).await?;
-            }
+            ModerationAction::Quarantine => asset.quarantine(now)?,
+            ModerationAction::Restore => asset.restore(now)?,
         }
-
         self.assets.save(&asset).await?;
         for event in asset.drain_events() {
             self.publisher.publish(&event).await?;
+        }
+        // Drop the cached delivery so the next read re-resolves against the new state.
+        self.cache.invalidate(&asset.id()).await?;
+
+        if cmd.action == ModerationAction::Quarantine {
+            // Purge the edge's cached copies of every rendition (the takedown path).
+            let keys: Vec<StorageKey> = asset.renditions().iter().map(|r| r.storage_key().clone()).collect();
+            if !keys.is_empty() {
+                self.cdn.invalidate(&keys).await?;
+            }
         }
         Ok(ApplyModerationOutcome { applied: true, state: Some(asset.state()) })
     }
@@ -123,6 +124,40 @@ mod tests {
             .unwrap();
         assert_eq!(out.state, Some(AssetState::Ready));
         assert_eq!(fx.publisher.event_types(), vec!["media.asset_restored"]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_edge_purge_keeps_the_quarantine_and_the_redelivery_purges() {
+        let fx = Fixture::new();
+        let (asset_id, _owner) = fx.ready_asset(MediaKind::PostImage).await;
+        fx.publisher.clear();
+
+        // CloudFront is down: the takedown errors (so it is redelivered)…
+        fx.cdn.fail(true);
+        let err = fx
+            .apply_moderation_handler()
+            .handle(env(asset_id, ModerationAction::Quarantine), t0())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MediaError::CdnInvalidationFailed { .. }));
+        // …but the quarantine is already persisted and announced: nothing is
+        // delivered any more.
+        let asset = fx.assets.find_by_id(&asset_id).await.unwrap().unwrap();
+        assert_eq!(asset.state(), AssetState::Quarantined);
+        assert_eq!(fx.publisher.event_types(), vec!["media.asset_quarantined"]);
+        assert!(fx.cdn.invalidated_keys().is_empty());
+
+        // The redelivery, CloudFront back: only the purge happens.
+        fx.cdn.fail(false);
+        fx.publisher.clear();
+        let out = fx
+            .apply_moderation_handler()
+            .handle(env(asset_id, ModerationAction::Quarantine), t0())
+            .await
+            .unwrap();
+        assert_eq!(out.state, Some(AssetState::Quarantined));
+        assert!(!fx.cdn.invalidated_keys().is_empty(), "purged on redelivery");
+        assert!(fx.publisher.event_types().is_empty(), "no second quarantine event");
     }
 
     #[tokio::test]

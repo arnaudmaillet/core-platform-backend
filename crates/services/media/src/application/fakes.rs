@@ -182,15 +182,21 @@ impl ObjectStore for StubObjectStore {
 
 pub struct RecordingCdnGateway {
     invalidated: Mutex<Vec<String>>,
+    failing: std::sync::atomic::AtomicBool,
 }
 
 impl RecordingCdnGateway {
     pub fn new() -> Self {
-        Self { invalidated: Mutex::new(Vec::new()) }
+        Self { invalidated: Mutex::new(Vec::new()), failing: std::sync::atomic::AtomicBool::new(false) }
     }
 
     pub fn invalidated_keys(&self) -> Vec<String> {
         self.invalidated.lock().unwrap().clone()
+    }
+
+    /// Makes `invalidate` fail (a CloudFront outage) until called with `false`.
+    pub fn fail(&self, failing: bool) {
+        self.failing.store(failing, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -210,6 +216,9 @@ impl CdnGateway for RecordingCdnGateway {
     }
 
     async fn invalidate(&self, keys: &[StorageKey]) -> Result<(), MediaError> {
+        if self.failing.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(MediaError::CdnInvalidationFailed { reason: "edge down (fake)".into() });
+        }
         let mut log = self.invalidated.lock().unwrap();
         for k in keys {
             log.push(k.as_str().to_owned());
