@@ -183,6 +183,28 @@ impl TestHarness {
         post_uuid
     }
 
+    /// Indexes a post at `(lat, lng)` published at `published_at_ms` (a late
+    /// or repeated `post.published`).
+    pub async fn index_post_published_at(&self, lat: f64, lng: f64, published_at_ms: i64) -> Uuid {
+        let post_uuid = Uuid::now_v7();
+        let cmd = IndexPostCommand {
+            post_id:           post_uuid.to_string(),
+            author_id:         Uuid::now_v7().to_string(),
+            author_handle:     "tester".to_owned(),
+            author_avatar_url: String::new(),
+            thumbnail_url:     String::new(),
+            caption:           String::new(),
+            lat,
+            lng,
+            virality_score:    5.0,
+            published_at_ms,
+            retention_secs:    None,
+            author_tier:       0,
+        };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
+        post_uuid
+    }
+
     /// Re-scores a post at `(lat, lng)`, as the score updater does.
     pub async fn update_score(&self, post: Uuid, lat: f64, lng: f64, score: f64) {
         let coord = GeoCoordinate::new(lat, lng).expect("coordinate");

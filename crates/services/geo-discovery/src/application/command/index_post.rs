@@ -32,7 +32,7 @@ pub struct IndexPostCommand {
     pub lng:               f64,
     pub virality_score:    f64,
     pub published_at_ms:   i64,
-    /// Seconds. None → service default (172 800 s).
+    /// Seconds from `published_at_ms`. None → service default (172 800 s).
     pub retention_secs:    Option<u64>,
     /// Author tier at publish time. 0=Standard, 1=Premium, 2=VIP.
     /// Sourced from the post.published Kafka event (denormalized by services/post).
@@ -87,9 +87,15 @@ where
         let author_id = AuthorId::try_from(cmd.author_id.as_str())?;
         let coord     = GeoCoordinate::new(cmd.lat, cmd.lng)?;
         let score     = ViralityScore::new(cmd.virality_score)?;
-        let ttl       = cmd.retention_secs
+        let retention = cmd.retention_secs
             .map(RetentionTtl::from_secs)
             .unwrap_or_else(RetentionTtl::default_ttl);
+        // The retention runs from the publication: a late or repeated event (a
+        // restore re-announces an old post) does not resurface it.
+        let Some(ttl) = retention.remaining(cmd.published_at_ms, chrono::Utc::now().timestamp_millis()) else {
+            tracing::debug!(post_id = %post_id, "post.published past its map retention — not indexed");
+            return Ok(());
+        };
 
         let idx_r5 = H3Index::encode(&coord, H3Resolution::R5);
         let idx_r7 = H3Index::encode(&coord, H3Resolution::R7);

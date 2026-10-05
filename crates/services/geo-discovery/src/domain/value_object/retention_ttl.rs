@@ -37,4 +37,34 @@ impl RetentionTtl {
     pub fn as_duration(&self) -> Duration {
         self.0
     }
+
+    /// What is left of this retention for a post published at
+    /// `published_at_ms`, at `now_ms`: the retention runs from the publication,
+    /// not from when the event is processed, so a late or repeated
+    /// `post.published` (a restore re-announces an old post) cannot put it back
+    /// on the map for a fresh window. `None` once it has run out. A publication
+    /// time ahead of `now` (clock skew) keeps the whole retention.
+    pub fn remaining(&self, published_at_ms: i64, now_ms: i64) -> Option<Self> {
+        let age_secs = (now_ms.saturating_sub(published_at_ms).max(0) / 1000) as u64;
+        let left = self.0.as_secs().checked_sub(age_secs).filter(|s| *s > 0)?;
+        Some(Self(Duration::from_secs(left)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HOUR_MS: i64 = 3_600_000;
+
+    #[test]
+    fn the_retention_runs_from_the_publication() {
+        let now = 1_800_000_000_000;
+        let ttl = RetentionTtl::default_ttl();
+        assert_eq!(ttl.remaining(now, now), Some(ttl), "just published: all of it");
+        assert_eq!(ttl.remaining(now - 10 * HOUR_MS, now).map(|t| t.as_redis_ex()), Some(38 * 3600));
+        assert_eq!(ttl.remaining(now - 48 * HOUR_MS, now), None, "run out");
+        assert_eq!(ttl.remaining(now - 30 * 24 * HOUR_MS, now), None, "a restored month-old post stays off the map");
+        assert_eq!(ttl.remaining(now + HOUR_MS, now), Some(ttl), "clock skew");
+    }
 }
