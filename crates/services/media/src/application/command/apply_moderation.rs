@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -5,6 +6,7 @@ use cqrs::Envelope;
 
 use crate::application::command::asset_objects;
 use crate::application::port::{AssetRepository, CdnGateway, DeliveryCache, EventPublisher, ObjectStore};
+use crate::domain::aggregate::Asset;
 use crate::domain::value_object::{AssetId, AssetState, StorageKey};
 use crate::error::MediaError;
 
@@ -52,6 +54,18 @@ pub struct ApplyModerationHandler {
 }
 
 impl ApplyModerationHandler {
+    /// Saves each asset, publishes its events, and drops its cached delivery.
+    async fn persist(&self, group: &mut [Asset]) -> Result<(), MediaError> {
+        for asset in group.iter_mut() {
+            self.assets.save(asset).await?;
+            for event in asset.drain_events() {
+                self.publisher.publish(&event).await?;
+            }
+            self.cache.invalidate(&asset.id()).await?;
+        }
+        Ok(())
+    }
+
     pub fn new(
         assets: Arc<dyn AssetRepository>,
         store: Arc<dyn ObjectStore>,
@@ -68,37 +82,59 @@ impl ApplyModerationHandler {
         now: DateTime<Utc>,
     ) -> Result<ApplyModerationOutcome, MediaError> {
         let cmd = envelope.payload;
-        let Some(mut asset) = self.assets.find_by_id(&cmd.asset_id).await? else {
+        let Some(asset) = self.assets.find_by_id(&cmd.asset_id).await? else {
             // Unknown asset — fold to a no-op so the consumer commits.
             return Ok(ApplyModerationOutcome { applied: false, state: None });
         };
+        // Identical bytes share their objects, so a takedown (or its reversal)
+        // is about the content: it applies to every asset holding these bytes.
+        let mut group = vec![asset];
+        if let Some(hash) = group[0].content_hash().cloned() {
+            let target = group[0].id();
+            group.extend(self.assets.find_by_content_hash(&hash).await?.into_iter().filter(|a| a.id() != target));
+        }
 
         match cmd.action {
-            ModerationAction::Quarantine => asset.quarantine(now)?,
-            ModerationAction::Restore => {
-                if asset.state() == AssetState::Quarantined {
-                    asset_objects::release(self.store.as_ref(), &asset).await?;
+            ModerationAction::Quarantine => {
+                for asset in &mut group {
+                    asset.quarantine(now)?;
                 }
-                asset.restore(now)?;
+                self.persist(&mut group).await?;
+                // The origin stops serving, then the edge drops its cached copies.
+                let mut keys = BTreeSet::new();
+                for asset in &group {
+                    let moved = asset_objects::quarantine(self.store.as_ref(), asset).await?;
+                    keys.extend(moved.iter().map(|k| k.as_str().to_owned()));
+                }
+                if !keys.is_empty() {
+                    self.cdn.invalidate(&keys.into_iter().map(StorageKey::from_raw).collect::<Vec<_>>()).await?;
+                }
+            }
+            ModerationAction::Restore => {
+                if group[0].state() != AssetState::Quarantined {
+                    group[0].restore(now)?; // the domain's refusal, as before
+                }
+                // Bytes held as evidence (CSAM) are never put back, whichever copy
+                // the reversal names.
+                if group.iter().any(|a| a.legal_hold()) {
+                    tracing::error!(
+                        asset.id = %group[0].id(),
+                        "restore refused: an asset with these bytes is under a legal hold"
+                    );
+                    return Ok(ApplyModerationOutcome { applied: false, state: Some(group[0].state()) });
+                }
+                let quarantined: Vec<usize> =
+                    (0..group.len()).filter(|&i| group[i].state() == AssetState::Quarantined).collect();
+                for &i in &quarantined {
+                    asset_objects::release(self.store.as_ref(), &group[i]).await?;
+                }
+                for &i in &quarantined {
+                    group[i].restore(now)?;
+                }
+                self.persist(&mut group).await?;
             }
         }
-        self.assets.save(&asset).await?;
-        for event in asset.drain_events() {
-            self.publisher.publish(&event).await?;
-        }
-        // Drop the cached delivery so the next read re-resolves against the new state.
-        self.cache.invalidate(&asset.id()).await?;
-
-        if cmd.action == ModerationAction::Quarantine
-            && asset_objects::owns_objects(self.assets.as_ref(), &asset).await?
-        {
-            // The origin stops serving, then the edge drops its cached copies.
-            let keys: Vec<StorageKey> = asset_objects::quarantine(self.store.as_ref(), &asset).await?;
-            if !keys.is_empty() {
-                self.cdn.invalidate(&keys).await?;
-            }
-        }
-        Ok(ApplyModerationOutcome { applied: true, state: Some(asset.state()) })
+        Ok(ApplyModerationOutcome { applied: true, state: Some(group[0].state()) })
     }
 }
 
@@ -211,18 +247,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn objects_shared_with_another_delivered_asset_stay_put() {
+    async fn a_takedown_applies_to_every_asset_with_the_same_bytes_and_so_does_its_reversal() {
         let fx = Fixture::new();
         // Same bytes (the fake probe hashes every upload alike): same keys.
         let (taken_down, _) = fx.ready_asset(MediaKind::PostImage).await;
-        let (_still_live, _) = fx.ready_asset(MediaKind::PostImage).await;
+        let (copy, _) = fx.ready_asset(MediaKind::PostImage).await;
         publish_objects(&fx, taken_down).await;
         let stored = fx.store.keys();
+        fx.publisher.clear();
+
+        fx.apply_moderation_handler().handle(env(taken_down, ModerationAction::Quarantine), t0()).await.unwrap();
+        for id in [taken_down, copy] {
+            assert_eq!(fx.assets.find_by_id(&id).await.unwrap().unwrap().state(), AssetState::Quarantined);
+        }
+        assert_eq!(fx.publisher.event_types(), vec!["media.asset_quarantined", "media.asset_quarantined"]);
+        assert!(fx.store.keys().iter().all(|k| k.starts_with("quarantine/")), "no copy left at a public key");
+
+        fx.apply_moderation_handler().handle(env(taken_down, ModerationAction::Restore), t0()).await.unwrap();
+        for id in [taken_down, copy] {
+            assert_eq!(fx.assets.find_by_id(&id).await.unwrap().unwrap().state(), AssetState::Ready);
+        }
+        assert_eq!(fx.store.keys(), stored);
+    }
+
+    #[tokio::test]
+    async fn bytes_under_a_legal_hold_are_never_restored_through_a_copy() {
+        let fx = Fixture::new();
+        let (taken_down, _) = fx.ready_asset(MediaKind::PostImage).await;
+        let (evidence, _) = fx.ready_asset(MediaKind::PostImage).await;
+        publish_objects(&fx, taken_down).await;
+        fx.apply_moderation_handler().handle(env(taken_down, ModerationAction::Quarantine), t0()).await.unwrap();
+        {
+            let mut held = fx.assets.find_by_id(&evidence).await.unwrap().unwrap();
+            held.place_legal_hold(t0());
+            fx.assets.save(&held).await.unwrap();
+        }
+        let quarantined = fx.store.keys();
 
         let out =
-            fx.apply_moderation_handler().handle(env(taken_down, ModerationAction::Quarantine), t0()).await.unwrap();
-        assert_eq!(out.state, Some(AssetState::Quarantined), "the asset itself is still taken down");
-        assert_eq!(fx.store.keys(), stored, "the other asset's objects are untouched");
+            fx.apply_moderation_handler().handle(env(taken_down, ModerationAction::Restore), t0()).await.unwrap();
+        assert!(!out.applied);
+        assert_eq!(out.state, Some(AssetState::Quarantined));
+        assert_eq!(fx.store.keys(), quarantined, "the bytes stay out of the origin");
     }
 
     #[tokio::test]

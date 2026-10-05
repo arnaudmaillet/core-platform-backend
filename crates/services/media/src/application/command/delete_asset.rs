@@ -140,6 +140,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deleting_one_of_two_identical_assets_keeps_the_shared_objects() {
+        let fx = Fixture::new();
+        let (asset_id, owner) = fx.ready_asset(MediaKind::PostImage).await;
+        let (_copy, _) = fx.ready_asset(MediaKind::PostImage).await;
+        let asset = fx.assets.find_by_id(&asset_id).await.unwrap().unwrap();
+        for r in asset.renditions() {
+            fx.store.put_object(r.storage_key(), 10, "etag");
+        }
+        fx.delete_handler().handle(env(asset_id, owner), t0()).await.unwrap();
+        for r in asset.renditions() {
+            assert!(fx.store.keys().contains(&r.storage_key().as_str().to_owned()), "the copy still uses it");
+        }
+    }
+
+    #[tokio::test]
     async fn a_legal_hold_blocks_deletion_before_any_byte_is_touched() {
         let fx = Fixture::new();
         let (asset_id, owner) = fx.ready_asset(MediaKind::PostImage).await;

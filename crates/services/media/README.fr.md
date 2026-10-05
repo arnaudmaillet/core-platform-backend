@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: c89b3c2413ec93669bde1aa02f1bd9db0ce0fbea061ba867aa8a3b946788b78e
+  source_sha256: facbd522374315194584b2eda81d4ee3ad22e1c720cb99defd095af8a3a9392a
   translated_at: 2026-10-05
   status: complete
 ---
@@ -97,10 +97,12 @@ HLS d'une vidéo) et son upload d'origine **passent sous `quarantine/`** — un 
 que l'accès d'origine du CDN n'autorise pas — et le CDN est purgé en dernier. Une
 restauration les remet en place *avant* de rétablir l'asset. Chaque étape est
 idempotente : un événement rejoué ne refait que ce qui reste. Des octets identiques
-partagent leurs clés : si un autre asset aux mêmes octets est encore diffusé, les
-objets partagés restent (journalisé), sauf si l'asset retiré est sous **conservation
-légale**, qui les déplace toujours. Une suppression efface les copies publiques comme
-en quarantaine (la conservation légale la bloque toujours d'abord).
+partagent leurs clés, donc **un retrait porte sur le contenu** : tout asset aux mêmes
+octets est mis en quarantaine avec lui (chacun enregistré et annoncé), et une
+annulation les rétablit tous — sauf si l'un d'eux est sous **conservation légale**
+(preuve CSAM), auquel cas rien n'est rétabli. Une suppression efface les copies
+publiques comme en quarantaine, sauf les objets qu'un autre asset aux mêmes octets
+détient encore (la conservation légale bloque toujours une suppression d'abord).
 
 > **Invariants** (et où ils sont appliqués) : aucun message ne porte de charge
 > utile `bytes` (revue proto + règle de contrat `media-api`) ; les transitions
