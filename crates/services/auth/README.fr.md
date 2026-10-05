@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 860e222b25d43b87df0bfbaeca3ef32bf73dfa27cd15c1a2d729a14197e7bd51
+  source_sha256: ca1d0bc292863ccdde3b599304abcc9934fa235bd31ad42c226f5e704f00c367
   translated_at: 2026-10-05
   status: complete
 ---
@@ -258,6 +258,7 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_FEDERATED_NONCE_REQUIRED` | Un `SignUp` / `Login` par id_token doit consommer un nonce de `StartFederatedSignIn` (sinon `AUT-5008`). Désactivé : un nonce créé par le client est seulement journalisé — à activer quand tous les clients appellent `StartFederatedSignIn`. | `false` |
 | `AUTH_APPLE_AUDIENCES` · `AUTH_GOOGLE_AUDIENCES` | Client ids (séparés par des virgules) pour lesquels un id_token Apple / Google doit être émis (`aud` : bundle / services ids de l'app ; client ids OAuth Google). Vide = l'inscription par ce fournisseur est désactivée (`AUT-5009`). | — |
 | `AUTH_FEDERATED_JWKS_TIMEOUT_MS` | Délai de récupération des JWKS d'un fournisseur. | `3000` |
+| `AUTH_FEDERATED_JWKS_REFRESH_SECS` | Les clés d'Apple / Google sont récupérées au démarrage puis à cet intervalle en arrière-plan (rotations prises en compte, clés retirées abandonnées ; un échec conserve les dernières clés). Un `kid` inconnu déclenche toujours une récupération, au plus une fois par minute. | `21600` |
 | `AUTH_VERIFICATION_SENDER` | Mode d'envoi des codes : `smtp` (Amazon SES), `log` (exécutions locales uniquement — le code est journalisé), non défini = désactivé (`AUT-5012`). | — |
 | `AUTH_SMTP_HOST` · `AUTH_SMTP_PORT` · `AUTH_SMTP_USERNAME` · `AUTH_SMTP_PASSWORD` · `AUTH_SMTP_FROM` | Relais SMTP des codes e-mail (SES : `email-smtp.<region>.amazonaws.com`, `587`, STARTTLS, identifiants SMTP SES, un expéditeur vérifié). | — · `587` |
 | `AUTH_SMS_SENDER` | Mode d'envoi des codes SMS : `sns`, non défini = désactivé (ou journalisés si `AUTH_VERIFICATION_SENDER=log`). | — |

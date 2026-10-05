@@ -4,7 +4,10 @@
 //! the provider.
 //!
 //! Checked: the signature (by `kid`; keys fetched on first use and re-fetched,
-//! at most once a minute, when an unknown `kid` shows up — a provider rotation),
+//! at most once a minute, when an unknown `kid` shows up — a provider rotation;
+//! [`JwksFederatedTokenVerifier::spawn_refresh`] also re-fetches them in the
+//! background, so the first sign-in after boot pays no fetch and a key the
+//! provider withdrew stops verifying),
 //! the issuer, the audience (the app's client ids — a token minted for another
 //! app is refused), expiry (60 s leeway) and the nonce (the raw value the app
 //! generated must match the claim, or its SHA-256 hex: what the app hands Apple).
@@ -56,6 +59,20 @@ impl ProviderKeys {
         }
     }
 
+    /// Keys fetched from `jwks_url` with the given algorithms (tests against a
+    /// local JWKS server, with throwaway EC keys).
+    #[cfg(test)]
+    fn fetching(issuers: Vec<String>, audiences: Vec<String>, algorithms: Vec<Algorithm>, jwks_url: &str) -> Self {
+        Self {
+            issuers,
+            audiences,
+            algorithms,
+            client: Some(JwksClient::new(jwks_url, Duration::from_secs(2))),
+            cache: JwksCache::new(),
+            last_fetch: Mutex::new(None),
+        }
+    }
+
     /// Fixed keys, no fetching (tests).
     pub async fn with_keys(
         issuers: Vec<String>,
@@ -66,6 +83,23 @@ impl ProviderKeys {
         let cache = JwksCache::new();
         cache.replace(keys).await;
         Self { issuers, audiences, algorithms, client: None, cache, last_fetch: Mutex::new(None) }
+    }
+
+    /// Re-fetches the whole key set and replaces the cache (keys the provider
+    /// withdrew go). On failure the last good keys stay. Fixed keys: no-op.
+    pub async fn refresh(&self) -> Result<(), AuthError> {
+        let Some(client) = &self.client else { return Ok(()) };
+        let keys = client.fetch().await.map_err(|e| {
+            tracing::warn!(error = %e, "federated JWKS refresh failed; keeping the last keys");
+            AuthError::IdpUnavailable
+        })?;
+        if keys.is_empty() {
+            tracing::warn!("federated JWKS refresh returned no keys; keeping the last keys");
+            return Err(AuthError::IdpUnavailable);
+        }
+        self.cache.replace(keys).await;
+        *self.last_fetch.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+        Ok(())
     }
 
     async fn key(&self, kid: &str) -> Result<DecodingKey, AuthError> {
@@ -152,6 +186,25 @@ impl JwksFederatedTokenVerifier {
     pub fn with(mut self, provider: FederatedProvider, keys: ProviderKeys) -> Self {
         self.providers.insert(provider, keys);
         self
+    }
+
+    /// Fetches every provider's keys now, then every `every` (warm cache at
+    /// boot, rotations and withdrawals picked up without waiting for an unknown
+    /// `kid`). Failures are logged and retried on the next tick.
+    pub fn spawn_refresh(self: &std::sync::Arc<Self>, every: Duration) -> tokio::task::JoinHandle<()> {
+        let verifier = std::sync::Arc::clone(self);
+        tokio::spawn(async move {
+            let mut ticks = tokio::time::interval(every.max(Duration::from_secs(60)));
+            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticks.tick().await;
+                for (provider, keys) in &verifier.providers {
+                    if keys.refresh().await.is_ok() {
+                        tracing::debug!(provider = ?provider, "federated JWKS refreshed");
+                    }
+                }
+            }
+        })
     }
 
     /// Apple with the given client ids (bundle / services ids); `None` when empty.
@@ -333,5 +386,80 @@ mod tests {
             v.verify(FederatedProvider::Google, &token(&kp, "k1", good), "n").await,
             Err(AuthError::FederatedProviderNotConfigured { .. })
         ));
+    }
+
+    /// A throwaway P-256 key: its token signer and its public JWK.
+    fn ec_jwk(kid: &str) -> (EncodingKey, serde_json::Value) {
+        use base64::Engine;
+        let signing = SigningKey::random(&mut rand_core::OsRng);
+        let point = signing.verifying_key().to_encoded_point(false);
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        let pem = signing.to_pkcs8_pem(LineEnding::LF).unwrap();
+        (
+            EncodingKey::from_ec_pem(pem.as_bytes()).unwrap(),
+            json!({ "kty": "EC", "crv": "P-256", "kid": kid, "alg": "ES256",
+                    "x": b64(point.x().unwrap()), "y": b64(point.y().unwrap()) }),
+        )
+    }
+
+    /// A one-route JWKS server answering `body` (or a 500 when `None`).
+    async fn jwks_server(body: std::sync::Arc<Mutex<Option<String>>>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                let mut buf = [0u8; 2048];
+                let _ = socket.read(&mut buf).await;
+                let current = body.lock().unwrap().clone();
+                let response = match current {
+                    Some(json) => format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{json}",
+                        json.len()
+                    ),
+                    None => "HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
+                };
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}/keys")
+    }
+
+    #[tokio::test]
+    async fn a_refresh_picks_up_rotations_drops_withdrawn_keys_and_survives_outages() {
+        let (old_signer, old_jwk) = ec_jwk("old");
+        let (new_signer, new_jwk) = ec_jwk("new");
+        let body = std::sync::Arc::new(Mutex::new(Some(json!({ "keys": [old_jwk] }).to_string())));
+        let url = jwks_server(std::sync::Arc::clone(&body)).await;
+        let keys = ProviderKeys::fetching(vec![APPLE_ISSUER.to_owned()], vec![AUD.to_owned()], vec![Algorithm::ES256], &url);
+        let signed = |signer: &EncodingKey, kid: &str| {
+            let mut header = Header::new(Algorithm::ES256);
+            header.kid = Some(kid.to_owned());
+            encode(&header, &apple_claims("n"), signer).unwrap()
+        };
+        let verifier = std::sync::Arc::new(JwksFederatedTokenVerifier::new().with(FederatedProvider::Apple, keys));
+        let apple = &verifier.providers[&FederatedProvider::Apple];
+
+        // Warm: the old key verifies with no fetch on the sign-in path.
+        apple.refresh().await.unwrap();
+        assert!(verifier.verify(FederatedProvider::Apple, &signed(&old_signer, "old"), "n").await.is_ok());
+
+        // The provider rotates: the old key is withdrawn, the new one published.
+        *body.lock().unwrap() = Some(json!({ "keys": [new_jwk] }).to_string());
+        apple.refresh().await.unwrap();
+        assert!(verifier.verify(FederatedProvider::Apple, &signed(&new_signer, "new"), "n").await.is_ok());
+        assert!(
+            matches!(
+                verifier.verify(FederatedProvider::Apple, &signed(&old_signer, "old"), "n").await,
+                Err(AuthError::IdTokenRejected { .. })
+            ),
+            "a withdrawn key no longer verifies"
+        );
+
+        // An outage keeps the last good keys.
+        *body.lock().unwrap() = None;
+        assert!(apple.refresh().await.is_err());
+        assert!(verifier.verify(FederatedProvider::Apple, &signed(&new_signer, "new"), "n").await.is_ok());
     }
 }

@@ -56,6 +56,9 @@ pub struct AuthConfig {
     pub google_audiences: Vec<String>,
     /// Deadline on fetching a provider's JWKS.
     pub federated_jwks_timeout: std::time::Duration,
+    /// How often Apple's / Google's keys are re-fetched in the background
+    /// (`AUTH_FEDERATED_JWKS_REFRESH_SECS`, default 6 h, at least 60 s).
+    pub federated_jwks_refresh: std::time::Duration,
     /// One-time codes: how they are sent (`smtp`, `log` for local runs, or
     /// unset = off), the SMTP relay (Amazon SES), and their policy.
     pub verification_sender: String,
@@ -133,6 +136,9 @@ impl AuthConfig {
             apple_audiences: env_list("AUTH_APPLE_AUDIENCES"),
             google_audiences: env_list("AUTH_GOOGLE_AUDIENCES"),
             federated_jwks_timeout: env_ms("AUTH_FEDERATED_JWKS_TIMEOUT_MS", 3_000),
+            federated_jwks_refresh: std::time::Duration::from_secs(
+                env_secs("AUTH_FEDERATED_JWKS_REFRESH_SECS", 21_600).max(60) as u64,
+            ),
             verification_sender: env_or("AUTH_VERIFICATION_SENDER", "").trim().to_ascii_lowercase(),
             smtp: smtp_from_env(),
             sms_sender: env_or("AUTH_SMS_SENDER", "").trim().to_ascii_lowercase(),
