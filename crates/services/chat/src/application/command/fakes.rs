@@ -217,8 +217,12 @@ impl InteractionGate for ScriptedGate {
     }
 }
 
+/// Memberships that ended: their role and `left_at` (#656).
+type EndedMemberships = HashMap<(ConversationId, ProfileId), (Role, DateTime<Utc>)>;
+
+/// The roster, and the memberships that ended.
 #[derive(Default)]
-pub struct FakeMembers(Mutex<HashMap<(ConversationId, ProfileId), Role>>);
+pub struct FakeMembers(Mutex<HashMap<(ConversationId, ProfileId), Role>>, Mutex<EndedMemberships>);
 
 impl FakeMembers {
     pub fn has(&self, c: &ConversationId, p: &ProfileId) -> bool {
@@ -234,7 +238,31 @@ impl FakeMembers {
 impl MemberRepository for FakeMembers {
     async fn insert(&self, c: &ConversationId, p: &Participant) -> Result<(), ChatError> {
         self.0.lock().unwrap().insert((*c, p.profile_id()), p.role());
+        self.1.lock().unwrap().remove(&(*c, p.profile_id()));
         Ok(())
+    }
+
+    async fn leave(&self, c: &ConversationId, p: &Participant, at: DateTime<Utc>) -> Result<(), ChatError> {
+        self.0.lock().unwrap().remove(&(*c, p.profile_id()));
+        self.1.lock().unwrap().insert((*c, p.profile_id()), (p.role(), at));
+        Ok(())
+    }
+
+    async fn find_membership(
+        &self,
+        m: &ProfileId,
+        c: &ConversationId,
+    ) -> Result<Option<crate::application::port::Membership>, ChatError> {
+        let membership = |role, left_at| crate::application::port::Membership {
+            conversation_id: *c,
+            role,
+            joined_at: Utc::now(),
+            left_at,
+        };
+        if let Some(&role) = self.0.lock().unwrap().get(&(*c, *m)) {
+            return Ok(Some(membership(role, None)));
+        }
+        Ok(self.1.lock().unwrap().get(&(*c, *m)).map(|&(role, at)| membership(role, Some(at))))
     }
 
     async fn find(&self, c: &ConversationId, m: &ProfileId) -> Result<Option<Participant>, ChatError> {
@@ -273,7 +301,25 @@ impl MemberRepository for FakeMembers {
             .unwrap()
             .iter()
             .filter(|((c, p), _)| p == m && after.is_none_or(|a| c.as_uuid() > a.as_uuid()))
-            .map(|(&(c, _), &role)| crate::application::port::Membership { conversation_id: c, role, joined_at: Utc::now() })
+            .map(|(&(c, _), &role)| crate::application::port::Membership {
+                conversation_id: c,
+                role,
+                joined_at: Utc::now(),
+                left_at: None,
+            })
+            .chain(
+                self.1
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|((c, p), _)| p == m && after.is_none_or(|a| c.as_uuid() > a.as_uuid()))
+                    .map(|(&(c, _), &(role, at))| crate::application::port::Membership {
+                        conversation_id: c,
+                        role,
+                        joined_at: Utc::now(),
+                        left_at: Some(at),
+                    }),
+            )
             .collect();
         mine.sort_by_key(|ms| ms.conversation_id.as_uuid());
         mine.truncate(limit.max(1) as usize);
@@ -350,6 +396,7 @@ pub struct FakeMessages {
     inserts:  Mutex<usize>,
     floors:   Mutex<Vec<Option<i64>>>,
     withheld: Mutex<Vec<bool>>,
+    seeded:   Mutex<Vec<MessageSummary>>,
 }
 
 impl FakeMessages {
@@ -359,6 +406,11 @@ impl FakeMessages {
 
     pub fn floors(&self) -> Vec<Option<i64>> {
         self.floors.lock().unwrap().clone()
+    }
+
+    /// History served by `list_history`, newest first, cursor applied.
+    pub fn seed(&self, messages: Vec<MessageSummary>) {
+        *self.seeded.lock().unwrap() = messages;
     }
 
     /// Whether each inserted message was withheld, in order.
@@ -379,11 +431,20 @@ impl MessageRepository for FakeMessages {
         &self,
         _: &ConversationId,
         _: i32,
-        _: Option<(i64, Uuid)>,
+        cursor: Option<(i64, Uuid)>,
         floor: Option<i64>,
     ) -> Result<(Vec<MessageSummary>, Option<(i64, Uuid)>), ChatError> {
         self.floors.lock().unwrap().push(floor);
-        Ok((Vec::new(), None))
+        let mut page: Vec<_> = self
+            .seeded
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| cursor.is_none_or(|(ms, _)| m.created_at.timestamp_millis() < ms))
+            .cloned()
+            .collect();
+        page.sort_by_key(|m| std::cmp::Reverse(m.created_at));
+        Ok((page, None))
     }
 }
 

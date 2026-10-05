@@ -26,6 +26,18 @@ impl MessageSummary {
     pub fn visible_to(&self, reader: Uuid) -> bool {
         !self.withheld || self.sender_id == reader
     }
+
+    /// Another member's message as the GDPR export shows it: when, not who
+    /// nor what (the sender nil, no content).
+    pub fn reduced_to_its_time(self) -> Self {
+        Self {
+            sender_id: Uuid::nil(),
+            body: String::new(),
+            media_ref: None,
+            reply_to: None,
+            ..self
+        }
+    }
 }
 
 /// Persistence port for the time-bucketed message log

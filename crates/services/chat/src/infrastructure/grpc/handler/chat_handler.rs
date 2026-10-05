@@ -15,7 +15,8 @@ use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
 use crate::application::command::{
-    CreateConversationCommand, DirectMessaging, InviteMemberCommand, JoinAsMemberCommand, MarkReadCommand,
+    CreateConversationCommand, DirectMessaging, InviteMemberCommand, JoinAsMemberCommand, LeaveConversationCommand,
+    MarkReadCommand,
     SendMessageCommand, SendMessages, SubscribeCommand, ToggleVisibilityCommand, UnsubscribeCommand,
 };
 use crate::application::port::{
@@ -23,7 +24,7 @@ use crate::application::port::{
     ReceiptStore, RoutingRegistry,
 };
 use crate::application::query::{
-    GetHistoryQuery, InboxPage, ListConversationsByMemberQuery, ListInboxQuery, ListMembersQuery,
+    FormerMemberHistoryQuery, GetHistoryQuery, InboxPage, ListConversationsByMemberQuery, ListInboxQuery, ListMembersQuery,
     ListSubscriptionsQuery, MemberConversation, MemberView as QueryMemberView,
 };
 use crate::application::port::Folder;
@@ -212,6 +213,48 @@ where
             profile_id:      req.profile_id,
         };
         self.dispatch_command(cmd).await
+    }
+
+    async fn leave_conversation(
+        &self,
+        request: Request<proto::LeaveConversationRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        self.dispatch_command(LeaveConversationCommand { conversation_id: req.conversation_id, profile_id: req.profile_id })
+            .await
+    }
+
+    /// Mesh only (#653 / #656): the export's read of a conversation the
+    /// profile is or was a member of.
+    async fn get_former_member_history(
+        &self,
+        request: Request<proto::GetFormerMemberHistoryRequest>,
+    ) -> Result<Response<proto::GetHistoryResponse>, Status> {
+        let req = request.into_inner();
+        let query = FormerMemberHistoryQuery {
+            conversation_id: req.conversation_id,
+            member_id:       req.member_id,
+            limit:           req.limit,
+            page_token:      non_empty(req.page_token),
+        };
+        let page = self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::GetHistoryResponse {
+            messages:        page
+                .messages
+                .into_iter()
+                .map(|m| {
+                    // Another member's message: its sender is not told.
+                    let other = m.sender_id.is_nil();
+                    let mut view = summary_to_view(m);
+                    if other {
+                        view.sender_id.clear();
+                    }
+                    view
+                })
+                .collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+        }))
     }
 
     async fn invite_member(
@@ -562,6 +605,7 @@ where
                     conversation_id: m.membership.conversation_id.as_uuid().to_string(),
                     role:            m.membership.role.as_tinyint() as i32,
                     joined_at_ms:    m.membership.joined_at.timestamp_millis(),
+                    left_at_ms:      m.membership.left_at.map_or(0, |at| at.timestamp_millis()),
                     kind:            m.kind.map_or(0, |k| k.as_tinyint() as i32),
                 })
                 .collect(),
@@ -906,6 +950,20 @@ where
         request: Request<proto::InviteMemberRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
         self.invite_member(request).await
+    }
+
+    async fn leave_conversation(
+        &self,
+        request: Request<proto::LeaveConversationRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.leave_conversation(request).await
+    }
+
+    async fn get_former_member_history(
+        &self,
+        request: Request<proto::GetFormerMemberHistoryRequest>,
+    ) -> Result<Response<proto::GetHistoryResponse>, Status> {
+        self.get_former_member_history(request).await
     }
 
     async fn subscribe(

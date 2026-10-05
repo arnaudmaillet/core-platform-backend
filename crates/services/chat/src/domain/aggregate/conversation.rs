@@ -347,6 +347,9 @@ impl Conversation {
     /// conversation always has an owner); ownership transfer is a separate
     /// operation handled at the application layer.
     pub fn release_member(&mut self, profile_id: ProfileId) -> Result<(), ChatError> {
+        if self.is_direct() {
+            return Err(Self::not_for_direct("a direct conversation is not left"));
+        }
         if profile_id == self.owner_id {
             return Err(ChatError::DomainViolation {
                 field:   "owner_id".to_owned(),

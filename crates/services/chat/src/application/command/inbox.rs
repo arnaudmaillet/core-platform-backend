@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use futures::{StreamExt, TryStreamExt};
 
 use crate::application::port::{
     ConversationRepository, Folder, InboxEntry, InboxStore, LastMessage, MemberRepository, PREVIEW_CHARS,
@@ -37,6 +38,9 @@ pub fn folder_for(conversation: &Conversation, member: ProfileId) -> Option<Fold
         MessageRequest::Declined { .. } => None,
     }
 }
+
+/// Roster entries written at once per message.
+const PUTS_IN_FLIGHT: usize = 16;
 
 fn at(ms: i64) -> DateTime<Utc> {
     DateTime::from_timestamp_millis(ms).unwrap_or_default()
@@ -63,24 +67,30 @@ impl InboxProjector {
         let Some(conversation) = self.conversation_repo.find(&conversation_id).await? else {
             return Ok(());
         };
-        for member in self.member_repo.list(&conversation_id).await? {
-            let member = member.profile_id();
-            // A withheld message is its sender's alone.
-            if event.withheld && member != sender {
-                continue;
-            }
-            let Some(folder) = folder_for(&conversation, member) else { continue };
-            let entry = InboxEntry {
-                conversation_id,
-                kind: conversation.kind(),
-                peer: conversation.peer_of(member),
-                folder,
-                activity: at(event.created_at_ms),
-                last: Some(last.clone()),
-            };
-            self.inbox.put(&member, &entry).await?;
-        }
-        Ok(())
+        let conversation = &conversation;
+        let last = &last;
+        // A group's roster (up to 500) is written a few entries at a time: each
+        // `put` is idempotent and per member.
+        futures::stream::iter(self.member_repo.list(&conversation_id).await?)
+            .map(Ok::<_, ChatError>)
+            .try_for_each_concurrent(PUTS_IN_FLIGHT, |member| async move {
+                let member = member.profile_id();
+                // A withheld message is its sender's alone.
+                if event.withheld && member != sender {
+                    return Ok(());
+                }
+                let Some(folder) = folder_for(conversation, member) else { return Ok(()) };
+                let entry = InboxEntry {
+                    conversation_id,
+                    kind: conversation.kind(),
+                    peer: conversation.peer_of(member),
+                    folder,
+                    activity: at(event.created_at_ms),
+                    last: Some(last.clone()),
+                };
+                self.inbox.put(&member, &entry).await
+            })
+            .await
     }
 
     /// A conversation's lifecycle: its owner in at creation, members in as
