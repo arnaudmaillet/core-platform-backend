@@ -4,6 +4,7 @@ pub mod get_account_by_phone;
 pub mod get_account_by_identity_id;
 pub mod get_account_status;
 pub mod get_gdpr_record;
+pub mod get_mfa_secret;
 pub mod list_accounts_by_status;
 
 // ── View types ────────────────────────────────────────────────────────────────
@@ -21,4 +22,5 @@ pub use get_account_by_identity_id::{
 };
 pub use get_account_status::{GetAccountStatusHandler, GetAccountStatusQuery};
 pub use get_gdpr_record::{GetGdprRecordHandler, GetGdprRecordQuery};
+pub use get_mfa_secret::{GetMfaSecretHandler, GetMfaSecretQuery, MfaSecretView};
 pub use list_accounts_by_status::{ListAccountsByStatusHandler, ListAccountsByStatusQuery};

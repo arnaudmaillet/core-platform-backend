@@ -75,6 +75,11 @@ impl MfaState {
         self.totp_enrolled_at = Some(Utc::now());
     }
 
+    /// Replaces every backup code with `recovery_codes` (a regenerated set).
+    pub fn replace_recovery_codes(&mut self, recovery_codes: Vec<RecoveryCodeHash>) {
+        self.recovery_codes = recovery_codes;
+    }
+
     /// Revokes all MFA state, returning the account to an unenrolled state.
     pub fn revoke(&mut self) {
         self.totp_secret = None;

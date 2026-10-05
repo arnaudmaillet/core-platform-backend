@@ -9,6 +9,7 @@ pub mod create_account;
 pub mod deactivate_account;
 pub mod enroll_mfa;
 pub mod reactivate_account;
+pub mod recovery_codes;
 pub mod record_failed_login;
 pub mod record_login;
 pub mod request_data_export;
@@ -33,6 +34,9 @@ pub use create_account::{CreateAccountCommand, CreateAccountHandler};
 pub use deactivate_account::{DeactivateAccountCommand, DeactivateAccountHandler};
 pub use enroll_mfa::{EnrollMfaCommand, EnrollMfaHandler};
 pub use reactivate_account::{ReactivateAccountCommand, ReactivateAccountHandler};
+pub use recovery_codes::{
+    ConsumeRecoveryCodeCommand, ConsumeRecoveryCodeHandler, ReplaceRecoveryCodesCommand, ReplaceRecoveryCodesHandler,
+};
 pub use record_failed_login::{RecordFailedLoginCommand, RecordFailedLoginHandler};
 pub use record_login::{RecordLoginCommand, RecordLoginHandler};
 pub use request_data_export::{RequestDataExportCommand, RequestDataExportHandler};

@@ -399,6 +399,35 @@ impl Account {
         Ok(())
     }
 
+    /// Spends the backup code hashed `code_hash` (#649): it works once.
+    ///
+    /// # Errors
+    /// [`AccountError::MfaNotEnrolled`] when MFA is off,
+    /// [`AccountError::RecoveryCodeInvalid`] when no unused code matches.
+    pub fn consume_recovery_code(&mut self, code_hash: &str) -> Result<(), AccountError> {
+        if !self.mfa.is_enrolled() {
+            return Err(AccountError::MfaNotEnrolled);
+        }
+        if !self.mfa.consume_recovery_code(code_hash) {
+            return Err(AccountError::RecoveryCodeInvalid);
+        }
+        self.touch_now();
+        Ok(())
+    }
+
+    /// Replaces the backup codes with a regenerated set (#649).
+    ///
+    /// # Errors
+    /// [`AccountError::MfaNotEnrolled`] when MFA is off.
+    pub fn replace_recovery_codes(&mut self, recovery_codes: Vec<RecoveryCodeHash>) -> Result<(), AccountError> {
+        if !self.mfa.is_enrolled() {
+            return Err(AccountError::MfaNotEnrolled);
+        }
+        self.mfa.replace_recovery_codes(recovery_codes);
+        self.touch_now();
+        Ok(())
+    }
+
     /// Revokes all MFA state.
     ///
     /// Requires `Active` status. Emits [`MfaRevoked`].
@@ -1336,5 +1365,32 @@ mod tests {
         account.replace_phone_proven(phone.clone(), Uuid::now_v7()).unwrap();
         assert_eq!(account.phone(), Some(&phone));
         assert!(account.phone_verified());
+    }
+
+    fn hashes(prefix: &str) -> Vec<RecoveryCodeHash> {
+        (0..8).map(|i| RecoveryCodeHash::from_hash(format!("{prefix}-{i}"))).collect()
+    }
+
+    /// #649: a backup code works once; a regenerated set replaces the old one;
+    /// neither applies to an account without MFA.
+    #[test]
+    fn a_backup_code_works_once_and_a_new_set_replaces_the_old() {
+        let mut account = admin_account_with_overrides(Vec::new());
+        assert!(matches!(account.consume_recovery_code("old-1"), Err(AccountError::MfaNotEnrolled)));
+        assert!(matches!(account.replace_recovery_codes(hashes("new")), Err(AccountError::MfaNotEnrolled)));
+
+        account
+            .enroll_mfa(EncryptedBytes::from_ciphertext(vec![1, 2, 3]), hashes("old"), Uuid::now_v7())
+            .unwrap();
+        let version = account.version();
+        account.consume_recovery_code("old-1").expect("first use");
+        assert!(account.version() > version, "a spend is a versioned write (no double spend)");
+        assert!(matches!(account.consume_recovery_code("old-1"), Err(AccountError::RecoveryCodeInvalid)));
+        assert!(matches!(account.consume_recovery_code("nope"), Err(AccountError::RecoveryCodeInvalid)));
+        assert_eq!(account.mfa().recovery_codes().len(), 7);
+
+        account.replace_recovery_codes(hashes("new")).unwrap();
+        assert!(matches!(account.consume_recovery_code("old-2"), Err(AccountError::RecoveryCodeInvalid)));
+        account.consume_recovery_code("new-2").expect("the new set");
     }
 }

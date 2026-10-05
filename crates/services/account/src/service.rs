@@ -45,14 +45,13 @@ impl Service for AccountService {
     /// else on this service is mesh-only. See `transport::grpc::edge`.
     // Self-service only: every listed RPC binds `account_id` to the token subject.
     // Admin/compliance RPCs (KYC, suspend, roles, listing) and the
-    // auth-plane writes (RecordLogin, Anonymize, CreateAccount) stay mesh-only
+    // auth-plane writes (RecordLogin, Anonymize, CreateAccount) and every MFA
+    // RPC (auth's, #649: it holds the seed key and the step-up) stay mesh-only
     // until a staff permission catalogue exists. VerifyEmail / VerifyPhone are
     // auth-plane writes too: they carry no proof, so only auth calls them, once
     // the holder proved the address (a verified id_token or a one-time code).
     const EDGE_POLICY: EdgePolicy = &[
         authenticated("/account.v1.AccountService/ChangePassword"),
-        authenticated("/account.v1.AccountService/EnrollMfa"),
-        authenticated("/account.v1.AccountService/RevokeMfa"),
         authenticated("/account.v1.AccountService/DeactivateAccount"),
         authenticated("/account.v1.AccountService/RequestGdprDeletion"),
         authenticated("/account.v1.AccountService/CancelGdprDeletion"),
@@ -140,7 +139,16 @@ mod tests {
     /// must never be reachable on the client edge.
     #[test]
     fn verification_writes_are_mesh_only() {
-        for method in ["/account.v1.AccountService/VerifyEmail", "/account.v1.AccountService/VerifyPhone"] {
+        for method in [
+            "/account.v1.AccountService/VerifyEmail",
+            "/account.v1.AccountService/VerifyPhone",
+            // MFA material and its writes are auth's (#649).
+            "/account.v1.AccountService/EnrollMfa",
+            "/account.v1.AccountService/RevokeMfa",
+            "/account.v1.AccountService/GetMfaSecret",
+            "/account.v1.AccountService/ConsumeRecoveryCode",
+            "/account.v1.AccountService/ReplaceRecoveryCodes",
+        ] {
             assert!(
                 AccountService::EDGE_POLICY.iter().all(|rule| rule.method != method),
                 "{method} is on the edge"

@@ -118,6 +118,9 @@ service AccountService {
   rpc ChangePassword (ChangePasswordRequest) returns (CommandResponse);
   rpc EnrollMfa (EnrollMfaRequest) returns (CommandResponse);
   rpc RevokeMfa (RevokeMfaRequest) returns (CommandResponse);
+  rpc GetMfaSecret (GetMfaSecretRequest) returns (MfaSecretView);
+  rpc ConsumeRecoveryCode (ConsumeRecoveryCodeRequest) returns (CommandResponse);
+  rpc ReplaceRecoveryCodes (ReplaceRecoveryCodesRequest) returns (CommandResponse);
   rpc UpdateKycStatus (UpdateKycStatusRequest) returns (CommandResponse);
   rpc SuspendAccount (SuspendAccountRequest) returns (CommandResponse);
   rpc ReactivateAccount (ReactivateAccountRequest) returns (CommandResponse);
@@ -148,11 +151,20 @@ service AccountService {
 > `PENDING_VERIFICATION=1…DELETED=5`; `KycStatus` `NOT_STARTED=1…REJECTED=5`; `AccountRole`
 > `USER=1…SUPER_ADMIN=6`. **Handler defaults** for fields absent in proto:
 > `RecordFailedLogin.max_attempts=5`, `lockout_duration_secs=900`,
-> `RequestGdprDeletion.retention_days=30`, `EnrollMfa.recovery_code_hashes=[]` (server-generated).
+> `RequestGdprDeletion.retention_days=30`.
 
-**Security at the boundary:** passwords stored as Argon2id only (plaintext never accepted); TOTP seeds
-AES-256-GCM encrypted (`EncryptedBytes`); recovery codes Bcrypt-hashed; secret fields suppress
-`Display`/`Debug` and carry `#[serde(skip)]`.
+**Security at the boundary:** passwords stored as Argon2id only (plaintext never accepted); secret fields
+suppress `Display`/`Debug` and carry `#[serde(skip)]`.
+
+**MFA is auth's (#649); account only keeps it.** Every MFA RPC is **mesh only**: the holder enrolls and
+disables two-step sign-in through auth, after a step-up. auth encrypts the TOTP seed with its own key
+(AES-256-GCM; account stores the ciphertext and never reads it), hashes each backup code, and checks
+codes. `EnrollMfa` takes the ciphertext and at least 6 distinct code hashes (`ACC-9001` otherwise,
+`ACC-5001` when MFA is already on). `GetMfaSecret` hands auth the ciphertext and the number of codes left.
+`ConsumeRecoveryCode` spends one code by its hash, once: the save is version-checked, so of two
+concurrent spends one fails, and a spent or unknown code is `ACC-5003`. `ReplaceRecoveryCodes` takes a
+regenerated set. `AccountView.mfa_enrolled` / `mfa_recovery_codes_remaining` show the holder where they
+stand.
 
 ### Rust ports (hexagonal contract)
 
@@ -167,7 +179,7 @@ pub trait AccountRepository: Send + Sync + 'static { /* save (CAS), find_by_id, 
 | `AccountNotFound`, `RoleNotAssigned` | `NOT_FOUND` |
 | `IdentityAlreadyRegistered`, `EmailAlreadyRegistered`, `MfaAlreadyEnrolled`, `RoleAlreadyAssigned`, `GdprDeletionAlreadyRequested`, `EmailAlreadyVerified` | `ALREADY_EXISTS` |
 | `ConcurrentModification` | `ABORTED` (**retryable**) |
-| `AccountNotActive`, `InvalidStatusTransition`, `InvalidKycTransition`, `MfaNotEnrolled`, `AccountAlreadyAnonymized` | `FAILED_PRECONDITION` |
+| `AccountNotActive`, `InvalidStatusTransition`, `InvalidKycTransition`, `MfaNotEnrolled`, `RecoveryCodeInvalid`, `AccountAlreadyAnonymized` | `FAILED_PRECONDITION` |
 | `Validation`, `InvalidAccountRole/KycStatus/AccountStatus` | `INVALID_ARGUMENT` |
 | `Storage` | `UNAVAILABLE` |
 
