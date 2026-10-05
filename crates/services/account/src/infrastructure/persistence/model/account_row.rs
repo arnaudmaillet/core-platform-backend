@@ -68,7 +68,7 @@ pub struct AccountRow {
     pub gdpr_data_export_requested_at: Option<DateTime<Utc>>,
     pub gdpr_data_export_completed_at: Option<DateTime<Utc>>,
     pub gdpr_analytics_consented_at: Option<DateTime<Utc>>,
-    pub gdpr_data_export_url: Option<String>,
+    pub gdpr_data_export_key: Option<String>,
     pub gdpr_data_export_expires_at: Option<DateTime<Utc>>,
 
     pub roles: Vec<String>,
@@ -131,7 +131,7 @@ impl TryFrom<AccountRow> for Account {
             row.gdpr_data_export_completed_at,
         )
         .with_analytics_consented_at(row.gdpr_analytics_consented_at)
-        .with_data_export_delivery(row.gdpr_data_export_url, row.gdpr_data_export_expires_at);
+        .with_data_export_delivery(row.gdpr_data_export_key, row.gdpr_data_export_expires_at);
 
         let roles: Vec<AccountRole> = row
             .roles

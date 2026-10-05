@@ -33,7 +33,7 @@ use crate::application::command::{
     VerifyEmailHandler, VerifyPhoneCommand, VerifyPhoneHandler, ChangeEmailCommand, ChangeEmailHandler,
     ChangePhoneCommand, ChangePhoneHandler,
 };
-use crate::application::port::{AccountRepository, EventPublisher};
+use crate::application::port::{AccountRepository, EventPublisher, ExportStore};
 use crate::application::query::{
     GetAccountByEmailHandler, GetAccountByEmailQuery, GetAccountByIdHandler, GetAccountByIdQuery,
     GetAccountByPhoneHandler, GetAccountByPhoneQuery,
@@ -59,6 +59,16 @@ impl App {
     pub async fn build(
         pool: PgPool,
         publisher: Arc<dyn EventPublisher>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::build_with_exports(pool, publisher, None).await
+    }
+
+    /// [`Self::build`], with the GDPR export store (#653) that signs a
+    /// delivered export's link when the record is read.
+    pub async fn build_with_exports(
+        pool: PgPool,
+        publisher: Arc<dyn EventPublisher>,
+        exports: Option<Arc<dyn ExportStore>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let repository: Arc<dyn AccountRepository> = Arc::new(PgAccountRepository::new(
             TransactionManager::new(pool),
@@ -102,7 +112,10 @@ impl App {
                 .register::<GetAccountByEmailQuery, _>(GetAccountByEmailHandler::new(Arc::clone(&repository)))?
                 .register::<GetAccountByPhoneQuery, _>(GetAccountByPhoneHandler::new(Arc::clone(&repository)))?
                 .register::<GetAccountStatusQuery, _>(GetAccountStatusHandler::new(Arc::clone(&repository)))?
-                .register::<GetGdprRecordQuery, _>(GetGdprRecordHandler::new(Arc::clone(&repository)))?
+                .register::<GetGdprRecordQuery, _>(match exports {
+                    Some(exports) => GetGdprRecordHandler::new(Arc::clone(&repository)).with_exports(exports),
+                    None => GetGdprRecordHandler::new(Arc::clone(&repository)),
+                })?
                 .register::<GetMfaSecretQuery, _>(GetMfaSecretHandler::new(Arc::clone(&repository)))?
                 .register::<ListAccountsByStatusQuery, _>(ListAccountsByStatusHandler::new(Arc::clone(&repository)))?
                 .build(),

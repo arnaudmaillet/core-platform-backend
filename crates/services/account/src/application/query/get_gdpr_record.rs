@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use cqrs::{Envelope, Query, QueryHandler};
 use uuid::Uuid;
 
-use crate::application::port::AccountRepository;
+use crate::application::port::{AccountRepository, ExportStore};
 use crate::domain::value_object::AccountId;
 use crate::error::AccountError;
 
@@ -37,11 +37,37 @@ impl Query for GetGdprRecordQuery {
 
 pub struct GetGdprRecordHandler {
     repo: Arc<dyn AccountRepository>,
+    /// Signs the delivered export's link on read (#653); `None`: no link.
+    exports: Option<Arc<dyn ExportStore>>,
 }
 
 impl GetGdprRecordHandler {
     pub fn new(repo: Arc<dyn AccountRepository>) -> Self {
-        Self { repo }
+        Self { repo, exports: None }
+    }
+
+    /// Hands out the delivered export's link, signed per read.
+    pub fn with_exports(mut self, exports: Arc<dyn ExportStore>) -> Self {
+        self.exports = Some(exports);
+        self
+    }
+
+    /// A link to the delivered export, valid for what is left of its 7 days
+    /// — none while a newer request is being built, once expired, or without
+    /// the store.
+    fn export_link(&self, gdpr: &crate::domain::entity::GdprRecord) -> Option<(String, DateTime<Utc>)> {
+        let (store, key, expires_at) = (self.exports.as_ref()?, gdpr.data_export_key()?, gdpr.data_export_expires_at()?);
+        let left = expires_at - Utc::now();
+        if gdpr.has_pending_export() || left <= chrono::Duration::seconds(60) {
+            return None;
+        }
+        match store.signed_link(key, left) {
+            Ok(link) => Some((link, expires_at)),
+            Err(error) => {
+                tracing::warn!(%error, "export link not signed");
+                None
+            }
+        }
     }
 }
 
@@ -65,6 +91,7 @@ impl QueryHandler<GetGdprRecordQuery> for GetGdprRecordHandler {
             .ok_or_else(|| AccountError::AccountNotFound { id: id_str.clone() })?;
 
         let gdpr = account.gdpr();
+        let link = self.export_link(gdpr);
         Ok(GdprRecordView {
             account_id: id_str.clone(),
             data_processing_consented_at: gdpr.data_processing_consented_at(),
@@ -75,9 +102,8 @@ impl QueryHandler<GetGdprRecordQuery> for GetGdprRecordHandler {
             anonymized_at: gdpr.anonymized_at(),
             data_export_requested_at: gdpr.data_export_requested_at(),
             data_export_completed_at: gdpr.data_export_completed_at(),
-            // A newer request is being built: the old link is not the answer.
-            data_export_url: gdpr.data_export_url().filter(|_| !gdpr.has_pending_export()).map(str::to_owned),
-            data_export_expires_at: gdpr.data_export_expires_at().filter(|_| !gdpr.has_pending_export()),
+            data_export_expires_at: link.as_ref().map(|(_, at)| *at),
+            data_export_url: link.map(|(url, _)| url),
             last_consent_version: gdpr.last_consent_version().map(str::to_owned),
         })
     }

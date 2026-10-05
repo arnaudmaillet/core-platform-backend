@@ -41,3 +41,44 @@ pub trait ExportStore: Send + Sync + 'static {
     /// A signed download link for `key`, valid `ttl` (at most 7 days).
     fn signed_link(&self, key: &str, ttl: Duration) -> Result<String, AccountError>;
 }
+
+/// A conversation a profile is a member of (#653).
+#[derive(Debug, Clone)]
+pub struct ConversationExport {
+    pub conversation_id: String,
+    /// Its membership row (role, joined at), as the chat service gives it.
+    pub membership: serde_json::Value,
+    /// A direct (one-to-one) conversation by its kind, exported in full. Never
+    /// inferred from the roster: a group that shrank to two still holds the
+    /// departed members' words, and a two-member channel is still a channel.
+    pub direct: bool,
+}
+
+/// One message of a conversation: who sent it, when, and the whole of it.
+#[derive(Debug, Clone)]
+pub struct MessageExport {
+    pub sender_id: String,
+    pub created_at_ms: i64,
+    pub message: serde_json::Value,
+}
+
+/// What each other service holds of an account and its profiles, read over
+/// the mesh (every page; JSON as the service shapes it). Any failure fails
+/// the whole export, retried next pass.
+#[async_trait]
+pub trait ExportPeers: Send + Sync + 'static {
+    /// The account's profiles: `(profile_id, profile)`.
+    async fn profiles(&self, account_id: &AccountId) -> Result<Vec<(String, serde_json::Value)>, AccountError>;
+    async fn posts(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError>;
+    async fn comments(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError>;
+    async fn reactions(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError>;
+    /// `{following, followers, blocks}`.
+    async fn social(&self, profile_id: &str) -> Result<serde_json::Value, AccountError>;
+    async fn conversations(&self, profile_id: &str) -> Result<Vec<ConversationExport>, AccountError>;
+    /// The member profile ids of a conversation, read as `as_member`.
+    async fn members(&self, conversation_id: &str, as_member: &str) -> Result<Vec<String>, AccountError>;
+    /// Its whole history, read as `as_member`.
+    async fn messages(&self, conversation_id: &str, as_member: &str) -> Result<Vec<MessageExport>, AccountError>;
+    /// The account's media, each with a download link valid `ttl`.
+    async fn media(&self, account_id: &AccountId, ttl: Duration) -> Result<Vec<serde_json::Value>, AccountError>;
+}

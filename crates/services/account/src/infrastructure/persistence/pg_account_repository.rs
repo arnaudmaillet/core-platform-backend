@@ -104,7 +104,7 @@ impl AccountRepository for PgAccountRepository {
         let p_gdpr_export_req     = gdpr.data_export_requested_at();
         let p_gdpr_export_done    = gdpr.data_export_completed_at();
         let p_gdpr_analytics_at   = gdpr.analytics_consented_at();
-        let p_gdpr_export_url     = gdpr.data_export_url().map(str::to_owned);
+        let p_gdpr_export_key     = gdpr.data_export_key().map(str::to_owned);
         let p_gdpr_export_expires = gdpr.data_export_expires_at();
         // The consent history rows this save appends (GDPR Art. 7(1) evidence),
         // from the aggregate's pending ConsentsUpdated events.
@@ -150,7 +150,7 @@ impl AccountRepository for PgAccountRepository {
                                 roles, permission_overrides,
                                 version, created_at, updated_at, created_by,
                                 gdpr_analytics_consented_at,
-                                gdpr_data_export_url, gdpr_data_export_expires_at
+                                gdpr_data_export_key, gdpr_data_export_expires_at
                             ) VALUES (
                                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
                                 $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
@@ -201,7 +201,7 @@ impl AccountRepository for PgAccountRepository {
                         .bind(p_updated_at)          // $40
                         .bind(p_created_by)          // $41
                         .bind(p_gdpr_analytics_at)   // $42
-                        .bind(p_gdpr_export_url.clone())     // $43
+                        .bind(p_gdpr_export_key.clone())     // $43
                         .bind(p_gdpr_export_expires) // $44
                         .execute(&mut **tx)
                         .await
@@ -263,7 +263,7 @@ impl AccountRepository for PgAccountRepository {
                                 roles = $35,
                                 permission_overrides = $36,
                                 gdpr_analytics_consented_at = $38,
-                                gdpr_data_export_url = $39,
+                                gdpr_data_export_key = $39,
                                 gdpr_data_export_expires_at = $40,
                                 version = version + 1,
                                 updated_at = NOW()
@@ -308,7 +308,7 @@ impl AccountRepository for PgAccountRepository {
                         .bind(&p_perms)             // $36
                         .bind(expected_version)     // $37
                         .bind(p_gdpr_analytics_at)  // $38
-                        .bind(p_gdpr_export_url)    // $39
+                        .bind(p_gdpr_export_key)    // $39
                         .bind(p_gdpr_export_expires) // $40
                         .execute(&mut **tx)
                         .await
