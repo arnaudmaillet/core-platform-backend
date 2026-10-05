@@ -560,6 +560,26 @@ impl super::port::GuestRegistry for InMemoryGuestRegistry {
         self.upgrades.lock().unwrap().push((*guest_id, *account_id));
         Ok(())
     }
+
+    async fn purge_stale(
+        &self,
+        seen_before: DateTime<Utc>,
+        _now: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<u64, AuthError> {
+        let upgraded: Vec<AccountId> = self.upgrades.lock().unwrap().iter().map(|(g, _)| *g).collect();
+        let mut records = self.records.lock().unwrap();
+        let before = records.len();
+        let mut left = limit;
+        records.retain(|r| {
+            let stale = left > 0 && r.first_seen_at < seen_before && !upgraded.contains(&r.guest_id);
+            if stale {
+                left -= 1;
+            }
+            !stale
+        });
+        Ok((before - records.len()) as u64)
+    }
 }
 
 // ─── EventPublisher ──────────────────────────────────────────────────────────
