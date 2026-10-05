@@ -37,10 +37,11 @@ producer's `DOMAIN.md §8`.
 | `comment.created` | `comment` | `notification`, `engagement` |
 | `comment.deleted` | `comment` | `engagement` |
 | `engagement.reactions` | `engagement` | `counter`, `notification`, `engagement` |
-| `social-graph.followed` | `social-graph` | `timeline` |
+| `social-graph.followed` | `social-graph` | `notification`, `timeline` |
 | `social-graph.unfollowed` | `social-graph` | `timeline` |
 | `social-graph.blocked` | `social-graph` | — *(orphan — see below)* |
 | `social-graph.author_tier_changed` | `social-graph` | `profile` |
+| `social-graph.follow_requested` | `social-graph` | `notification` |
 | `chat.conversation.created` | `chat` | — *(orphan — see below)* |
 | `chat.conversation.published` | `chat` | — *(orphan — see below)* |
 | `chat.conversation.unpublished` | `chat` | `chat` |

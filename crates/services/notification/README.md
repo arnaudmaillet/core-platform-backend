@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-2** — derived/best-effort; feed is durable, pushes are best-effort |
 > | **Deployable** | `crates/apps/notification-server` (library crate: `crates/services/notification`) |
 > | **Datastores** | ScyllaDB keyspace `notification` (TWCS feed + counters) · Redis (collapse + unread) |
-> | **Async** | publishes nothing · consumes `engagement.reactions` / `comment.created` / `post.published` |
+> | **Async** | publishes nothing · consumes `engagement.reactions` / `comment.created` / `post.published` / `social-graph.followed` / `social-graph.follow_requested` |
 > | **Upstream callers** | `<TODO: mobile / BFF (stream + feed reads)>` |
 > | **Downstream deps** | ScyllaDB, Redis, Kafka |
 > | **SLO** | unread-count read sub-ms (Redis) · feed read O(1) paginated · push best-effort |
@@ -166,6 +166,7 @@ identifiers — via the shared `error` crate.
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `engagement.reactions` | `notification-reaction-consumer` | reaction notifications (collapsed) | DLQ `{topic}.dlq` |
+| `social-graph.followed` + `social-graph.follow_requested` | `notification-follow-consumer` | follows → `FOLLOW` to the followee; a request to a private profile → `FOLLOW_REQUEST` to its owner (the app opens the requests inbox); an approved request (`via_request`) → `FOLLOW_ACCEPTED` to the requester, not the owner again (#755). Subject: the other profile (`SUBJECT_KIND_PROFILE`). Block-gated, self-guarded, one notification per event (deterministic id) | DLQ `{topic}.dlq` |
 | `comment.created` | `notification-comment-consumer` | comment notifications (block-gated, self-guarded; none for a `quiet` event: a restricted author, #659) | DLQ `{topic}.dlq` |
 | `post.published` | `notification-mention-consumer` | parse `@mentions`, cache post author | DLQ `{topic}.dlq` |
 

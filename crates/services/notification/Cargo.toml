@@ -51,6 +51,8 @@ integration-notification = []
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Wire contract test of the follow worker against social-graph's own events.
+social-graph = { workspace = true }
 
 # ── Integration suite (feature = "integration-notification") ─────────────────
 # Container orchestration, the RF=1 migration runner, and `await_until` come from

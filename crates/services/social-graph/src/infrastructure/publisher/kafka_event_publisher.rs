@@ -7,13 +7,15 @@ use transport::{
 
 use crate::application::port::EventPublisher;
 use crate::domain::event::{
-    AuthorTierChanged, DomainEvent, ProfileBlocked, ProfileFollowed, ProfileUnfollowed,
+    AuthorTierChanged, DomainEvent, FollowRequested, ProfileBlocked, ProfileFollowed, ProfileUnfollowed,
 };
 use crate::error::SocialGraphError;
 
 const TOPIC_FOLLOWED:   &str = "social-graph.followed";
 const TOPIC_UNFOLLOWED: &str = "social-graph.unfollowed";
 const TOPIC_BLOCKED:    &str = "social-graph.blocked";
+/// A follow request to a private profile (#755), for notification.
+const TOPIC_FOLLOW_REQUESTED: &str = "social-graph.follow_requested";
 /// The author-tier signal `profile` consumes (then persists + re-emits on
 /// `profile.v1.events` for `post` to denormalize). Keyed by profile id.
 const TOPIC_AUTHOR_TIER_CHANGED: &str = "social-graph.author_tier_changed";
@@ -40,6 +42,7 @@ impl EventPublisher for KafkaEventPublisher {
     async fn publish(&self, event: &DomainEvent) -> Result<(), SocialGraphError> {
         match event {
             DomainEvent::ProfileFollowed(e) => publish_followed(&self.producer, e).await,
+            DomainEvent::FollowRequested(e) => publish_follow_requested(&self.producer, e).await,
             DomainEvent::ProfileUnfollowed(e) => publish_unfollowed(&self.producer, e).await,
             DomainEvent::ProfileBlocked(e) => publish_blocked(&self.producer, e).await,
             // ProfileUnblocked is not published downstream per the interface contract.
@@ -87,6 +90,19 @@ async fn publish_followed(
     let key      = format!("{}:{}", event.actor_id, event.target_id);
     let envelope = EventEnvelope::new(TOPIC_FOLLOWED, key, event.clone())
         .with_header("event_type", "ProfileFollowed")
+        .with_header("actor_id",   event.actor_id.as_str())
+        .with_header("target_id",  event.target_id.as_str());
+
+    producer.publish(envelope).await.map_err(transport_err)
+}
+
+async fn publish_follow_requested(
+    producer: &KafkaProducerHandle,
+    event:    &FollowRequested,
+) -> Result<(), SocialGraphError> {
+    let key      = format!("{}:{}", event.actor_id, event.target_id);
+    let envelope = EventEnvelope::new(TOPIC_FOLLOW_REQUESTED, key, event.clone())
+        .with_header("event_type", "FollowRequested")
         .with_header("actor_id",   event.actor_id.as_str())
         .with_header("target_id",  event.target_id.as_str());
 

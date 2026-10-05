@@ -55,6 +55,7 @@ use crate::infrastructure::publisher::{KafkaNotificationPublisher, NoopNotificat
 use crate::infrastructure::streaming::BroadcastRegistry;
 use crate::infrastructure::worker::{
     collapse_flush_worker::CollapseFlushWorker, comment_worker::CommentNotificationWorker,
+    follow_worker::FollowNotificationWorker,
     mention_worker::MentionNotificationWorker, reaction_worker::ReactionNotificationWorker,
 };
 
@@ -200,6 +201,17 @@ impl App {
                     Arc::clone(&stream_registry),
                     Arc::clone(&config),
                     "notification-comment-consumer",
+                )
+                .run(),
+            );
+            tokio::spawn(
+                FollowNotificationWorker::new(
+                    kafka_config.clone(),
+                    Arc::clone(&repository),
+                    Arc::clone(&block_cache),
+                    Arc::clone(&counter),
+                    Arc::clone(&stream_registry),
+                    "notification-follow-consumer",
                 )
                 .run(),
             );

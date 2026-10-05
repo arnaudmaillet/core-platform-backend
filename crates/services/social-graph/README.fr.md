@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: cec81d80a413803b9be10005f1923088e06de2166ed4d49f1bfebfa2c9a68922
+  source_sha256: 36449688e731b7c9075eeb1c39708159edb7b134022f55a4421b8d1d1166f5c2
   translated_at: 2026-10-05
   status: complete
 ---
@@ -20,7 +20,7 @@ i18n:
 > | **Palier (Tier)** | **TIER-1** — feeds, notifications et filtrage par blocage en dépendent |
 > | **Binaire déployable** | `crates/apps/social-graph-server` (crate bibliothèque : `crates/services/social-graph`) |
 > | **Bases de données** | ScyllaDB keyspace `social_graph` (5 tables) · Redis (sets + compteurs) |
-> | **Asynchrone** | publie `social-graph.followed` / `.unfollowed` / `.blocked` / `.author_tier_changed` · consomme `profile.v1.events` (projection d'audience) |
+> | **Asynchrone** | publie `social-graph.followed` / `.follow_requested` / `.unfollowed` / `.blocked` / `.author_tier_changed` · consomme `profile.v1.events` (projection d'audience) |
 > | **Appelants amont** | `timeline`, `notification`, `<TODO: passerelle>` |
 > | **Dépendances aval** | ScyllaDB, Redis, Kafka |
 > | **SLO** | `<TODO>` dispo · `GetRelationStatus` p99 `<TODO>` · écriture p99 `<TODO>` |
@@ -214,7 +214,8 @@ pas prévenue et rien n'est rompu. Table `social_graph.restrictions` (partitionn
 
 | Topic | Trigger | Key | Consumers |
 |---|---|---|---|
-| `social-graph.followed` | `Follow` success | `{actor}:{target}` | `timeline` (fan-out), `notification` |
+| `social-graph.followed` | `Follow` success, or `ApproveFollowRequest` (`via_request: true`) | `{actor}:{target}` | `timeline` (fan-out), `notification` (new follower / request accepted) |
+| `social-graph.follow_requested` | `Follow` of a private profile: a pending request (#755) | `{actor}:{target}` | `notification` (the owner is told). `{actor_id, target_id, requested_at}` |
 | `social-graph.unfollowed` | `Unfollow` success | `{actor}:{target}` | `timeline` (pruning) |
 | `social-graph.blocked` | `Block` success | `{actor}:{target}` | content filtering, notification suppression |
 | `social-graph.author_tier_changed` | un follow/unfollow franchit un seuil de palier (follower count) | `{profile}` | `profile` (persiste le palier → ré-émet sur `profile.v1.events` pour que `post` le dénormalise → routage de fan-out `timeline`/`geo-discovery`). `{profile_id, new_tier, follower_count, changed_at_ms}` |

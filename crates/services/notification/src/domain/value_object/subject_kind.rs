@@ -5,6 +5,8 @@ use crate::error::NotificationError;
 pub enum SubjectKind {
     Post,
     Comment,
+    /// A profile (follows, follow requests): the other profile.
+    Profile,
 }
 
 impl SubjectKind {
@@ -12,6 +14,7 @@ impl SubjectKind {
         match self {
             Self::Post    => 1,
             Self::Comment => 2,
+            Self::Profile => 3,
         }
     }
 
@@ -19,6 +22,7 @@ impl SubjectKind {
         match v {
             1 => Ok(Self::Post),
             2 => Ok(Self::Comment),
+            3 => Ok(Self::Profile),
             n => Err(NotificationError::UnknownSubjectKind { kind: n.to_string() }),
         }
     }

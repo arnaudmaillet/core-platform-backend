@@ -10,6 +10,12 @@ pub enum NotificationKind {
     Comment,
     Reply,
     Mention,
+    /// A profile started following the recipient (#755).
+    Follow,
+    /// A profile asked to follow the recipient's private profile (#755).
+    FollowRequest,
+    /// The recipient's follow request was accepted (#755).
+    FollowAccepted,
 }
 
 impl NotificationKind {
@@ -19,6 +25,9 @@ impl NotificationKind {
             Self::Comment  => 2,
             Self::Reply    => 3,
             Self::Mention  => 4,
+            Self::Follow         => 5,
+            Self::FollowRequest  => 6,
+            Self::FollowAccepted => 7,
         }
     }
 
@@ -28,6 +37,9 @@ impl NotificationKind {
             2 => Ok(Self::Comment),
             3 => Ok(Self::Reply),
             4 => Ok(Self::Mention),
+            5 => Ok(Self::Follow),
+            6 => Ok(Self::FollowRequest),
+            7 => Ok(Self::FollowAccepted),
             n => Err(NotificationError::UnknownNotificationKind { kind: n.to_string() }),
         }
     }
@@ -42,6 +54,9 @@ impl NotificationKind {
             Self::Comment  => "comment",
             Self::Reply    => "reply",
             Self::Mention  => "mention",
+            Self::Follow         => "follow",
+            Self::FollowRequest  => "follow_request",
+            Self::FollowAccepted => "follow_accepted",
         }
     }
 }

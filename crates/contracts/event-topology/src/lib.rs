@@ -61,6 +61,7 @@ pub const PRODUCERS: &[(&str, &str)] = &[
     ("social-graph.unfollowed", "social-graph"),
     ("social-graph.blocked", "social-graph"),
     ("social-graph.author_tier_changed", "social-graph"),
+    ("social-graph.follow_requested", "social-graph"),
     // chat (its own delivery plane)
     ("chat.conversation.created", "chat"),
     ("chat.conversation.published", "chat"),
@@ -109,6 +110,9 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     // engagement reactions → counter aggregation, notif fan-out, write-behind
     ("engagement.reactions", "counter"),
     ("engagement.reactions", "notification"),
+    // follows, follow requests and their approval (#755)
+    ("social-graph.followed", "notification"),
+    ("social-graph.follow_requested", "notification"),
     ("engagement.reactions", "engagement"),
     // social-graph edges → timeline fan-out, profile tier ownership
     ("social-graph.followed", "timeline"),
