@@ -23,6 +23,29 @@ pub fn code_message(code: &str, minutes: i64, locale: Option<&str>) -> (String, 
     }
 }
 
+/// `(subject, plain-text body)` telling the owner of an address that wrong
+/// codes paused sign-in codes for it.
+pub fn lockout_notice_message(locale: Option<&str>) -> (String, String) {
+    if locale.is_some_and(|l| l.to_ascii_lowercase().starts_with("fr")) {
+        (
+            "Codes de connexion mis en pause pour ton adresse".to_owned(),
+            "De nombreux codes erronés ont été saisis pour te connecter avec cette adresse. Pour protéger \
+             ton compte, nous n'envoyons plus de code pour elle pendant 24 heures.\n\nSi c'était toi, \
+             réessaie plus tard. Sinon, tu n'as rien à faire : personne ne peut se connecter sans un code \
+             envoyé ici.\n"
+                .to_owned(),
+        )
+    } else {
+        (
+            "Sign-in codes paused for your address".to_owned(),
+            "Many wrong codes were entered to sign in with this address. To protect your account, we are \
+             not sending codes to it for 24 hours.\n\nIf it was you, try again later. If not, there is \
+             nothing to do: nobody can sign in without a code sent here.\n"
+                .to_owned(),
+        )
+    }
+}
+
 /// The SMS text for `code` (short: one segment).
 pub fn sms_message(code: &str, minutes: i64, locale: Option<&str>) -> String {
     if locale.is_some_and(|l| l.to_ascii_lowercase().starts_with("fr")) {
@@ -42,6 +65,14 @@ mod tests {
             let text = sms_message("123456", 10, locale);
             assert!(text.starts_with("123456") && text.len() <= 160, "{text}");
         }
+    }
+
+    #[test]
+    fn the_lockout_notice_follows_the_locale_and_carries_no_code() {
+        let (subject, body) = lockout_notice_message(Some("fr"));
+        assert!(subject.contains("pause") && body.contains("24 heures"));
+        let (subject, body) = lockout_notice_message(None);
+        assert!(subject.contains("paused") && body.contains("24 hours"));
     }
 
     #[test]

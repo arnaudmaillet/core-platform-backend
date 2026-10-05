@@ -856,11 +856,20 @@ impl super::port::VerificationStore for InMemoryVerificationStore {
                 destination_key,
             });
         }
+        let (stored_channel, stored_destination, stored_locale) =
+            (stored.challenge.channel, stored.challenge.destination.clone(), stored.challenge.locale.clone());
         stored.attempts_left = stored.attempts_left.saturating_sub(1);
         if stored.attempts_left == 0 {
             challenges.remove(challenge_id);
         }
-        Ok(super::port::ConsumeOutcome::Miss { destination_key })
+        Ok(super::port::ConsumeOutcome::Miss {
+            destination_key,
+            destination: super::port::VerifiedDestination {
+                channel: stored_channel,
+                destination: stored_destination,
+            },
+            locale: stored_locale,
+        })
     }
 
     async fn discard(&self, challenge_id: &str) -> Result<(), AuthError> {
@@ -896,6 +905,7 @@ impl super::port::VerificationStore for InMemoryVerificationStore {
 #[derive(Default)]
 pub struct RecordingCodeSender {
     sent: Mutex<Vec<(String, String, Option<String>)>>,
+    notices: Mutex<Vec<(String, Option<String>)>>,
     failing: std::sync::atomic::AtomicBool,
 }
 
@@ -912,6 +922,11 @@ impl RecordingCodeSender {
     pub fn recover(&self) {
         self.failing.store(false, std::sync::atomic::Ordering::SeqCst);
     }
+
+    /// The (destination, locale) of every lockout notice sent.
+    pub fn notices(&self) -> Vec<(String, Option<String>)> {
+        self.notices.lock().unwrap().clone()
+    }
 }
 
 #[async_trait]
@@ -927,6 +942,16 @@ impl super::port::CodeSender for RecordingCodeSender {
             return Err(AuthError::VerificationSendFailed);
         }
         self.sent.lock().unwrap().push((destination.to_owned(), code.to_owned(), locale.map(str::to_owned)));
+        Ok(())
+    }
+
+    async fn send_lockout_notice(
+        &self,
+        _channel: super::port::VerificationChannel,
+        destination: &str,
+        locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        self.notices.lock().unwrap().push((destination.to_owned(), locale.map(str::to_owned)));
         Ok(())
     }
 }

@@ -107,10 +107,10 @@ return {n, redis.call('TTL', KEYS[1])}
 "#;
 
 /// KEYS = challenge · ARGV = code hash. Returns {'ok', channel, destination,
-/// destination key} on a match (and deletes), {'miss', destination key} on a
+/// destination key} on a match (and deletes), {'miss', destination key, channel, destination, locale} on a
 /// wrong code, {} for no such challenge.
 const CONSUME: &str = r#"
-local stored = redis.call('HMGET', KEYS[1], 'code_hash', 'channel', 'destination', 'destination_key')
+local stored = redis.call('HMGET', KEYS[1], 'code_hash', 'channel', 'destination', 'destination_key', 'locale')
 if not stored[1] then return {} end
 if stored[1] == ARGV[1] then
     redis.call('DEL', KEYS[1])
@@ -118,13 +118,13 @@ if stored[1] == ARGV[1] then
 end
 local left = redis.call('HINCRBY', KEYS[1], 'attempts_left', -1)
 if left <= 0 then redis.call('DEL', KEYS[1]) end
-return {'miss', stored[4]}
+return {'miss', stored[4], stored[2], stored[3], stored[5] or ''}
 "#;
 
 /// KEYS = challenge · ARGV = channel, destination, destination key, code hash,
-/// attempts, ttl secs.
+/// attempts, ttl secs, locale ('' if none).
 const SAVE: &str = r#"
-redis.call('HSET', KEYS[1], 'channel', ARGV[1], 'destination', ARGV[2], 'destination_key', ARGV[3], 'code_hash', ARGV[4], 'attempts_left', ARGV[5])
+redis.call('HSET', KEYS[1], 'channel', ARGV[1], 'destination', ARGV[2], 'destination_key', ARGV[3], 'code_hash', ARGV[4], 'attempts_left', ARGV[5], 'locale', ARGV[7])
 redis.call('EXPIRE', KEYS[1], tonumber(ARGV[6]))
 return 1
 "#;
@@ -180,6 +180,7 @@ impl VerificationStore for RedisVerificationStore {
                     challenge.code_hash.clone(),
                     max_attempts.max(1).to_string(),
                     ttl.num_seconds().max(1).to_string(),
+                    challenge.locale.clone().unwrap_or_default(),
                 ],
             )
             .await
@@ -201,7 +202,14 @@ impl VerificationStore for RedisVerificationStore {
                 },
                 None => ConsumeOutcome::Unknown,
             },
-            [tag, key] if tag == "miss" => ConsumeOutcome::Miss { destination_key: key.clone() },
+            [tag, key, channel, destination, locale] if tag == "miss" => match channel_from(channel) {
+                Some(channel) => ConsumeOutcome::Miss {
+                    destination_key: key.clone(),
+                    destination: VerifiedDestination { channel, destination: destination.clone() },
+                    locale: Some(locale.clone()).filter(|l| !l.is_empty()),
+                },
+                None => ConsumeOutcome::Unknown,
+            },
             _ => ConsumeOutcome::Unknown,
         })
     }

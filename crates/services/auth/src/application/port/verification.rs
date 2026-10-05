@@ -30,6 +30,8 @@ pub struct PendingChallenge {
     pub destination_key: String,
     /// `SHA-256(challenge_id ":" code)`, hex.
     pub code_hash:    String,
+    /// The reader's language, for a notice about this address later.
+    pub locale:       Option<String>,
 }
 
 /// An address someone just proved they control.
@@ -44,8 +46,9 @@ pub struct VerifiedDestination {
 pub enum ConsumeOutcome {
     /// The code matched: the challenge is consumed.
     Verified { destination: VerifiedDestination, destination_key: String },
-    /// A wrong code for this challenge (an attempt was spent).
-    Miss { destination_key: String },
+    /// A wrong code for this challenge (an attempt was spent). Carries the
+    /// address so its owner can be told when it gets locked.
+    Miss { destination_key: String, destination: VerifiedDestination, locale: Option<String> },
     /// No such challenge (unknown, expired, used up).
     Unknown,
 }
@@ -128,4 +131,16 @@ pub trait CodeSender: Send + Sync + 'static {
         code: &str,
         locale: Option<&str>,
     ) -> Result<(), AuthError>;
+
+    /// Tells the owner of `destination` that wrong codes locked it for
+    /// everyone. Transports that cannot (or should not: SMS costs money and is
+    /// a pumping vector) send nothing.
+    async fn send_lockout_notice(
+        &self,
+        _channel: VerificationChannel,
+        _destination: &str,
+        _locale: Option<&str>,
+    ) -> Result<(), AuthError> {
+        Ok(())
+    }
 }
