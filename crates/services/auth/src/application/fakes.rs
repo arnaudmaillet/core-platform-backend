@@ -1411,6 +1411,38 @@ impl super::port::PasskeyRepository for InMemoryPasskeyRepository {
         Ok(())
     }
 
+    async fn find(
+        &self,
+        account_id: &AccountId,
+        credential_id: &[u8],
+    ) -> Result<Option<super::port::StoredPasskey>, AuthError> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(a, p)| a == account_id && p.credential_id == credential_id)
+            .map(|(_, p)| p.clone()))
+    }
+
+    async fn record_use(
+        &self,
+        account_id: &AccountId,
+        credential_id: &[u8],
+        sign_count: u32,
+        backed_up: bool,
+        at: DateTime<Utc>,
+    ) -> Result<(), AuthError> {
+        for (a, p) in self.rows.lock().unwrap().iter_mut() {
+            if a == account_id && p.credential_id == credential_id {
+                p.sign_count = p.sign_count.max(sign_count);
+                p.backed_up = backed_up;
+                p.last_used_at = Some(at);
+            }
+        }
+        Ok(())
+    }
+
     async fn remove(&self, account_id: &AccountId, credential_id: &[u8]) -> Result<bool, AuthError> {
         let mut rows = self.rows.lock().unwrap();
         let before = rows.len();

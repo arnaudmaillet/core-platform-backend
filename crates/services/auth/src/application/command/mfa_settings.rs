@@ -329,7 +329,7 @@ mod tests {
 
         // The next sign-in needs the code — a backup code handed out works.
         let LoginOutcome::SecondFactorRequired(challenge) = w.login().await else { panic!("two-step") };
-        let complete = CompleteLoginCommand { mfa_token: challenge.mfa_token, code: backup.codes[3].clone() };
+        let complete = CompleteLoginCommand { mfa_token: challenge.mfa_token, code: backup.codes[3].clone(), passkey: None };
         w.fx.login_handler().complete(Envelope::new(Uuid::now_v7(), complete), t0()).await.expect("a backup code");
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;

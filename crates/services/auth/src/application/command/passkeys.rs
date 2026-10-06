@@ -1,11 +1,20 @@
 //! The holder's passkeys (#808): registering one (a challenge, then the
-//! authenticator's response), listing them, removing one. Registering and
-//! removing are emailed to the account's address; starting a registration and
-//! removing need a recent credential proof (the edge's step-up).
+//! authenticator's response), listing them, removing one, and signing in with
+//! one ([`PasskeySignIn`]: a first factor, the second step, or a step-up).
+//! Registering and removing are emailed to the account's address; starting a
+//! registration and removing need a recent credential proof (the edge's
+//! step-up).
 //!
 //! A registration challenge is bound to the account that asked for it: it is
 //! kept (single use, five minutes) under the hash of the account and the
-//! challenge, so only that account can redeem it.
+//! challenge, so only that account can redeem it. A sign-in challenge is
+//! anyone's (single use, five minutes): the assertion names its account.
+//!
+//! **Which account a sign-in is.** Credential ids are only unique per account
+//! (anyone's authenticator can claim any id), so an account is never found
+//! from a credential id: it is the assertion's user handle (the account id
+//! the passkey was made with), or the account the step already belongs to,
+//! and the credential must be one of *that* account's.
 
 use std::sync::Arc;
 
@@ -23,7 +32,7 @@ use crate::application::port::{
     AccountDirectory, FederatedNonceStore, MfaChange, PasskeyRepository, SessionCache, SessionRepository,
     StoredPasskey,
 };
-use crate::domain::value_object::webauthn::{verify_registration, RelyingParty};
+use crate::domain::value_object::webauthn::{verify_assertion, verify_registration, RelyingParty};
 use crate::domain::value_object::{AccountId, SessionId};
 use crate::error::AuthError;
 
@@ -101,6 +110,116 @@ fn registration_key(account_id: &AccountId, challenge: &[u8]) -> String {
 pub fn normalize_passkey_name(raw: &str) -> String {
     let name: String = raw.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_PASSKEY_NAME_CHARS).collect();
     if name.is_empty() { "Passkey".to_owned() } else { name }
+}
+
+/// What the client hands its platform authenticator to sign in
+/// (`PublicKeyCredentialRequestOptions`: discoverable, user verification
+/// required, no allow list).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasskeySignInOptions {
+    /// base64url, no padding.
+    pub challenge:       String,
+    pub rp_id:           String,
+    pub expires_in_secs: i64,
+}
+
+/// The authenticator's assertion, as the client sends it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PasskeyAssertion {
+    /// The options' challenge.
+    pub challenge:          String,
+    pub credential_id:      Vec<u8>,
+    pub client_data_json:   Vec<u8>,
+    pub authenticator_data: Vec<u8>,
+    pub signature:          Vec<u8>,
+    /// The user handle the passkey was made with (the account id's bytes);
+    /// may be empty on a second step or a step-up.
+    pub user_handle:        Vec<u8>,
+}
+
+impl std::fmt::Debug for PasskeyAssertion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PasskeyAssertion").finish_non_exhaustive()
+    }
+}
+
+fn sign_in_key(challenge: &[u8]) -> String {
+    data_encoding::HEXLOWER.encode(&Sha256::digest(challenge))
+}
+
+/// Signing in with a passkey: the challenge, then the assertion's check.
+pub struct PasskeySignIn {
+    rp:         RelyingParty,
+    passkeys:   Arc<dyn PasskeyRepository>,
+    challenges: Arc<dyn FederatedNonceStore>,
+}
+
+impl PasskeySignIn {
+    pub fn new(rp: RelyingParty, passkeys: Arc<dyn PasskeyRepository>, challenges: Arc<dyn FederatedNonceStore>) -> Self {
+        Self { rp, passkeys, challenges }
+    }
+
+    /// A challenge for an assertion (single use, five minutes).
+    pub async fn start(&self) -> Result<PasskeySignInOptions, AuthError> {
+        let mut challenge = [0u8; 32];
+        rand::rng().fill_bytes(&mut challenge);
+        self.challenges.issue(&sign_in_key(&challenge), Duration::seconds(PASSKEY_CHALLENGE_TTL_SECS)).await?;
+        Ok(PasskeySignInOptions {
+            challenge:       URL_SAFE_NO_PAD.encode(challenge),
+            rp_id:           self.rp.id.clone(),
+            expires_in_secs: PASSKEY_CHALLENGE_TTL_SECS,
+        })
+    }
+
+    /// Checks `assertion` (its challenge used up either way) and returns the
+    /// account it signs in. `expected`: the account a second step or a
+    /// step-up belongs to — the passkey must be that account's.
+    pub async fn verify(
+        &self,
+        assertion: &PasskeyAssertion,
+        expected: Option<&AccountId>,
+        now: DateTime<Utc>,
+    ) -> Result<AccountId, AuthError> {
+        let challenge = URL_SAFE_NO_PAD
+            .decode(assertion.challenge.trim_end_matches('='))
+            .map_err(|_| AuthError::PasskeyChallengeInvalid)?;
+        if !self.challenges.consume(&sign_in_key(&challenge)).await? {
+            return Err(AuthError::PasskeyChallengeInvalid);
+        }
+        let named = match assertion.user_handle.as_slice() {
+            [] => None,
+            handle => Some(
+                uuid::Uuid::from_slice(handle)
+                    .map(AccountId::from_uuid)
+                    .map_err(|_| AuthError::PasskeyAssertionFailed)?,
+            ),
+        };
+        let account_id = match (named, expected) {
+            (Some(named), Some(expected)) if named != *expected => return Err(AuthError::PasskeyAssertionFailed),
+            (Some(account), _) | (None, Some(&account)) => account,
+            (None, None) => return Err(AuthError::PasskeyAssertionFailed),
+        };
+        let passkey = self
+            .passkeys
+            .find(&account_id, &assertion.credential_id)
+            .await?
+            .ok_or(AuthError::PasskeyAssertionFailed)?;
+        let used = verify_assertion(
+            &self.rp,
+            &challenge,
+            &passkey.public_key,
+            passkey.sign_count,
+            &assertion.client_data_json,
+            &assertion.authenticator_data,
+            &assertion.signature,
+        )
+        .map_err(|reason| {
+            tracing::info!(%reason, account.id = %account_id.as_str(), "passkey sign-in refused");
+            AuthError::PasskeyAssertionFailed
+        })?;
+        self.passkeys.record_use(&account_id, &assertion.credential_id, used.sign_count, used.backed_up, now).await?;
+        Ok(account_id)
+    }
 }
 
 pub struct PasskeyHandler {
@@ -409,6 +528,138 @@ mod tests {
             w.handler.finish_registration(Envelope::new(Uuid::now_v7(), (on(&mine).payload, response(&options))), t0()).await;
         assert!(matches!(replay, Err(AuthError::PasskeyChallengeInvalid)), "{replay:?}");
         assert!(w.passkeys.is_empty());
+    }
+
+    /// Registers `auth` for `session` and returns a sign-in over the same
+    /// repository.
+    async fn registered(w: &World, session: &IssuedSession, auth: &SoftAuthenticator) -> PasskeySignIn {
+        w.register(session, auth).await.unwrap();
+        PasskeySignIn::new(
+            RelyingParty::new(RP_ID, vec![]),
+            Arc::clone(&w.passkeys) as _,
+            Arc::new(InMemoryNonceStore::default()),
+        )
+    }
+
+    /// An assertion by `auth` for a fresh challenge of `sign_in`.
+    async fn assertion(
+        sign_in: &PasskeySignIn,
+        auth: &mut SoftAuthenticator,
+        user_handle: Vec<u8>,
+        flags: u8,
+    ) -> PasskeyAssertion {
+        let options = sign_in.start().await.unwrap();
+        let challenge = URL_SAFE_NO_PAD.decode(&options.challenge).unwrap();
+        let client = SoftAuthenticator::client_data("webauthn.get", &challenge, ORIGIN);
+        let (authenticator_data, signature) = auth.assert(RP_ID, flags, &client, false);
+        PasskeyAssertion {
+            challenge: options.challenge,
+            credential_id: auth.credential_id.clone(),
+            client_data_json: client,
+            authenticator_data,
+            signature,
+            user_handle,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_names_its_account_by_user_handle_and_checks_the_key() {
+        let w = World::new();
+        let session = w.login().await;
+        let mut auth = SoftAuthenticator::new();
+        let sign_in = registered(&w, &session, &auth).await;
+        let handle = session.account_id.as_uuid().as_bytes().to_vec();
+
+        let ok = assertion(&sign_in, &mut auth, handle.clone(), PASSKEY).await;
+        assert_eq!(sign_in.verify(&ok, None, t0()).await.unwrap(), session.account_id);
+        assert_eq!(w.passkeys.list(&session.account_id).await.unwrap()[0].last_used_at, Some(t0()));
+        // Single use.
+        assert!(matches!(sign_in.verify(&ok, None, t0()).await, Err(AuthError::PasskeyChallengeInvalid)));
+
+        // The second step / step-up of the same account: with or without a handle.
+        let step = assertion(&sign_in, &mut auth, Vec::new(), PASSKEY).await;
+        assert_eq!(sign_in.verify(&step, Some(&session.account_id), t0()).await.unwrap(), session.account_id);
+
+        // No handle and no account: refused (an id never names an account).
+        let anonymous = assertion(&sign_in, &mut auth, Vec::new(), PASSKEY).await;
+        assert!(matches!(sign_in.verify(&anonymous, None, t0()).await, Err(AuthError::PasskeyAssertionFailed)));
+        // Another account's step, or a handle naming another account.
+        let other = AccountId::from_uuid(Uuid::now_v7());
+        let wrong = assertion(&sign_in, &mut auth, handle.clone(), PASSKEY).await;
+        assert!(matches!(sign_in.verify(&wrong, Some(&other), t0()).await, Err(AuthError::PasskeyAssertionFailed)));
+        let elsewhere = assertion(&sign_in, &mut auth, other.as_uuid().as_bytes().to_vec(), PASSKEY).await;
+        assert!(matches!(sign_in.verify(&elsewhere, None, t0()).await, Err(AuthError::PasskeyAssertionFailed)));
+        // Another key under this credential id, or no user verification.
+        let mut impostor = SoftAuthenticator::new();
+        impostor.credential_id = auth.credential_id.clone();
+        let forged = assertion(&sign_in, &mut impostor, handle.clone(), PASSKEY).await;
+        assert!(matches!(sign_in.verify(&forged, None, t0()).await, Err(AuthError::PasskeyAssertionFailed)));
+        let weak = assertion(&sign_in, &mut auth, handle, crate::domain::value_object::webauthn::testing::PRESENT_ONLY).await;
+        assert!(matches!(sign_in.verify(&weak, None, t0()).await, Err(AuthError::PasskeyAssertionFailed)));
+    }
+
+    /// A passkey signs in without a second step, even with two-step sign-in
+    /// on; it is also the second step after a password, and a step-up.
+    #[tokio::test]
+    async fn a_passkey_signs_in_completes_a_second_step_and_steps_up() {
+        use crate::application::command::{CompleteLoginCommand, LoginOutcome, StepUpCredential, VerifyCredentialsCommand};
+        use crate::application::port::SessionRepository;
+
+        let w = World::new();
+        let session = w.login().await;
+        let mut auth = SoftAuthenticator::new();
+        let sign_in = Arc::new(registered(&w, &session, &auth).await);
+        w.fx.enroll_mfa(session.account_id);
+        let login = w.fx.login_handler().with_passkeys(Arc::clone(&sign_in));
+        let handle = session.account_id.as_uuid().as_bytes().to_vec();
+        let device = DeviceFingerprint::default();
+        let grant = |a: PasskeyAssertion| LoginCommand {
+            grant: AuthnGrant::Passkey(a),
+            device: device.clone(),
+            guest_refresh_token: None,
+            client_ip: None,
+        };
+
+        // First factor: signed in at once, as the account's own identity.
+        let a = assertion(&sign_in, &mut auth, handle.clone(), PASSKEY).await;
+        let issued = match login.handle(Envelope::new(Uuid::now_v7(), grant(a)), t0()).await.unwrap() {
+            LoginOutcome::Issued(issued) => issued,
+            other => panic!("no second step after a passkey: {other:?}"),
+        };
+        assert_eq!(issued.account_id, session.account_id);
+        let stored = w.fx.sessions.find_by_id(&issued.session_id).await.unwrap().unwrap();
+        assert_eq!(stored.subject().issuer(), "https://idp.test", "the account's link, so a password step-up works");
+        let refused = assertion(&sign_in, &mut auth, Vec::new(), PASSKEY).await;
+        assert!(matches!(
+            login.handle(Envelope::new(Uuid::now_v7(), grant(refused)), t0()).await,
+            Err(AuthError::PasskeyAssertionFailed)
+        ));
+
+        // The second step after a password.
+        let password = LoginCommand {
+            grant: AuthnGrant::Password { username: "user".into(), password: "pw".into() },
+            device: device.clone(),
+            guest_refresh_token: None,
+            client_ip: None,
+        };
+        let challenge = match login.handle(Envelope::new(Uuid::now_v7(), password), t0()).await.unwrap() {
+            LoginOutcome::SecondFactorRequired(challenge) => challenge,
+            other => panic!("two-step sign-in is on: {other:?}"),
+        };
+        let a = assertion(&sign_in, &mut auth, Vec::new(), PASSKEY).await;
+        let complete = CompleteLoginCommand { mfa_token: challenge.mfa_token, code: String::new(), passkey: Some(a) };
+        let done = login.complete(Envelope::new(Uuid::now_v7(), complete), t0()).await.unwrap();
+        assert_eq!(done.account_id, session.account_id);
+
+        // A step-up.
+        let verify = w.fx.verify_credentials_handler().with_passkeys(Arc::clone(&sign_in));
+        let a = assertion(&sign_in, &mut auth, handle, PASSKEY).await;
+        let cmd = VerifyCredentialsCommand {
+            account_id: done.account_id.as_str(),
+            session_id: done.session_id.as_str(),
+            credential: StepUpCredential::Passkey(a),
+        };
+        verify.handle(Envelope::new(Uuid::now_v7(), cmd), t0()).await.unwrap();
     }
 
     #[tokio::test]

@@ -22,6 +22,8 @@ pub enum StepUpCredential {
     /// A TOTP or backup code, for an account with two-step sign-in on (#649)
     /// — the step-up of an account without a password, too.
     MfaCode(String),
+    /// One of the account's passkeys (#808).
+    Passkey(super::passkeys::PasskeyAssertion),
 }
 
 /// The holder re-proves a credential before a destructive action. `account_id`
@@ -54,6 +56,7 @@ impl Validate for VerifyCredentialsCommand {
         }
         let empty = match &self.credential {
             StepUpCredential::Password(p) | StepUpCredential::MfaCode(p) => p.is_empty(),
+            StepUpCredential::Passkey(a) => a.challenge.is_empty() || a.signature.is_empty(),
         };
         if empty {
             v.push(FieldViolation::new("credential", "AUT-VAL-027", "a credential is required"));
@@ -85,12 +88,20 @@ pub struct VerifyCredentialsHandler {
     policy: SessionPolicy,
     /// Two-step codes (#649); `None`: an MFA code proves nothing.
     mfa: Option<Arc<MfaVerifier>>,
+    /// Passkeys (#808); `None`: a passkey proves nothing.
+    passkeys: Option<Arc<super::passkeys::PasskeySignIn>>,
 }
 
 impl VerifyCredentialsHandler {
     /// Accepts the holder's two-step code as a step-up (#649).
     pub fn with_mfa(mut self, mfa: Arc<MfaVerifier>) -> Self {
         self.mfa = Some(mfa);
+        self
+    }
+
+    /// Accepts one of the holder's passkeys as a step-up (#808).
+    pub fn with_passkeys(mut self, passkeys: Arc<super::passkeys::PasskeySignIn>) -> Self {
+        self.passkeys = Some(passkeys);
         self
     }
 
@@ -105,7 +116,7 @@ impl VerifyCredentialsHandler {
         minter: Arc<dyn TokenMinter>,
         policy: SessionPolicy,
     ) -> Self {
-        Self { idp, admin, directory, profiles, sessions, cache, minter, policy, mfa: None }
+        Self { idp, admin, directory, profiles, sessions, cache, minter, policy, mfa: None, passkeys: None }
     }
 
     pub async fn handle(
@@ -126,6 +137,10 @@ impl VerifyCredentialsHandler {
             StepUpCredential::MfaCode(code) => {
                 let mfa = self.mfa.as_ref().ok_or(AuthError::MfaUnavailable)?;
                 mfa.check(&account_id, &code, now).await?;
+            }
+            StepUpCredential::Passkey(assertion) => {
+                let passkeys = self.passkeys.as_ref().ok_or(AuthError::PasskeysUnavailable)?;
+                passkeys.verify(&assertion, Some(&account_id), now).await?;
             }
         }
 

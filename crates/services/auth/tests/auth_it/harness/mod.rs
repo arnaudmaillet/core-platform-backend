@@ -62,7 +62,9 @@ impl IdentityProvider for StubIdp {
         let subject = match grant {
             AuthnGrant::Password { username, .. } => username,
             AuthnGrant::AuthorizationCode { code, .. } => code,
-            AuthnGrant::IdToken { .. } | AuthnGrant::Code { .. } => return Err(AuthError::IdpAuthenticationFailed),
+            AuthnGrant::IdToken { .. } | AuthnGrant::Code { .. } | AuthnGrant::Passkey(_) => {
+                return Err(AuthError::IdpAuthenticationFailed)
+            }
         };
         Ok(NormalizedClaims { issuer: "https://idp.test".to_owned(), subject })
     }
@@ -341,6 +343,10 @@ impl Harness {
                 registrations: Arc::new(auth::infrastructure::cache::RedisNonceStore::with_namespace(
                     redis.clone(),
                     "pkreg",
+                )),
+                sign_ins: Arc::new(auth::infrastructure::cache::RedisNonceStore::with_namespace(
+                    redis.clone(),
+                    "pkauth",
                 )),
             }),
             policy: SessionPolicy::new(

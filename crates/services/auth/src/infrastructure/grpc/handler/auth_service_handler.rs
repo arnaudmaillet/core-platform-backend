@@ -9,7 +9,7 @@ use uuid::Uuid;
 use transport::grpc::edge;
 use crate::application::command::{
     ChangeContactCommand, ChangeContactHandler, ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, GuestAttestation, CompleteLoginCommand, IssuedSession, LoginCommand, LoginHandler, LoginOutcome, MfaCaller,
-    MfaSettingsHandler, PasskeyHandler, PasskeyRegistration, PasskeyView,
+    MfaSettingsHandler, PasskeyAssertion, PasskeyHandler, PasskeyRegistration, PasskeySignIn, PasskeyView,
     LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutCommand, LogoutHandler,
     RefreshCommand, RefreshHandler, SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome,
     StartGuestSessionCommand, StartGuestSessionHandler, StartVerificationCommand, VerificationCodes,
@@ -48,6 +48,7 @@ pub struct AuthServiceHandler {
     change_contact: Option<Arc<ChangeContactHandler>>,
     mfa_settings: Option<Arc<MfaSettingsHandler>>,
     passkeys: Option<Arc<PasskeyHandler>>,
+    passkey_sign_in: Option<Arc<PasskeySignIn>>,
     nonces: Option<Arc<FederatedNonces>>,
     attestation: Option<Arc<GuestAttestation>>,
     /// Proxies appending to `X-Forwarded-For` in front of the edge
@@ -83,6 +84,7 @@ impl AuthServiceHandler {
             change_contact: None,
             mfa_settings: None,
             passkeys: None,
+            passkey_sign_in: None,
             nonces: None,
             attestation: None,
             trusted_proxy_hops: transport::grpc::client_ip::DEFAULT_TRUSTED_PROXY_HOPS,
@@ -226,6 +228,27 @@ impl AuthServiceHandler {
     pub fn with_passkeys(mut self, handler: Arc<PasskeyHandler>) -> Self {
         self.passkeys = Some(handler);
         self
+    }
+
+    /// Enables StartPasskeySignIn (#808).
+    pub fn with_passkey_sign_in(mut self, sign_in: Arc<PasskeySignIn>) -> Self {
+        self.passkey_sign_in = Some(sign_in);
+        self
+    }
+
+    /// Edge `public` (#808): a challenge for a passkey assertion.
+    pub async fn start_passkey_sign_in(
+        &self,
+        _request: Request<proto::StartPasskeySignInRequest>,
+    ) -> Result<Response<proto::PasskeySignInOptions>, Status> {
+        let sign_in =
+            self.passkey_sign_in.as_deref().ok_or_else(|| Status::unavailable("passkeys are not configured"))?;
+        let options = sign_in.start().await.map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::PasskeySignInOptions {
+            challenge:  options.challenge,
+            rp_id:      options.rp_id,
+            expires_in: options.expires_in_secs,
+        }))
     }
 
     fn passkeys(&self) -> Result<&PasskeyHandler, Status> {
@@ -487,6 +510,7 @@ impl AuthServiceHandler {
         let credential = match request.into_inner().credential {
             Some(Credential::Password(p)) => StepUpCredential::Password(p),
             Some(Credential::MfaCode(c)) => StepUpCredential::MfaCode(c),
+            Some(Credential::Passkey(a)) => StepUpCredential::Passkey(assertion_from_proto(a)),
             None => return Err(Status::invalid_argument("a credential is required")),
         };
         let cmd = VerifyCredentialsCommand { account_id, session_id, credential };
@@ -569,7 +593,11 @@ impl AuthServiceHandler {
         request: Request<proto::CompleteLoginRequest>,
     ) -> Result<Response<proto::LoginResponse>, Status> {
         let req = request.into_inner();
-        let cmd = CompleteLoginCommand { mfa_token: req.mfa_token, code: req.code };
+        let cmd = CompleteLoginCommand {
+            mfa_token: req.mfa_token,
+            code:      req.code,
+            passkey:   req.passkey.map(assertion_from_proto),
+        };
         let issued = self
             .login
             .complete(Envelope::new(Uuid::now_v7(), cmd), Utc::now())
@@ -735,6 +763,7 @@ fn grant_from_proto(
         Some(proto::login_request::Credential::VerificationCode(g)) => {
             Ok(AuthnGrant::Code { challenge_id: g.challenge_id, code: g.code })
         }
+        Some(proto::login_request::Credential::Passkey(a)) => Ok(AuthnGrant::Passkey(assertion_from_proto(a))),
         None => Err(Status::invalid_argument("login requires a credential")),
     }
 }
@@ -812,6 +841,17 @@ fn session_status_to_proto(status: SessionStatus) -> i32 {
         SessionStatus::Expired => proto::SessionStatus::Expired,
     };
     s as i32
+}
+
+fn assertion_from_proto(a: proto::PasskeyAssertion) -> PasskeyAssertion {
+    PasskeyAssertion {
+        challenge:          a.challenge,
+        credential_id:      a.credential_id,
+        client_data_json:   a.client_data_json,
+        authenticator_data: a.authenticator_data,
+        signature:          a.signature,
+        user_handle:        a.user_handle,
+    }
 }
 
 fn passkey_to_proto(p: PasskeyView) -> proto::Passkey {

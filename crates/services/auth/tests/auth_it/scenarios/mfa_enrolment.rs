@@ -77,6 +77,7 @@ async fn two_step_sign_in_is_turned_on_regenerated_and_off_from_the_settings() {
         .complete_login(Request::new(proto::CompleteLoginRequest {
             mfa_token: challenge.mfa_token,
             code: codes.backup_codes[0].clone(),
+            passkey: None,
         }))
         .await
         .expect("a backup code from the settings");
@@ -94,6 +95,7 @@ async fn two_step_sign_in_is_turned_on_regenerated_and_off_from_the_settings() {
         .complete_login(Request::new(proto::CompleteLoginRequest {
             mfa_token: challenge.mfa_token.clone(),
             code: codes.backup_codes[1].clone(),
+            passkey: None,
         }))
         .await
         .unwrap_err();
@@ -102,6 +104,7 @@ async fn two_step_sign_in_is_turned_on_regenerated_and_off_from_the_settings() {
         .complete_login(Request::new(proto::CompleteLoginRequest {
             mfa_token: challenge.mfa_token,
             code: fresh.backup_codes[0].clone(),
+            passkey: None,
         }))
         .await
         .expect("the new set");

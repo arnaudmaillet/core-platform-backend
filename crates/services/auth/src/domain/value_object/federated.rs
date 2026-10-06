@@ -11,6 +11,10 @@ pub const EMAIL_CODE_ISSUER: &str = "urn:core-platform:email";
 /// accounts): the subject is the number in E.164.
 pub const PHONE_CODE_ISSUER: &str = "urn:core-platform:phone";
 
+/// The issuer of a passkey session's subject when its account has no
+/// identity link (#808); the subject is the credential id.
+pub const PASSKEY_ISSUER: &str = "urn:core-platform:passkey";
+
 /// Google's id_token issuers (both forms are in use).
 pub const GOOGLE_ISSUERS: [&str; 2] = ["https://accounts.google.com", "accounts.google.com"];
 

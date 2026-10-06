@@ -19,7 +19,8 @@ use transport::kafka::producer::KafkaProducerBuilder;
 use crate::application::command::{
     AccountErasure, ExportReadyNotifier, AttestMode, GuestAttestation, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
     LogoutAllSessionsHandler, LogoutHandler, MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler,
-    MfaPolicy, MfaSettingsHandler, MfaVerifier, PasskeyHandler, StartGuestSessionHandler, VerificationCodes,
+    MfaPolicy, MfaSettingsHandler, MfaVerifier, PasskeyHandler, PasskeySignIn, StartGuestSessionHandler,
+    VerificationCodes,
     VerifyCredentialsHandler,
 };
 use crate::application::port::{
@@ -98,6 +99,8 @@ pub struct PasskeyDeps {
     pub repository:    Arc<dyn PasskeyRepository>,
     /// Registration challenges (single use, bound to an account).
     pub registrations: Arc<dyn FederatedNonceStore>,
+    /// Sign-in challenges (single use, anyone's).
+    pub sign_ins:      Arc<dyn FederatedNonceStore>,
 }
 
 /// Backend connection configs. `kafka` is optional: absent ⇒ the log publisher.
@@ -138,7 +141,11 @@ impl App {
         // Every id_token sign-in also redeems its server-issued nonce.
         let federated: Arc<dyn FederatedTokenVerifier> =
             Arc::new(NonceBoundVerifier::new(Arc::clone(&deps.federated), Arc::clone(&deps.nonces)));
-        let login = Arc::new(LoginHandler::new(
+        // Passkey sign-in (#808): first factor, second step, step-up.
+        let passkey_sign_in: Option<Arc<PasskeySignIn>> = deps.passkeys.as_ref().map(|p| {
+            Arc::new(PasskeySignIn::new(p.relying_party.clone(), Arc::clone(&p.repository), Arc::clone(&p.sign_ins)))
+        });
+        let login = LoginHandler::new(
             Arc::clone(&deps.idp),
             Arc::clone(&deps.directory),
             Arc::clone(&deps.profiles),
@@ -152,7 +159,11 @@ impl App {
         )
         .with_federated(Arc::clone(&federated), Arc::clone(&deps.guests))
         .with_codes(Arc::clone(&deps.codes))
-        .with_mfa(Arc::clone(&deps.mfa)));
+        .with_mfa(Arc::clone(&deps.mfa));
+        let login = Arc::new(match &passkey_sign_in {
+            Some(sign_in) => login.with_passkeys(Arc::clone(sign_in)),
+            None => login,
+        });
         let sign_up = Arc::new(SignUpHandler::new(
             Arc::clone(&federated),
             Arc::clone(&deps.directory),
@@ -205,7 +216,7 @@ impl App {
             Arc::clone(&deps.publisher),
             deps.policy.clone(),
         ));
-        let verify_credentials = Arc::new(VerifyCredentialsHandler::new(
+        let verify_credentials = VerifyCredentialsHandler::new(
             Arc::clone(&deps.idp),
             Arc::clone(&deps.credentials),
             Arc::clone(&deps.directory),
@@ -215,7 +226,11 @@ impl App {
             Arc::clone(&deps.minter),
             deps.policy.clone(),
         )
-        .with_mfa(Arc::clone(&deps.mfa)));
+        .with_mfa(Arc::clone(&deps.mfa));
+        let verify_credentials = Arc::new(match &passkey_sign_in {
+            Some(sign_in) => verify_credentials.with_passkeys(Arc::clone(sign_in)),
+            None => verify_credentials,
+        });
         let mut start_guest = StartGuestSessionHandler::new(
             Arc::clone(&deps.sessions),
             Arc::clone(&deps.refresh_tokens),
@@ -266,6 +281,10 @@ impl App {
         ))
         .with_codes(Arc::clone(&deps.codes))
         .with_federated_nonces(deps.nonces);
+        let handler = match passkey_sign_in {
+            Some(sign_in) => handler.with_passkey_sign_in(sign_in),
+            None => handler,
+        };
         let handler = match deps.passkeys {
             Some(passkeys) => handler.with_passkeys(Arc::new(
                 PasskeyHandler::new(
@@ -460,6 +479,7 @@ impl App {
                         relying_party,
                         repository: Arc::new(PgPasskeyRepository::new(tx.clone())),
                         registrations: Arc::new(RedisNonceStore::with_namespace(redis.clone(), "pkreg")),
+                        sign_ins: Arc::new(RedisNonceStore::with_namespace(redis.clone(), "pkauth")),
                     })
                 }
                 None => {

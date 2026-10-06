@@ -36,7 +36,7 @@ async fn challenge(h: &Harness, user: &str) -> String {
 
 async fn complete(h: &Harness, mfa_token: &str, code: &str) -> Result<proto::LoginResponse, tonic::Status> {
     h.handler
-        .complete_login(Request::new(proto::CompleteLoginRequest { mfa_token: mfa_token.to_owned(), code: code.to_owned() }))
+        .complete_login(Request::new(proto::CompleteLoginRequest { mfa_token: mfa_token.to_owned(), code: code.to_owned(), passkey: None }))
         .await
         .map(|r| r.into_inner())
 }

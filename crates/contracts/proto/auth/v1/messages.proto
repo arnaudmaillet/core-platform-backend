@@ -108,6 +108,10 @@ message LoginRequest {
         // A code sent to the account's email address (passwordless accounts).
         // An address with no such account fails NOT_FOUND (AUT-6004): SignUp.
         VerificationCodeGrant   verification_code   = 7;
+        // A passkey (#808): signs in without a second step, even with
+        // two-step sign-in on (a passkey is two factors). AUT-5028 when it
+        // does not verify.
+        PasskeyAssertion        passkey             = 8;
     }
     // Optional: the refresh token of the guest session this device was using.
     // A successful login ends that guest session (the guest becomes the member).
@@ -140,6 +144,8 @@ message CompleteLoginRequest {
     // Six digits from the authenticator app, or a backup code
     // (`xxxxx-xxxxx`; case and the dash do not matter).
     string  code      = 2;
+    // Or one of the account's passkeys (#808); `code` is then ignored.
+    PasskeyAssertion passkey = 3;
 }
 
 // ── Sign-up ───────────────────────────────────────────────────────────────────
@@ -352,6 +358,8 @@ message VerifyCredentialsRequest {
         // A TOTP or backup code (#649): the step-up of an account with
         // two-step sign-in on, password or not. AUT-5020 when it is off.
         string  mfa_code  = 2;
+        // One of the account's passkeys (#808).
+        PasskeyAssertion passkey = 3;
     }
 }
 
@@ -444,6 +452,32 @@ message Passkey {
     google.protobuf.Timestamp last_used_at  = 4;
     // Synced across the holder's devices (e.g. iCloud Keychain).
     bool                      synced        = 5;
+}
+
+message StartPasskeySignInRequest {}
+
+// PublicKeyCredentialRequestOptions: discoverable (no allow list),
+// userVerification "required". The challenge is base64url, no padding.
+message PasskeySignInOptions {
+    string challenge  = 1;
+    string rp_id      = 2;
+    int64  expires_in = 3;
+}
+
+// The authenticator's assertion (ASAuthorizationPlatformPublicKeyCredential-
+// Assertion), raw. The account is the user handle's (or, on a second step or
+// a step-up, the one the step belongs to): a credential id alone never names
+// an account.
+message PasskeyAssertion {
+    // The sign-in options' challenge.
+    string challenge          = 1;
+    bytes  credential_id      = 2;
+    bytes  client_data_json   = 3;
+    bytes  authenticator_data = 4;
+    bytes  signature          = 5;
+    // userID as the passkey was created with (RegistrationOptions.user_id,
+    // decoded). Required to sign in; optional on a second step or a step-up.
+    bytes  user_handle        = 6;
 }
 
 message ListPasskeysRequest {}

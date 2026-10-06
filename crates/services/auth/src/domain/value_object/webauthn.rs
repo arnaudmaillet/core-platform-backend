@@ -354,6 +354,8 @@ pub mod testing {
 
     /// User present + verified (+ backup eligible and backed up: a passkey).
     pub const PASSKEY: u8 = FLAG_UP | FLAG_UV | FLAG_BE | FLAG_BS;
+    /// User present, not verified (no device unlock).
+    pub const PRESENT_ONLY: u8 = FLAG_UP;
 }
 
 #[cfg(test)]

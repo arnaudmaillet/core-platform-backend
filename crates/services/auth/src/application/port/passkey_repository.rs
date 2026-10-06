@@ -31,6 +31,21 @@ pub trait PasskeyRepository: Send + Sync + 'static {
     /// ([`AuthError::PasskeyAlreadyRegistered`]). Atomic with the count.
     async fn add(&self, account_id: &AccountId, passkey: &StoredPasskey, max: usize) -> Result<(), AuthError>;
 
+    /// One of the account's passkeys (never another account's, whatever the
+    /// credential id: ids are only unique per account).
+    async fn find(&self, account_id: &AccountId, credential_id: &[u8]) -> Result<Option<StoredPasskey>, AuthError>;
+
+    /// A sign-in used it: its counter moves forward (never back, under races)
+    /// and its last use is stamped.
+    async fn record_use(
+        &self,
+        account_id: &AccountId,
+        credential_id: &[u8],
+        sign_count: u32,
+        backed_up: bool,
+        at: DateTime<Utc>,
+    ) -> Result<(), AuthError>;
+
     /// Removes one; `false` when the account has no such passkey.
     async fn remove(&self, account_id: &AccountId, credential_id: &[u8]) -> Result<bool, AuthError>;
 }

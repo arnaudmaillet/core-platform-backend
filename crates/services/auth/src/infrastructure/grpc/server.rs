@@ -60,6 +60,13 @@ impl AuthService for AuthServiceHandler {
         self.finish_passkey_registration(request).await
     }
 
+    async fn start_passkey_sign_in(
+        &self,
+        request: Request<proto::StartPasskeySignInRequest>,
+    ) -> Result<Response<proto::PasskeySignInOptions>, Status> {
+        self.start_passkey_sign_in(request).await
+    }
+
     async fn list_passkeys(
         &self,
         request: Request<proto::ListPasskeysRequest>,
