@@ -40,6 +40,11 @@ pub struct Harness {
 }
 
 impl Harness {
+    /// Whether the profile's recent-searches document exists at all.
+    pub async fn recent_document_exists(&self, profile_id: &str) -> bool {
+        self.index.has_recent_searches_document(profile_id).await.expect("it: recent doc")
+    }
+
     /// The recent-searches store (#663), straight on the adapter.
     pub fn recent(&self) -> &dyn search::application::port::RecentSearches {
         self.index.as_ref()
@@ -76,7 +81,8 @@ impl Harness {
         }
 
         let port: Arc<dyn SearchIndex> = Arc::clone(&index) as Arc<dyn SearchIndex>;
-        let projection = ProjectionHandler::new(Arc::clone(&port));
+        let projection = ProjectionHandler::new(Arc::clone(&port))
+            .with_recent(Arc::clone(&index) as Arc<dyn search::application::port::RecentSearches>);
         // The harness calls the handler without an edge principal (the mesh),
         // so the audience filter never runs; any gate will do.
         let handler = App::compose(port, Arc::new(NoAudienceCheck))
@@ -246,6 +252,13 @@ impl Harness {
             searchable,
             occurred_at: ms(occurred_ms),
         }))
+        .await;
+    }
+
+    pub async fn delete_profile(&self, profile_id: &str) {
+        self.apply(SourceEvent::Profile(search::domain::ProfileEvent::Deleted(search::domain::EntityDeletion {
+            id: profile_id.to_owned(),
+        })))
         .await;
     }
 

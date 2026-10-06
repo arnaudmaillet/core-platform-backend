@@ -55,7 +55,10 @@ impl App {
         }
 
         let index_port: Arc<dyn SearchIndex> = index.clone();
-        let projection = Arc::new(ProjectionHandler::new(Arc::clone(&index_port)));
+        let projection = Arc::new(
+            ProjectionHandler::new(Arc::clone(&index_port))
+                .with_recent(Arc::clone(&index) as Arc<dyn crate::application::port::RecentSearches>),
+        );
 
         // Lazy connect: dials `post` / `profile` on first use, so a cold start does
         // not require the dependencies to be up at boot. Both deadlines are

@@ -76,3 +76,22 @@ async fn recent_searches_are_kept_newest_first_deduplicated_deletable_and_cleara
     // Another profile's list is its own.
     assert!(store.list(&uuid::Uuid::now_v7().to_string(), now).await.unwrap().is_empty());
 }
+
+/// GDPR Art. 17: a deleted profile's recent searches go with it, as do a
+/// purged author's — the document itself, not just what a read shows.
+#[tokio::test]
+async fn erasure_takes_the_recent_searches_with_it() {
+    let h = Harness::start().await;
+    let now = Utc::now();
+    let (deleted, purged) = (uuid::Uuid::now_v7().to_string(), uuid::Uuid::now_v7().to_string());
+    for profile in [&deleted, &purged] {
+        h.recent().record(profile, "something personal", now).await.unwrap();
+        assert_eq!(h.recent().list(profile, now).await.unwrap().len(), 1);
+    }
+    h.delete_profile(&deleted).await;
+    h.purge(&purged).await;
+    for profile in [&deleted, &purged] {
+        assert!(h.recent().list(profile, now).await.unwrap().is_empty(), "erased");
+        assert!(!h.recent_document_exists(profile).await, "the document itself is gone");
+    }
+}

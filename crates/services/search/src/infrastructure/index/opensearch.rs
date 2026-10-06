@@ -154,6 +154,18 @@ impl OpenSearchIndex {
         }
     }
 
+    /// Whether `profile_id` has a recent-searches document at all (erasure
+    /// checks: an empty list is not proof the document is gone).
+    pub async fn has_recent_searches_document(&self, profile_id: &str) -> Result<bool, SearchError> {
+        let path = format!("{}/_doc/{}", encode_path(&self.recent_index()), encode(profile_id));
+        let (status, value) = self.send(Method::GET, &path, None).await?;
+        match status {
+            StatusCode::NOT_FOUND => Ok(false),
+            s if s.is_success() => Ok(value["found"].as_bool().unwrap_or(false)),
+            s => Err(write_status_error(s, &value)),
+        }
+    }
+
     /// Recent searches (#663): one document per profile.
     fn recent_index(&self) -> String {
         format!("{}-recent-searches", self.config.index_prefix)
