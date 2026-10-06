@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8f9e694a9be1216e452d712b98f1bc8d9f7cb07095ef591b54b5fe9afbbd6806
-  translated_at: 2026-07-03
+  source_sha256: ad807d78a7035501b29b08b6f4866af8c91d113c00db299e513374d3e931e88e
+  translated_at: 2026-10-06
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -118,6 +118,15 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS là où 
 
 La surface synchrone est délibérément **en lecture seule** : `BatchGetCounters` (magnitudes pour un lot de références d'entités + masque de métriques — le chemin chaud d'hydratation de feed), `GetTrending` (top-K pour une portée, servi depuis CMS + un tas borné), et `GetTimeSeries` (buckets historiques — le seul RPC autorisé à toucher le tier froid Scylla, explicitement *non* sous-ms et hors du chemin de feed). **Il n'y a aucun RPC d'écriture/incrément** — l'ingestion est Kafka uniquement.
 
+**Compteurs de likes masqués (#809).** Quand l'auteur d'un post masque ses compteurs de likes, sa valeur
+`LIKE` est retirée de `BatchGetCounters` pour tout autre que l'auteur (un des profils de l'appelant,
+d'après le jeton) — invités compris — et un `GetTrending` `LIKE` retire le post (les rangs se resserrent,
+si bien que sa place ne le trahit pas non plus). Les autres métriques ne changent pas ; le mesh lit tout.
+À qui est le post et le réglage de l'auteur viennent de post (`BatchGetLikeVisibility`, en cache 60 s par
+instance) ; quand post ne peut pas répondre, le `LIKE` de chaque post est retenu et la lecture est marquée
+`degraded` — jamais une erreur. Sans `COUNTER_POST_GRPC_ENDPOINT`, rien n'est retenu (un avertissement au
+démarrage).
+
 > **Contrat de fil :** les résultats sont des magnitudes attachées à une référence — `(entity_type, id, metric, value)` plus la provenance approximatif-vs-exact. Les appelants DOIVENT hydrater l'entité elle-même (corps du post, profil, URL média) depuis son système de référence. `counter` ne renvoie aucune entité autoritative ni aucune appartenance par-acteur.
 
 ### Ports Rust (contrat hexagonal) *(Phase 3)*
@@ -230,6 +239,8 @@ async fn main() -> anyhow::Result<()> {
 | `COUNTER_SOCIAL_GRAPH_GRPC_ENDPOINT` | Non | `http://localhost:50053` | endpoint `social-graph` — comptes follower/following autoritaires pour la réconciliation |
 | `COUNTER_SOCIAL_GRAPH_RPC_TIMEOUT_MS` | Non | `5000` | deadline par requête des RPC `social-graph` — un appel suspendu bloquerait sinon la boucle de réconciliation |
 | `COUNTER_SOCIAL_GRAPH_CONNECT_TIMEOUT_MS` | Non | `2000` | deadline de connexion à l'ouverture du canal `social-graph` |
+| `COUNTER_POST_GRPC_ENDPOINT` | Non | non défini | adresse mesh de `post` (p. ex. `http://post:50056`), serveur de lecture seulement : les compteurs de likes masqués sont retenus (#809). Non défini → retenus pour personne |
+| `COUNTER_POST_RPC_TIMEOUT_MS` · `COUNTER_POST_CONNECT_TIMEOUT_MS` | Non | `500` · `1000` | délais de cet appel |
 
 ### Variables d'infrastructure héritées
 

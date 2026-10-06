@@ -105,7 +105,8 @@ impl Service for CounterReadService {
             Arc::clone(&ports.ledger),
             Arc::clone(&ports.series),
             read_timeout,
-        );
+        )
+        .with_like_guard(like_guard_from_env()?);
         Ok(Self {
             handler,
             redis: ports.redis,
@@ -313,4 +314,25 @@ fn build_consumer(
         .build()
         .with_context(|| format!("build dead-letter producer for {topic}"))?;
     Ok((consumer, producer))
+}
+
+/// Like counts withheld per their author's setting (#809), asked of post at
+/// `COUNTER_POST_GRPC_ENDPOINT` (lazily connected; request / connect deadlines
+/// `COUNTER_POST_RPC_TIMEOUT_MS` / `COUNTER_POST_CONNECT_TIMEOUT_MS`, 500 ms /
+/// 1 s). Unset: nothing is withheld (until the mesh route exists).
+fn like_guard_from_env() -> anyhow::Result<crate::application::query::LikeGuard> {
+    use crate::application::query::LikeGuard;
+    let Some(endpoint) = std::env::var("COUNTER_POST_GRPC_ENDPOINT").ok().filter(|v| !v.trim().is_empty()) else {
+        tracing::warn!("COUNTER_POST_GRPC_ENDPOINT unset: hidden like counts are not withheld");
+        return Ok(LikeGuard::default());
+    };
+    let ms = |key: &str, default: u64| {
+        Duration::from_millis(std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default))
+    };
+    let channel = Channel::from_shared(endpoint)
+        .map_err(|e| anyhow::anyhow!("invalid COUNTER_POST_GRPC_ENDPOINT: {e}"))?
+        .timeout(ms("COUNTER_POST_RPC_TIMEOUT_MS", 500))
+        .connect_timeout(ms("COUNTER_POST_CONNECT_TIMEOUT_MS", 1_000))
+        .connect_lazy();
+    Ok(LikeGuard::new(Arc::new(crate::infrastructure::GrpcLikeVisibility::new(channel))))
 }

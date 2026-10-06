@@ -14,12 +14,14 @@
 pub mod consumer;
 pub mod decode;
 pub mod grpc;
+pub mod grpc_like_visibility;
 pub mod kafka_signal_publisher;
 pub mod pg_counter_ledger;
 pub mod reconcile;
 pub mod redis_counter_store;
 pub mod scylla_time_series;
 
+pub use grpc_like_visibility::GrpcLikeVisibility;
 pub use kafka_signal_publisher::{KafkaSignalPublisher, PopularityEvent};
 pub use pg_counter_ledger::PgCounterLedger;
 pub use redis_counter_store::RedisCounterStore;

@@ -1105,6 +1105,7 @@ dependencies = [
  "error",
  "fred",
  "http",
+ "post-api",
  "postgres",
  "prost-types",
  "redis-storage",

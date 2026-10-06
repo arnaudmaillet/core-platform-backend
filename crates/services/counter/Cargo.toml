@@ -20,6 +20,7 @@ description = "Counter-analytics microservice — the platform's real-time count
 [dependencies]
 # ── Contracts ─────────────────────────────────────────────────────────────────
 counter-api      = { workspace = true }
+post-api         = { workspace = true }   # BatchGetLikeVisibility client (#809)
 # social-graph is the authoritative SoR for follower/following counts — the
 # reconciliation source queries it over gRPC.
 social-graph-api = { workspace = true }

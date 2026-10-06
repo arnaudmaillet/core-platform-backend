@@ -5,7 +5,9 @@
 pub mod get_counters;
 pub mod get_time_series;
 pub mod get_trending;
+pub mod like_guard;
 
 pub use get_counters::{BatchGetHandler, RunBatchGet};
 pub use get_time_series::{RunTimeSeries, TimeSeriesHandler};
 pub use get_trending::{RunTrending, TrendingHandler};
+pub use like_guard::{CountReader, LikeGuard};
