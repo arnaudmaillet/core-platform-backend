@@ -406,6 +406,56 @@ message BackupCodesResponse {
     int32           sessions_revoked = 2;
 }
 
+// ── Passkeys (#808) ───────────────────────────────────────────────────────────
+
+message StartPasskeyRegistrationRequest {}
+
+// PublicKeyCredentialCreationOptions for the platform authenticator: ES256
+// (alg -7), residentKey and userVerification "required", attestation "none".
+// Binary fields are base64url without padding.
+message PasskeyRegistrationOptions {
+    string          challenge           = 1;
+    string          rp_id               = 2;
+    // The WebAuthn user handle (opaque; a passkey sign-in returns it).
+    string          user_id             = 3;
+    // Shown by the authenticator: the account's email or phone.
+    string          user_name           = 4;
+    // The account's passkeys, so an authenticator does not make a second one.
+    repeated string exclude_credentials = 5;
+    int64           expires_in          = 6;
+}
+
+message FinishPasskeyRegistrationRequest {
+    // The options' challenge.
+    string challenge          = 1;
+    // The authenticator's response, raw.
+    bytes  client_data_json   = 2;
+    bytes  attestation_object = 3;
+    // The holder's name for it (≤ 64 chars); empty ⇒ "Passkey".
+    string name               = 4;
+}
+
+message Passkey {
+    // base64url, no padding.
+    string                    credential_id = 1;
+    string                    name          = 2;
+    google.protobuf.Timestamp created_at    = 3;
+    // Unset until it first signs in.
+    google.protobuf.Timestamp last_used_at  = 4;
+    // Synced across the holder's devices (e.g. iCloud Keychain).
+    bool                      synced        = 5;
+}
+
+message ListPasskeysRequest {}
+
+message ListPasskeysResponse {
+    repeated Passkey passkeys = 1;
+}
+
+message RemovePasskeyRequest {
+    string credential_id = 1;
+}
+
 message DisableMfaRequest {}
 
 message DisableMfaResponse {}

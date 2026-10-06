@@ -149,4 +149,4 @@ access token. Reuse of a rotated token is a security signal.
 - **Classification:** Supporting — security-critical, federates a generic IdP, bespoke only at the edge-token/session layer.
 - **Volatility:** low-to-medium — driven by security posture and IdP changes.
 - **Known modeling debt:** none material recorded.
-- **Deferred capabilities:** MFA as a step-up method (TOTP / backup codes, #649) and passkeys; richer device/session management surfaces. Password step-up (`VerifyCredentials` → `auth_time`) is live.
+- **Deferred capabilities:** signing in with a passkey (#808 part 2: first factor, second step, step-up); richer device/session management surfaces. Password and two-step-code step-up (`VerifyCredentials` → `auth_time`), two-step sign-in (#649) and passkey registration (#808) are live.

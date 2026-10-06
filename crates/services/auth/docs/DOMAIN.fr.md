@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: 083bd40ad38a9098f2ba48fd0d2b9f730d16ee2f1cb3673026bf82cc6cb7c07c
-  translated_at: 2026-10-04
+  source_sha256: 14145173663f884cb9c3e7c46b6b2ab11f4c8a8661e27354b7154ba62a90203f
+  translated_at: 2026-10-06
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -162,4 +162,4 @@ ensuite.
 - **Classification :** Supporting — critique pour la sécurité, fédère un IdP générique, sur-mesure seulement à la couche edge-token/session.
 - **Volatilité :** faible-à-moyenne — guidée par la posture de sécurité et les changements d'IdP.
 - **Dette de modélisation connue :** rien de matériel consigné.
-- **Capacités différées :** la MFA comme méthode de step-up (TOTP / codes de secours, #649) et les passkeys ; surfaces de gestion d'appareils/sessions plus riches. Le step-up par mot de passe (`VerifyCredentials` → `auth_time`) est en service.
+- **Capacités différées :** la connexion par passkey (#808, partie 2 : premier facteur, seconde étape, step-up) ; surfaces de gestion d'appareils/sessions plus riches. Le step-up par mot de passe ou code de deux étapes (`VerifyCredentials` → `auth_time`), la connexion en deux étapes (#649) et l'enregistrement de passkeys (#808) sont en service.

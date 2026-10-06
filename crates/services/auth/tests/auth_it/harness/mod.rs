@@ -257,6 +257,9 @@ pub struct Harness {
     pub seed_cipher: Arc<auth::infrastructure::mfa::AesSeedCipher>,
 }
 
+/// The passkeys' RP id (origin `https://` + it).
+pub const PASSKEY_RP_ID: &str = "example.app";
+
 impl Harness {
     pub async fn start() -> Self {
         let pg_url = test_support::containers::postgres_ready(MIGRATIONS_DIR).await;
@@ -331,6 +334,15 @@ impl Harness {
             )),
             mfa,
             mfa_issuer: "Core Platform".into(),
+            // Passkeys (#808) over the real Postgres and Redis.
+            passkeys: Some(auth::app::PasskeyDeps {
+                relying_party: auth::domain::value_object::webauthn::RelyingParty::new(PASSKEY_RP_ID, vec![]),
+                repository: Arc::new(auth::infrastructure::persistence::PgPasskeyRepository::new(tx.clone())),
+                registrations: Arc::new(auth::infrastructure::cache::RedisNonceStore::with_namespace(
+                    redis.clone(),
+                    "pkreg",
+                )),
+            }),
             policy: SessionPolicy::new(
                 ChronoDuration::minutes(10),
                 ChronoDuration::minutes(30),

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 4ce40be949f9fb3e44cd590736bb272c36f011d947fed5dc49fbad08b2d57c52
-  translated_at: 2026-10-05
+  source_sha256: cd32d0622bf19ac29cc585cd2b5e27605a9a8c2f551435ba1500a2ed1deb5838
+  translated_at: 2026-10-06
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -264,6 +264,23 @@ déconnecte aussi les autres sessions ; `DisableMfa` la désactive (`AUT-5020` s
 changement est envoyé par e-mail à l'adresse du compte (activée, désactivée, nouveaux codes de secours),
 si bien qu'une prise de contrôle qui la désactive reste visible.
 
+**Passkeys (#808).** Des identifiants WebAuthn liés à `AUTH_WEBAUTHN_RP_ID` (le domaine que l'app
+déclare sous `webcredentials` ; origines `AUTH_WEBAUTHN_ORIGINS`, par défaut `https://<rp id>`) ; sans
+lui, chaque RPC de passkey répond UNAVAILABLE. Clés ES256 uniquement, découvrables, **vérification de
+l'utilisateur exigée** (déverrouillage de l'appareil : une passkey vaut deux facteurs), **aucune
+attestation** (tout authentificateur ; les passkeys synchronisées n'en apportent pas), vérifiées en
+interne (`domain::value_object::webauthn` : type / challenge / origine des données client, empreinte du
+RP id, drapeaux UP+UV, clé COSE EC2 P-256 ; sans OpenSSL). `StartPasskeyRegistration` (step-up) renvoie
+les options de création : un challenge de 32 octets, à usage unique, 5 minutes, gardé dans Redis sous
+l'empreinte du compte **et** du challenge (`auth:{pkreg:<hash>}`, si bien que seul ce compte le
+rachète), l'identifiant utilisateur (les 16 octets de l'id du compte) et les passkeys du compte à
+exclure. `FinishPasskeyRegistration` vérifie la réponse de l'authentificateur (`AUT-5023` challenge,
+`AUT-5024` refusée — la raison est journalisée, pas renvoyée) et l'enregistre dans Postgres
+(`passkeys`, sur le shard du compte ; 10 au plus — `AUT-5025` ; le même authentificateur deux fois —
+`AUT-5026`). `ListPasskeys` / `RemovePasskey` (step-up ; `AUT-5027`). Chaque ajout et suppression est
+envoyé par e-mail à l'adresse du compte. Les passkeys sont effacées avec le compte. La connexion par
+passkey vient ensuite (#808, partie 2).
+
 **Step-up.** Un jeton émis juste après une preuve d'identifiant — `Login` / `CompleteLogin`, ou
 `VerifyCredentials` (re-prouver le mot de passe, ou donner un code de deux étapes : le step-up d'un
 compte sans mot de passe ; `AUT-5020` si la connexion en deux étapes est désactivée) — porte
@@ -375,6 +392,7 @@ jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QP
 | `AUTH_SMS_COUNTRIES` | Pays (ISO 3166-1 alpha-2, séparés par des virgules) vers lesquels les codes SMS peuvent partir ; doit être égal à la liste autorisée de la protect configuration SNS (infra `global/messaging/sms`). Un code inconnu fait échouer le démarrage. | les marchés de lancement (37) |
 | `AUTH_SMS_DAILY_BUDGET` | SMS que le service entier peut envoyer par jour UTC (`0` = aucun) ; au-delà `AUT-5016`. | `50` |
 | `AUTH_SMS_COUNTRY_DAILY_BUDGET` | SMS qu'un pays de destination peut recevoir par jour UTC, vérifié avant celui du service ; au-delà `AUT-5016`. | `25` |
+| `AUTH_WEBAUTHN_RP_ID` · `AUTH_WEBAUTHN_ORIGINS` | Passkeys (#808) : le RP id (le domaine que l'app iOS déclare sous `webcredentials`, qui sert son `apple-app-site-association`) et les origines client admises (liste séparée par des virgules ; par défaut `https://<rp id>`). Absent → passkeys indisponibles (UNAVAILABLE). **Ne jamais changer le RP id une fois des passkeys créées** : elles y sont liées. | — · — |
 | `AUTH_MFA_SEED_KEY` · `AUTH_MFA_SEED_KEY_ID` · `AUTH_MFA_SEED_KEYS_PREVIOUS` | Connexion en deux étapes (#649) : la clé AES-256 qui scelle les graines TOTP (32 octets, base64 standard), son identifiant, et les clés retirées (`id:base64,…`) qui ouvrent encore les anciennes graines. Absente → connexion en deux étapes indisponible, en mode fermé (`AUT-5019`). **Ne jamais la retirer une fois utilisée.** Provisionnée par core-platform-infra#27. | — · `k1` · — |
 | `AUTH_MFA_ISSUER` | Le nom du service dans l'application d'authentification du titulaire (#649). | `Core Platform` |
 | `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES_PER_IP` · `_MAX_FAILURES` | Durée de vie d'un code, essais par code, codes par adresse par heure / par jour, délai avant renvoi, codes faux par adresse depuis une IP en 24 h avant verrouillage pour cette IP, et depuis partout avant verrouillage pour tous. | `600` · `5` · `5` · `20` · `30` · `15` · `50` |

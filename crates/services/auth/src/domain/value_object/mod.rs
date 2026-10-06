@@ -15,6 +15,7 @@ pub mod session_id;
 pub mod session_kind;
 pub mod session_status;
 pub mod totp;
+pub mod webauthn;
 
 pub use access_token_claims::AccessTokenClaims;
 pub use account_id::AccountId;

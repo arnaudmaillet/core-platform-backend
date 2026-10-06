@@ -46,6 +46,34 @@ impl AuthService for AuthServiceHandler {
         self.regenerate_backup_codes(request).await
     }
 
+    async fn start_passkey_registration(
+        &self,
+        request: Request<proto::StartPasskeyRegistrationRequest>,
+    ) -> Result<Response<proto::PasskeyRegistrationOptions>, Status> {
+        self.start_passkey_registration(request).await
+    }
+
+    async fn finish_passkey_registration(
+        &self,
+        request: Request<proto::FinishPasskeyRegistrationRequest>,
+    ) -> Result<Response<proto::Passkey>, Status> {
+        self.finish_passkey_registration(request).await
+    }
+
+    async fn list_passkeys(
+        &self,
+        request: Request<proto::ListPasskeysRequest>,
+    ) -> Result<Response<proto::ListPasskeysResponse>, Status> {
+        self.list_passkeys(request).await
+    }
+
+    async fn remove_passkey(
+        &self,
+        request: Request<proto::RemovePasskeyRequest>,
+    ) -> Result<Response<proto::ListPasskeysResponse>, Status> {
+        self.remove_passkey(request).await
+    }
+
     async fn complete_login(
         &self,
         request: Request<proto::CompleteLoginRequest>,

@@ -91,6 +91,10 @@ pub enum MfaChange {
     Enabled,
     Disabled,
     BackupCodesRegenerated,
+    /// A passkey was registered (#808).
+    PasskeyAdded,
+    /// A passkey was removed (#808).
+    PasskeyRemoved,
 }
 
 /// The holder's two-step material, as account keeps it.

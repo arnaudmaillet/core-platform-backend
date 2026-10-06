@@ -9,7 +9,7 @@ use uuid::Uuid;
 use transport::grpc::edge;
 use crate::application::command::{
     ChangeContactCommand, ChangeContactHandler, ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, GuestAttestation, CompleteLoginCommand, IssuedSession, LoginCommand, LoginHandler, LoginOutcome, MfaCaller,
-    MfaSettingsHandler,
+    MfaSettingsHandler, PasskeyHandler, PasskeyRegistration, PasskeyView,
     LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutCommand, LogoutHandler,
     RefreshCommand, RefreshHandler, SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome,
     StartGuestSessionCommand, StartGuestSessionHandler, StartVerificationCommand, VerificationCodes,
@@ -47,6 +47,7 @@ pub struct AuthServiceHandler {
     codes: Option<Arc<VerificationCodes>>,
     change_contact: Option<Arc<ChangeContactHandler>>,
     mfa_settings: Option<Arc<MfaSettingsHandler>>,
+    passkeys: Option<Arc<PasskeyHandler>>,
     nonces: Option<Arc<FederatedNonces>>,
     attestation: Option<Arc<GuestAttestation>>,
     /// Proxies appending to `X-Forwarded-For` in front of the edge
@@ -81,6 +82,7 @@ impl AuthServiceHandler {
             codes: None,
             change_contact: None,
             mfa_settings: None,
+            passkeys: None,
             nonces: None,
             attestation: None,
             trusted_proxy_hops: transport::grpc::client_ip::DEFAULT_TRUSTED_PROXY_HOPS,
@@ -218,6 +220,96 @@ impl AuthServiceHandler {
             backup_codes: codes.codes,
             sessions_revoked: codes.sessions_revoked,
         }))
+    }
+
+    /// Enables the passkey RPCs (#808): an RP id is configured.
+    pub fn with_passkeys(mut self, handler: Arc<PasskeyHandler>) -> Self {
+        self.passkeys = Some(handler);
+        self
+    }
+
+    fn passkeys(&self) -> Result<&PasskeyHandler, Status> {
+        self.passkeys.as_deref().ok_or_else(|| Status::unavailable("passkeys are not configured"))
+    }
+
+    /// Edge `authenticated` + a recent credential proof (#808).
+    pub async fn start_passkey_registration(
+        &self,
+        request: Request<proto::StartPasskeyRegistrationRequest>,
+    ) -> Result<Response<proto::PasskeyRegistrationOptions>, Status> {
+        let handler = self.passkeys()?;
+        edge::require_recent_auth(&request, edge::STEP_UP_MAX_AGE_SECS)?;
+        let (account_id, session_id) = caller(&request)?;
+        let options = handler
+            .start_registration(Envelope::new(Uuid::now_v7(), MfaCaller { account_id, session_id }), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::PasskeyRegistrationOptions {
+            challenge:           options.challenge,
+            rp_id:               options.rp_id,
+            user_id:             options.user_id,
+            user_name:           options.user_name,
+            exclude_credentials: options.exclude_credentials,
+            expires_in:          options.expires_in_secs,
+        }))
+    }
+
+    /// Edge `authenticated` (#808): the challenge is bound to the caller's
+    /// account, and was started after a step-up.
+    pub async fn finish_passkey_registration(
+        &self,
+        request: Request<proto::FinishPasskeyRegistrationRequest>,
+    ) -> Result<Response<proto::Passkey>, Status> {
+        let handler = self.passkeys()?;
+        let (account_id, session_id) = caller(&request)?;
+        let req = request.into_inner();
+        let registration = PasskeyRegistration {
+            challenge:          req.challenge,
+            client_data_json:   req.client_data_json,
+            attestation_object: req.attestation_object,
+            name:               req.name,
+        };
+        let made = handler
+            .finish_registration(
+                Envelope::new(Uuid::now_v7(), (MfaCaller { account_id, session_id }, registration)),
+                Utc::now(),
+            )
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(passkey_to_proto(made)))
+    }
+
+    /// Edge `authenticated` (#808).
+    pub async fn list_passkeys(
+        &self,
+        request: Request<proto::ListPasskeysRequest>,
+    ) -> Result<Response<proto::ListPasskeysResponse>, Status> {
+        let handler = self.passkeys()?;
+        let (account_id, session_id) = caller(&request)?;
+        let passkeys = handler
+            .list(Envelope::new(Uuid::now_v7(), MfaCaller { account_id, session_id }), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::ListPasskeysResponse { passkeys: passkeys.into_iter().map(passkey_to_proto).collect() }))
+    }
+
+    /// Edge `authenticated` + a recent credential proof (#808).
+    pub async fn remove_passkey(
+        &self,
+        request: Request<proto::RemovePasskeyRequest>,
+    ) -> Result<Response<proto::ListPasskeysResponse>, Status> {
+        let handler = self.passkeys()?;
+        edge::require_recent_auth(&request, edge::STEP_UP_MAX_AGE_SECS)?;
+        let (account_id, session_id) = caller(&request)?;
+        let credential_id = request.into_inner().credential_id;
+        let left = handler
+            .remove(
+                Envelope::new(Uuid::now_v7(), (MfaCaller { account_id, session_id }, credential_id)),
+                Utc::now(),
+            )
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::ListPasskeysResponse { passkeys: left.into_iter().map(passkey_to_proto).collect() }))
     }
 
     /// Enables StartVerification (email one-time codes).
@@ -720,6 +812,16 @@ fn session_status_to_proto(status: SessionStatus) -> i32 {
         SessionStatus::Expired => proto::SessionStatus::Expired,
     };
     s as i32
+}
+
+fn passkey_to_proto(p: PasskeyView) -> proto::Passkey {
+    proto::Passkey {
+        credential_id: p.credential_id,
+        name:          p.name,
+        created_at:    Some(to_timestamp(p.created_at)),
+        last_used_at:  p.last_used_at.map(to_timestamp),
+        synced:        p.synced,
+    }
 }
 
 fn to_timestamp(dt: DateTime<Utc>) -> prost_types::Timestamp {
