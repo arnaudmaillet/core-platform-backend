@@ -143,6 +143,23 @@ pub fn mfa_changed_notice_message(change: MfaChange, locale: Option<&str>) -> (S
             "De nouveaux codes de secours viennent d'être générés pour ton compte : les anciens ne fonctionnent \
              plus. Tes autres appareils ont été déconnectés.",
         ),
+        (MfaChange::PasskeyAdded, true) => (
+            "Nouvelle passkey",
+            "Une passkey vient d'être ajoutée à ton compte : elle permet désormais de se connecter sans mot de \
+             passe ni code.",
+        ),
+        (MfaChange::PasskeyRemoved, true) => (
+            "Passkey supprimée",
+            "Une passkey vient d'être supprimée de ton compte : elle ne permet plus de se connecter.",
+        ),
+        (MfaChange::PasskeyAdded, false) => (
+            "New passkey",
+            "A passkey was just added to your account: it can now sign in without a password or a code.",
+        ),
+        (MfaChange::PasskeyRemoved, false) => (
+            "Passkey removed",
+            "A passkey was just removed from your account: it can no longer sign in.",
+        ),
         (MfaChange::Enabled, false) => (
             "Two-step sign-in turned on",
             "Two-step sign-in was just turned on for your account: every sign-in will now ask for a code from \
@@ -279,6 +296,10 @@ mod tests {
         assert!(body.contains("signed out") && body.contains("If it was you"), "{body}");
         let (subject, _) = mfa_changed_notice_message(MfaChange::BackupCodesRegenerated, None);
         assert_eq!(subject, "New backup codes");
+        let (subject, body) = mfa_changed_notice_message(MfaChange::PasskeyAdded, Some("fr"));
+        assert_eq!(subject, "Nouvelle passkey");
+        assert!(body.contains("sécurise ton compte"), "{body}");
+        assert_eq!(mfa_changed_notice_message(MfaChange::PasskeyRemoved, None).0, "Passkey removed");
     }
 
     #[test]

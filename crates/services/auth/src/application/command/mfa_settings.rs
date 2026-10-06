@@ -204,23 +204,33 @@ impl MfaSettingsHandler {
         Ok(revoked)
     }
 
-    /// Emails the account's address about `change`, in the background (best
-    /// effort: the change is done whatever the mail does).
     fn notify(&self, account_id: AccountId, change: MfaChange) {
-        let (Some(codes), directory) = (self.codes.clone(), Arc::clone(&self.directory)) else { return };
-        tokio::spawn(async move {
-            match directory.contact(&account_id).await {
-                Ok(contact) => {
-                    if let Some(email) = contact.email
-                        && let Err(error) = codes.notify_mfa_changed(&email, change, None).await
-                    {
-                        tracing::warn!(%error, ?change, "two-step change notice not sent");
-                    }
-                }
-                Err(error) => tracing::warn!(%error, "no two-step change notice: contact unreadable"),
-            }
-        });
+        notify_security_change(self.codes.clone(), Arc::clone(&self.directory), account_id, change);
     }
+}
+
+/// Emails the account's address about a sign-in security `change` (two-step
+/// sign-in, passkeys), in the background (best effort: the change is done
+/// whatever the mail does). No transport (`codes` = `None`): nothing is sent.
+pub(crate) fn notify_security_change(
+    codes: Option<Arc<VerificationCodes>>,
+    directory: Arc<dyn AccountDirectory>,
+    account_id: AccountId,
+    change: MfaChange,
+) {
+    let Some(codes) = codes else { return };
+    tokio::spawn(async move {
+        match directory.contact(&account_id).await {
+            Ok(contact) => {
+                if let Some(email) = contact.email
+                    && let Err(error) = codes.notify_mfa_changed(&email, change, None).await
+                {
+                    tracing::warn!(%error, ?change, "sign-in security notice not sent");
+                }
+            }
+            Err(error) => tracing::warn!(%error, "no sign-in security notice: contact unreadable"),
+        }
+    });
 }
 
 #[cfg(test)]

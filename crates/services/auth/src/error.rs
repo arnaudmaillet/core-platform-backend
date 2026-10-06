@@ -47,6 +47,11 @@ use thiserror::Error;
 /// | AUT-5020 | MfaNotEnabled                | 422  | Low      | No        |
 /// | AUT-5021 | MfaChallengeInvalid          | 401  | Low      | No        |
 /// | AUT-5022 | MfaAlreadyEnabled            | 409  | Low      | No        |
+/// | AUT-5023 | PasskeyChallengeInvalid      | 401  | Low      | No        |
+/// | AUT-5024 | PasskeyRejected              | 422  | Low      | No        |
+/// | AUT-5025 | PasskeyLimitReached          | 409  | Low      | No        |
+/// | AUT-5026 | PasskeyAlreadyRegistered     | 409  | Low      | No        |
+/// | AUT-5027 | PasskeyNotFound              | 404  | Low      | No        |
 /// | AUT-1005 | GuestSessionsDisabled        | 403  | Low      | No        |
 /// | AUT-1006 | DeviceAttestationRequired    | 403  | Low      | No        |
 /// | AUT-1007 | DeviceAttestationInvalid     | 403  | Medium   | No        |
@@ -224,6 +229,28 @@ pub enum AuthError {
     #[error("two-step sign-in is already enabled")]
     MfaAlreadyEnabled,
 
+    // ── Passkeys (#808) ───────────────────────────────────────────────────────
+    /// The passkey challenge is unknown, expired, used, or another account's.
+    #[error("the passkey challenge is not valid; start again")]
+    PasskeyChallengeInvalid,
+
+    /// The authenticator's response does not verify (origin, RP id, user
+    /// verification, key type, signature). The reason is logged, not returned.
+    #[error("the passkey was not accepted")]
+    PasskeyRejected,
+
+    /// The account holds as many passkeys as allowed.
+    #[error("too many passkeys; remove one first")]
+    PasskeyLimitReached,
+
+    /// This authenticator's passkey is already registered to the account.
+    #[error("this passkey is already registered")]
+    PasskeyAlreadyRegistered,
+
+    /// No such passkey on the account.
+    #[error("passkey not found")]
+    PasskeyNotFound,
+
     // ── Account directory (AUT-6xxx) ──────────────────────────────────────────
     #[error("account is not active; current status: '{current}'")]
     AccountNotActive { current: String },
@@ -330,6 +357,11 @@ impl AppError for AuthError {
             AuthError::MfaNotEnabled => "AUT-5020",
             AuthError::MfaChallengeInvalid => "AUT-5021",
             AuthError::MfaAlreadyEnabled => "AUT-5022",
+            AuthError::PasskeyChallengeInvalid => "AUT-5023",
+            AuthError::PasskeyRejected => "AUT-5024",
+            AuthError::PasskeyLimitReached => "AUT-5025",
+            AuthError::PasskeyAlreadyRegistered => "AUT-5026",
+            AuthError::PasskeyNotFound => "AUT-5027",
 
             AuthError::AccountNotActive { .. } => "AUT-6001",
             AuthError::AccountDirectoryUnavailable => "AUT-6002",
@@ -360,7 +392,8 @@ impl AppError for AuthError {
 
             AuthError::SessionNotFound { .. }
             | AuthError::SubjectLinkNotFound { .. }
-            | AuthError::NoAccountForIdentity => StatusCode::NOT_FOUND,
+            | AuthError::NoAccountForIdentity
+            | AuthError::PasskeyNotFound => StatusCode::NOT_FOUND,
 
             AuthError::SessionRevoked
             | AuthError::SessionExpired
@@ -374,11 +407,14 @@ impl AppError for AuthError {
             | AuthError::IdTokenRejected { .. }
             | AuthError::VerificationCodeInvalid
             | AuthError::MfaCodeInvalid
-            | AuthError::MfaChallengeInvalid => StatusCode::UNAUTHORIZED,
+            | AuthError::MfaChallengeInvalid
+            | AuthError::PasskeyChallengeInvalid => StatusCode::UNAUTHORIZED,
 
             AuthError::VerificationRateLimited { .. } | AuthError::MfaLocked { .. } => StatusCode::TOO_MANY_REQUESTS,
 
-            AuthError::MfaAlreadyEnabled => StatusCode::CONFLICT,
+            AuthError::MfaAlreadyEnabled
+            | AuthError::PasskeyLimitReached
+            | AuthError::PasskeyAlreadyRegistered => StatusCode::CONFLICT,
 
             AuthError::SubjectAlreadyLinked { .. }
             | AuthError::EmailAlreadyRegistered

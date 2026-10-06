@@ -1,5 +1,5 @@
 //! GDPR erasure against real Postgres + Redis: `account_deleted` makes auth delete
-//! the account's sessions, refresh tokens and identity links, and the guest it
+//! the account's sessions, refresh tokens, passkeys and identity links, and the guest it
 //! was before signing up (with that guest's sessions). Other accounts are untouched
 //! and a replay erases nothing more.
 
@@ -37,6 +37,18 @@ async fn an_erased_account_leaves_nothing_in_auth() {
         .execute(&h.pool)
         .await
         .unwrap();
+    // A passkey (#808).
+    sqlx::query(
+        "INSERT INTO passkeys (account_id, credential_id, public_key, name, aaguid, backup_eligible, backed_up, \
+         created_at) VALUES ($1, $2, $3, 'iPhone', $4, true, true, now())",
+    )
+    .bind(member)
+    .bind(vec![1u8, 2, 3])
+    .bind(vec![4u8; 65])
+    .bind(Uuid::nil())
+    .execute(&h.pool)
+    .await
+    .unwrap();
     // Someone else, signed in too.
     let other = h.login(&random_user()).await.expect("login").tokens.unwrap();
     let other = Uuid::parse_str(&h.introspect(&other.access_token).await.unwrap().account_id).unwrap();
@@ -56,6 +68,7 @@ async fn an_erased_account_leaves_nothing_in_auth() {
         ("SELECT COUNT(*) FROM sessions WHERE account_id = $1", member),
         ("SELECT COUNT(*) FROM refresh_tokens WHERE account_id = $1", member),
         ("SELECT COUNT(*) FROM subject_links WHERE account_id = $1", member),
+        ("SELECT COUNT(*) FROM passkeys WHERE account_id = $1", member),
         ("SELECT COUNT(*) FROM guest_principals WHERE guest_id = $1", guest_id),
         ("SELECT COUNT(*) FROM sessions WHERE account_id = $1", guest_id),
         ("SELECT COUNT(*) FROM refresh_tokens WHERE account_id = $1", guest_id),

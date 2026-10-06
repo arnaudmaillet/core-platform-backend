@@ -19,17 +19,19 @@ use transport::kafka::producer::KafkaProducerBuilder;
 use crate::application::command::{
     AccountErasure, ExportReadyNotifier, AttestMode, GuestAttestation, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
     LogoutAllSessionsHandler, LogoutHandler, MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler,
-    MfaPolicy, MfaSettingsHandler, MfaVerifier, StartGuestSessionHandler, VerificationCodes, VerifyCredentialsHandler,
+    MfaPolicy, MfaSettingsHandler, MfaVerifier, PasskeyHandler, StartGuestSessionHandler, VerificationCodes,
+    VerifyCredentialsHandler,
 };
 use crate::application::port::{
-    AccountDirectory, CredentialAdmin, EventPublisher, FederatedTokenVerifier, GuestRegistry,
-    IdentityProvider,
+    AccountDirectory, CredentialAdmin, EventPublisher, FederatedNonceStore, FederatedTokenVerifier, GuestRegistry,
+    IdentityProvider, PasskeyRepository,
     ProfileDirectory,
     RefreshTokenRepository,
     SessionCache, SessionRepository, SubjectLinkRepository, TokenMinter,
 };
 use crate::application::query::{IntrospectHandler, ListSessionsHandler};
 use crate::application::SessionPolicy;
+use crate::domain::value_object::webauthn::RelyingParty;
 use crate::config::AuthConfig;
 use crate::infrastructure::attest::AppAttestVerifier;
 use crate::infrastructure::cache::{
@@ -49,7 +51,8 @@ use crate::infrastructure::idp::{
     UnconfiguredCredentialAdmin,
 };
 use crate::infrastructure::persistence::{
-    PgAccountEraser, PgGuestRegistry, PgRefreshTokenRepository, PgSessionRepository, PgSubjectLinkRepository,
+    PgAccountEraser, PgGuestRegistry, PgPasskeyRepository, PgRefreshTokenRepository, PgSessionRepository,
+    PgSubjectLinkRepository,
 };
 use crate::infrastructure::token::Es256TokenMinter;
 
@@ -84,7 +87,17 @@ pub struct AppDeps {
     pub mfa: Arc<MfaVerifier>,
     /// The service's name in the holder's authenticator app.
     pub mfa_issuer: String,
+    /// Passkeys (#808); `None` = no RP id configured (UNAVAILABLE).
+    pub passkeys: Option<PasskeyDeps>,
     pub policy: SessionPolicy,
+}
+
+/// What the passkey RPCs need beyond the shared ports.
+pub struct PasskeyDeps {
+    pub relying_party: RelyingParty,
+    pub repository:    Arc<dyn PasskeyRepository>,
+    /// Registration challenges (single use, bound to an account).
+    pub registrations: Arc<dyn FederatedNonceStore>,
 }
 
 /// Backend connection configs. `kafka` is optional: absent ⇒ the log publisher.
@@ -251,8 +264,22 @@ impl App {
             )
             .with_codes(Arc::clone(&deps.codes)),
         ))
-        .with_codes(deps.codes)
+        .with_codes(Arc::clone(&deps.codes))
         .with_federated_nonces(deps.nonces);
+        let handler = match deps.passkeys {
+            Some(passkeys) => handler.with_passkeys(Arc::new(
+                PasskeyHandler::new(
+                    passkeys.relying_party,
+                    passkeys.repository,
+                    passkeys.registrations,
+                    Arc::clone(&deps.sessions),
+                    Arc::clone(&deps.cache),
+                    Arc::clone(&deps.directory),
+                )
+                .with_codes(deps.codes),
+            )),
+            None => handler,
+        };
         match deps.attestation {
             Some(attestation) => handler.with_device_attestation(attestation),
             None => handler,
@@ -425,6 +452,21 @@ impl App {
             },
             mfa,
             mfa_issuer: config.mfa_issuer.clone(),
+            passkeys: match &config.webauthn_rp_id {
+                Some(rp_id) => {
+                    let relying_party = RelyingParty::new(rp_id.clone(), config.webauthn_origins.clone());
+                    tracing::info!(rp_id = %relying_party.id, origins = ?relying_party.origins, "passkeys on");
+                    Some(PasskeyDeps {
+                        relying_party,
+                        repository: Arc::new(PgPasskeyRepository::new(tx.clone())),
+                        registrations: Arc::new(RedisNonceStore::with_namespace(redis.clone(), "pkreg")),
+                    })
+                }
+                None => {
+                    tracing::warn!("AUTH_WEBAUTHN_RP_ID unset: passkeys unavailable");
+                    None
+                }
+            },
             policy: config.policy,
         };
 
@@ -477,6 +519,7 @@ mod tests {
             attestation: None,
             mfa: Arc::clone(&fx.mfa),
             mfa_issuer: "Core Platform".into(),
+            passkeys: None,
             policy: fx.policy.clone(),
         })
     }

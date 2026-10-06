@@ -72,6 +72,11 @@ impl Service for AuthService {
         authenticated("/auth.v1.AuthService/ConfirmMfaEnrollment"),
         authenticated("/auth.v1.AuthService/DisableMfa"),
         authenticated("/auth.v1.AuthService/RegenerateBackupCodes"),
+        // Passkeys (#808): the caller's own; Start/Remove also need a step-up.
+        authenticated("/auth.v1.AuthService/StartPasskeyRegistration"),
+        authenticated("/auth.v1.AuthService/FinishPasskeyRegistration"),
+        authenticated("/auth.v1.AuthService/ListPasskeys"),
+        authenticated("/auth.v1.AuthService/RemovePasskey"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

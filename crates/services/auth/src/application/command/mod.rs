@@ -10,6 +10,7 @@ pub mod login;
 pub mod member_session;
 pub mod mfa;
 pub mod mfa_settings;
+pub mod passkeys;
 pub mod logout;
 pub mod logout_all_sessions;
 pub mod refresh;
@@ -37,6 +38,10 @@ pub use logout_all_sessions::{
 pub use member_session::{MemberSession, MemberSessions};
 pub use mfa::{MfaPolicy, MfaVerifier};
 pub use mfa_settings::{BackupCodes, MfaCaller, MfaSettingsHandler, StartedMfaEnrolment, ENROLMENT_TTL_SECS};
+pub use passkeys::{
+    PasskeyHandler, PasskeyRegistration, PasskeyRegistrationOptions, PasskeyView, MAX_PASSKEYS,
+    PASSKEY_CHALLENGE_TTL_SECS,
+};
 pub use refresh::{RefreshCommand, RefreshHandler};
 pub use sign_up::{SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome};
 pub use verification::{

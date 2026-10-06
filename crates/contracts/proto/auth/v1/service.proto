@@ -140,6 +140,30 @@ service AuthService {
     // account's email is told. AUT-5020 when two-step sign-in is off.
     rpc RegenerateBackupCodes(RegenerateBackupCodesRequest) returns (BackupCodesResponse);
 
+    // ── Passkeys (#808) ───────────────────────────────────────────────────────
+    // WebAuthn credentials (ES256, discoverable, user verification required,
+    // no attestation) bound to AUTH_WEBAUTHN_RP_ID. Without it configured
+    // every passkey RPC is UNAVAILABLE.
+
+    // Start registering a passkey: the options for the platform authenticator
+    // (challenge single use, 5 minutes, bound to the caller's account). Needs
+    // a recent credential proof. AUT-5025 when the account holds 10.
+    rpc StartPasskeyRegistration(StartPasskeyRegistrationRequest) returns (PasskeyRegistrationOptions);
+
+    // The authenticator's response: verified (challenge, origin, RP id, user
+    // verification, ES256 key) and stored. The account's email is told.
+    // AUT-5023 bad / used / expired challenge; AUT-5024 not accepted;
+    // AUT-5026 this authenticator's passkey is already registered.
+    rpc FinishPasskeyRegistration(FinishPasskeyRegistrationRequest) returns (Passkey);
+
+    // The caller's passkeys, oldest first.
+    rpc ListPasskeys(ListPasskeysRequest) returns (ListPasskeysResponse);
+
+    // Removes one of the caller's passkeys (it no longer signs in) and returns
+    // those left. Needs a recent credential proof; the account's email is
+    // told. AUT-5027 when the account has no such passkey.
+    rpc RemovePasskey(RemovePasskeyRequest) returns (ListPasskeysResponse);
+
     // ── Introspection & device management ─────────────────────────────────────
 
     // INTERNAL. Server-side token introspection returning the normalized

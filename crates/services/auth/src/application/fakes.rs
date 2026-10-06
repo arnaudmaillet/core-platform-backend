@@ -52,6 +52,13 @@ impl StubIdentityProvider {
         Self { claims: Mutex::new(None), password: Mutex::new(None) }
     }
 
+    /// Later grants come back as `subject` (another account).
+    pub fn set_subject(&self, subject: &str) {
+        if let Some(claims) = self.claims.lock().unwrap().as_mut() {
+            claims.subject = subject.to_owned();
+        }
+    }
+
     /// Password grants succeed only with `password` from now on.
     pub fn with_password(&self, password: &str) {
         *self.password.lock().unwrap() = Some(password.to_owned());
@@ -1370,6 +1377,45 @@ impl super::port::CodeSender for RecordingCodeSender {
     ) -> Result<(), AuthError> {
         self.export_notices.lock().unwrap().push((email.to_owned(), link.to_owned()));
         Ok(())
+    }
+}
+
+/// Passkeys (#808), in memory.
+#[derive(Default)]
+pub struct InMemoryPasskeyRepository {
+    rows: Mutex<Vec<(AccountId, super::port::StoredPasskey)>>,
+}
+
+impl InMemoryPasskeyRepository {
+    pub fn is_empty(&self) -> bool {
+        self.rows.lock().unwrap().is_empty()
+    }
+}
+
+#[async_trait]
+impl super::port::PasskeyRepository for InMemoryPasskeyRepository {
+    async fn list(&self, account_id: &AccountId) -> Result<Vec<super::port::StoredPasskey>, AuthError> {
+        Ok(self.rows.lock().unwrap().iter().filter(|(a, _)| a == account_id).map(|(_, p)| p.clone()).collect())
+    }
+
+    async fn add(&self, account_id: &AccountId, passkey: &super::port::StoredPasskey, max: usize) -> Result<(), AuthError> {
+        let mut rows = self.rows.lock().unwrap();
+        let held: Vec<_> = rows.iter().filter(|(a, _)| a == account_id).collect();
+        if held.len() >= max {
+            return Err(AuthError::PasskeyLimitReached);
+        }
+        if held.iter().any(|(_, p)| p.credential_id == passkey.credential_id) {
+            return Err(AuthError::PasskeyAlreadyRegistered);
+        }
+        rows.push((*account_id, passkey.clone()));
+        Ok(())
+    }
+
+    async fn remove(&self, account_id: &AccountId, credential_id: &[u8]) -> Result<bool, AuthError> {
+        let mut rows = self.rows.lock().unwrap();
+        let before = rows.len();
+        rows.retain(|(a, p)| !(a == account_id && p.credential_id == credential_id));
+        Ok(rows.len() < before)
     }
 }
 

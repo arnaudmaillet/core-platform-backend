@@ -234,6 +234,21 @@ intruder already signed in elsewhere has to pass the second factor); no enrolmen
 sessions out too; `DisableMfa` turns it off (`AUT-5020` when it is) and signs nobody out: the sessions already issued lose nothing by it. Each change is emailed to the
 account's address (turned on, turned off, new backup codes), so a takeover that disables it is visible.
 
+**Passkeys (#808).** WebAuthn credentials bound to `AUTH_WEBAUTHN_RP_ID` (the domain the app lists
+under `webcredentials`; origins `AUTH_WEBAUTHN_ORIGINS`, default `https://<rp id>`); without it every
+passkey RPC is UNAVAILABLE. ES256 keys only, discoverable, **user verification required** (device
+unlock: a passkey counts as two factors), **no attestation** (any authenticator; synced passkeys bring
+none), verified in-house (`domain::value_object::webauthn`: client data type / challenge / origin, RP id
+hash, UP+UV flags, COSE EC2 P-256 key; no OpenSSL). `StartPasskeyRegistration` (step-up) returns the
+creation options: a 32-byte challenge, single use, 5 minutes, kept in Redis under the hash of the
+account **and** the challenge (`auth:{pkreg:<hash>}`, so only that account redeems it), the user handle
+(the account id's 16 bytes) and the account's passkeys to exclude. `FinishPasskeyRegistration` verifies
+the authenticator's response (`AUT-5023` challenge, `AUT-5024` refused — the reason is logged, not
+returned) and stores it in Postgres (`passkeys`, on the account's shard; at most 10 — `AUT-5025`; the
+same authenticator twice — `AUT-5026`). `ListPasskeys` / `RemovePasskey` (step-up; `AUT-5027`). Adding
+and removing are emailed to the account's address. Passkeys are erased with the account. Signing in with
+one comes next (#808 part 2).
+
 **Step-up.** A token minted right after a credential proof — `Login` / `CompleteLogin`, or
 `VerifyCredentials` (re-prove the password, or give a two-step code: the step-up of an account without
 a password; `AUT-5020` when two-step sign-in is off) — carries
@@ -344,6 +359,7 @@ stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
 | `AUTH_SMS_COUNTRIES` | Comma-separated ISO 3166-1 alpha-2 countries SMS codes may go to; must equal the SNS protect allow-list (infra `global/messaging/sms`). An unknown code fails the boot. | the launch markets (37) |
 | `AUTH_SMS_DAILY_BUDGET` | SMS the whole service may send per UTC day (`0` = none); over it `AUT-5016`. | `50` |
 | `AUTH_SMS_COUNTRY_DAILY_BUDGET` | SMS one destination country may receive per UTC day, checked before the service's; over it `AUT-5016`. | `25` |
+| `AUTH_WEBAUTHN_RP_ID` · `AUTH_WEBAUTHN_ORIGINS` | Passkeys (#808): the RP id (the domain the iOS app lists under `webcredentials`, serving its `apple-app-site-association`) and the allowed client origins (comma list; default `https://<rp id>`). Unset → passkeys unavailable (UNAVAILABLE). **Never change the RP id once passkeys exist**: they are bound to it. | — · — |
 | `AUTH_MFA_SEED_KEY` · `AUTH_MFA_SEED_KEY_ID` · `AUTH_MFA_SEED_KEYS_PREVIOUS` | Two-step sign-in (#649): the AES-256 key sealing TOTP seeds (32 bytes, standard base64), its id, and retired keys (`id:base64,…`) still opening older seeds. Unset → two-step sign-in unavailable, fail-closed (`AUT-5019`). **Never remove once used.** Provisioned by core-platform-infra#27. | — · `k1` · — |
 | `AUTH_MFA_ISSUER` | The service's name in the holder's authenticator app (#649). | `Core Platform` |
 | `AUTH_VERIFICATION_TTL_SECS` · `_MAX_ATTEMPTS` · `_PER_HOUR` · `_PER_DAY` · `_RESEND_SECS` · `_MAX_FAILURES_PER_IP` · `_MAX_FAILURES` | Code lifetime, tries per code, codes per address an hour / a day, resend cooldown, wrong codes per address from one IP in 24 h before it is locked for that IP, and from anywhere before it is locked for everyone. | `600` · `5` · `5` · `20` · `30` · `15` · `50` |

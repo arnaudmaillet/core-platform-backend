@@ -48,6 +48,11 @@ pub struct AuthConfig {
     /// App Attest in front of `StartGuestSession` (B5b). The app ids and
     /// environments come from the environment, never from code.
     pub app_attest: AppAttestConfig,
+    /// Passkeys (#808): `AUTH_WEBAUTHN_RP_ID` (the domain the app lists under
+    /// `webcredentials`) and `AUTH_WEBAUTHN_ORIGINS` (comma list; default
+    /// `https://<rp id>`). No RP id ⇒ passkeys are off (UNAVAILABLE).
+    pub webauthn_rp_id: Option<String>,
+    pub webauthn_origins: Vec<String>,
     /// `AUTH_FEDERATED_NONCE_REQUIRED` (default **false**): an id_token SignUp /
     /// Login must carry a nonce from StartFederatedSignIn (single use). Off, a
     /// client-generated nonce is only logged — turn it on once every client
@@ -156,6 +161,11 @@ impl AuthConfig {
                 .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes")),
             federated_nonce_required: std::env::var("AUTH_FEDERATED_NONCE_REQUIRED")
                 .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes")),
+            webauthn_rp_id: std::env::var("AUTH_WEBAUTHN_RP_ID")
+                .ok()
+                .map(|v| v.trim().to_ascii_lowercase())
+                .filter(|v| !v.is_empty()),
+            webauthn_origins: env_list("AUTH_WEBAUTHN_ORIGINS"),
             apple_audiences: env_list("AUTH_APPLE_AUDIENCES"),
             google_audiences: env_list("AUTH_GOOGLE_AUDIENCES"),
             federated_jwks_timeout: env_ms("AUTH_FEDERATED_JWKS_TIMEOUT_MS", 3_000),
