@@ -36,9 +36,12 @@ impl ReuseRegistry for ScyllaReuseRegistry {
         struct Row {
             allow_remix:       Option<bool>,
             allow_sound_reuse: Option<bool>,
+            allow_downloads:   Option<bool>,
+            show_like_counts:  Option<bool>,
         }
         let stmt = Statement::new(
-            "SELECT allow_remix, allow_sound_reuse FROM post.author_reuse_settings WHERE profile_id = ?",
+            "SELECT allow_remix, allow_sound_reuse, allow_downloads, show_like_counts \
+             FROM post.author_reuse_settings WHERE profile_id = ?",
         );
         let row = self
             .client
@@ -54,17 +57,29 @@ impl ReuseRegistry for ScyllaReuseRegistry {
             .map(|r| ReuseDefaults {
                 allow_remix:       r.allow_remix.unwrap_or(true),
                 allow_sound_reuse: r.allow_sound_reuse.unwrap_or(true),
+                allow_downloads:   r.allow_downloads.unwrap_or(true),
+                show_like_counts:  r.show_like_counts.unwrap_or(true),
             })
             .unwrap_or_default())
     }
 
     async fn set_defaults(&self, author: &ProfileId, defaults: ReuseDefaults) -> Result<(), PostError> {
         let stmt = Statement::new(
-            "INSERT INTO post.author_reuse_settings (profile_id, allow_remix, allow_sound_reuse) VALUES (?, ?, ?)",
+            "INSERT INTO post.author_reuse_settings \
+             (profile_id, allow_remix, allow_sound_reuse, allow_downloads, show_like_counts) VALUES (?, ?, ?, ?, ?)",
         );
         self.client
             .session
-            .execute_unpaged(stmt, (author.as_uuid(), defaults.allow_remix, defaults.allow_sound_reuse))
+            .execute_unpaged(
+                stmt,
+                (
+                    author.as_uuid(),
+                    defaults.allow_remix,
+                    defaults.allow_sound_reuse,
+                    defaults.allow_downloads,
+                    defaults.show_like_counts,
+                ),
+            )
             .await
             .map_err(scylla_err)?;
         Ok(())

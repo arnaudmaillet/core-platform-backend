@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Post microservice — multi-format media content production pillar (Carousel / MainVideo / TextOnly)."
 
 [dependencies]
+futures = { workspace = true }
 post-api = { workspace = true }
 social-graph-api = { workspace = true }   # CheckAccess client (audience check)
 error            = { workspace = true }

@@ -4172,6 +4172,7 @@ dependencies = [
  "chrono",
  "cqrs",
  "error",
+ "futures",
  "h3o",
  "http",
  "moderation",

@@ -15,4 +15,10 @@ service PostService {
 
     rpc GetPost             (GetPostRequest)             returns (PostView);
     rpc ListPostsByProfile  (ListPostsByProfileRequest)  returns (ListPostsByProfileResponse);
+
+    // MESH ONLY (#809): each post's author and whether that author hides
+    // like counts from others, for the services that serve counts
+    // (engagement, counter) to withhold them from anyone but the author.
+    // At most 200 posts; unknown posts are absent.
+    rpc BatchGetLikeVisibility (BatchGetLikeVisibilityRequest) returns (BatchGetLikeVisibilityResponse);
 }

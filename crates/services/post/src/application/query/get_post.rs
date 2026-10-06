@@ -3,7 +3,9 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::{
-    application::port::{window_start, AudienceGate, AuthorLocationStore, AuthorWindowStore, PostRepository},
+    application::port::{
+        window_start, AudienceGate, AuthorLocationStore, AuthorWindowStore, PostRepository, ReuseRegistry,
+    },
     domain::{aggregate::Post, value_object::{ContentAccess, LocationAudience, PostId, ProfileId, Viewer}},
     error::PostError,
 };
@@ -31,6 +33,8 @@ pub struct GetPostHandler<R> {
     pub audience:   Arc<dyn AudienceGate>,
     pub locations:  Arc<dyn AuthorLocationStore>,
     pub windows:    Arc<dyn AuthorWindowStore>,
+    /// The authors' downloads / like-count settings (#809).
+    pub authors:    Arc<dyn ReuseRegistry>,
 }
 
 impl<R: PostRepository> QueryHandler<GetPostQuery> for GetPostHandler<R> {
@@ -94,6 +98,12 @@ impl<R: PostRepository> QueryHandler<GetPostQuery> for GetPostHandler<R> {
                 (_, None) => false,
             };
             post.show_location(sharing.shown(point).filter(|_| in_audience));
+        }
+        // Downloads and like counts (#809): the author's settings, for anyone
+        // else (the mesh included, so a service serving clients withholds too).
+        if !as_author {
+            let defaults = self.authors.defaults(post.profile_id()).await?;
+            post.apply_author_display(defaults.allow_downloads, defaults.show_like_counts);
         }
         Ok(post)
     }

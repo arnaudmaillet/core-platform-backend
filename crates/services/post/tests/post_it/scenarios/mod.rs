@@ -10,3 +10,4 @@ mod recently_deleted;
 mod viewer_visibility;
 mod sound_reuse;
 mod mentions;
+mod author_display;

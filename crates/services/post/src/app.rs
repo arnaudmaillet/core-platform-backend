@@ -28,6 +28,7 @@ use crate::application::port::{
     ReuseRegistry,
 };
 use crate::application::query::get_post::{GetPostHandler, GetPostQuery};
+use crate::application::query::like_visibility::{GetLikeVisibilityHandler, GetLikeVisibilityQuery};
 use crate::application::query::list_posts_by_profile::{
     ListPostsByProfileHandler, ListPostsByProfileQuery,
 };
@@ -128,6 +129,11 @@ impl App {
                     audience:   Arc::clone(&audience),
                     locations:  Arc::clone(&author_location_store),
                     windows:    Arc::clone(&author_window_store),
+                    authors:    Arc::clone(&reuse_registry),
+                })?
+                .register::<GetLikeVisibilityQuery, _>(GetLikeVisibilityHandler {
+                    repository: Arc::clone(&repository),
+                    authors:    Arc::clone(&reuse_registry),
                 })?
                 .register::<ListRecentlyDeletedQuery, _>(ListRecentlyDeletedHandler {
                     repository:       Arc::clone(&repository),

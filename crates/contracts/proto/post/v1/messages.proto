@@ -63,6 +63,26 @@ message PostView {
     // created_at + the window; 0 without a window. A read model serving clients
     // (search) stores it to withhold the post once that time passes.
     int64                   visible_until_ms    = 19;
+    // The author turned downloads off (#809): the reader (anyone but the
+    // author) is not offered to save the post's media.
+    bool                    downloads_disabled  = 20;
+    // The author hides like counts from this reader (#809): counts are
+    // withheld (engagement, counter); the app shows none.
+    bool                    like_counts_hidden  = 21;
+}
+
+message BatchGetLikeVisibilityRequest {
+    repeated string post_ids = 1;
+}
+
+message PostLikeVisibility {
+    string post_id            = 1;
+    string author_id          = 2;
+    bool   like_counts_hidden = 3;
+}
+
+message BatchGetLikeVisibilityResponse {
+    repeated PostLikeVisibility posts = 1;
 }
 
 message PostSummary {

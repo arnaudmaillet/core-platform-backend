@@ -76,6 +76,9 @@ impl PostService for PostServer {
     async fn list_posts_by_profile(&self, _: Request<post_api::ListPostsByProfileRequest>) -> Result<Response<post_api::ListPostsByProfileResponse>, Status> {
         Err(Status::unimplemented("ListPostsByProfile"))
     }
+    async fn batch_get_like_visibility(&self, _: Request<post_api::BatchGetLikeVisibilityRequest>) -> Result<Response<post_api::BatchGetLikeVisibilityResponse>, Status> {
+        Err(Status::unimplemented("BatchGetLikeVisibility"))
+    }
 }
 
 struct GraphServer(Arc<Graph>);

@@ -15,6 +15,7 @@ use crate::application::command::create_post::AttachmentInput;
 use crate::application::port::PostSummary;
 use crate::application::query::{
     get_post::GetPostQuery,
+    like_visibility::{GetLikeVisibilityQuery, LikeVisibility},
     list_posts_by_profile::ListPostsByProfileQuery,
     list_recently_deleted::ListRecentlyDeletedQuery,
 };
@@ -206,6 +207,29 @@ where
         Ok(Response::new(post_to_proto(post)))
     }
 
+    /// Mesh only (#809): not in `EDGE_POLICY`.
+    pub async fn batch_get_like_visibility(
+        &self,
+        request: Request<proto::BatchGetLikeVisibilityRequest>,
+    ) -> Result<Response<proto::BatchGetLikeVisibilityResponse>, Status> {
+        let query = GetLikeVisibilityQuery { post_ids: request.into_inner().post_ids };
+        let found: Vec<LikeVisibility> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::BatchGetLikeVisibilityResponse {
+            posts: found
+                .into_iter()
+                .map(|v| proto::PostLikeVisibility {
+                    post_id:            v.post_id.as_str(),
+                    author_id:          v.author_id.as_str(),
+                    like_counts_hidden: v.like_counts_hidden,
+                })
+                .collect(),
+        }))
+    }
+
     pub async fn list_posts_by_profile(
         &self,
         request: Request<proto::ListPostsByProfileRequest>,
@@ -302,6 +326,8 @@ fn post_to_proto(post: Post) -> proto::PostView {
         allow_sound_reuse: post.reuse().allow_sound_reuse,
         outside_window:    post.outside_window(),
         visible_until_ms:  post.visible_until().map(|t| t.timestamp_millis()).unwrap_or_default(),
+        downloads_disabled: post.downloads_disabled(),
+        like_counts_hidden: post.like_counts_hidden(),
     }
 }
 

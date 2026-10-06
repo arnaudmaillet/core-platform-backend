@@ -110,6 +110,7 @@ service PostService {
   rpc ListRecentlyDeleted (ListRecentlyDeletedRequest) returns (ListRecentlyDeletedResponse); // #663 the author's restorable posts, newest deletion first
   rpc GetPost (GetPostRequest) returns (PostView);                          // point lookup; viewer-aware
   rpc ListPostsByProfile (ListPostsByProfileRequest) returns (ListPostsByProfileResponse); // cursor-paginated; viewer-aware
+  rpc BatchGetLikeVisibility (BatchGetLikeVisibilityRequest) returns (BatchGetLikeVisibilityResponse); // #809 MESH ONLY: author + like counts hidden, ≤ 200 posts
 }
 // CreatePostRequest / PostView carry an optional GeoPoint location:
 message GeoPoint { double lat = 1; double lng = 2; }  // WGS-84; absent → post is not geo-indexed
@@ -122,6 +123,14 @@ follows its author's profile default (projected from `ProfileInteractionSettings
 calls it — is refused (`PST-1008`, 403) unless that post, or failing an override its author, allows reuse;
 one's own sounds and unknown ones (library tracks) are free. Remix has no server surface yet: the flag is
 stored for the client.
+
+**Downloads and like counts (#809).** The author's `allow_downloads` / `show_like_counts` are projected
+from the same event into `post.author_reuse_settings` (migration 0013; no row or NULL ⇒ allowed / shown;
+teens default to no downloads). `GetPost` marks the post for anyone but the author — the mesh included,
+so a service serving clients withholds too — with `downloads_disabled` (the app offers no save; the media
+renditions needed to view it are still served) and `like_counts_hidden`. The services that serve counts
+(engagement, counter) withhold likes from anyone but the author through the mesh-only
+`BatchGetLikeVisibility` (each post's author and whether they hide like counts; unknown posts absent).
 
 **Mentions (#656).** A caption mentions a profile with a link `[@handle](profile:<uuid>)`. `CreatePost` and
 `UpdatePost` ask social-graph `CheckInteraction(MENTION)` for each mentioned profile (each once, oneself

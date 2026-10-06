@@ -50,6 +50,12 @@ pub struct Post {
     /// Read path only: when the post leaves its author's post window (#664),
     /// for a mesh read; never stored.
     visible_until:  Option<DateTime<Utc>>,
+    /// Read path only (#809): its author turned downloads off, for this
+    /// reader (never the author); never stored.
+    downloads_disabled: bool,
+    /// Read path only (#809): its author hides like counts from this reader
+    /// (never the author); never stored.
+    like_counts_hidden: bool,
     pending_events: Vec<DomainEvent>,
 }
 
@@ -89,6 +95,8 @@ impl Post {
             reuse: ReuseOverrides::default(),
             outside_window: false,
             visible_until: None,
+            downloads_disabled: false,
+            like_counts_hidden: false,
             pending_events: Vec::new(),
         })
     }
@@ -130,6 +138,8 @@ impl Post {
             reuse: ReuseOverrides::default(),
             outside_window: false,
             visible_until: None,
+            downloads_disabled: false,
+            like_counts_hidden: false,
             pending_events: Vec::new(),
         }
     }
@@ -304,6 +314,15 @@ impl Post {
         self.outside_window = true;
     }
     pub fn outside_window(&self) -> bool { self.outside_window }
+
+    /// Applies its author's downloads and like-count settings (#809) for a
+    /// reader other than the author (read path only).
+    pub fn apply_author_display(&mut self, allow_downloads: bool, show_like_counts: bool) {
+        self.downloads_disabled = !allow_downloads;
+        self.like_counts_hidden = !show_like_counts;
+    }
+    pub fn downloads_disabled(&self) -> bool { self.downloads_disabled }
+    pub fn like_counts_hidden(&self) -> bool { self.like_counts_hidden }
 
     /// Records when the post leaves its author's post window (#664), for a
     /// mesh reader (read path only).
