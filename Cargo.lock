@@ -855,6 +855,7 @@ dependencies = [
  "test-support",
  "testcontainers",
  "testcontainers-modules",
+ "text-filter",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -986,6 +987,7 @@ dependencies = [
  "service-runtime",
  "social-graph-api",
  "test-support",
+ "text-filter",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -6304,6 +6306,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e75e78ff453128a2c7da9a5d5a3325ea34ea214d4bf51eab3417de23a4e5147"
 dependencies = [
  "testcontainers",
+]
+
+[[package]]
+name = "text-filter"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

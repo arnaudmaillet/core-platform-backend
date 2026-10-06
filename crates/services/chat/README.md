@@ -288,6 +288,15 @@ How the entries are kept:
   block that came after a request hides it too. The gate is unreachable ⇒ `CHT-5001`.
 - **Answers.** Accepting moves the entry to INBOX. Declining removes it for the decliner only.
 - **Replays.** An entry never moves back on a replay.
+- **Hidden requests (#810).** A request whose sender's message contains one of the caller's hidden
+  words, or an offensive term while their offensive filter is on, lists under **HIDDEN_REQUESTS**
+  instead of REQUESTS (the recipient can still open it; requests are never notified). It is sorted at
+  read time with the caller's *current* filter — adding or removing a word re-sorts pending requests at
+  once — from the whole message (the entry keeps a 100-character preview only). The filter is the one
+  the caller set for comments (profile `ProfileCommentFiltersChanged`), projected by the same
+  `profile.v1.events` consumer as the presence settings into `chat.message_filters` (migration 0013; no
+  row ⇒ offensive filter on); the matching is `text-filter`'s, shared with comment. The offensive terms
+  come from `CHAT_OFFENSIVE_TERMS_FILE` (the same file as comment's). An unreadable filter fails the read.
 
 ### Rust ports (hexagonal contract)
 
@@ -427,6 +436,7 @@ async fn main() -> anyhow::Result<()> {
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
+| `CHAT_OFFENSIVE_TERMS_FILE` | No | unset | The offensive-term list for message requests (#810): one term per line, `#` comments — the same file as `COMMENT_OFFENSIVE_TERMS_FILE`. Unset / unreadable ⇒ only the members' own hidden words apply. |
 | `CHAT_MAX_PAGE_SIZE` | No | `50` | Server-enforced cap on `GetHistory`/`ListSubscriptions` page size (prevents full-partition scans). |
 | `CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER` | No | unset | `true`: index every existing membership by member at startup (once; idempotent) — #653. |
 | `CHAT_HOT_TAIL_CACHE_SIZE` | No | `200` | Messages kept in the per-conversation Redis hot-tail cache (read offload). |

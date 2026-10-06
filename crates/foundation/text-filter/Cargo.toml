@@ -1,0 +1,11 @@
+[package]
+name        = "text-filter"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+authors.workspace     = true
+repository.workspace  = true
+description           = "A holder's hidden words and the offensive-term list, matched against user text (comments, message requests)."
+
+[dependencies]
+serde = { workspace = true }

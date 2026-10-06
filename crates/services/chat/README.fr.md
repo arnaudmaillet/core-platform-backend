@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3ded5c376782eb0af625c3c13539bbd9ae43cf560c22d033f3cb6aa1d0f33405
-  translated_at: 2026-10-05
+  source_sha256: 28cb6079e3a2aae93b6ad4682909e81fc12feeb5fd6f66f80fa9099064767c8a
+  translated_at: 2026-10-06
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -312,6 +312,17 @@ Comment les entrées sont tenues :
   injoignable ⇒ `CHT-5001`.
 - **Réponses.** Accepter déplace l'entrée dans INBOX ; refuser la retire pour celui qui refuse seulement.
 - **Rejeux.** Une entrée ne recule jamais lors d'un rejeu.
+- **Demandes masquées (#810).** Une demande dont le message de l'expéditeur contient un des mots masqués
+  de l'appelant, ou un terme injurieux quand son filtre injurieux est actif, apparaît dans
+  **HIDDEN_REQUESTS** au lieu de REQUESTS (le destinataire peut toujours l'ouvrir ; les demandes ne sont
+  jamais notifiées). Elle est triée à la lecture avec le filtre *actuel* de l'appelant — ajouter ou retirer
+  un mot retrie aussitôt les demandes en attente — à partir du message entier (l'entrée ne garde qu'un
+  aperçu de 100 caractères). Le filtre est celui que l'appelant a réglé pour les commentaires (profile
+  `ProfileCommentFiltersChanged`), projeté par le même consumer `profile.v1.events` que les réglages de
+  présence dans `chat.message_filters` (migration 0013 ; pas de ligne ⇒ filtre injurieux actif) ; la
+  correspondance est celle de `text-filter`, partagée avec comment. Les termes injurieux viennent de
+  `CHAT_OFFENSIVE_TERMS_FILE` (le même fichier que celui de comment). Un filtre illisible fait échouer la
+  lecture.
 
 ### Ports Rust (contrat hexagonal)
 
@@ -455,6 +466,7 @@ async fn main() -> anyhow::Result<()> {
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
+| `CHAT_OFFENSIVE_TERMS_FILE` | Non | non défini | La liste des termes injurieux pour les demandes de messages (#810) : un terme par ligne, commentaires `#` — le même fichier que `COMMENT_OFFENSIVE_TERMS_FILE`. Non défini / illisible ⇒ seuls les mots masqués des membres s'appliquent. |
 | `CHAT_MAX_PAGE_SIZE` | No | `50` | Server-enforced cap on `GetHistory`/`ListSubscriptions` page size (prevents full-partition scans). |
 | `CHAT_BACKFILL_CONVERSATIONS_BY_MEMBER` | Non | non défini | `true` : indexe chaque appartenance existante par membre au démarrage (une fois ; idempotent) — #653. |
 | `CHAT_HOT_TAIL_CACHE_SIZE` | No | `200` | Messages kept in the per-conversation Redis hot-tail cache (read offload). |

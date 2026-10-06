@@ -544,6 +544,7 @@ where
         let folder = match proto::InboxFolder::try_from(req.folder) {
             Ok(proto::InboxFolder::Requests) => Folder::Requests,
             Ok(proto::InboxFolder::Inbox) => Folder::Inbox,
+            Ok(proto::InboxFolder::HiddenRequests) => Folder::HiddenRequests,
             Err(_) => return Err(Status::invalid_argument("unknown inbox folder")),
         };
         let query = ListInboxQuery {

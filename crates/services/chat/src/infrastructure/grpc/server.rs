@@ -38,6 +38,7 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         visibility_consumer_group:   "chat-visibility-consumer".to_owned(),
         presence_settings_consumer_group: "chat-presence-settings".to_owned(),
         inbox_consumer_group:        "chat-inbox".to_owned(),
+        offensive_terms:             crate::app::offensive_terms_from_env(),
     };
 
     let backends = Backends {

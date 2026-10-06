@@ -193,6 +193,7 @@ impl TestHarness {
             visibility_consumer_group:   format!("chat-it-visibility-{}", Uuid::now_v7()),
             presence_settings_consumer_group: format!("chat-it-presence-{}", Uuid::now_v7()),
             inbox_consumer_group:        format!("chat-it-inbox-{}", Uuid::now_v7()),
+            offensive_terms:             text_filter::TermList::default(),
         };
 
         let App {

@@ -16,6 +16,7 @@ members = [
     "crates/storage/redis",
     "crates/platform/auth-context",
     "crates/foundation/validate-core",
+    "crates/foundation/text-filter",
     "crates/platform/validation",
     "crates/platform/test-support",
     "crates/platform/service-runtime",
@@ -106,6 +107,7 @@ transport        = { path = "crates/platform/transport" }
 cqrs             = { path = "crates/platform/cqrs" }
 auth-context     = { path = "crates/platform/auth-context" }
 validate-core    = { path = "crates/foundation/validate-core" }
+text-filter      = { path = "crates/foundation/text-filter" }
 validation       = { path = "crates/platform/validation" }
 postgres-storage = { path = "crates/storage/postgres", package = "postgres" }
 scylla-storage   = { path = "crates/storage/scylla" }
