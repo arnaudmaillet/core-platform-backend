@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a57a02f92d7bfd718193dda0e40bd01513c38cec181be1c5e9745ea5a7613755
-  translated_at: 2026-10-05
+  source_sha256: 9f103dcd1bec6887863e7adc5f26db3d395261da575310aa9f17e729915b7c74
+  translated_at: 2026-10-06
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -104,6 +104,7 @@ paginé de `post_reactions`).
 | Redis | chemin chaud faisant autorité | les commandes réaction/vue/partage échouent | **Dur** — `503 Unavailable` (backpressure vers les appelants) |
 | ScyllaDB | ledger durable + compteurs | le write-behind temporise | **Souple** — Redis reste cohérent ; le ledger rattrape |
 | Kafka | write-behind + ingestion de commentaires | persistance + comptes de commentaires retardent | **Souple** — chemin chaud non affecté |
+| `post` (gRPC `BatchGetLikeVisibility`, #809) | à qui est le post et si son auteur masque les compteurs de likes | likes retenus pour les non-auteurs | **Mode fermé** pour les likes seulement (vues/partages/commentaires non affectés) ; cache de 60 s |
 
 **Amont (rayon d'impact) :**
 
@@ -131,6 +132,14 @@ service EngagementService {
   rpc ListReactionsByProfile (ListReactionsByProfileRequest) returns (ListReactionsByProfileResponse); // mesh only
 }
 ```
+
+**Compteurs de likes masqués (#809).** Quand l'auteur d'un post masque ses compteurs de likes (réglages
+d'interaction du profil), `GetPostEngagement` ne renvoie aucun `reaction_scores` et un
+`total_weighted_score` nul à tout autre que l'auteur (un des profils de l'appelant, d'après le jeton) —
+invités compris ; vues, partages et commentaires restent. Le mesh lit tout. À qui est le post et le
+réglage de l'auteur viennent de post (`BatchGetLikeVisibility`, en cache 60 s par instance) ; quand post
+ne peut pas répondre, les likes sont retenus. Sans `ENGAGEMENT_POST_GRPC_ENDPOINT`, rien n'est retenu
+(un avertissement au démarrage).
 
 ### Ports Rust (contrat hexagonal)
 
@@ -236,6 +245,8 @@ async fn main() -> anyhow::Result<()> {
 | `ENGAGEMENT_REACTION_WEIGHT_CLAP` | `1` | 👏 score weight |
 | `ENGAGEMENT_REACTION_WEIGHT_SAD` | `1` | 😢 score weight |
 | `ENGAGEMENT_BACKFILL_REACTIONS_BY_PROFILE` | non défini | `true` : indexe chaque réaction existante par profil au démarrage (une fois ; idempotent) — #653 |
+| `ENGAGEMENT_POST_GRPC_ENDPOINT` | non défini | adresse mesh de post (p. ex. `http://post:50056`) : les compteurs de likes masqués sont retenus (#809). Non défini → retenus pour personne |
+| `ENGAGEMENT_POST_RPC_TIMEOUT_MS` · `ENGAGEMENT_POST_CONNECT_TIMEOUT_MS` | `500` · `1000` | délais de cet appel |
 
 ### Service + infrastructure héritée
 

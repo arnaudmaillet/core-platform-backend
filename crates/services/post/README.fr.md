@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a908d8eb18cbca5a13959683558e5c10d20e0854f561e12f15e78bf0f4f5fb0a
+  source_sha256: 43ba0e16e92afa82b4405693024a6bd24be647302f79de527a1a2fa4b763d2ee
   translated_at: 2026-10-06
   status: complete
 ---
@@ -143,9 +143,10 @@ de ligne ou NULL ⇒ autorisé / affiché ; les ados n'autorisent pas les télé
 `GetPost` marque le post pour tout autre lecteur que l'auteur — le mesh compris, si bien qu'un service qui
 sert des clients retient aussi — avec `downloads_disabled` (l'app ne propose pas d'enregistrer ; les
 rendus média nécessaires pour le voir restent servis) et `like_counts_hidden`. Les services qui servent
-des compteurs (engagement, counter) retiennent les likes pour tout autre que l'auteur grâce à
-`BatchGetLikeVisibility`, réservé au mesh (l'auteur de chaque post et s'il masque ses compteurs de likes ;
-posts inconnus absents).
+des compteurs retiennent les likes pour tout autre que l'auteur grâce à `BatchGetLikeVisibility`, réservé
+au mesh (l'auteur de chaque post et s'il masque ses compteurs de likes ; posts inconnus absents) :
+`GetPostEngagement` d'engagement le fait ; **`BatchGetCounters` (`LIKE`) de counter pas encore** (#809, à
+venir), si bien que d'ici là le drapeau n'y est qu'une indication.
 
 **Mentions (#656).** Une légende mentionne un profil par un lien `[@handle](profile:<uuid>)`. `CreatePost` et
 `UpdatePost` interrogent social-graph `CheckInteraction(MENTION)` pour chaque profil mentionné (une fois

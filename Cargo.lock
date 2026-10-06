@@ -1665,6 +1665,7 @@ dependencies = [
  "error",
  "fred",
  "http",
+ "post-api",
  "redis-storage",
  "scylla",
  "scylla-storage",

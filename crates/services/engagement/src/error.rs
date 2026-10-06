@@ -41,6 +41,12 @@ pub enum EngagementError {
     #[error("the reaction ledger is unavailable on this instance")]
     LedgerUnavailable,
 
+    // ── ENG-6xxx: Peers ───────────────────────────────────────────────────────
+    /// post could not say whose post it is or whether its author hides like
+    /// counts (#809): likes are withheld (fail closed), never shown.
+    #[error("post is unavailable: {message}")]
+    PostUnavailable { message: String },
+
     // ── ENG-9xxx: ID parsing / domain violations ──────────────────────────────
     #[error("invalid post ID: '{0}'")]
     InvalidPostId(String),
@@ -70,6 +76,8 @@ impl AppError for EngagementError {
             Self::CounterFlushFailed { .. }   => "ENG-5002",
             Self::LedgerUnavailable           => "ENG-5003",
 
+            Self::PostUnavailable { .. }      => "ENG-6001",
+
             Self::InvalidPostId(_)            => "ENG-9001",
             Self::InvalidProfileId(_)         => "ENG-9002",
             Self::DomainViolation { .. }      => "ENG-9003",
@@ -94,7 +102,7 @@ impl AppError for EngagementError {
             | Self::ScriptReturnInvalid
             | Self::CounterFlushFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
 
-            Self::LedgerUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::LedgerUnavailable | Self::PostUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -117,6 +125,8 @@ impl AppError for EngagementError {
             Self::ReactionNotFound { .. }
             | Self::InvalidPostId(_)
             | Self::InvalidProfileId(_) => Severity::Low,
+
+            Self::PostUnavailable { .. } => Severity::Medium,
         }
     }
 
@@ -124,6 +134,7 @@ impl AppError for EngagementError {
         match self {
             Self::Scylla(e) => e.is_retryable(),
             Self::Redis(e)  => e.is_retryable(),
+            Self::PostUnavailable { .. } => true,
             _               => false,
         }
     }
@@ -144,7 +155,8 @@ impl AppError for EngagementError {
             | Self::EventPublishFailed { .. }
             | Self::ScriptReturnInvalid
             | Self::CounterFlushFailed { .. }
-            | Self::LedgerUnavailable =>
+            | Self::LedgerUnavailable
+            | Self::PostUnavailable { .. } =>
                 "An internal error occurred. Please try again later.",
 
             Self::ReactionNotFound { .. } =>

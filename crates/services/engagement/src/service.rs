@@ -71,7 +71,7 @@ impl Service for EngagementService {
             .build()?;
         let publisher = Arc::new(KafkaEngagementEventPublisher::new(producer));
 
-        let app = App::build(backends, weights, publisher)
+        let app = App::build(backends, weights, publisher, like_visibility_from_env()?)
             .await
             .map_err(|e| anyhow::anyhow!("engagement app build: {e}"))?;
 
@@ -109,6 +109,26 @@ impl Service for EngagementService {
         routes.add_service(EngagementServiceServer::new(handler));
         Ok(())
     }
+}
+
+/// Like counts withheld per their author's setting (#809), asked of post at
+/// `ENGAGEMENT_POST_GRPC_ENDPOINT` (lazily connected; request / connect
+/// deadlines `ENGAGEMENT_POST_RPC_TIMEOUT_MS` / `ENGAGEMENT_POST_CONNECT_TIMEOUT_MS`,
+/// 500 ms / 1 s). Unset: nothing is withheld (until the mesh route exists).
+pub(crate) fn like_visibility_from_env() -> anyhow::Result<Option<Arc<dyn crate::application::port::LikeVisibility>>> {
+    let Some(endpoint) = std::env::var("ENGAGEMENT_POST_GRPC_ENDPOINT").ok().filter(|v| !v.trim().is_empty()) else {
+        tracing::warn!("ENGAGEMENT_POST_GRPC_ENDPOINT unset: hidden like counts are not withheld");
+        return Ok(None);
+    };
+    let ms = |key: &str, default: u64| {
+        std::time::Duration::from_millis(std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default))
+    };
+    let channel = tonic::transport::Channel::from_shared(endpoint)
+        .map_err(|e| anyhow::anyhow!("invalid ENGAGEMENT_POST_GRPC_ENDPOINT: {e}"))?
+        .timeout(ms("ENGAGEMENT_POST_RPC_TIMEOUT_MS", 500))
+        .connect_timeout(ms("ENGAGEMENT_POST_CONNECT_TIMEOUT_MS", 1_000))
+        .connect_lazy();
+    Ok(Some(Arc::new(crate::infrastructure::client::GrpcLikeVisibility::new(channel))))
 }
 
 #[cfg(test)]

@@ -49,7 +49,7 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         kafka:  Some(kafka_client),
     };
 
-    let app = App::build(backends, weights, publisher).await?;
+    let app = App::build(backends, weights, publisher, crate::service::like_visibility_from_env()?).await?;
 
     // ── gRPC server ───────────────────────────────────────────────────────────
 

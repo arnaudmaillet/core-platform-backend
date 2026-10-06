@@ -71,7 +71,7 @@ impl TestHarness {
         };
 
         let weights = Arc::new(ReactionWeightsConfig::from_env().expect("reaction weights"));
-        let app = App::build(backends, weights, Arc::new(NoopPublisher))
+        let app = App::build(backends, weights, Arc::new(NoopPublisher), None)
             .await
             .expect("integration: build engagement app");
 
@@ -104,7 +104,10 @@ impl TestHarness {
     /// Current engagement snapshot for `post`.
     pub async fn snapshot(&self, post: &PostId) -> PostEngagementSnapshot {
         self.query_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), GetPostEngagementQuery { post_id: post.as_str() }))
+            .dispatch(Envelope::new(Uuid::now_v7(), GetPostEngagementQuery {
+                post_id: post.as_str(),
+                reader:  engagement::application::query::get_post_engagement::EngagementReader::Internal,
+            }))
             .await
             .expect("get_post_engagement")
     }

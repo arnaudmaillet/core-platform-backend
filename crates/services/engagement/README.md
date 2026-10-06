@@ -91,6 +91,7 @@ startup (`ENGAGEMENT_BACKFILL_REACTIONS_BY_PROFILE=true`: a paged scan of `post_
 | Redis | authoritative hot path | reaction/view/share commands fail | **Hard** — `503 Unavailable` (backpressure to callers) |
 | ScyllaDB | durable ledger + counters | write-behind backs off | **Soft** — Redis stays consistent; ledger catches up |
 | Kafka | write-behind + comment ingest | persistence + comment counts lag | **Soft** — hot path unaffected |
+| `post` (gRPC `BatchGetLikeVisibility`, #809) | whose post it is and whether its author hides like counts | likes withheld from non-authors | **Fail closed** for likes only (views/shares/comments unaffected); 60 s cache |
 
 **Upstream (blast radius):**
 
@@ -117,6 +118,13 @@ service EngagementService {
   rpc ListReactionsByProfile (ListReactionsByProfileRequest) returns (ListReactionsByProfileResponse); // mesh only
 }
 ```
+
+**Hidden like counts (#809).** When a post's author hides like counts (profile interaction settings),
+`GetPostEngagement` returns no `reaction_scores` and a zero `total_weighted_score` to anyone but the
+author (one of the caller's profiles, from the token) — guests included; views, shares and comments stay.
+The mesh reads everything. Whose post it is and the author's setting come from post
+(`BatchGetLikeVisibility`, cached 60 s per instance); when post cannot answer, likes are withheld.
+Without `ENGAGEMENT_POST_GRPC_ENDPOINT` nothing is withheld (a warning at boot).
 
 ### Rust ports (hexagonal contract)
 
@@ -221,6 +229,8 @@ async fn main() -> anyhow::Result<()> {
 | `ENGAGEMENT_REACTION_WEIGHT_CLAP` | `1` | 👏 score weight |
 | `ENGAGEMENT_REACTION_WEIGHT_SAD` | `1` | 😢 score weight |
 | `ENGAGEMENT_BACKFILL_REACTIONS_BY_PROFILE` | unset | `true`: index every existing reaction by profile at startup (once; idempotent) — #653 |
+| `ENGAGEMENT_POST_GRPC_ENDPOINT` | unset | post's mesh address (e.g. `http://post:50056`): hidden like counts are withheld (#809). Unset → withheld from nobody |
+| `ENGAGEMENT_POST_RPC_TIMEOUT_MS` · `ENGAGEMENT_POST_CONNECT_TIMEOUT_MS` | `500` · `1000` | deadlines of that call |
 
 ### Service + inherited infrastructure
 
