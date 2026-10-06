@@ -11,13 +11,26 @@ pub enum Folder {
     Inbox,
     /// Message requests to this member, unanswered.
     Requests,
+    /// The requests the member's hidden words or offensive filter catch
+    /// (#810). Read-only: stored as [`Folder::Requests`], sorted at read time
+    /// with the member's current filter.
+    HiddenRequests,
 }
 
 impl Folder {
+    /// Where it is stored (hidden requests are requests).
     pub fn as_tinyint(self) -> i8 {
         match self {
             Self::Inbox => 0,
-            Self::Requests => 1,
+            Self::Requests | Self::HiddenRequests => 1,
+        }
+    }
+
+    /// Where its entries are stored.
+    pub fn stored(self) -> Self {
+        match self {
+            Self::HiddenRequests => Self::Requests,
+            other => other,
         }
     }
 

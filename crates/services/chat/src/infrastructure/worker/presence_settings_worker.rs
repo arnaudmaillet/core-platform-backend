@@ -1,6 +1,7 @@
-//! Projects the members' presence settings (#661) from `profile.v1.events`
-//! (`ProfileDiscoverySettingsChanged`) into `chat.presence_settings`. Other
-//! profile events are skipped.
+//! Projects the members' settings from `profile.v1.events`: presence (#661,
+//! `ProfileDiscoverySettingsChanged` → `chat.presence_settings`) and message
+//! filters (#810, `ProfileCommentFiltersChanged` → `chat.message_filters`).
+//! Other profile events are skipped.
 
 use std::sync::Arc;
 
@@ -11,7 +12,9 @@ use transport::kafka::consumer::builder::KafkaConsumerBuilder;
 use transport::kafka::consumer::{run_consumer, ProcessOutcome, RetryPolicy};
 use transport::kafka::producer::KafkaProducerHandle;
 
-use crate::application::port::{PresenceSettings, PresenceSettingsStore};
+use text_filter::ContentFilter;
+
+use crate::application::port::{MessageFilterStore, PresenceSettings, PresenceSettingsStore};
 use crate::domain::value_object::ProfileId;
 use crate::infrastructure::worker::build_dlq_producer;
 
@@ -28,22 +31,37 @@ pub struct ProfileEvent {
     activity_status: Option<bool>,
     #[serde(default)]
     read_receipts:   Option<bool>,
+    #[serde(default)]
+    hidden_words:     Option<Vec<String>>,
+    #[serde(default)]
+    filter_offensive: Option<bool>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum Outcome {
     Skip,
     Record(ProfileId, PresenceSettings),
+    Filters(ProfileId, ContentFilter),
     Poison(String),
 }
 
 fn outcome(event: &ProfileEvent) -> Outcome {
-    if event.event_type != "ProfileDiscoverySettingsChanged" {
-        return Outcome::Skip;
-    }
+    let filters = match event.event_type.as_str() {
+        "ProfileDiscoverySettingsChanged" => false,
+        "ProfileCommentFiltersChanged" => true,
+        _ => return Outcome::Skip,
+    };
     let Ok(profile) = ProfileId::try_from(event.profile_id.as_str()) else {
         return Outcome::Poison(format!("bad profile_id {:?}", event.profile_id));
     };
+    if filters {
+        return match (&event.hidden_words, event.filter_offensive) {
+            (Some(words), Some(filter_offensive)) => {
+                Outcome::Filters(profile, ContentFilter { hidden_words: words.clone(), filter_offensive })
+            }
+            _ => Outcome::Poison("missing message filters".into()),
+        };
+    }
     match (event.activity_status, event.read_receipts) {
         (Some(activity_status), Some(read_receipts)) => {
             Outcome::Record(profile, PresenceSettings { activity_status, read_receipts })
@@ -58,6 +76,7 @@ fn outcome(event: &ProfileEvent) -> Outcome {
 pub struct PresenceSettingsWorker {
     kafka_config: KafkaClientConfig,
     store:        Arc<dyn PresenceSettingsStore>,
+    filters:      Arc<dyn MessageFilterStore>,
     group_id:     String,
 }
 
@@ -65,9 +84,10 @@ impl PresenceSettingsWorker {
     pub fn new(
         kafka_config: KafkaClientConfig,
         store: Arc<dyn PresenceSettingsStore>,
+        filters: Arc<dyn MessageFilterStore>,
         group_id: impl Into<String>,
     ) -> Self {
-        Self { kafka_config, store, group_id: group_id.into() }
+        Self { kafka_config, store, filters, group_id: group_id.into() }
     }
 
     pub async fn run(self) {
@@ -119,6 +139,9 @@ impl PresenceSettingsWorker {
             Outcome::Record(profile, settings) => {
                 ProcessOutcome::from_result(self.store.set(&profile, settings).await)
             }
+            Outcome::Filters(profile, filter) => {
+                ProcessOutcome::from_result(self.filters.set(&profile, &filter).await)
+            }
         }
     }
 }
@@ -158,5 +181,23 @@ mod tests {
         );
         let other = wire(ProfileEventWire::ProfileUpdated { profile_id: id.to_string(), occurred_at_ms: 1 });
         assert_eq!(outcome(&other), Outcome::Skip);
+    }
+
+    #[test]
+    fn message_filters_are_read_from_profiles_own_wire() {
+        let id = Uuid::now_v7();
+        let event = wire(ProfileEventWire::ProfileCommentFiltersChanged {
+            profile_id: id.to_string(),
+            hidden_words: vec!["spoiler".into()],
+            filter_offensive: false,
+            occurred_at_ms: 1,
+        });
+        assert_eq!(
+            outcome(&event),
+            Outcome::Filters(
+                ProfileId::from_uuid(id),
+                ContentFilter { hidden_words: vec!["spoiler".into()], filter_offensive: false },
+            ),
+        );
     }
 }

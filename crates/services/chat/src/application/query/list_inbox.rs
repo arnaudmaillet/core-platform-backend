@@ -4,8 +4,11 @@ use cqrs::{Envelope, Query, QueryHandler};
 use futures::{StreamExt, TryStreamExt};
 
 use crate::application::command::direct::verdict;
+use text_filter::{ContentFilter, TermList};
+
 use crate::application::port::{
-    ConversationRepository, Folder, InboxEntry, InboxStore, InteractionGate, MemberRepository, MessageVerdict,
+    ConversationRepository, Folder, InboxEntry, InboxStore, InteractionGate, MemberRepository, MessageFilterStore,
+    MessageRepository, MessageVerdict,
 };
 use crate::domain::value_object::{ConversationId, ProfileId};
 use crate::error::ChatError;
@@ -50,13 +53,36 @@ pub struct ListInboxHandler {
     pub inbox:             Arc<dyn InboxStore>,
     pub gate:              Option<Arc<dyn InteractionGate>>,
     pub max_page_size:     i32,
+    /// Hidden words / offensive filter on requests (#810).
+    pub filters:           Arc<dyn MessageFilterStore>,
+    pub messages:          Arc<dyn MessageRepository>,
+    pub offensive:         Arc<TermList>,
 }
+
+/// Messages of a request read to sort it (a request holds one until answered).
+const REQUEST_MESSAGES: i32 = 5;
 
 impl ListInboxHandler {
     /// The entry as `me` sees it, or `None` when it must not show: a request
     /// whose sender `me` blocks, or is blocked by (a block that came after the
     /// request), or one no longer awaiting `me`.
-    async fn resolve(&self, me: ProfileId, entry: InboxEntry) -> Result<Option<InboxItem>, ChatError> {
+    /// Does `filter` catch the request in `entry` (any of its sender's
+    /// messages, read whole — the entry keeps a preview only)?
+    async fn caught(&self, filter: &ContentFilter, entry: &InboxEntry, requester: ProfileId) -> Result<bool, ChatError> {
+        let (messages, _) = self.messages.list_history(&entry.conversation_id, REQUEST_MESSAGES, None, None).await?;
+        Ok(messages
+            .iter()
+            .filter(|m| m.sender_id == requester.as_uuid())
+            .any(|m| filter.hides(&m.body, &self.offensive)))
+    }
+
+    async fn resolve(
+        &self,
+        me: ProfileId,
+        folder: Folder,
+        filter: Option<&ContentFilter>,
+        entry: InboxEntry,
+    ) -> Result<Option<InboxItem>, ChatError> {
         let id = entry.conversation_id;
         let (member, conversation, current) = tokio::join!(
             self.member_repo.find(&id, &me),
@@ -78,6 +104,15 @@ impl ListInboxHandler {
             if verdict(self.gate.as_ref(), &requester, &me).await? == MessageVerdict::Silenced {
                 return Ok(None);
             }
+            // Hidden requests (#810): those the member's filter catches go to
+            // their own folder, the rest stay in Requests.
+            let caught = match filter {
+                Some(filter) => self.caught(filter, &entry, requester).await?,
+                None => false,
+            };
+            if caught != (folder == Folder::HiddenRequests) {
+                return Ok(None);
+            }
         }
         let unread = entry.last.as_ref().is_some_and(|last| {
             last.sender_id != me && member.last_read().is_none_or(|read| last.message_id > read)
@@ -96,7 +131,15 @@ impl QueryHandler<ListInboxQuery> for ListInboxHandler {
         let limit = q.limit.clamp(1, self.max_page_size.max(1));
         let after = q.page_token.as_deref().map(decode_cursor).transpose()?;
 
-        let entries = self.inbox.list(&me, q.folder, limit, after).await?;
+        let entries = self.inbox.list(&me, q.folder.stored(), limit, after).await?;
+        // The member's filter, once per page (fail closed: unreadable, the
+        // read fails). One that hides nothing skips reading the messages.
+        let filter = if q.folder.stored() == Folder::Requests {
+            Some(self.filters.get(&me).await?)
+                .filter(|f| !f.hidden_words.is_empty() || (f.filter_offensive && !self.offensive.is_empty()))
+        } else {
+            None
+        };
         // The cursor is the store's: a page whose entries are filtered out
         // comes back short, never skips.
         let next_page_token = match entries.last() {
@@ -106,7 +149,7 @@ impl QueryHandler<ListInboxQuery> for ListInboxHandler {
             _ => None,
         };
         let items: Vec<Option<InboxItem>> = futures::stream::iter(entries)
-            .map(|entry| self.resolve(me, entry))
+            .map(|entry| self.resolve(me, q.folder, filter.as_ref(), entry))
             .buffered(RESOLVES)
             .try_collect()
             .await?;
@@ -127,7 +170,56 @@ mod tests {
     use crate::application::command::inbox::InboxProjector;
     use crate::domain::aggregate::{Conversation, Participant};
     use crate::domain::event::MessageSentEvent;
-    use crate::domain::value_object::{MessageId, Role};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+    use chrono::{TimeZone, Utc};
+
+    use crate::application::port::MessageSummary;
+    use crate::domain::aggregate::Message;
+    use crate::domain::value_object::{ContentType, MessageId, Role};
+
+    /// Each conversation's messages (newest first).
+    #[derive(Default)]
+    struct Logs(Mutex<HashMap<ConversationId, Vec<MessageSummary>>>);
+
+    #[async_trait]
+    impl MessageRepository for Logs {
+        async fn insert(&self, _: &Message) -> Result<(), ChatError> {
+            Ok(())
+        }
+        async fn list_history(
+            &self,
+            id: &ConversationId,
+            _: i32,
+            _: Option<(i64, uuid::Uuid)>,
+            _: Option<i64>,
+        ) -> Result<(Vec<MessageSummary>, Option<(i64, uuid::Uuid)>), ChatError> {
+            Ok((self.0.lock().unwrap().get(id).cloned().unwrap_or_default(), None))
+        }
+    }
+
+    /// One member's filter; `down` fails every read.
+    #[derive(Default)]
+    struct Filters {
+        filter: Mutex<ContentFilter>,
+        down:   Mutex<bool>,
+    }
+
+    #[async_trait]
+    impl MessageFilterStore for Filters {
+        async fn set(&self, _: &ProfileId, filter: &ContentFilter) -> Result<(), ChatError> {
+            *self.filter.lock().unwrap() = filter.clone();
+            Ok(())
+        }
+        async fn get(&self, _: &ProfileId) -> Result<ContentFilter, ChatError> {
+            if *self.down.lock().unwrap() {
+                return Err(ChatError::InvalidPageToken { token: "filters down".into() });
+            }
+            Ok(self.filter.lock().unwrap().clone())
+        }
+    }
 
     fn pid() -> ProfileId {
         ProfileId::from_uuid(uuid::Uuid::now_v7())
@@ -137,6 +229,8 @@ mod tests {
         conversations: Arc<FakeConversations>,
         members:       Arc<FakeMembers>,
         gate:          Arc<ScriptedGate>,
+        logs:          Arc<Logs>,
+        filters:       Arc<Filters>,
         projector:     InboxProjector,
         handler:       ListInboxHandler,
     }
@@ -146,6 +240,8 @@ mod tests {
         let members = Arc::<FakeMembers>::default();
         let inbox = Arc::<FakeInbox>::default();
         let gate = Arc::<ScriptedGate>::default();
+        let logs = Arc::<Logs>::default();
+        let filters = Arc::<Filters>::default();
         let projector = InboxProjector {
             conversation_repo: Arc::clone(&conversations) as Arc<dyn ConversationRepository>,
             member_repo:       Arc::clone(&members) as Arc<dyn MemberRepository>,
@@ -157,12 +253,19 @@ mod tests {
             inbox:             Arc::clone(&inbox) as Arc<dyn InboxStore>,
             gate:              Some(Arc::clone(&gate) as Arc<dyn InteractionGate>),
             max_page_size:     50,
+            filters:           Arc::clone(&filters) as Arc<dyn MessageFilterStore>,
+            messages:          Arc::clone(&logs) as Arc<dyn MessageRepository>,
+            offensive:         Arc::new(TermList::new(["badword".to_owned()])),
         };
-        World { conversations, members, gate, projector, handler }
+        World { conversations, members, gate, logs, filters, projector, handler }
     }
 
     impl World {
         async fn request(&self, from: ProfileId, to: ProfileId, at_ms: i64) -> ConversationId {
+            self.request_saying(from, to, at_ms, "hi").await
+        }
+
+        async fn request_saying(&self, from: ProfileId, to: ProfileId, at_ms: i64, body: &str) -> ConversationId {
             let c = Conversation::open_direct(ConversationId::new(), from, to, true);
             self.conversations.insert_direct(&c).await.unwrap();
             for p in [from, to] {
@@ -174,7 +277,7 @@ mod tests {
                     message_id:      MessageId::new().as_str(),
                     sender_id:       from.as_str(),
                     content_type:    "text".into(),
-                    body:            "hi".into(),
+                    body:            body.into(),
                     media_ref:       None,
                     reply_to:        None,
                     created_at_ms:   at_ms,
@@ -183,6 +286,16 @@ mod tests {
                 })
                 .await
                 .unwrap();
+            self.logs.0.lock().unwrap().insert(c.id(), vec![MessageSummary {
+                message_id:   uuid::Uuid::now_v7(),
+                sender_id:    from.as_uuid(),
+                content_type: ContentType::Text,
+                body:         body.into(),
+                media_ref:    None,
+                reply_to:     None,
+                created_at:   Utc.timestamp_millis_opt(at_ms).unwrap(),
+                withheld:     false,
+            }]);
             c.id()
         }
 
@@ -236,5 +349,38 @@ mod tests {
         assert_eq!(second.items.len(), 1);
         assert!(second.next_page_token.is_none());
         assert_eq!(second.items[0].entry.activity.timestamp_millis(), 1_000);
+    }
+
+    /// Hidden words and the offensive filter (#810): caught requests leave
+    /// Requests for Hidden requests, sorted with the member's current filter.
+    #[tokio::test]
+    async fn requests_caught_by_the_members_filter_are_hidden_requests() {
+        let w = world();
+        let (me, a, b, c) = (pid(), pid(), pid(), pid());
+        let plain = w.request_saying(a, me, 1_000, "hello there").await;
+        // Past the 100-char preview: the whole message is read.
+        let long = format!("{} SPOILER ahead", "x".repeat(150));
+        let spoiler = w.request_saying(b, me, 2_000, &long).await;
+        let rude = w.request_saying(c, me, 3_000, "you badword").await;
+        let ids = |page: InboxPage| page.items.into_iter().map(|i| i.entry.conversation_id).collect::<Vec<_>>();
+
+        // The default: offensive filter on, no hidden words.
+        assert_eq!(ids(w.list(me, Folder::Requests).await), vec![spoiler, plain]);
+        assert_eq!(ids(w.list(me, Folder::HiddenRequests).await), vec![rude]);
+
+        w.filters.set(&me, &ContentFilter { hidden_words: vec!["spoiler".into()], filter_offensive: true }).await.unwrap();
+        assert_eq!(ids(w.list(me, Folder::Requests).await), vec![plain]);
+        assert_eq!(ids(w.list(me, Folder::HiddenRequests).await), vec![rude, spoiler]);
+
+        // A change re-sorts at once: offensive filter off.
+        w.filters.set(&me, &ContentFilter { hidden_words: vec!["spoiler".into()], filter_offensive: false }).await.unwrap();
+        assert_eq!(ids(w.list(me, Folder::Requests).await), vec![rude, plain]);
+        assert_eq!(ids(w.list(me, Folder::HiddenRequests).await), vec![spoiler]);
+
+        // The inbox is never filtered; an unreadable filter fails the read.
+        assert!(w.list(me, Folder::Inbox).await.items.is_empty());
+        *w.filters.down.lock().unwrap() = true;
+        let query = ListInboxQuery { profile_id: me.as_str(), folder: Folder::Requests, limit: 10, page_token: None };
+        assert!(w.handler.handle(Envelope::new(uuid::Uuid::now_v7(), query)).await.is_err());
     }
 }

@@ -32,7 +32,7 @@ use crate::application::command::{
 };
 use crate::application::port::{
     ConversationRepository, EventPublisher, HotTailCache, InboxStore, InteractionGate, MemberRepository,
-    PresenceSettingsStore, PresenceStore, ReceiptStore, RoutingRegistry,
+    MessageFilterStore, MessageRepository, PresenceSettingsStore, PresenceStore, ReceiptStore, RoutingRegistry,
 };
 use crate::application::query::{
     FormerMemberHistoryQuery, GetHistoryHandler, GetHistoryQuery, ListInboxHandler, ListInboxQuery, ListMembersHandler, ListMembersQuery,
@@ -47,7 +47,7 @@ use crate::infrastructure::grpc::handler::ChatServiceHandler;
 use crate::infrastructure::persistence::{
     ScyllaConversationRepository, ScyllaInboxStore, ScyllaInvitationRepository, ScyllaMemberRepository,
     ScyllaMessageRepository,
-    ScyllaPresenceSettingsStore, ScyllaSubscriptionRepository,
+    ScyllaMessageFilterStore, ScyllaPresenceSettingsStore, ScyllaSubscriptionRepository,
 };
 use crate::infrastructure::routing::{
     Fanout, MessageFanout, PlaneAttach, PlaneSubscriber, RedisPlaneBroadcaster,
@@ -93,6 +93,9 @@ pub struct AppConfig {
     pub presence_settings_consumer_group: String,
     /// Kafka consumer-group id for the [`InboxWorker`] (#656).
     pub inbox_consumer_group: String,
+    /// The offensive-term list a member's message requests are filtered with
+    /// (#810; see [`offensive_terms_from_env`]).
+    pub offensive_terms: text_filter::TermList,
 }
 
 /// A fully-wired chat service bound to its backends, plus the shared `Arc`
@@ -158,6 +161,8 @@ impl App {
         let routing = Arc::new(RedisRoutingRegistry::new(redis_client.clone()));
         let presence_settings: Arc<dyn PresenceSettingsStore> =
             Arc::new(ScyllaPresenceSettingsStore::new(Arc::clone(&scylla_client)));
+        let message_filters: Arc<dyn MessageFilterStore> =
+            Arc::new(ScyllaMessageFilterStore::new(Arc::clone(&scylla_client)));
         let broadcaster = Arc::new(RedisPlaneBroadcaster::new(redis_client.clone()));
 
         // ── In-process fan-out registries + per-pod subscriber ───────────────
@@ -230,6 +235,9 @@ impl App {
                 inbox:             Arc::clone(&inbox),
                 gate:              interaction_gate,
                 max_page_size:     config.max_page_size,
+                filters:           Arc::clone(&message_filters),
+                messages:          Arc::clone(&message_repo) as Arc<dyn MessageRepository>,
+                offensive:         Arc::new(config.offensive_terms.clone()),
             })?
             .register::<ListSubscriptionsQuery, _>(ListSubscriptionsHandler {
                 subscription_repo: Arc::clone(&subscription_repo),
@@ -253,6 +261,7 @@ impl App {
                 PresenceSettingsWorker::new(
                     cfg.clone(),
                     Arc::clone(&presence_settings),
+                    Arc::clone(&message_filters),
                     config.presence_settings_consumer_group.clone(),
                 )
                 .run(),
@@ -386,4 +395,25 @@ fn build_commands<EP: EventPublisher>(
         })?
         .build();
     Ok(Commands { bus, sender, direct })
+}
+
+/// The offensive-term list for message requests (#810): the file at
+/// `CHAT_OFFENSIVE_TERMS_FILE` (one term per line; `#` comments), the same list
+/// comment uses. Unset or unreadable: empty — the filter then hides nothing
+/// beyond the member's own words (logged).
+pub fn offensive_terms_from_env() -> text_filter::TermList {
+    let Ok(path) = std::env::var("CHAT_OFFENSIVE_TERMS_FILE") else {
+        tracing::warn!("CHAT_OFFENSIVE_TERMS_FILE unset: the offensive filter hides no message request");
+        return text_filter::TermList::default();
+    };
+    match text_filter::TermList::from_file(&path) {
+        Ok(terms) => {
+            tracing::info!(path, terms = terms.len(), "offensive terms loaded for message requests");
+            terms
+        }
+        Err(error) => {
+            tracing::error!(path, %error, "cannot read the offensive terms; the filter hides no message request");
+            text_filter::TermList::default()
+        }
+    }
 }

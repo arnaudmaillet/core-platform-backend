@@ -42,4 +42,7 @@ enum ContentType {
 enum InboxFolder {
     INBOX_FOLDER_INBOX    = 0; // accepted direct conversations, groups, channels one writes in
     INBOX_FOLDER_REQUESTS = 1; // message requests to the member, unanswered
+    // #810: the requests the member's hidden words or offensive filter catch
+    // (sorted at read time with their current filter; never notified).
+    INBOX_FOLDER_HIDDEN_REQUESTS = 2;
 }

@@ -9,6 +9,7 @@ description = "Comment microservice — 1-level threaded comment engine with GIF
 
 [dependencies]
 comment-api = { workspace = true }
+text-filter = { workspace = true }
 post-api         = { workspace = true }   # GetPost client (read gate)
 social-graph-api = { workspace = true }   # CheckAccess client (read gate)
 error          = { workspace = true }
