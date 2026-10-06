@@ -103,10 +103,13 @@ message LoginRequest {
         AuthorizationCodeGrant  authorization_code  = 3;
         PasswordGrant           password            = 4;
         // An id_token whose identity has no account yet fails NOT_FOUND
-        // (AUT-6004): the app goes on with SignUp.
+        // (AUT-6004): the app goes on with SignUp with the same token and
+        // nonce (the nonce is only redeemed by a sign-in that succeeds).
         IdTokenGrant            id_token            = 5;
         // A code sent to the account's email address (passwordless accounts).
-        // An address with no such account fails NOT_FOUND (AUT-6004): SignUp.
+        // An address with no such account fails NOT_FOUND (AUT-6004): SignUp
+        // with the same challenge and code (a code is only spent by a sign-in
+        // that succeeds; a wrong one still counts).
         VerificationCodeGrant   verification_code   = 7;
         // A passkey (#808): signs in without a second step, even with
         // two-step sign-in on (a passkey is two factors). AUT-5028 when it

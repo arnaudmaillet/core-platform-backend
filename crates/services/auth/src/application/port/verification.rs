@@ -107,6 +107,15 @@ pub trait VerificationStore: Send + Sync + 'static {
     /// is dropped once they are all spent.
     async fn consume(&self, challenge_id: &str, code_hash: &str) -> Result<ConsumeOutcome, AuthError>;
 
+    /// [`consume`](Self::consume) without spending a matching challenge (a miss
+    /// still spends an attempt): the code proves the address, and the caller
+    /// decides whether to [`take`](Self::take) it.
+    async fn check(&self, challenge_id: &str, code_hash: &str) -> Result<ConsumeOutcome, AuthError>;
+
+    /// Spends a checked challenge; `false` if it is gone (used meanwhile, or
+    /// expired) — exactly one caller gets `true`.
+    async fn take(&self, challenge_id: &str) -> Result<bool, AuthError>;
+
     async fn discard(&self, challenge_id: &str) -> Result<(), AuthError>;
 
     /// Counts one SMS to `country` against today's (UTC) budgets: the

@@ -1128,6 +1128,7 @@ impl Fixture {
 
 // ─── One-time codes ──────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 struct StoredChallenge {
     challenge: super::port::PendingChallenge,
     attempts_left: u32,
@@ -1194,35 +1195,16 @@ impl super::port::VerificationStore for InMemoryVerificationStore {
     }
 
     async fn consume(&self, challenge_id: &str, code_hash: &str) -> Result<super::port::ConsumeOutcome, AuthError> {
-        let mut challenges = self.challenges.lock().unwrap();
-        let Some(stored) = challenges.get_mut(challenge_id) else { return Ok(super::port::ConsumeOutcome::Unknown) };
-        let destination_key = stored.challenge.destination_key.clone();
-        if stored.challenge.code_hash == code_hash {
-            let stored = challenges.remove(challenge_id).unwrap();
-            return Ok(super::port::ConsumeOutcome::Verified {
-                destination: super::port::VerifiedDestination {
-                    channel: stored.challenge.channel,
-                    destination: stored.challenge.destination,
-                },
-                destination_key,
-            });
-        }
-        let (stored_channel, stored_destination, stored_locale) =
-            (stored.challenge.channel, stored.challenge.destination.clone(), stored.challenge.locale.clone());
-        stored.attempts_left = stored.attempts_left.saturating_sub(1);
-        if stored.attempts_left == 0 {
-            challenges.remove(challenge_id);
-        }
-        Ok(super::port::ConsumeOutcome::Miss {
-            destination_key,
-            destination: super::port::VerifiedDestination {
-                channel: stored_channel,
-                destination: stored_destination,
-            },
-            locale: stored_locale,
-        })
+        self.match_code(challenge_id, code_hash, true)
     }
 
+    async fn check(&self, challenge_id: &str, code_hash: &str) -> Result<super::port::ConsumeOutcome, AuthError> {
+        self.match_code(challenge_id, code_hash, false)
+    }
+
+    async fn take(&self, challenge_id: &str) -> Result<bool, AuthError> {
+        Ok(self.challenges.lock().unwrap().remove(challenge_id).is_some())
+    }
     async fn discard(&self, challenge_id: &str) -> Result<(), AuthError> {
         self.challenges.lock().unwrap().remove(challenge_id);
         Ok(())
@@ -1249,6 +1231,38 @@ impl super::port::VerificationStore for InMemoryVerificationStore {
             *n = n.saturating_sub(1);
         }
         Ok(())
+    }
+}
+
+impl InMemoryVerificationStore {
+    fn match_code(&self, challenge_id: &str, code_hash: &str, spend: bool) -> Result<super::port::ConsumeOutcome, AuthError> {
+        let mut challenges = self.challenges.lock().unwrap();
+        let Some(stored) = challenges.get_mut(challenge_id) else { return Ok(super::port::ConsumeOutcome::Unknown) };
+        let destination_key = stored.challenge.destination_key.clone();
+        if stored.challenge.code_hash == code_hash {
+            let stored = if spend { challenges.remove(challenge_id).unwrap() } else { stored.clone() };
+            return Ok(super::port::ConsumeOutcome::Verified {
+                destination: super::port::VerifiedDestination {
+                    channel: stored.challenge.channel,
+                    destination: stored.challenge.destination,
+                },
+                destination_key,
+            });
+        }
+        let (stored_channel, stored_destination, stored_locale) =
+            (stored.challenge.channel, stored.challenge.destination.clone(), stored.challenge.locale.clone());
+        stored.attempts_left = stored.attempts_left.saturating_sub(1);
+        if stored.attempts_left == 0 {
+            challenges.remove(challenge_id);
+        }
+        Ok(super::port::ConsumeOutcome::Miss {
+            destination_key,
+            destination: super::port::VerifiedDestination {
+                channel: stored_channel,
+                destination: stored_destination,
+            },
+            locale: stored_locale,
+        })
     }
 }
 

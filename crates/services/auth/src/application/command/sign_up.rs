@@ -660,6 +660,106 @@ mod tests {
         assert!(matches!(err, AuthError::NoAccountForIdentity));
     }
 
+    /// #807: the app signs in first, and on NOT_FOUND signs up with **the same
+    /// proof** — so a sign-in that finds no account must not spend it.
+    #[tokio::test]
+    async fn a_login_that_finds_no_account_leaves_the_proof_for_sign_up() {
+        use crate::application::command::federated_nonce::{FederatedNonces, NonceBoundVerifier};
+        use crate::application::command::verification::{StartVerificationCommand, VerificationPolicy};
+        use crate::application::command::LoginCommand;
+        use crate::application::fakes::{InMemoryNonceStore, InMemoryVerificationStore, RecordingCodeSender};
+        use crate::application::port::{AuthnGrant, VerificationChannel};
+
+        let fx = Fixture::new();
+        let login_with = |grant: AuthnGrant| {
+            Envelope::new(Uuid::now_v7(), LoginCommand {
+                grant,
+                device: DeviceFingerprint::default(),
+                guest_refresh_token: None,
+                client_ip: None,
+            })
+        };
+
+        // A code: Login → NOT_FOUND, then SignUp with the same code, once.
+        let sender = Arc::new(RecordingCodeSender::default());
+        let codes = Arc::new(VerificationCodes::new(
+            Arc::new(InMemoryVerificationStore::default()),
+            Arc::clone(&sender) as _,
+            VerificationPolicy::default(),
+        ));
+        let verifier = Arc::new(StubVerifier::default());
+        let sign_up_handler = handler(&fx, &verifier).with_codes(Arc::clone(&codes));
+        let login = fx.login_handler().with_codes(Arc::clone(&codes));
+        let started = codes
+            .start(StartVerificationCommand {
+                channel: VerificationChannel::Email,
+                destination: "new@example.com".into(),
+                locale: None,
+                client_ip: None,
+            })
+            .await
+            .unwrap();
+        let (_, code, _) = sender.last().unwrap();
+        let by_code = || AuthnGrant::Code { challenge_id: started.challenge_id.clone(), code: code.clone() };
+        let sign_up_by_code = || {
+            let mut env = sign_up("unused", adult_dob(), None);
+            env.payload.credential =
+                SignUpCredential::Code { challenge_id: started.challenge_id.clone(), code: code.clone() };
+            env
+        };
+        assert!(matches!(login.handle(login_with(by_code()), t0()).await, Err(AuthError::NoAccountForIdentity)));
+        let outcome = sign_up_handler.handle(sign_up_by_code(), t0()).await.unwrap();
+        assert!(matches!(outcome, SignUpOutcome::SignedUp { .. }), "{outcome:?}");
+        assert!(matches!(sign_up_handler.handle(sign_up_by_code(), t0()).await, Err(AuthError::VerificationCodeInvalid)));
+        // Spent by the sign-up: no sign-in with it either.
+        assert!(matches!(login.handle(login_with(by_code()), t0()).await, Err(AuthError::VerificationCodeInvalid)));
+
+        // An existing account: a sign-in spends the code.
+        let again = codes
+            .start(StartVerificationCommand {
+                channel: VerificationChannel::Email,
+                destination: "new@example.com".into(),
+                locale: None,
+                client_ip: None,
+            })
+            .await
+            .unwrap();
+        let (_, code, _) = sender.last().unwrap();
+        let grant = || AuthnGrant::Code { challenge_id: again.challenge_id.clone(), code: code.clone() };
+        assert!(login.handle(login_with(grant()), t0()).await.is_ok());
+        assert!(matches!(login.handle(login_with(grant()), t0()).await, Err(AuthError::VerificationCodeInvalid)));
+
+        // An Apple id_token with server nonces required: same story.
+        let nonces = Arc::new(FederatedNonces::new(Arc::new(InMemoryNonceStore::default()), true));
+        verifier.knows("t9", FederatedProvider::Apple, "apple-9", Some("zoe@example.com"), false);
+        let nonce = nonces.start().await.unwrap().nonce;
+        let login = fx
+            .login_handler()
+            .with_federated(Arc::clone(&verifier) as _, Arc::clone(&fx.guests) as _)
+            .with_federated_nonces(Arc::clone(&nonces));
+        let id_token = || AuthnGrant::IdToken {
+            provider: FederatedProvider::Apple,
+            id_token: "t9".into(),
+            nonce: nonce.clone(),
+        };
+        assert!(matches!(login.handle(login_with(id_token()), t0()).await, Err(AuthError::NoAccountForIdentity)));
+        let bound = Arc::new(NonceBoundVerifier::new(Arc::clone(&verifier) as _, Arc::clone(&nonces)));
+        let sign_up_federated = SignUpHandler::new(
+            bound,
+            Arc::clone(&fx.directory) as _,
+            Arc::clone(&fx.links) as _,
+            Arc::clone(&fx.guests) as _,
+            members(&fx),
+        );
+        let mut env = sign_up("t9", adult_dob(), None);
+        env.payload.credential =
+            SignUpCredential::IdToken { provider: FederatedProvider::Apple, id_token: "t9".into(), nonce: nonce.clone() };
+        let outcome = sign_up_federated.handle(env, t0()).await.unwrap();
+        assert!(matches!(outcome, SignUpOutcome::SignedUp { .. }), "{outcome:?}");
+        // Redeemed by the sign-up: a replay of that token is refused.
+        assert!(matches!(login.handle(login_with(id_token()), t0()).await, Err(AuthError::IdTokenRejected { .. })));
+    }
+
     #[tokio::test]
     async fn an_sms_code_signs_up_a_phone_only_account() {
         use crate::application::command::verification::{StartVerificationCommand, VerificationPolicy};

@@ -6,6 +6,7 @@ use cqrs::Envelope;
 use rand::RngCore;
 use validate_core::{FieldViolation, Validate};
 
+use crate::application::command::FederatedNonces;
 use crate::application::command::member_session::MemberSessions;
 use crate::application::command::mfa::MfaVerifier;
 use crate::application::command::passkeys::{PasskeyAssertion, PasskeySignIn};
@@ -129,6 +130,8 @@ pub struct LoginHandler {
     members: MemberSessions,
     /// Native Sign in with Apple / Google; `None` refuses id_token grants.
     federated: Option<Arc<dyn FederatedTokenVerifier>>,
+    /// Server-issued sign-in nonces, redeemed once an id_token signs in.
+    nonces: Option<Arc<FederatedNonces>>,
     /// Where a retired guest session's upgrade is recorded.
     guests: Option<Arc<dyn GuestRegistry>>,
     /// Email one-time codes; `None` refuses code grants.
@@ -161,6 +164,7 @@ impl LoginHandler {
             publisher: Arc::clone(&publisher),
             members: MemberSessions { profiles, sessions, refresh_tokens, cache, minter, publisher, policy },
             federated: None,
+            nonces: None,
             guests: None,
             codes: None,
             mfa: None,
@@ -239,8 +243,15 @@ impl LoginHandler {
         self
     }
 
+    /// Redeems an id_token's server-issued nonce once it signs in (never for an
+    /// identity with no account, so SignUp can use it).
+    pub fn with_federated_nonces(mut self, nonces: Arc<FederatedNonces>) -> Self {
+        self.nonces = Some(nonces);
+        self
+    }
+
     /// Enables id_token grants (native Sign in with Apple / Google) and the
-    /// guest-session hand-over.
+    /// guest-session hand-over. `verifier` must not redeem nonces itself.
     pub fn with_federated(
         mut self,
         verifier: Arc<dyn FederatedTokenVerifier>,
@@ -278,7 +289,12 @@ impl LoginHandler {
                 })?;
                 let identity = verifier.verify(provider, &id_token, &nonce).await?;
                 let subject = IdpSubject::new(identity.issuer, identity.subject)?;
+                // No account: the nonce stays unspent, so SignUp can follow with
+                // the same token (#807). It is redeemed only on a sign-in.
                 let link = self.links.find_by_subject(&subject).await?.ok_or(AuthError::NoAccountForIdentity)?;
+                if let Some(nonces) = &self.nonces {
+                    nonces.redeem(&nonce).await?;
+                }
                 (subject, link.account_id(), false)
             }
             // A one-time code proving the address of a passwordless account.
@@ -287,13 +303,16 @@ impl LoginHandler {
                     .codes
                     .as_ref()
                     .ok_or_else(|| AuthError::VerificationChannelUnavailable { channel: "email".into() })?;
-                let proven = codes.verify(&challenge_id, &code, cmd.client_ip.as_deref()).await?;
+                // Checked, not spent: an address with no account keeps its code
+                // for SignUp (#807); a sign-in spends it.
+                let proven = codes.check(&challenge_id, &code, cmd.client_ip.as_deref()).await?;
                 let issuer = match proven.channel {
                     VerificationChannel::Email => EMAIL_CODE_ISSUER,
                     VerificationChannel::Sms => PHONE_CODE_ISSUER,
                 };
                 let subject = IdpSubject::new(issuer, proven.destination)?;
                 let link = self.links.find_by_subject(&subject).await?.ok_or(AuthError::NoAccountForIdentity)?;
+                codes.spend(&challenge_id).await?;
                 (subject, link.account_id(), false)
             }
             // Broker the credential to the IdP and normalize the identity. The

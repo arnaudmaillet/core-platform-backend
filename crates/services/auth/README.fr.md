@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: f9b9b4feaad73fa92629a7fcb2511fa253c3b456bddd4925d1a4ddd2a0a4e542
+  source_sha256: edfb6383940ca341ebf5a5819023a310fcdd62d43f23cec6c78a88e96793681c
   translated_at: 2026-10-06
   status: complete
 ---
@@ -121,7 +121,9 @@ si l'identité, ou son e-mail vérifié par le fournisseur, a déjà un compte, 
 recherché, et les adresses relais privées d'Apple ne correspondent jamais. Le profil suit
 (`profile.CreateProfile`, puis `Refresh` pour que `pids` le porte). `Login` accepte le même
 id_token (`IdTokenGrant`) pour les retours ; une identité sans compte reçoit `AUT-6004` (`NOT_FOUND`)
-et l'app enchaîne sur `SignUp`. Les deux acceptent le **refresh token invité** de l'appareil : cette
+et l'app enchaîne sur `SignUp` **avec la même preuve** : un `Login` qui ne trouve pas de compte ne
+consomme ni le code (vérifié sans être consommé ; un code faux compte toujours) ni le nonce — seule
+une connexion réussie le fait (#807). Les deux acceptent le **refresh token invité** de l'appareil : cette
 session invitée se termine (`guest_upgraded`) et `guest_principals` enregistre le compte devenu.
 
 ### E-mail sans mot de passe (mode invité)
