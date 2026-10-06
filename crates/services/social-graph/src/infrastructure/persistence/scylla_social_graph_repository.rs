@@ -766,8 +766,8 @@ impl SocialGraphRepository for ScyllaSocialGraphRepository {
             if row.hidden == Some(true) {
                 facts.hidden.insert(id);
             }
-            if row.suggestible == Some(false) {
-                facts.unsuggestible.insert(id);
+            if row.suggestible == Some(true) {
+                facts.suggestible.insert(id);
             }
         }
 
