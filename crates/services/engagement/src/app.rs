@@ -26,7 +26,7 @@ use crate::application::command::record_share::{RecordShareCommand, RecordShareH
 use crate::application::command::record_view::{RecordViewCommand, RecordViewHandler};
 use crate::application::command::remove_reaction::{RemoveReactionCommand, RemoveReactionHandler};
 use crate::application::command::upsert_reaction::{UpsertReactionCommand, UpsertReactionHandler};
-use crate::application::port::{EngagementEventPublisher, ReactionLedger, ScoreStore};
+use crate::application::port::{EngagementEventPublisher, LikeVisibility, ReactionLedger, ScoreStore};
 use crate::application::query::list_reactions_by_profile::{ListReactionsByProfileHandler, ListReactionsByProfileQuery};
 use crate::application::query::get_post_engagement::{
     GetPostEngagementHandler, GetPostEngagementQuery,
@@ -68,10 +68,12 @@ pub struct App {
 impl App {
     /// Builds the Redis score store and CQRS buses; when Kafka is configured,
     /// also builds the ScyllaDB ledger and spawns the write-behind workers.
+    /// `likes`: who hides like counts (#809, post); `None` withholds nothing.
     pub async fn build<P: EngagementEventPublisher>(
         backends:  Backends,
         weights:   Arc<ReactionWeightsConfig>,
         publisher: Arc<P>,
+        likes:     Option<Arc<dyn LikeVisibility>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let Backends { scylla, redis, kafka } = backends;
 
@@ -118,6 +120,7 @@ impl App {
                 })?
                 .register::<GetPostEngagementQuery, _>(GetPostEngagementHandler {
                     score_store: Arc::clone(&score_store),
+                    likes,
                 })?
                 .build(),
         );

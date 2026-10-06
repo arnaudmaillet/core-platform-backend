@@ -11,7 +11,7 @@ use crate::application::command::{
     upsert_reaction::UpsertReactionCommand,
 };
 use crate::application::port::{PostEngagementSnapshot, ProfileReaction};
-use crate::application::query::get_post_engagement::GetPostEngagementQuery;
+use crate::application::query::get_post_engagement::{EngagementReader, GetPostEngagementQuery};
 use crate::application::query::list_reactions_by_profile::ListReactionsByProfileQuery;
 use crate::domain::value_object::ReactionKind;
 
@@ -110,8 +110,15 @@ where
         &self,
         request: Request<proto::GetPostEngagementRequest>,
     ) -> Result<Response<proto::PostEngagementView>, Status> {
+        // The reader from how the request arrived: hidden likes (#809) reach
+        // only the author (one of the caller's profiles) and the mesh.
+        let reader = match edge::viewer(&request) {
+            edge::Viewer::Internal => EngagementReader::Internal,
+            edge::Viewer::Anonymous => EngagementReader::Profiles(Vec::new()),
+            edge::Viewer::Member { profile_ids, .. } => EngagementReader::Profiles(profile_ids),
+        };
         let req   = request.into_inner();
-        let query = GetPostEngagementQuery { post_id: req.post_id.clone() };
+        let query = GetPostEngagementQuery { post_id: req.post_id.clone(), reader };
 
         let snapshot: PostEngagementSnapshot = self
             .query_bus

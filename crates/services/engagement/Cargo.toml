@@ -9,6 +9,7 @@ description = "Engagement microservice — weighted reaction scoring engine with
 
 [dependencies]
 engagement-api = { workspace = true }
+post-api       = { workspace = true }   # BatchGetLikeVisibility client (#809)
 error          = { workspace = true }
 validate-core  = { workspace = true }
 validation     = { workspace = true }
