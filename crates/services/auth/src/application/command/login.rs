@@ -8,6 +8,7 @@ use validate_core::{FieldViolation, Validate};
 
 use crate::application::command::member_session::MemberSessions;
 use crate::application::command::mfa::MfaVerifier;
+use crate::application::command::passkeys::{PasskeyAssertion, PasskeySignIn};
 use crate::application::command::verification::VerificationCodes;
 use crate::application::ensure_valid;
 use crate::application::policy::SessionPolicy;
@@ -18,7 +19,9 @@ use crate::application::port::{
 };
 use crate::domain::aggregate::SubjectLink;
 use crate::application::port::VerificationChannel;
-use crate::domain::value_object::{AccountId, DeviceFingerprint, IdpSubject, EMAIL_CODE_ISSUER, PHONE_CODE_ISSUER};
+use crate::domain::value_object::{
+    AccountId, DeviceFingerprint, IdpSubject, EMAIL_CODE_ISSUER, PASSKEY_ISSUER, PHONE_CODE_ISSUER,
+};
 use crate::error::AuthError;
 
 /// Establish a session by brokering a credential to the IdP, or by verifying a
@@ -83,6 +86,19 @@ impl Validate for LoginCommand {
                     ));
                 }
             }
+            AuthnGrant::Passkey(assertion) => {
+                if assertion.challenge.trim().is_empty()
+                    || assertion.client_data_json.is_empty()
+                    || assertion.authenticator_data.is_empty()
+                    || assertion.signature.is_empty()
+                {
+                    v.push(FieldViolation::new(
+                        "passkey",
+                        "AUT-VAL-042",
+                        "a passkey assertion needs its challenge, client data, authenticator data and signature",
+                    ));
+                }
+            }
         }
         if v.is_empty() { Ok(()) } else { Err(v) }
     }
@@ -120,6 +136,8 @@ pub struct LoginHandler {
     /// Two-step sign-in (#649). `None` (no seed key): an account with it on
     /// cannot sign in — fail-closed, never skipped.
     mfa: Option<Arc<MfaVerifier>>,
+    /// Passkeys (#808); `None` refuses passkey grants and second steps.
+    passkeys: Option<Arc<PasskeySignIn>>,
 }
 
 impl LoginHandler {
@@ -146,6 +164,27 @@ impl LoginHandler {
             guests: None,
             codes: None,
             mfa: None,
+            passkeys: None,
+        }
+    }
+
+    /// Enables signing in with a passkey: as the first factor (two factors in
+    /// one — no second step follows) and as the second step.
+    pub fn with_passkeys(mut self, passkeys: Arc<PasskeySignIn>) -> Self {
+        self.passkeys = Some(passkeys);
+        self
+    }
+
+    /// The identity a passkey session stands for: the account's first link
+    /// (so a password change or a password step-up works from it), else the
+    /// passkey itself.
+    async fn passkey_subject(&self, account_id: &AccountId, assertion: &PasskeyAssertion) -> Result<IdpSubject, AuthError> {
+        match self.links.find_by_account(account_id).await?.into_iter().next() {
+            Some(link) => Ok(link.subject().clone()),
+            None => IdpSubject::new(
+                PASSKEY_ISSUER,
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&assertion.credential_id),
+            ),
         }
     }
 
@@ -222,7 +261,15 @@ impl LoginHandler {
         let correlation_id = envelope.correlation_id;
 
         // 1–2. Who is signing in, and their account.
+        let mut by_passkey = false;
         let (subject, account_id, needs_link) = match cmd.grant {
+            // A passkey (#808): the assertion names its account (user handle).
+            AuthnGrant::Passkey(assertion) => {
+                let passkeys = self.passkeys.as_ref().ok_or(AuthError::PasskeysUnavailable)?;
+                let account_id = passkeys.verify(&assertion, None, now).await?;
+                by_passkey = true;
+                (self.passkey_subject(&account_id, &assertion).await?, account_id, false)
+            }
             // A native id_token: verified here. Its account was linked at
             // SignUp; an identity with none is told to sign up.
             AuthnGrant::IdToken { provider, id_token, nonce } => {
@@ -279,18 +326,19 @@ impl LoginHandler {
         };
 
         // 4. Two-step sign-in on: nothing happens until the second factor —
-        //    no session, no resumed account, no first link (#649).
-        if snapshot.mfa_enrolled {
+        //    no session, no resumed account, no first link (#649). A passkey
+        //    is both factors already (possession + device unlock).
+        if snapshot.mfa_enrolled && !by_passkey {
             let mfa = self.mfa.as_ref().ok_or(AuthError::MfaUnavailable)?;
             return self.challenge(mfa, proven, now).await.map(LoginOutcome::SecondFactorRequired);
         }
         self.finish(proven, snapshot, now, correlation_id).await.map(LoginOutcome::Issued)
     }
 
-    /// The second step (#649): the code for the sign-in `mfa_token` names.
-    /// Wrong codes count against the account (the challenge stays usable
-    /// until it expires or the account locks); the right one issues the
-    /// session, once.
+    /// The second step (#649): the code for the sign-in `mfa_token` names, or
+    /// one of the account's passkeys (#808). Wrong codes count against the
+    /// account (the challenge stays usable until it expires or the account
+    /// locks); the right one issues the session, once.
     pub async fn complete(
         &self,
         envelope: Envelope<CompleteLoginCommand>,
@@ -300,7 +348,13 @@ impl LoginHandler {
         let mfa = self.mfa.as_ref().ok_or(AuthError::MfaUnavailable)?;
         let token_hash = challenge_hash(&cmd.mfa_token);
         let pending = mfa.store().pending_login(&token_hash).await?.ok_or(AuthError::MfaChallengeInvalid)?;
-        mfa.check(&pending.account_id, &cmd.code, now).await?;
+        match &cmd.passkey {
+            Some(assertion) => {
+                let passkeys = self.passkeys.as_ref().ok_or(AuthError::PasskeysUnavailable)?;
+                passkeys.verify(assertion, Some(&pending.account_id), now).await?;
+            }
+            None => mfa.check(&pending.account_id, &cmd.code, now).await?,
+        }
         // Single use: of two completions racing, one issues a session.
         let pending = mfa.store().take_pending_login(&token_hash).await?.ok_or(AuthError::MfaChallengeInvalid)?;
 
@@ -448,11 +502,13 @@ pub struct MfaChallenge {
     pub expires_in_secs: i64,
 }
 
-/// The second step: the code (TOTP or backup) for a pending sign-in.
+/// The second step: the code (TOTP or backup) for a pending sign-in, or a
+/// passkey assertion (then `code` is ignored).
 #[derive(Clone)]
 pub struct CompleteLoginCommand {
     pub mfa_token: String,
     pub code: String,
+    pub passkey: Option<PasskeyAssertion>,
 }
 
 impl std::fmt::Debug for CompleteLoginCommand {
@@ -715,7 +771,7 @@ mod tests {
         assert!(fx.directory.resumed().is_empty(), "nothing resumes before the code");
 
         let complete = |code: String| {
-            Envelope::new(Uuid::now_v7(), CompleteLoginCommand { mfa_token: challenge.mfa_token.clone(), code })
+            Envelope::new(Uuid::now_v7(), CompleteLoginCommand { mfa_token: challenge.mfa_token.clone(), code, passkey: None })
         };
         let wrong = fx.login_handler().complete(complete("000000".into()), t0()).await.unwrap_err();
         // (A 1-in-a-million chance the wrong code is right is accepted here.)
@@ -729,7 +785,7 @@ mod tests {
 
         let again = fx.login_handler().complete(complete("abcde-fghjk".into()), t0()).await.unwrap_err();
         assert!(matches!(again, AuthError::MfaChallengeInvalid), "single use: {again:?}");
-        let unknown = Envelope::new(Uuid::now_v7(), CompleteLoginCommand { mfa_token: "nope".into(), code: "abcde-fghjk".into() });
+        let unknown = Envelope::new(Uuid::now_v7(), CompleteLoginCommand { mfa_token: "nope".into(), code: "abcde-fghjk".into(), passkey: None });
         assert!(matches!(fx.login_handler().complete(unknown, t0()).await, Err(AuthError::MfaChallengeInvalid)));
     }
 

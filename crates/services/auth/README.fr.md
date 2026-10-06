@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: cd32d0622bf19ac29cc585cd2b5e27605a9a8c2f551435ba1500a2ed1deb5838
+  source_sha256: f9b9b4feaad73fa92629a7fcb2511fa253c3b456bddd4925d1a4ddd2a0a4e542
   translated_at: 2026-10-06
   status: complete
 ---
@@ -278,8 +278,22 @@ exclure. `FinishPasskeyRegistration` vérifie la réponse de l'authentificateur 
 `AUT-5024` refusée — la raison est journalisée, pas renvoyée) et l'enregistre dans Postgres
 (`passkeys`, sur le shard du compte ; 10 au plus — `AUT-5025` ; le même authentificateur deux fois —
 `AUT-5026`). `ListPasskeys` / `RemovePasskey` (step-up ; `AUT-5027`). Chaque ajout et suppression est
-envoyé par e-mail à l'adresse du compte. Les passkeys sont effacées avec le compte. La connexion par
-passkey vient ensuite (#808, partie 2).
+envoyé par e-mail à l'adresse du compte. Les passkeys sont effacées avec le compte.
+
+**Se connecter avec une passkey.** `StartPasskeySignIn` (public) délivre un challenge (à usage unique,
+5 minutes, `auth:{pkauth:<hash>}` ; découvrable, sans liste d'autorisation). L'assertion va ensuite à
+`Login` (grant `passkey` : le **premier facteur, sans seconde étape même avec la connexion en deux
+étapes activée** — une passkey vaut deux facteurs), à `CompleteLogin { passkey }` (la seconde étape
+après un mot de passe, à la place d'un code) ou à `VerifyCredentials { passkey }` (step-up). **Le compte
+n'est jamais trouvé à partir d'un identifiant de passkey** (les identifiants ne sont uniques que par
+compte) : c'est le user handle de l'assertion — ou, pour une seconde étape ou un step-up, le compte
+auquel appartient l'étape, auquel un user handle doit correspondre — et la passkey doit être une de
+*ce* compte ; sans handle ni compte, c'est refusé. La signature est vérifiée avec la clé enregistrée
+(le compteur doit avancer, sauf s'ils valent tous deux zéro), le compteur et la dernière utilisation de
+la passkey sont mis à jour, et tout écart donne `AUT-5028` (la raison est journalisée). Une session par
+passkey représente la première liaison d'identité du compte (si bien que `ChangePassword` et un step-up
+par mot de passe fonctionnent depuis elle). Les suites habituelles d'une connexion s'appliquent (alerte
+de nouvel appareil, compte désactivé repris, invité retiré).
 
 **Step-up.** Un jeton émis juste après une preuve d'identifiant — `Login` / `CompleteLogin`, ou
 `VerifyCredentials` (re-prouver le mot de passe, ou donner un code de deux étapes : le step-up d'un

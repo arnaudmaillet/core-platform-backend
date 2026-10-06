@@ -1,7 +1,8 @@
 //! #808 over the real graph through the gRPC edge handlers: the holder
 //! registers a passkey (behind a recent credential proof) with a software
 //! authenticator, lists it (kept in Postgres), cannot redeem the challenge
-//! twice, and removes it (behind a step-up too).
+//! twice, signs in with it (no password) and steps up with it, then removes
+//! it (behind a step-up too) — after which it signs nobody in.
 
 use std::sync::Arc;
 
@@ -12,6 +13,7 @@ use tonic::{Code, Request};
 use uuid::Uuid;
 
 use auth::domain::value_object::webauthn::testing::{SoftAuthenticator, PASSKEY};
+use auth::infrastructure::grpc::handler::AuthServiceHandler;
 use auth::infrastructure::grpc::handler::proto;
 
 use crate::auth_it::harness::{random_user, Harness, PASSKEY_RP_ID};
@@ -35,13 +37,38 @@ fn as_holder<T>(message: T, account_id: &str, session_id: &str, fresh: bool) -> 
     request
 }
 
+/// A Login with `auth`'s assertion for a fresh StartPasskeySignIn challenge.
+async fn sign_in(handler: &AuthServiceHandler, auth: &mut SoftAuthenticator, account: &str) -> proto::LoginRequest {
+    let options = handler
+        .start_passkey_sign_in(Request::new(proto::StartPasskeySignInRequest {}))
+        .await
+        .unwrap()
+        .into_inner();
+    let challenge = URL_SAFE_NO_PAD.decode(&options.challenge).unwrap();
+    let client = SoftAuthenticator::client_data("webauthn.get", &challenge, &format!("https://{}", options.rp_id));
+    let (authenticator_data, signature) = auth.assert(&options.rp_id, PASSKEY, &client, false);
+    proto::LoginRequest {
+        device: None,
+        grant_type: proto::GrantType::Passkey as i32,
+        credential: Some(proto::login_request::Credential::Passkey(proto::PasskeyAssertion {
+            challenge: options.challenge,
+            credential_id: auth.credential_id.clone(),
+            client_data_json: client,
+            authenticator_data,
+            signature,
+            user_handle: Uuid::parse_str(account).unwrap().as_bytes().to_vec(),
+        })),
+        guest_refresh_token: String::new(),
+    }
+}
+
 #[tokio::test]
 async fn a_passkey_is_registered_listed_and_removed() {
     let h = Harness::start().await;
     let login = h.login(&random_user()).await.unwrap();
     let (account, session) = (login.account_id.clone(), login.tokens.unwrap().session_id);
     let origin = format!("https://{PASSKEY_RP_ID}");
-    let auth = SoftAuthenticator::new();
+    let mut auth = SoftAuthenticator::new();
 
     // Starting needs a recent credential proof.
     let stale = h
@@ -93,6 +120,37 @@ async fn a_passkey_is_registered_listed_and_removed() {
         .unwrap();
     assert_eq!(stored, 1);
 
+    // Signing in with it: no password, a session for this account.
+    let signed_in = h.handler.login(Request::new(sign_in(&h.handler, &mut auth, &account).await)).await.unwrap().into_inner();
+    assert_eq!(signed_in.account_id, account);
+    assert!(!signed_in.mfa_required);
+    let other_session = signed_in.tokens.unwrap().session_id;
+    let used = h
+        .handler
+        .list_passkeys(as_holder(proto::ListPasskeysRequest {}, &account, &other_session, false))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(used.passkeys[0].last_used_at.is_some(), "its last use is stamped");
+
+    // A step-up with it.
+    let proof = match sign_in(&h.handler, &mut auth, &account).await.credential {
+        Some(proto::login_request::Credential::Passkey(a)) => a,
+        _ => unreachable!(),
+    };
+    let stepped = h
+        .handler
+        .verify_credentials(as_holder(
+            proto::VerifyCredentialsRequest { credential: Some(proto::verify_credentials_request::Credential::Passkey(proof)) },
+            &account,
+            &other_session,
+            false,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(stepped.step_up_expires_in > 0);
+
     // Removing needs a recent proof too.
     let remove = proto::RemovePasskeyRequest { credential_id: made.credential_id.clone() };
     let stale = h.handler.remove_passkey(as_holder(remove.clone(), &account, &session, false)).await.unwrap_err();
@@ -101,4 +159,8 @@ async fn a_passkey_is_registered_listed_and_removed() {
     assert!(left.passkeys.is_empty());
     let gone = h.handler.remove_passkey(as_holder(remove, &account, &session, true)).await.unwrap_err();
     assert_eq!(gone.code(), Code::NotFound, "{gone:?}");
+
+    // Removed, it signs nobody in.
+    let refused = h.handler.login(Request::new(sign_in(&h.handler, &mut auth, &account).await)).await.unwrap_err();
+    assert_eq!(refused.code(), Code::Unauthenticated, "{refused:?}");
 }

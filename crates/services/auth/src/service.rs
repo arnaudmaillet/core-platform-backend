@@ -43,6 +43,8 @@ impl Service for AuthService {
         public("/auth.v1.AuthService/Login"),
         // The second step of a sign-in (#649): the mfa_token is the proof.
         public("/auth.v1.AuthService/CompleteLogin"),
+        // A passkey sign-in's challenge (#808): anyone's, single use.
+        public("/auth.v1.AuthService/StartPasskeySignIn"),
         public("/auth.v1.AuthService/Refresh"),
         // Guest mode: an installation starts an anonymous, read-only session.
         // Abuse controls (App Attest, per-IP / per-device limits) come with B5.

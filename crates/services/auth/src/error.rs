@@ -52,6 +52,8 @@ use thiserror::Error;
 /// | AUT-5025 | PasskeyLimitReached          | 409  | Low      | No        |
 /// | AUT-5026 | PasskeyAlreadyRegistered     | 409  | Low      | No        |
 /// | AUT-5027 | PasskeyNotFound              | 404  | Low      | No        |
+/// | AUT-5028 | PasskeyAssertionFailed       | 401  | Low      | No        |
+/// | AUT-5029 | PasskeysUnavailable          | 503  | Medium   | No        |
 /// | AUT-1005 | GuestSessionsDisabled        | 403  | Low      | No        |
 /// | AUT-1006 | DeviceAttestationRequired    | 403  | Low      | No        |
 /// | AUT-1007 | DeviceAttestationInvalid     | 403  | Medium   | No        |
@@ -251,6 +253,15 @@ pub enum AuthError {
     #[error("passkey not found")]
     PasskeyNotFound,
 
+    /// A passkey sign-in that does not verify: unknown credential, another
+    /// account's, bad signature, no user verification. The reason is logged.
+    #[error("the passkey sign-in was not accepted")]
+    PasskeyAssertionFailed,
+
+    /// Passkeys are not configured (no RP id).
+    #[error("passkeys are unavailable")]
+    PasskeysUnavailable,
+
     // ── Account directory (AUT-6xxx) ──────────────────────────────────────────
     #[error("account is not active; current status: '{current}'")]
     AccountNotActive { current: String },
@@ -362,6 +373,8 @@ impl AppError for AuthError {
             AuthError::PasskeyLimitReached => "AUT-5025",
             AuthError::PasskeyAlreadyRegistered => "AUT-5026",
             AuthError::PasskeyNotFound => "AUT-5027",
+            AuthError::PasskeyAssertionFailed => "AUT-5028",
+            AuthError::PasskeysUnavailable => "AUT-5029",
 
             AuthError::AccountNotActive { .. } => "AUT-6001",
             AuthError::AccountDirectoryUnavailable => "AUT-6002",
@@ -408,7 +421,8 @@ impl AppError for AuthError {
             | AuthError::VerificationCodeInvalid
             | AuthError::MfaCodeInvalid
             | AuthError::MfaChallengeInvalid
-            | AuthError::PasskeyChallengeInvalid => StatusCode::UNAUTHORIZED,
+            | AuthError::PasskeyChallengeInvalid
+            | AuthError::PasskeyAssertionFailed => StatusCode::UNAUTHORIZED,
 
             AuthError::VerificationRateLimited { .. } | AuthError::MfaLocked { .. } => StatusCode::TOO_MANY_REQUESTS,
 
@@ -438,7 +452,8 @@ impl AppError for AuthError {
             | AuthError::ProfileDirectoryUnavailable
             | AuthError::VerificationSendFailed
             | AuthError::SmsBudgetExhausted
-            | AuthError::MfaUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            | AuthError::MfaUnavailable
+            | AuthError::PasskeysUnavailable => StatusCode::SERVICE_UNAVAILABLE,
 
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         }

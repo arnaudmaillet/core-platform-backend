@@ -117,6 +117,44 @@ impl PasskeyRepository for PgPasskeyRepository {
             .await
     }
 
+    #[instrument(name = "auth.passkey.find", skip(self, credential_id), fields(account.id = %account_id.as_str()))]
+    async fn find(&self, account_id: &AccountId, credential_id: &[u8]) -> Result<Option<StoredPasskey>, AuthError> {
+        let row = sqlx::query_as::<_, PasskeyRow>(
+            "SELECT credential_id, public_key, sign_count, name, aaguid, backup_eligible, backed_up, created_at, \
+             last_used_at FROM passkeys WHERE account_id = $1 AND credential_id = $2",
+        )
+        .bind(account_id.as_uuid())
+        .bind(credential_id)
+        .fetch_optional(self.tx.pool_for(account_id)?)
+        .await
+        .map_err(storage)?;
+        Ok(row.map(StoredPasskey::from))
+    }
+
+    #[instrument(name = "auth.passkey.record_use", skip(self, credential_id), fields(account.id = %account_id.as_str()))]
+    async fn record_use(
+        &self,
+        account_id: &AccountId,
+        credential_id: &[u8],
+        sign_count: u32,
+        backed_up: bool,
+        at: DateTime<Utc>,
+    ) -> Result<(), AuthError> {
+        sqlx::query(
+            "UPDATE passkeys SET sign_count = GREATEST(sign_count, $3), backed_up = $4, last_used_at = $5 \
+             WHERE account_id = $1 AND credential_id = $2",
+        )
+        .bind(account_id.as_uuid())
+        .bind(credential_id)
+        .bind(i64::from(sign_count))
+        .bind(backed_up)
+        .bind(at)
+        .execute(self.tx.pool_for(account_id)?)
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
     #[instrument(name = "auth.passkey.remove", skip(self, credential_id), fields(account.id = %account_id.as_str()))]
     async fn remove(&self, account_id: &AccountId, credential_id: &[u8]) -> Result<bool, AuthError> {
         let removed = sqlx::query("DELETE FROM passkeys WHERE account_id = $1 AND credential_id = $2")

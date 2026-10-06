@@ -28,6 +28,9 @@ pub enum AuthnGrant {
     /// A one-time code sent to the account's email address (passwordless).
     /// Checked by auth itself, never sent to the IdP broker.
     Code { challenge_id: String, code: String },
+    /// A passkey assertion (#808). Checked by auth itself, never sent to the
+    /// IdP broker.
+    Passkey(crate::application::command::PasskeyAssertion),
 }
 
 /// The normalized identity an IdP returns after authenticating a grant.

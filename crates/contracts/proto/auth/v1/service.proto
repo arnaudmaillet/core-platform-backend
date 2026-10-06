@@ -156,6 +156,12 @@ service AuthService {
     // AUT-5026 this authenticator's passkey is already registered.
     rpc FinishPasskeyRegistration(FinishPasskeyRegistrationRequest) returns (Passkey);
 
+    // A challenge to sign in with a passkey (single use, 5 minutes), then
+    // Login { passkey } (first factor: no second step), CompleteLogin
+    // { passkey } (the second step after a password) or VerifyCredentials
+    // { passkey } (step-up). Public.
+    rpc StartPasskeySignIn(StartPasskeySignInRequest) returns (PasskeySignInOptions);
+
     // The caller's passkeys, oldest first.
     rpc ListPasskeys(ListPasskeysRequest) returns (ListPasskeysResponse);
 

@@ -246,8 +246,20 @@ account **and** the challenge (`auth:{pkreg:<hash>}`, so only that account redee
 the authenticator's response (`AUT-5023` challenge, `AUT-5024` refused — the reason is logged, not
 returned) and stores it in Postgres (`passkeys`, on the account's shard; at most 10 — `AUT-5025`; the
 same authenticator twice — `AUT-5026`). `ListPasskeys` / `RemovePasskey` (step-up; `AUT-5027`). Adding
-and removing are emailed to the account's address. Passkeys are erased with the account. Signing in with
-one comes next (#808 part 2).
+and removing are emailed to the account's address. Passkeys are erased with the account.
+
+**Signing in with a passkey.** `StartPasskeySignIn` (public) hands out a challenge (single use, 5
+minutes, `auth:{pkauth:<hash>}`; discoverable, no allow list). The assertion then goes to `Login`
+(`passkey` grant: the **first factor, and no second step follows even with two-step sign-in on** — a
+passkey is two factors), `CompleteLogin { passkey }` (the second step after a password, instead of a
+code) or `VerifyCredentials { passkey }` (step-up). **The account is never found from a credential id**
+(ids are only unique per account): it is the assertion's user handle — or, on a second step or a
+step-up, the account the step belongs to, which a user handle must match — and the credential must be
+one of *that* account's; no handle and no account is refused. The signature is checked against the
+stored key (counter must move forward unless both are zero), the passkey's counter and last use are
+updated, and anything off is `AUT-5028` (the reason is logged). A passkey session stands for the
+account's first identity link (so `ChangePassword` and a password step-up work from it). The usual
+sign-in follow-ups apply (new-device alert, deactivated account resumed, guest retired).
 
 **Step-up.** A token minted right after a credential proof — `Login` / `CompleteLogin`, or
 `VerifyCredentials` (re-prove the password, or give a two-step code: the step-up of an account without

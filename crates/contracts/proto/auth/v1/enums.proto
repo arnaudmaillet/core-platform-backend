@@ -33,6 +33,8 @@ enum GrantType {
     ID_TOKEN               = 3;
     // A one-time code sent to an email address (StartVerification).
     VERIFICATION_CODE      = 4;
+    // A passkey assertion (#808; StartPasskeySignIn).
+    PASSKEY                = 5;
 }
 
 // Where a one-time code is sent.

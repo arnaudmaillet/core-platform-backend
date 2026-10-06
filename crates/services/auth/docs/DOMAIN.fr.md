@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: 14145173663f884cb9c3e7c46b6b2ab11f4c8a8661e27354b7154ba62a90203f
+  source_sha256: bbb2d6f8694fe8c47908cc92cec11af3c47946fcba6177764f4b6a8af30f016b
   translated_at: 2026-10-06
   status: complete
 ---
@@ -162,4 +162,4 @@ ensuite.
 - **Classification :** Supporting — critique pour la sécurité, fédère un IdP générique, sur-mesure seulement à la couche edge-token/session.
 - **Volatilité :** faible-à-moyenne — guidée par la posture de sécurité et les changements d'IdP.
 - **Dette de modélisation connue :** rien de matériel consigné.
-- **Capacités différées :** la connexion par passkey (#808, partie 2 : premier facteur, seconde étape, step-up) ; surfaces de gestion d'appareils/sessions plus riches. Le step-up par mot de passe ou code de deux étapes (`VerifyCredentials` → `auth_time`), la connexion en deux étapes (#649) et l'enregistrement de passkeys (#808) sont en service.
+- **Capacités différées :** surfaces de gestion d'appareils/sessions plus riches. Le step-up par mot de passe, code de deux étapes ou passkey (`VerifyCredentials` → `auth_time`), la connexion en deux étapes (#649) et les passkeys (#808 : enregistrement, et connexion comme premier facteur, seconde étape ou step-up) sont en service.
