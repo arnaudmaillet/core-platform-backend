@@ -157,7 +157,9 @@ impl App {
             Arc::clone(&deps.publisher),
             deps.policy.clone(),
         )
-        .with_federated(Arc::clone(&federated), Arc::clone(&deps.guests))
+        // Login redeems the nonce itself, only once the identity has an account (#807).
+        .with_federated(Arc::clone(&deps.federated), Arc::clone(&deps.guests))
+        .with_federated_nonces(Arc::clone(&deps.nonces))
         .with_codes(Arc::clone(&deps.codes))
         .with_mfa(Arc::clone(&deps.mfa));
         let login = Arc::new(match &passkey_sign_in {

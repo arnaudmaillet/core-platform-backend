@@ -371,10 +371,45 @@ impl VerificationCodes {
         code: &str,
         client_ip: Option<&str>,
     ) -> Result<VerifiedDestination, AuthError> {
+        self.prove(challenge_id, code, client_ip, true).await
+    }
+
+    /// [`verify`](Self::verify) without spending the challenge: the code proves
+    /// the address (a wrong code still counts), and the caller
+    /// [`spend`](Self::spend)s it once it is used — `Login` only when the
+    /// address has an account, so a new one can still `SignUp` with it.
+    pub async fn check(
+        &self,
+        challenge_id: &str,
+        code: &str,
+        client_ip: Option<&str>,
+    ) -> Result<VerifiedDestination, AuthError> {
+        self.prove(challenge_id, code, client_ip, false).await
+    }
+
+    /// Spends a [`check`](Self::check)ed challenge; a challenge used meanwhile
+    /// (a concurrent sign-in) is [`AuthError::VerificationCodeInvalid`].
+    pub async fn spend(&self, challenge_id: &str) -> Result<(), AuthError> {
+        if self.store.take(challenge_id.trim()).await? { Ok(()) } else { Err(AuthError::VerificationCodeInvalid) }
+    }
+
+    async fn prove(
+        &self,
+        challenge_id: &str,
+        code: &str,
+        client_ip: Option<&str>,
+        spend: bool,
+    ) -> Result<VerifiedDestination, AuthError> {
         if challenge_id.trim().is_empty() || code.trim().is_empty() {
             return Err(AuthError::VerificationCodeInvalid);
         }
-        match self.store.consume(challenge_id.trim(), &code_hash(challenge_id.trim(), code)).await? {
+        let hash = code_hash(challenge_id.trim(), code);
+        let outcome = if spend {
+            self.store.consume(challenge_id.trim(), &hash).await?
+        } else {
+            self.store.check(challenge_id.trim(), &hash).await?
+        };
+        match outcome {
             ConsumeOutcome::Verified { destination, destination_key } => {
                 if self.locked(&destination_key, client_ip).await?.is_some() {
                     tracing::warn!("a right code for a locked address was refused");

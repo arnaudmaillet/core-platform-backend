@@ -103,7 +103,9 @@ answer is `existing_account{method}` (APPLE / GOOGLE / PASSWORD) instead — onl
 verified token is ever looked up, and Apple private-relay addresses never match. The profile comes
 next (`profile.CreateProfile`, then `Refresh` so `pids` carry it). `Login` accepts the same
 id_token (`IdTokenGrant`) for returning users; an identity with no account gets `AUT-6004`
-(`NOT_FOUND`) and the app goes on with `SignUp`. Both accept the device's **guest refresh token**:
+(`NOT_FOUND`) and the app goes on with `SignUp` **with the same proof**: a `Login` that finds no
+account neither spends the code (checked, not consumed; a wrong one still counts) nor redeems the
+nonce — only a sign-in that succeeds does (#807). Both accept the device's **guest refresh token**:
 that guest session ends (`guest_upgraded`) and `guest_principals` records the account it became.
 
 ### Passwordless email (guest mode)

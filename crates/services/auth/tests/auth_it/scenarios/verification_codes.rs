@@ -48,6 +48,9 @@ async fn codes_prove_an_address_once_and_sends_are_budgeted() {
     // Right code once; then spent.
     let started = codes.start(start(&address)).await.unwrap();
     let code = outbox.last();
+    // #807: a check proves the code without spending it; one spend wins.
+    assert_eq!(codes.check(&started.challenge_id, &code, None).await.unwrap().destination, address);
+    assert_eq!(codes.check(&started.challenge_id, &code, None).await.unwrap().destination, address);
     let proven = codes.verify(&started.challenge_id, &code, None).await.unwrap();
     assert_eq!(proven.destination, address);
     assert!(matches!(codes.verify(&started.challenge_id, &code, None).await, Err(AuthError::VerificationCodeInvalid)));

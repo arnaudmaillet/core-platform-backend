@@ -106,14 +106,14 @@ local n = tonumber(redis.call('GET', KEYS[1]) or '0')
 return {n, redis.call('TTL', KEYS[1])}
 "#;
 
-/// KEYS = challenge · ARGV = code hash. Returns {'ok', channel, destination,
-/// destination key} on a match (and deletes), {'miss', destination key, channel, destination, locale} on a
+/// KEYS = challenge · ARGV = code hash, `spend` | `keep`. Returns {'ok',
+/// channel, destination, destination key} on a match (deleted unless `keep`), {'miss', destination key, channel, destination, locale} on a
 /// wrong code, {} for no such challenge.
 const CONSUME: &str = r#"
 local stored = redis.call('HMGET', KEYS[1], 'code_hash', 'channel', 'destination', 'destination_key', 'locale')
 if not stored[1] then return {} end
 if stored[1] == ARGV[1] then
-    redis.call('DEL', KEYS[1])
+    if ARGV[2] ~= 'keep' then redis.call('DEL', KEYS[1]) end
     return {'ok', stored[2], stored[3], stored[4]}
 end
 local left = redis.call('HINCRBY', KEYS[1], 'attempts_left', -1)
@@ -137,6 +137,32 @@ pub struct RedisVerificationStore {
 impl RedisVerificationStore {
     pub fn new(client: RedisClient) -> Self {
         Self { client }
+    }
+
+    async fn match_code(&self, challenge_id: &str, code_hash: &str, mode: &str) -> Result<ConsumeOutcome, AuthError> {
+        let found: Vec<String> = self
+            .client
+            .eval(CONSUME, vec![challenge_key(challenge_id)], vec![code_hash.to_owned(), mode.to_owned()])
+            .await
+            .map_err(cache_err)?;
+        Ok(match found.as_slice() {
+            [tag, channel, destination, key] if tag == "ok" => match channel_from(channel) {
+                Some(channel) => ConsumeOutcome::Verified {
+                    destination: VerifiedDestination { channel, destination: destination.clone() },
+                    destination_key: key.clone(),
+                },
+                None => ConsumeOutcome::Unknown,
+            },
+            [tag, key, channel, destination, locale] if tag == "miss" => match channel_from(channel) {
+                Some(channel) => ConsumeOutcome::Miss {
+                    destination_key: key.clone(),
+                    destination: VerifiedDestination { channel, destination: destination.clone() },
+                    locale: Some(locale.clone()).filter(|l| !l.is_empty()),
+                },
+                None => ConsumeOutcome::Unknown,
+            },
+            _ => ConsumeOutcome::Unknown,
+        })
     }
 }
 
@@ -189,30 +215,19 @@ impl VerificationStore for RedisVerificationStore {
     }
 
     async fn consume(&self, challenge_id: &str, code_hash: &str) -> Result<ConsumeOutcome, AuthError> {
-        let found: Vec<String> = self
-            .client
-            .eval(CONSUME, vec![challenge_key(challenge_id)], vec![code_hash.to_owned()])
-            .await
-            .map_err(cache_err)?;
-        Ok(match found.as_slice() {
-            [tag, channel, destination, key] if tag == "ok" => match channel_from(channel) {
-                Some(channel) => ConsumeOutcome::Verified {
-                    destination: VerifiedDestination { channel, destination: destination.clone() },
-                    destination_key: key.clone(),
-                },
-                None => ConsumeOutcome::Unknown,
-            },
-            [tag, key, channel, destination, locale] if tag == "miss" => match channel_from(channel) {
-                Some(channel) => ConsumeOutcome::Miss {
-                    destination_key: key.clone(),
-                    destination: VerifiedDestination { channel, destination: destination.clone() },
-                    locale: Some(locale.clone()).filter(|l| !l.is_empty()),
-                },
-                None => ConsumeOutcome::Unknown,
-            },
-            _ => ConsumeOutcome::Unknown,
-        })
+        self.match_code(challenge_id, code_hash, "spend").await
     }
+
+    async fn check(&self, challenge_id: &str, code_hash: &str) -> Result<ConsumeOutcome, AuthError> {
+        self.match_code(challenge_id, code_hash, "keep").await
+    }
+
+    async fn take(&self, challenge_id: &str) -> Result<bool, AuthError> {
+        use fred::interfaces::KeysInterface;
+        let removed: i64 = self.client.del(challenge_key(challenge_id)).await.map_err(cache_err)?;
+        Ok(removed == 1)
+    }
+
 
     async fn record_failure(&self, destination_key: &str, window: Duration) -> Result<u32, AuthError> {
         let n: i64 = self
