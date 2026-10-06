@@ -77,6 +77,7 @@ impl Service for SocialGraphService {
         authenticated("/social_graph.v1.SocialGraphService/Block"),
         authenticated("/social_graph.v1.SocialGraphService/Unblock"),
         authenticated("/social_graph.v1.SocialGraphService/GetRelationStatus"),
+        authenticated("/social_graph.v1.SocialGraphService/SuggestProfiles"),
         public_read("/social_graph.v1.SocialGraphService/ListFollowers"),
         public_read("/social_graph.v1.SocialGraphService/ListFollowing"),
         authenticated("/social_graph.v1.SocialGraphService/ListBlocks"),

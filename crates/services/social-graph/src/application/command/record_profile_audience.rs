@@ -17,6 +17,8 @@ pub enum AudienceFact {
     Hidden(bool),
     /// Who may comment / mention / message it.
     Interaction(InteractionPolicy),
+    /// It may (`true`) or may not appear in others' suggestions (#661).
+    Suggestible(bool),
 }
 
 /// Records an audience fact in the projection the access check reads.
@@ -61,6 +63,7 @@ impl CommandHandler<RecordProfileAudienceCommand> for RecordProfileAudienceHandl
             AudienceFact::Private(private) => self.repo.set_profile_private(&id, private).await,
             AudienceFact::Hidden(hidden) => self.repo.set_profile_hidden(&id, hidden).await,
             AudienceFact::Interaction(policy) => self.repo.set_interaction_policy(&id, &policy).await,
+            AudienceFact::Suggestible(suggestible) => self.repo.set_profile_suggestible(&id, suggestible).await,
         }
     }
 }

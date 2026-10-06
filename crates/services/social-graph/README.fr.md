@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: dd35f4caedfade8273dcce75c25d16eb237e7653445962cbde85c58e9afdacaf
+  source_sha256: 2530f4a3faa5f00e2f2cad570af189c8db5cf1151dc58f812a399ece7eeb2a4a
   translated_at: 2026-10-05
   status: complete
 ---
@@ -149,6 +149,7 @@ service SocialGraphService {
   rpc ListRestricted(ListRestrictedRequest) returns (ListRestrictedResponse);   // propriétaire
   rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY : par cible, l'accès au contenu, plus `follows` / `mutual` (un profil lecteur suit la cible / ils se suivent mutuellement — l'audience de localisation d'un auteur, #657)
   rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);   // MESH-ONLY : l'acteur peut-il commenter / mentionner / écrire à la cible (ses réglages d'interaction profile, blocages) ; `held` quand la limite temporaire de la cible (#669) couvre l'acteur — un commentaire / message d'un non-abonné, ou d'un abonné de moins de 7 jours sous `recent_followers` ; en cas de refus, `refusal` dit pourquoi (`BLOCKED`, `NO_ONE`, ou `AUDIENCE` : l'audience abonnés / mutuels exclut l'acteur — chat fait alors de ce message une demande, #656)
+  rpc SuggestProfiles(SuggestProfilesRequest) returns (SuggestProfilesResponse);   // #661, edge (un des profils de l'appelant) : les amis d'amis classés par abonnements communs ; jamais soi-même, un profil suivi, bloqué dans un sens ou l'autre, privé, masqué ou retiré des suggestions (`profile_audience.suggestible`, depuis ProfileDiscoverySettingsChanged)
   rpc ListMutedProfiles(ListMutedProfilesRequest) returns (ListMutedProfilesResponse);   // MESH-ONLY : les mises en sourdine d'un lecteur pour une portée (timeline)
   rpc ListRestrictedAmong(ListRestrictedAmongRequest) returns (ListRestrictedAmongResponse);   // MESH-ONLY : quels commentateurs le propriétaire du post a restreints (comment)
 }

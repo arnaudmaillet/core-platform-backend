@@ -117,6 +117,13 @@ service SocialGraphService {
     // the edge token.
     rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);
 
+    // People the caller may know (#661): friends of friends, ranked by how
+    // many of the profiles the caller follows follow them. Never oneself, a
+    // followed profile, a block either way, a private or hidden profile, nor
+    // one that turned "appear in suggestions" off (a teen never turns it on).
+    // Edge: one of the caller's profiles.
+    rpc SuggestProfiles(SuggestProfilesRequest) returns (SuggestProfilesResponse);
+
     // The profiles a reader mutes for a scope. MESH-ONLY: timeline drops
     // their posts from the reader's feeds.
     rpc ListMutedProfiles(ListMutedProfilesRequest) returns (ListMutedProfilesResponse);

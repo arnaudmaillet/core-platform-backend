@@ -124,6 +124,17 @@ async fn discovery_settings_update_partially_stay_owner_only_and_are_announced()
     let other = Viewer::Account(harness::random_account_id());
     assert_eq!(h.get_by_handle_as(&handle, other).await.unwrap().discovery, None, "owner-only");
     assert!(h.publisher.published().iter().any(|t| t == "ProfileDiscoverySettingsChanged"));
+
+    // #661: a holder not known to be 18+ may turn suggestions off, never on.
+    let as_minor = |in_suggestions| SetDiscoverySettingsCommand {
+        profile_id: profile.id.clone(),
+        in_suggestions: Some(in_suggestions),
+        minor: true,
+        ..Default::default()
+    };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), as_minor(false))).await.expect("off is fine");
+    assert!(h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), as_minor(true))).await.is_err(), "on is refused");
+    assert!(!h.get_by_id(&profile.id).await.unwrap().discovery.unwrap().in_suggestions);
 }
 
 #[tokio::test]

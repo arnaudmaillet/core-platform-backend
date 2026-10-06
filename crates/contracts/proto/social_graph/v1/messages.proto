@@ -309,3 +309,21 @@ message ListRestrictedAmongRequest {
 message ListRestrictedAmongResponse {
     repeated string restricted_ids = 1;
 }
+
+// ── Suggestions (#661) ────────────────────────────────────────────────────────
+
+message SuggestProfilesRequest {
+    string profile_id = 1;
+    // At most 50; 0 means 20.
+    int32  limit      = 2;
+}
+
+message SuggestedProfile {
+    string profile_id   = 1;
+    // How many of the profiles the caller follows follow it.
+    uint32 mutual_count = 2;
+}
+
+message SuggestProfilesResponse {
+    repeated SuggestedProfile profiles = 1;
+}

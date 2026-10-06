@@ -9,6 +9,7 @@ pub mod list_gate;
 pub mod list_following;
 pub mod mutes;
 pub mod restrictions;
+pub mod suggest_profiles;
 
 pub use check_access::{CheckAccessHandler, CheckAccessQuery, TargetAnswer};
 pub use check_interaction::{CheckInteractionHandler, CheckInteractionQuery};
@@ -38,3 +39,4 @@ impl FollowListPage {
         Self { hidden: true, ..Self::default() }
     }
 }
+pub use suggest_profiles::{SuggestProfilesHandler, SuggestProfilesQuery, Suggestion, MAX_SUGGESTIONS};

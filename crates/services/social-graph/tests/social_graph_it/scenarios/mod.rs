@@ -10,3 +10,4 @@ mod interaction_check;
 mod list_privacy;
 mod mutes;
 mod restrictions;
+mod suggestions;

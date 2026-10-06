@@ -81,6 +81,13 @@ where
         self.list_muted_profiles(request).await
     }
 
+    async fn suggest_profiles(
+        &self,
+        request: Request<proto::SuggestProfilesRequest>,
+    ) -> Result<Response<proto::SuggestProfilesResponse>, Status> {
+        self.suggest_profiles(request).await
+    }
+
     async fn check_interaction(
         &self,
         request: Request<proto::CheckInteractionRequest>,

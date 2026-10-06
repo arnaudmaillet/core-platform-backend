@@ -36,6 +36,9 @@ struct ProfileV1Event {
     limit_audience: Option<String>,
     #[serde(default)]
     limit_until_ms: Option<i64>,
+    /// ProfileDiscoverySettingsChanged (#661).
+    #[serde(default)]
+    in_suggestions: Option<bool>,
 }
 
 /// What an event means for the audience projection, if anything.
@@ -69,6 +72,10 @@ fn fact(event: &ProfileV1Event) -> Result<Option<AudienceFact>, String> {
                 },
             })
         }
+        "ProfileDiscoverySettingsChanged" => match event.in_suggestions {
+            Some(suggestible) => AudienceFact::Suggestible(suggestible),
+            None => return Err("ProfileDiscoverySettingsChanged without in_suggestions".to_owned()),
+        },
         _ => return Ok(None),
     }))
 }
@@ -145,6 +152,24 @@ mod tests {
         assert_eq!(fact(&wire(restored)), Ok(Some(AudienceFact::Hidden(false))));
         let event = wire(ProfileEventWire::ProfileRestored { profile_id: "p-9".into(), occurred_at_ms: 1 });
         assert_eq!(event.profile_id, "p-9");
+    }
+
+    /// #661: "appear in suggestions", from profile's own wire.
+    #[test]
+    fn the_suggestions_flag_is_read_from_profiles_own_wire() {
+        let discovery = |in_suggestions| ProfileEventWire::ProfileDiscoverySettingsChanged {
+            profile_id: "p-1".into(),
+            activity_status: true,
+            read_receipts: true,
+            by_phone: true,
+            by_email: true,
+            by_handle_search: true,
+            by_qr: true,
+            in_suggestions,
+            occurred_at_ms: 1,
+        };
+        assert_eq!(fact(&wire(discovery(false))), Ok(Some(AudienceFact::Suggestible(false))));
+        assert_eq!(fact(&wire(discovery(true))), Ok(Some(AudienceFact::Suggestible(true))));
     }
 
     #[test]
