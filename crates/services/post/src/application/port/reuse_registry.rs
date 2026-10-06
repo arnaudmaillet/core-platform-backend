@@ -3,16 +3,21 @@ use async_trait::async_trait;
 use crate::domain::value_object::{AudioId, PostId, ProfileId};
 use crate::error::PostError;
 
-/// An author's remix / original-sound reuse defaults (#669).
+/// An author's interaction defaults that bear on their posts: remix /
+/// original-sound reuse (#669), downloads and like counts (#809).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReuseDefaults {
     pub allow_remix:       bool,
     pub allow_sound_reuse: bool,
+    /// Others may save the author's posts (#809).
+    pub allow_downloads:   bool,
+    /// Others see the author's posts' like counts (#809).
+    pub show_like_counts:  bool,
 }
 
 impl Default for ReuseDefaults {
     fn default() -> Self {
-        Self { allow_remix: true, allow_sound_reuse: true }
+        Self { allow_remix: true, allow_sound_reuse: true, allow_downloads: true, show_like_counts: true }
     }
 }
 

@@ -21,7 +21,7 @@ async fn reusing_a_sound_follows_its_post_then_its_author() {
 
     // The creator turns reuse off by default: the other sound closes too.
     let creator_pid = ProfileId::try_from(creator.as_str()).unwrap();
-    h.reuse.set_defaults(&creator_pid, ReuseDefaults { allow_remix: true, allow_sound_reuse: false }).await.unwrap();
+    h.reuse.set_defaults(&creator_pid, ReuseDefaults { allow_remix: true, allow_sound_reuse: false, allow_downloads: true, show_like_counts: true }).await.unwrap();
     assert!(h.try_create_with_sound(&harness::random_id(), &other, &open_sound, false, None).await.is_err());
 
     // Calling someone's sound "original" does not get around it.

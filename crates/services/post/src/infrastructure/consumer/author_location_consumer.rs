@@ -36,6 +36,11 @@ struct ProfileV1Event {
     allow_remix: Option<bool>,
     #[serde(default)]
     allow_sound_reuse: Option<bool>,
+    /// Downloads and like counts (#809); absent on older events ⇒ allowed.
+    #[serde(default)]
+    allow_downloads: Option<bool>,
+    #[serde(default)]
+    show_like_counts: Option<bool>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -64,6 +69,8 @@ fn outcome(event: &ProfileV1Event) -> Outcome {
         return Outcome::Reuse(profile_id, ReuseDefaults {
             allow_remix:       event.allow_remix.unwrap_or(true),
             allow_sound_reuse: event.allow_sound_reuse.unwrap_or(true),
+            allow_downloads:   event.allow_downloads.unwrap_or(true),
+            show_like_counts:  event.show_like_counts.unwrap_or(true),
         });
     }
     if tab {
@@ -199,8 +206,8 @@ mod tests {
             comments: "everyone".into(),
             mentions: "everyone".into(),
             messages: "everyone".into(),
-            allow_downloads: true,
-            show_like_counts: true,
+            allow_downloads: false,
+            show_like_counts: false,
             allow_remix: true,
             allow_sound_reuse: false,
             limit_audience: None,
@@ -211,7 +218,7 @@ mod tests {
             outcome(&event),
             Outcome::Reuse(
                 ProfileId::try_from(id.as_str()).unwrap(),
-                ReuseDefaults { allow_remix: true, allow_sound_reuse: false },
+                ReuseDefaults { allow_remix: true, allow_sound_reuse: false, allow_downloads: false, show_like_counts: false },
             ),
         );
     }

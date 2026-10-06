@@ -68,6 +68,13 @@ where
         self.get_post(request).await
     }
 
+    async fn batch_get_like_visibility(
+        &self,
+        request: Request<proto::BatchGetLikeVisibilityRequest>,
+    ) -> Result<Response<proto::BatchGetLikeVisibilityResponse>, Status> {
+        self.batch_get_like_visibility(request).await
+    }
+
     async fn list_posts_by_profile(
         &self,
         request: Request<proto::ListPostsByProfileRequest>,
