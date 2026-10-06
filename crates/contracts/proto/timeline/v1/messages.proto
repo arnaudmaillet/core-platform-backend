@@ -90,6 +90,12 @@ message GetDiscoveryFeedRequest {
     string           page_token    = 6;
     // Server clamps to TIMELINE_MAX_PAGE_SIZE; <= 0 means 20.
     int32            limit         = 7;
+    // The reading profile (one of the caller's): its interest tags rank a
+    // FOR_YOU page. Empty = not personalised (a guest always is).
+    string           profile_id    = 8;
+    // The holder's non-personalised feed setting (#662, profile
+    // FeedSettings.non_personalized): set, interest tags are ignored.
+    bool             non_personalized = 9;
 }
 
 message GetDiscoveryFeedResponse {
@@ -104,4 +110,34 @@ message GetDiscoveryFeedResponse {
     string            region_applied        = 3;
     // The content level actually applied.
     ContentLevel      content_level_applied = 4;
+    // Whether the reader's interest tags ranked this page.
+    bool              personalized          = 5;
+}
+
+// ── Interest tags (#662) ────────────────────────────────────────────────────
+
+// One interest tag (a hashtag, lowercase, without its '#') and its weight
+// today.
+message Interest {
+    string tag    = 1;
+    double weight = 2;
+}
+
+message InterestsResponse {
+    // Heaviest first.
+    repeated Interest interests = 1;
+}
+
+message ListInterestsRequest {
+    string profile_id = 1;
+}
+
+message RemoveInterestRequest {
+    string profile_id = 1;
+    // As listed (a leading '#' is accepted).
+    string tag        = 2;
+}
+
+message ResetInterestsRequest {
+    string profile_id = 1;
 }

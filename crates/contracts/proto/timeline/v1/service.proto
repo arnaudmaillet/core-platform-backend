@@ -36,8 +36,10 @@ service TimelineService {
     // the last returned item.
     rpc GetAudioFeed (GetAudioFeedRequest) returns (GetAudioFeedResponse);
 
-    // Returns a page of the discovery feed: a non-personalised pool of recent
-    // public posts that needs no follow graph (For You for guests and members).
+    // Returns a page of the discovery feed: a pool of recent public posts that
+    // needs no follow graph (For You for guests and members). A FOR_YOU page
+    // read for one of the caller's profiles (profile_id) is ranked by that
+    // profile's interest tags, unless non_personalized is set (#662).
     //
     // The pool holds posts published in the last TIMELINE_DISCOVERY_WINDOW_SECS
     // (Redis), fed by post.v1.events, counter.v1.popularity and
@@ -46,4 +48,14 @@ service TimelineService {
     // audience is checked with social-graph CheckAccess; when that check is
     // unavailable the read fails (UNAVAILABLE), it never shows unchecked posts.
     rpc GetDiscoveryFeed (GetDiscoveryFeedRequest) returns (GetDiscoveryFeedResponse);
+
+    // Interest tags (#662): the hashtags of the posts a profile reacted to in
+    // the discovery window, weighted (a weight halves every 30 days without a
+    // new reaction). Owner only (edge: one of the caller's profiles).
+    rpc ListInterests (ListInterestsRequest) returns (InterestsResponse);
+    // Drops a tag and keeps it out: later reactions no longer teach it, and it
+    // stops ranking For You. Returns the remaining tags.
+    rpc RemoveInterest (RemoveInterestRequest) returns (InterestsResponse);
+    // Forgets every tag (removed ones included): For You starts over.
+    rpc ResetInterests (ResetInterestsRequest) returns (InterestsResponse);
 }

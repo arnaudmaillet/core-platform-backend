@@ -315,7 +315,7 @@ where
         };
         let cmd = SetFeedSettingsCommand {
             profile_id: req.profile_id.clone(),
-            settings:   FeedSettings { sensitive_content },
+            settings:   FeedSettings { sensitive_content, non_personalized: settings.non_personalized },
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -802,6 +802,7 @@ fn profile_view_to_proto(v: ProfileView) -> proto::ProfileView {
                 crate::domain::value_object::SensitiveContent::Less => proto::SensitiveContent::Less,
                 crate::domain::value_object::SensitiveContent::Standard => proto::SensitiveContent::Standard,
             }) as i32,
+            non_personalized: f.non_personalized,
         }),
         tab_settings: v.tab_settings.map(|t| proto::TabSettings {
             post_window: (match t.post_window {

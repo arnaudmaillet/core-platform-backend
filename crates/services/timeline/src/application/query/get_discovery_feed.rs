@@ -1,13 +1,17 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use cqrs::{Envelope, Query, QueryHandler};
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::port::{muted_authors, visible_authors, DiscoveryPool, NearbyPosts, PoolEntry, SocialGraphClient};
+use crate::application::port::{
+    muted_authors, visible_authors, DiscoveryPool, InterestStore, NearbyPosts, PoolEntry, SocialGraphClient,
+};
 use crate::domain::aggregate::FeedEntry;
+use crate::domain::value_object::interest::{affinity, BOOST_INTERESTS};
 use crate::domain::value_object::{
-    hot_score, ContentLevel, DiscoveryCursor, DiscoveryRanking, DiscoveryStream, PostId,
+    hot_score, ContentLevel, DiscoveryCursor, DiscoveryRanking, DiscoveryStream, PostId, ProfileId,
     StreamPosition, Viewer, TRENDING_PER_FRESH,
 };
 use crate::error::TimelineError;
@@ -33,12 +37,18 @@ pub struct GetDiscoveryFeedQuery {
     pub lng:           Option<f64>,
     pub limit:         i32,
     pub page_token:    Option<String>,
+    /// The reading profile whose interest tags rank a FOR_YOU page (#662);
+    /// `None` for a guest or a non-personalised feed. Bound to the caller at
+    /// the edge.
+    pub personalize_for: Option<ProfileId>,
 }
 
 #[derive(Debug)]
 pub struct DiscoveryPage {
     pub items:           Vec<FeedEntry>,
     pub next_page_token: Option<String>,
+    /// Whether the reader's interest tags ranked the page.
+    pub personalized:    bool,
 }
 
 impl Query for GetDiscoveryFeedQuery {
@@ -69,6 +79,7 @@ pub struct GetDiscoveryFeedHandler<SG> {
     /// At most this many NEARBY candidates are ranked per request.
     pub nearby_candidates: usize,
     pub hot_gravity_secs:  f64,
+    pub interests:         Arc<dyn InterestStore>,
 }
 
 /// What a page shows: the reader's level, and the authors it may see (`None` =
@@ -80,6 +91,8 @@ struct Filter<'a, SG: ?Sized> {
     level:        ContentLevel,
     visible:      HashMap<crate::domain::value_object::AuthorId, bool>,
     muted:        HashSet<crate::domain::value_object::AuthorId>,
+    /// The hashtags of every post read, for the interest ranking.
+    tags:         HashMap<PostId, Vec<String>>,
 }
 
 impl<SG: SocialGraphClient + ?Sized> Filter<'_, SG> {
@@ -91,6 +104,9 @@ impl<SG: SocialGraphClient + ?Sized> Filter<'_, SG> {
     ) -> Result<Vec<(StreamPosition, Option<FeedEntry>)>, TimelineError> {
         let ids: Vec<PostId> = entries.iter().map(|e| e.post_id).collect();
         let meta = pool.meta(&ids).await?;
+        for m in meta.values().filter(|m| !m.tags.is_empty()) {
+            self.tags.insert(m.post_id, m.tags.clone());
+        }
         let muted = &self.muted;
         let shown = |e: &PoolEntry| {
             meta.get(&e.post_id)
@@ -236,7 +252,7 @@ impl<SG: SocialGraphClient> GetDiscoveryFeedHandler<SG> {
                 .collect();
             Some(DiscoveryCursor { positions }.encode(ranking))
         };
-        Ok(DiscoveryPage { items, next_page_token })
+        Ok(DiscoveryPage { items, next_page_token, personalized: false })
     }
 
     /// NEARBY: geo-discovery's posts around the point, ranked by hot score from
@@ -290,8 +306,36 @@ impl<SG: SocialGraphClient> GetDiscoveryFeedHandler<SG> {
         let next_page_token = last.filter(|_| more).map(|position| {
             DiscoveryCursor { positions: vec![(DiscoveryStream::Nearby, position)] }.encode(DiscoveryRanking::Nearby)
         });
-        Ok(DiscoveryPage { items, next_page_token })
+        Ok(DiscoveryPage { items, next_page_token, personalized: false })
     }
+
+    /// The reader's heaviest interest tags, for a FOR_YOU page only. Fails
+    /// open: an unreachable store serves the page unranked.
+    async fn interests_for(&self, query: &GetDiscoveryFeedQuery) -> HashMap<String, f64> {
+        let (Some(profile), DiscoveryRanking::ForYou) = (&query.personalize_for, query.ranking) else {
+            return HashMap::new();
+        };
+        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or_default();
+        match self.interests.top(profile, now_ms, BOOST_INTERESTS).await {
+            Ok(top) => top.into_iter().map(|i| (i.tag, i.weight)).collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, "interest tags unavailable; For You page served unranked");
+                HashMap::new()
+            }
+        }
+    }
+}
+
+/// Ranks a page by its posts' affinity with the interests, heaviest first; the
+/// streams' order holds between equals (the sort is stable). Within the page
+/// only, so the cursor (per stream) is untouched.
+fn rank_by_interest(items: &mut Vec<FeedEntry>, tags: &HashMap<PostId, Vec<String>>, interests: &HashMap<String, f64>) {
+    let mut scored: Vec<(f64, FeedEntry)> = items
+        .drain(..)
+        .map(|e| (tags.get(&e.post_id).map_or(0.0, |t| affinity(t, interests)), e))
+        .collect();
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+    items.extend(scored.into_iter().map(|(_, e)| e));
 }
 
 impl<SG: SocialGraphClient> QueryHandler<GetDiscoveryFeedQuery> for GetDiscoveryFeedHandler<SG> {
@@ -308,17 +352,24 @@ impl<SG: SocialGraphClient> QueryHandler<GetDiscoveryFeedQuery> for GetDiscovery
             Viewer::Profiles(own) => muted_authors(self.social_graph.as_ref(), own).await,
             Viewer::Internal => HashSet::new(),
         };
+        let interests = self.interests_for(query).await;
         let mut filter = Filter {
             social_graph: self.social_graph.as_ref(),
             viewer:       &query.viewer,
             level:        query.content_level,
             visible:      HashMap::new(),
             muted,
+            tags:         HashMap::new(),
         };
-        match query.ranking {
-            DiscoveryRanking::Nearby => self.nearby_page(query, &cursor, &mut filter, size).await,
-            ranking => self.pool_page(ranking, &cursor, &mut filter, size).await,
+        let mut page = match query.ranking {
+            DiscoveryRanking::Nearby => self.nearby_page(query, &cursor, &mut filter, size).await?,
+            ranking => self.pool_page(ranking, &cursor, &mut filter, size).await?,
+        };
+        if !interests.is_empty() {
+            rank_by_interest(&mut page.items, &filter.tags, &interests);
+            page.personalized = true;
         }
+        Ok(page)
     }
 }
 
@@ -330,7 +381,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::domain::value_object::{AuthorId, ContentAccess, DiscoveryMeta, ProfileId, Restriction};
+    use crate::domain::value_object::{AuthorId, ContentAccess, DiscoveryMeta, Interest, ProfileId, Restriction};
 
     /// An in-memory pool: one ordered map per stream, plus the meta.
     #[derive(Default)]
@@ -355,14 +406,39 @@ mod tests {
                 popularity: score,
                 restriction,
                 deleted: false,
+                tags: Vec::new(),
             });
             post_id
         }
+
+        fn tag(&self, post_id: PostId, tags: &[&str]) {
+            self.meta.lock().unwrap().get_mut(&post_id).unwrap().tags = tags.iter().map(|t| (*t).to_owned()).collect();
+        }
+    }
+
+    /// Fixed interests for every profile; `down` fails every read.
+    #[derive(Default)]
+    struct Interests {
+        top:  Vec<Interest>,
+        down: bool,
+    }
+
+    #[async_trait]
+    impl InterestStore for Interests {
+        async fn reinforce(&self, _: &ProfileId, _: &PostId, _: &[String], _: i64) -> Result<(), TimelineError> { Ok(()) }
+        async fn top(&self, _: &ProfileId, _: i64, limit: usize) -> Result<Vec<Interest>, TimelineError> {
+            if self.down {
+                return Err(TimelineError::ScriptReturnInvalid { context: "down" });
+            }
+            Ok(self.top.iter().take(limit).cloned().collect())
+        }
+        async fn remove(&self, _: &ProfileId, _: &str) -> Result<(), TimelineError> { Ok(()) }
+        async fn reset(&self, _: &ProfileId) -> Result<(), TimelineError> { Ok(()) }
     }
 
     #[async_trait]
     impl DiscoveryPool for MemPool {
-        async fn record_published(&self, _: &PostId, _: &AuthorId, _: i64) -> Result<(), TimelineError> { Ok(()) }
+        async fn record_published(&self, _: &PostId, _: &AuthorId, _: i64, _: &[String]) -> Result<(), TimelineError> { Ok(()) }
         async fn record_popularity(&self, _: &PostId, _: f64) -> Result<(), TimelineError> { Ok(()) }
         async fn record_restriction(&self, _: &PostId, _: Restriction, _: i64) -> Result<(), TimelineError> { Ok(()) }
         async fn record_deleted(&self, _: &PostId) -> Result<(), TimelineError> { Ok(()) }
@@ -438,6 +514,7 @@ mod tests {
             max_page_size: 50,
             nearby_candidates: 300,
             hot_gravity_secs: 45_000.0,
+            interests: Arc::new(Interests::default()),
         }
     }
 
@@ -451,6 +528,7 @@ mod tests {
             lng: Some(2.35),
             limit,
             page_token,
+            personalize_for: None,
         })
     }
 
@@ -589,5 +667,47 @@ mod tests {
         let mut no_location = query(DiscoveryRanking::Nearby, 1, None);
         no_location.payload.lat = None;
         assert!(matches!(h.handle(no_location).await.unwrap_err(), TimelineError::LocationRequired));
+    }
+
+    #[tokio::test]
+    async fn for_you_ranks_a_page_by_the_readers_interest_tags() {
+        let pool = Arc::new(MemPool::default());
+        let a = author();
+        let plain = pool.put(DiscoveryStream::Hot, a, 100.0, Restriction::None);
+        let go = pool.put(DiscoveryStream::Hot, a, 90.0, Restriction::None);
+        let rust = pool.put(DiscoveryStream::Hot, a, 80.0, Restriction::None);
+        let both = pool.put(DiscoveryStream::Hot, a, 70.0, Restriction::None);
+        pool.tag(go, &["go"]);
+        pool.tag(rust, &["rust"]);
+        pool.tag(both, &["rust", "go"]);
+        let ids = |page: &DiscoveryPage| page.items.iter().map(|e| e.post_id).collect::<Vec<_>>();
+        let reader = |ranking| {
+            let mut q = query(ranking, 10, None);
+            q.payload.personalize_for = Some(ProfileId::from_uuid(Uuid::now_v7()));
+            q
+        };
+        let interests = Interests {
+            top:  vec![Interest { tag: "rust".into(), weight: 2.0 }, Interest { tag: "go".into(), weight: 0.5 }],
+            down: false,
+        };
+        let mut h = handler(Arc::clone(&pool), Arc::new(Graph::default()), vec![]);
+        h.interests = Arc::new(interests);
+
+        let page = h.handle(reader(DiscoveryRanking::ForYou)).await.unwrap();
+        assert_eq!(ids(&page), vec![both, rust, go, plain]);
+        assert!(page.personalized);
+
+        // Not personalised: no reader, or another ranking.
+        let page = h.handle(query(DiscoveryRanking::ForYou, 10, None)).await.unwrap();
+        assert_eq!(ids(&page), vec![plain, go, rust, both]);
+        assert!(!page.personalized);
+        let page = h.handle(reader(DiscoveryRanking::Trending)).await.unwrap();
+        assert_eq!(ids(&page), vec![plain, go, rust, both]);
+
+        // A store outage serves the page unranked.
+        h.interests = Arc::new(Interests { top: vec![], down: true });
+        let page = h.handle(reader(DiscoveryRanking::ForYou)).await.unwrap();
+        assert_eq!(ids(&page), vec![plain, go, rust, both]);
+        assert!(!page.personalized);
     }
 }

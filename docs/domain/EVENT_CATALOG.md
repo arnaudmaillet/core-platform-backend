@@ -28,7 +28,7 @@ producer's `DOMAIN.md §8`.
 | Topic | Producer | Consumers |
 |---|---|---|
 | `account.v1.events` | `account` | `audit`, `auth`, `profile` |
-| `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `comment`, `chat` |
+| `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `timeline`, `comment`, `chat` |
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |
 | `post.updated` | `post` | — *(orphan — see below)* |
@@ -36,7 +36,7 @@ producer's `DOMAIN.md §8`.
 | `post.v1.events` | `post` | `timeline`, `search`, `realtime` |
 | `comment.created` | `comment` | `notification`, `engagement` |
 | `comment.deleted` | `comment` | `engagement` |
-| `engagement.reactions` | `engagement` | `counter`, `notification`, `engagement` |
+| `engagement.reactions` | `engagement` | `counter`, `notification`, `timeline`, `engagement` |
 | `social-graph.followed` | `social-graph` | `notification`, `timeline` |
 | `social-graph.unfollowed` | `social-graph` | `timeline` |
 | `social-graph.blocked` | `social-graph` | — *(orphan — see below)* |

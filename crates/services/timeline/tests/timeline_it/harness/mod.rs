@@ -20,7 +20,7 @@ use scylla_storage::ScyllaConfig;
 
 use timeline::app::{App, AppConfig, Backends};
 use timeline::application::command::ingest_post_published::IngestPostPublishedCommand;
-use timeline::application::port::{DiscoveryPool, FeedStore, FollowingStore, TierCache, VipRegistry};
+use timeline::application::port::{DiscoveryPool, FeedStore, FollowingStore, InterestStore, TierCache, VipRegistry};
 use timeline::application::query::get_following_feed::{FollowingFeedPage, GetFollowingFeedQuery};
 
 pub use timeline::domain::value_object::{AuthorId, ProfileId};
@@ -62,6 +62,7 @@ pub struct TestHarness {
     pub following_store: Arc<dyn FollowingStore>,
     pub social_graph:    Arc<FakeSocialGraph>,
     pub discovery_pool:  Arc<dyn DiscoveryPool>,
+    pub interests:       Arc<dyn InterestStore>,
     pub nearby:          Arc<FakeNearby>,
 }
 
@@ -120,6 +121,7 @@ impl TestHarness {
             following_store: app.following_store,
             social_graph,
             discovery_pool:  app.discovery_pool,
+            interests:       app.interests,
             nearby,
         }
     }

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: f9372de531cee2a886687ab1504fd5e44361a315938bd14f4449e818dcd41e80
-  translated_at: 2026-10-05
+  source_sha256: 08b3bb74252ac24bc0eeb84f38294caf92e8a41b2ad766f2a4d2058172a0a591
+  translated_at: 2026-10-06
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -141,9 +141,16 @@ message FeedItem { string post_id=1; string author_id=2; int64 published_at_ms=3
 rpc GetDiscoveryFeed(GetDiscoveryFeedRequest) returns (GetDiscoveryFeedResponse);   // edge public_read
 
 message GetDiscoveryFeedRequest  { DiscoveryRanking ranking=1; string region=2; optional double lat=3;
-                                   optional double lng=4; ContentLevel content_level=5; string page_token=6; int32 limit=7; }
+                                   optional double lng=4; ContentLevel content_level=5; string page_token=6; int32 limit=7;
+                                   string profile_id=8; bool non_personalized=9; }
 message GetDiscoveryFeedResponse { repeated FeedItem items=1; string next_page_token=2; string region_applied=3;
-                                   ContentLevel content_level_applied=4; }
+                                   ContentLevel content_level_applied=4; bool personalized=5; }
+
+// Interest tags (#662), edge authenticated + require_profile; each returns the tags left, heaviest first.
+rpc ListInterests(ListInterestsRequest)   returns (InterestsResponse);   // { string profile_id=1; }
+rpc RemoveInterest(RemoveInterestRequest) returns (InterestsResponse);   // { string profile_id=1; string tag=2; }
+rpc ResetInterests(ResetInterestsRequest) returns (InterestsResponse);   // { string profile_id=1; }
+message InterestsResponse { repeated Interest interests=1; }             // Interest { string tag=1; double weight=2; }
 ```
 
 > **Contrat de sérialisation :** le curseur est `base64url("{published_at_ms}:{post_id_hyphenated}")` —
@@ -153,12 +160,13 @@ message GetDiscoveryFeedResponse { repeated FeedItem items=1; string next_page_t
 
 ### Fil de découverte (`GetDiscoveryFeed`)
 
-Un fil non personnalisé qui n'a besoin d'aucun graphe de suivi : le For You des invités et des membres
-(#673, B3).
+Un fil qui n'a besoin d'aucun graphe de suivi : le For You des invités et des membres (#673, B3), classé
+pour un membre selon ses centres d'intérêt, sauf s'il l'a désactivé (#662).
 
 - **Pool** (Redis, `timeline:{disc}:recent|fresh|hot` + un hash `timeline:disc:post:<id>` par post) : les posts
   publiés depuis moins de `TIMELINE_DISCOVERY_WINDOW_SECS` (72 h), plafonnés à `TIMELINE_DISCOVERY_POOL_CAP`.
-  Alimenté par un seul consumer (`timeline-discovery`) sur `post.v1.events` (publié / supprimé),
+  Alimenté par un seul consumer (`timeline-discovery`) sur `post.v1.events` (publié avec les hashtags de
+  la légende / supprimé),
   `counter.v1.popularity` (popularité cumulée) et `moderation.v1.events` (restriction gardée par version,
   enregistrée même avant que la publication soit vue). Comportement de cache : si Redis le perd, il se
   remplit à nouveau en une fenêtre.
@@ -173,14 +181,27 @@ Un fil non personnalisé qui n'a besoin d'aucun graphe de suivi : le For You des
   soumis à une limite d'âge seulement en `CONTENT_LEVEL_STANDARD`. Un **invité a toujours `RESTRICTED`** ;
   les autres obtiennent ce qu'ils demandent (le client envoie le réglage de contenu sensible du profil,
   #662), `RESTRICTED` par défaut ; un **lecteur de 13 à 17 ans** (tranche `age` du jeton) aussi a toujours
-  `RESTRICTED`. Les fils de découverte n'impliquent aucun profilage (DSA art. 38 : FOR_YOU classe un pool
-  global par popularité et récence), et le fil des abonnements est chronologique. Le lecteur vient du jeton (`edge::viewer`) : les auteurs qu'il ne peut pas
+  `RESTRICTED`. Le lecteur vient du jeton (`edge::viewer`) : les auteurs qu'il ne peut pas
   voir (`CheckAccess` ≠ `VISIBLE`) sont exclus, et la lecture **échoue fermée** (`TML-8002`, UNAVAILABLE)
   quand social-graph ne peut pas répondre. Les appelants mesh ne sont pas filtrés par audience.
 - **Mises en sourdine (#659).** Les posts des auteurs qu'un des profils du lecteur a mis en sourdine (portée
   posts) sont exclus du fil de découverte, et ceux des auteurs mis en sourdine par le profil du fil sont
   exclus du **fil des abonnements** (un VIP en sourdine n'est même pas lu ; le curseur passe les posts
   écartés). Un appel `ListMutedProfiles` par requête, en échec ouvert.
+- **Centres d'intérêt (#662).** Le même consumer lit `engagement.reactions` : la *première* réaction d'un
+  profil à un post du pool (`upserted` sans `old_kind` ; un post retiré ou supprimé n'apprend rien) ajoute
+  du poids aux hashtags du post dans les centres d'intérêt du profil (Redis, ZSET
+  `timeline:int:{<profile>}`, plus `:seen` — un post compte une fois par 30 jours — et `:muted`, les tags
+  supprimés). Les poids décroissent avec une demi-vie de 30 jours (stockés gonflés par rapport à une époque
+  fixe, si bien qu'une écriture ne fait qu'incrémenter), les 100 plus lourds sont gardés, et un stockage
+  inactif expire après 180 jours. Une page **FOR_YOU** lue avec `profile_id` (lié aux profils du jeton) est
+  reclassée selon l'affinité de ses posts avec les 20 tags les plus lourds — dans la page, si bien que le
+  curseur n'est pas touché ; l'ordre des flux est conservé entre égaux — et l'indique (`personalized`). Un
+  stockage injoignable sert la page sans reclassement. `non_personalized` (`FeedSettings` du profil, DSA
+  art. 38) désactive ce classement ; un invité n'est jamais personnalisé ; les autres classements et le fil
+  des abonnements ne le sont jamais. `ListInterests` / `RemoveInterest` (le tag reste exclu : les réactions
+  suivantes ne l'apprennent plus) / `ResetInterests` (tout, tags supprimés compris) sont réservés au
+  propriétaire. `ProfileDeleted` sur `profile.v1.events` efface les trois clés du profil (RGPD art. 17).
 - **Pagination.** Le curseur porte une position par flux et est lié à son classement. Une page peut être
   courte (voire vide) avec un jeton non vide quand ses candidats ont été filtrés ; un post qui passe de
   frais à hot peut revenir sur une page suivante — les clients dédupliquent par `post_id`.
@@ -196,6 +217,7 @@ pub trait FollowingStore: Send + Sync { /* following set (SADD/SREM/SMEMBERS) */
 pub trait FeedRepository / AuthorPostRepository: Send + Sync { /* ScyllaDB cold layer */ }
 pub trait SocialGraphClient: Send + Sync { /* paginated gRPC to social-graph */ }
 pub trait DiscoveryPool: Send + Sync { /* discovery indices + per-post meta (Redis) */ }
+pub trait InterestStore: Send + Sync { /* a profile's interest tags: reinforce / top / remove / reset (Redis) */ }
 pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point */ }
 ```
 
@@ -227,7 +249,7 @@ pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point *
 | `post.deleted` | `timeline-post-deleted` | VIP ZREM or Scylla purge | DLQ `{topic}.dlq` |
 | `social-graph.followed` | `timeline-sg-followed` | backfill recent posts + update following set | DLQ `{topic}.dlq` |
 | `social-graph.unfollowed` | `timeline-sg-unfollowed` | prune posts + update following set | DLQ `{topic}.dlq` |
-| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction) | DLQ `{topic}.dlq` |
+| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` · `engagement.reactions` · `profile.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction) ; centres d'intérêt (première réaction, effacement sur `ProfileDeleted`) | DLQ `{topic}.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** tous les workers s'exécutent sous `run_consumer` — commit manuel
 > après succès, retries bornés avec backoff + jitter, DLQ en cas d'épuisement/poison. Toutes les écritures

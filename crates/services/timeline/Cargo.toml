@@ -71,3 +71,5 @@ chrono       = { workspace = true }
 post         = { workspace = true }
 moderation   = { workspace = true }
 counter      = { workspace = true }
+engagement   = { workspace = true }
+profile      = { workspace = true }

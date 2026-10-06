@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8cf532f49faf65609d5c855685dabe15819406f05caf993681dff10dd7880104
+  source_sha256: be6565c26bc47166721e96387f8627bd2f688781a9bbf79ee85d312ce026799e
   translated_at: 2026-10-06
   status: complete
 ---
@@ -144,7 +144,7 @@ service ProfileService {
   rpc ClearInteractionLimit(ClearInteractionLimitRequest) returns (CommandResponse);
   rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // qui peut commenter / mentionner / écrire, téléchargements, compteurs de likes, remix et réutilisation du son original (#669 ; absent d'une requête ⇒ inchangé) ; les ados démarrent abonnés uniquement, sans téléchargement / remix / réutilisation du son
   rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse); // mode fantôme + précis / niveau ville + audience (tout le monde / abonnés / mutuels ; UNSPECIFIED la garde) + on_new_posts (une préférence stockée ; absent la garde), réservé au propriétaire sur la vue ; les ados démarrent fantômes, mutuels, sans localisation sur les nouveaux posts, et sont plafonnés à mutuels (une audience plus large est refusée, PRF-9001) ; geo-discovery et post l'appliquent (#657)
-  rpc SetFeedSettings(SetFeedSettingsRequest) returns (CommandResponse); // #662 contenu sensible moins (par défaut) / standard, synchronisé entre appareils ; le client l'envoie comme content_level de timeline ; réservé au propriétaire sur la vue
+  rpc SetFeedSettings(SetFeedSettingsRequest) returns (CommandResponse); // #662 contenu sensible moins (par défaut) / standard + non_personalized (For You non classé par centres d'intérêt), synchronisés entre appareils ; le client les envoie comme content_level / non_personalized de timeline ; réservé au propriétaire sur la vue
   rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse); // #664 fenêtre de posts (tout / 6 mois / 1 mois / 3 jours ; post masque les posts plus anciens aux visiteurs) + visibilité des onglets j'aime / enregistrés / republications / lieux (stockée ; aucun onglet servi pour l'instant) ; partiel ; réservé au propriétaire sur la vue
   rpc SetCommentFilters(SetCommentFiltersRequest) returns (CommandResponse); // #660 mots masqués (≤ 200, normalisés) + filtre offensant (activé par défaut) ; réservé au propriétaire sur la vue ; comment les applique
   rpc SetDiscoverySettings(SetDiscoverySettingsRequest) returns (CommandResponse); // #661 statut d'activité, accusés de lecture, trouvable par téléphone / e-mail / recherche de handle / QR / suggestions (partiel ; réservé au propriétaire sur la vue) ; les ados démarrent introuvables par téléphone, e-mail, suggestions ; search applique by_handle_search ; `in_suggestions` ne peut être activé que si le jeton dit 18+ (PRF-9001 : un ado n'est jamais suggéré) ; social-graph le projette pour SuggestProfiles, account lit by_phone / by_email pour FindProfilesByContacts

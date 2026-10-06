@@ -5,8 +5,8 @@
 //!   atomically. Member `"{post_id}:{author_id}"`; score = `published_at_ms`
 //!   (recent, fresh) or the hot score.
 //! - `timeline:disc:post:<post_id>` — a HASH per post: `a` author, `t`
-//!   published_at_ms, `p` popularity, `r` restriction code, `v` moderation
-//!   version, `x` deleted. It expires with the window (a decision recorded
+//!   published_at_ms, `g` hashtags (space-separated), `p` popularity, `r`
+//!   restriction code, `v` moderation version, `x` deleted. It expires with the window (a decision recorded
 //!   before the publication — a tombstone — lives a full window).
 //!
 //! The pool is a cache-like read model: if Redis loses it, it refills from new
@@ -66,9 +66,9 @@ fn fred_err(e: fred::error::Error) -> TimelineError {
 
 /// Records a publication in the meta; returns `[p, r, x]` ('' when unset).
 ///
-/// KEYS[1] = meta · ARGV = author, published_at_ms, ttl_secs
+/// KEYS[1] = meta · ARGV = author, published_at_ms, ttl_secs, hashtags
 const META_PUBLISHED: &str = r#"
-redis.call('HSET', KEYS[1], 'a', ARGV[1], 't', ARGV[2])
+redis.call('HSET', KEYS[1], 'a', ARGV[1], 't', ARGV[2], 'g', ARGV[4])
 redis.call('EXPIRE', KEYS[1], ARGV[3])
 local r = redis.call('HMGET', KEYS[1], 'p', 'r', 'x')
 for i = 1, 3 do if not r[i] then r[i] = '' end end
@@ -245,6 +245,7 @@ fn parse_meta(post_id: PostId, fields: &[Option<String>]) -> DiscoveryMeta {
         popularity:      field(2).and_then(|p| p.parse().ok()).unwrap_or(0.0),
         restriction:     field(3).map_or(Restriction::None, |r| Restriction::from_code(r.parse().unwrap_or(u8::MAX))),
         deleted:         field(4).is_some(),
+        tags:            field(5).map(|g| g.split(' ').map(str::to_owned).collect()).unwrap_or_default(),
     }
 }
 
@@ -255,6 +256,7 @@ impl DiscoveryPool for RedisDiscoveryPool {
         post_id:         &PostId,
         author_id:       &AuthorId,
         published_at_ms: i64,
+        tags:            &[String],
     ) -> Result<(), TimelineError> {
         let Some(ttl) = self.remaining_secs(published_at_ms) else {
             return Ok(()); // already out of the window
@@ -265,7 +267,7 @@ impl DiscoveryPool for RedisDiscoveryPool {
             .eval(
                 META_PUBLISHED,
                 vec![meta_key(post_id)],
-                vec![author_id.to_string(), published_at_ms.to_string(), ttl.to_string()],
+                vec![author_id.to_string(), published_at_ms.to_string(), ttl.to_string(), tags.join(" ")],
             )
             .await
             .map_err(fred_err)?;
@@ -406,7 +408,7 @@ impl DiscoveryPool for RedisDiscoveryPool {
             let fields: Vec<Option<String>> = self
                 .client
                 .inner
-                .hmget(meta_key(post_id), vec!["a", "t", "p", "r", "x"])
+                .hmget(meta_key(post_id), vec!["a", "t", "p", "r", "x", "g"])
                 .await
                 .map_err(fred_err)?;
             Ok::<_, TimelineError>((*post_id, fields))
@@ -432,7 +434,9 @@ mod tests {
         let author = AuthorId::from_uuid(uuid::Uuid::now_v7());
         let full = parse_meta(post, &[
             Some(author.to_string()), Some("1700".into()), Some("4.5".into()), Some("3".into()), None,
+            Some("rust go".into()),
         ]);
+        assert_eq!(full.tags, vec!["rust", "go"]);
         assert_eq!(full.author_id, Some(author));
         assert_eq!(full.published_at_ms, Some(1700));
         assert_eq!(full.popularity, 4.5);
@@ -443,5 +447,6 @@ mod tests {
         assert_eq!(tombstone.author_id, None);
         assert_eq!(tombstone.restriction, Restriction::Removed);
         assert!(tombstone.deleted);
+        assert!(tombstone.tags.is_empty());
     }
 }

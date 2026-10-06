@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 3f35ca8f1052d03c06d3023d0c51440895792fdc7f5172270aff146e085ac9b4
-  translated_at: 2026-10-05
+  source_sha256: 62db1e7f6e534c6db05226292b4997a8146476ab0ee3759b39d4c6c0b564376a
+  translated_at: 2026-10-06
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`EVENT_CATALOG.md`](./EVENT_CATALOG.md) fait foi.
@@ -41,7 +41,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | Topic | Producer | Consumers |
 |---|---|---|
 | `account.v1.events` | `account` | `audit`, `auth`, `profile` |
-| `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `comment`, `chat` |
+| `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `timeline`, `comment`, `chat` |
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |
 | `post.updated` | `post` | — *(orphan — see below)* |
@@ -49,7 +49,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `post.v1.events` | `post` | `timeline`, `search`, `realtime` |
 | `comment.created` | `comment` | `notification`, `engagement` |
 | `comment.deleted` | `comment` | `engagement` |
-| `engagement.reactions` | `engagement` | `counter`, `notification`, `engagement` |
+| `engagement.reactions` | `engagement` | `counter`, `notification`, `timeline`, `engagement` |
 | `social-graph.followed` | `social-graph` | `notification`, `timeline` |
 | `social-graph.unfollowed` | `social-graph` | `timeline` |
 | `social-graph.blocked` | `social-graph` | — *(orphan — see below)* |

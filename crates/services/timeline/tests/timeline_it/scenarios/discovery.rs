@@ -33,6 +33,7 @@ async fn publish(h: &TestHarness, author: &harness::AuthorId, published_at_ms: i
         post_id:   post_id.clone(),
         author_id: author.as_uuid().to_string(),
         published_at_ms,
+        tags: Vec::new(),
     })
     .await;
     post_id
@@ -53,6 +54,7 @@ async fn page(
         lng: Some(2.35),
         limit: 50,
         page_token,
+        personalize_for: None,
     };
     h.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.expect("discovery page")
 }
@@ -92,7 +94,7 @@ async fn the_discovery_pool_ranks_filters_and_pages() {
     let early = Uuid::now_v7().to_string();
     signal(&h, DiscoverySignal::Restricted { post_id: early.clone(), restriction: Restriction::Removed, version: 1 }).await;
     signal(&h, DiscoverySignal::Published {
-        post_id: early.clone(), author_id: author.as_uuid().to_string(), published_at_ms: t + 7_000,
+        post_id: early.clone(), author_id: author.as_uuid().to_string(), published_at_ms: t + 7_000, tags: Vec::new(),
     })
     .await;
     let mine: HashSet<String> =
