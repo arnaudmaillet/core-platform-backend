@@ -39,6 +39,10 @@ impl ExportSources for PeerExportSources {
             files.push(ExportFile::json(format!("{dir}/posts.json"), &json!(self.peers.posts(&profile_id).await?)));
             files.push(ExportFile::json(format!("{dir}/comments.json"), &json!(self.peers.comments(&profile_id).await?)));
             files.push(ExportFile::json(format!("{dir}/reactions.json"), &json!(self.peers.reactions(&profile_id).await?)));
+            files.push(ExportFile::json(
+                format!("{dir}/recent_searches.json"),
+                &json!(self.peers.recent_searches(&profile_id).await?),
+            ));
             files.push(ExportFile::json(format!("{dir}/social.json"), &self.peers.social(&profile_id).await?));
             for conversation in self.peers.conversations(&profile_id).await? {
                 // A left conversation's roster is no longer the holder's to read.
@@ -109,6 +113,9 @@ mod tests {
         async fn reactions(&self, _: &str) -> Result<Vec<serde_json::Value>, AccountError> {
             Ok(vec![json!({ "kind": "HEART" })])
         }
+        async fn recent_searches(&self, _: &str) -> Result<Vec<serde_json::Value>, AccountError> {
+            Ok(vec![json!({ "query": "paris food" })])
+        }
         async fn social(&self, _: &str) -> Result<serde_json::Value, AccountError> {
             Ok(json!({ "following": [], "followers": [], "blocks": [] }))
         }
@@ -154,6 +161,7 @@ mod tests {
             .unwrap();
         assert_eq!(file(&files, "profiles/me/posts.json")[0]["caption"], "hello");
         assert_eq!(file(&files, "profiles/me/reactions.json")[0]["kind"], "HEART");
+        assert_eq!(file(&files, "profiles/me/recent_searches.json")[0]["query"], "paris food");
         assert!(file(&files, "profiles/me/social.json")["blocks"].is_array());
         assert_eq!(file(&files, "media.json")[0]["ttl_days"], 7, "links valid 7 days");
 

@@ -23,6 +23,7 @@ use engagement_api::engagement_service_client::EngagementServiceClient;
 use media_api::media_service_client::MediaServiceClient;
 use post_api::post_service_client::PostServiceClient;
 use profile_api::profile_service_client::ProfileServiceClient;
+use search_api::search_service_client::SearchServiceClient;
 use social_graph_api::social_graph_service_client::SocialGraphServiceClient;
 
 /// Items per page when walking a listing.
@@ -38,6 +39,7 @@ pub struct MeshEndpoints {
     pub social_graph: String,
     pub chat: String,
     pub media: String,
+    pub search: String,
 }
 
 impl MeshEndpoints {
@@ -53,6 +55,7 @@ impl MeshEndpoints {
             social_graph: var("ACCOUNT_SOCIAL_GRAPH_GRPC_ENDPOINT", "http://localhost:50053"),
             chat: var("ACCOUNT_CHAT_GRPC_ENDPOINT", "http://localhost:50051"),
             media: var("ACCOUNT_MEDIA_GRPC_ENDPOINT", "http://localhost:50063"),
+            search: var("ACCOUNT_SEARCH_GRPC_ENDPOINT", "http://localhost:50062"),
         }
     }
 }
@@ -100,6 +103,7 @@ pub struct MeshExportPeers {
     social: SocialGraphServiceClient<Channel>,
     chat: ChatServiceClient<Channel>,
     media: MediaServiceClient<Channel>,
+    search: SearchServiceClient<Channel>,
     profile_d: Descriptors,
     post_d: Descriptors,
     comment_d: Descriptors,
@@ -107,6 +111,7 @@ pub struct MeshExportPeers {
     social_d: Descriptors,
     chat_d: Descriptors,
     media_d: Descriptors,
+    search_d: Descriptors,
 }
 
 impl MeshExportPeers {
@@ -128,6 +133,7 @@ impl MeshExportPeers {
             social: SocialGraphServiceClient::new(channel(&endpoints.social_graph)?),
             chat: ChatServiceClient::new(channel(&endpoints.chat)?),
             media: MediaServiceClient::new(channel(&endpoints.media)?),
+            search: SearchServiceClient::new(channel(&endpoints.search)?),
             profile_d: Descriptors::of(profile_api::FILE_DESCRIPTOR_SET)?,
             post_d: Descriptors::of(post_api::FILE_DESCRIPTOR_SET)?,
             comment_d: Descriptors::of(comment_api::FILE_DESCRIPTOR_SET)?,
@@ -135,6 +141,7 @@ impl MeshExportPeers {
             social_d: Descriptors::of(social_graph_api::FILE_DESCRIPTOR_SET)?,
             chat_d: Descriptors::of(chat_api::FILE_DESCRIPTOR_SET)?,
             media_d: Descriptors::of(media_api::FILE_DESCRIPTOR_SET)?,
+            search_d: Descriptors::of(search_api::FILE_DESCRIPTOR_SET)?,
         })
     }
 }
@@ -254,6 +261,19 @@ impl ExportPeers for MeshExportPeers {
                 None => return Ok(reactions),
             }
         }
+    }
+
+    /// search's `ListRecentSearches` over the mesh (#816): `require_profile`
+    /// accepts a mesh caller, so no separate RPC is needed.
+    async fn recent_searches(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError> {
+        let response = self
+            .search
+            .clone()
+            .list_recent_searches(search_api::ListRecentSearchesRequest { profile_id: profile_id.to_owned() })
+            .await
+            .map_err(rpc("search"))?
+            .into_inner();
+        Ok(response.searches.iter().map(|s| self.search_d.json("search.v1.RecentSearch", s)).collect())
     }
 
     async fn social(&self, profile_id: &str) -> Result<serde_json::Value, AccountError> {

@@ -117,6 +117,7 @@ fn readme(now: DateTime<Utc>) -> String {
            posts.json        what you posted\n\
            comments.json     what you commented\n\
            reactions.json    the posts you reacted to\n\
+           recent_searches.json  what you searched for lately\n\
            social.json       who you follow, who follows you, who you blocked\n\
            conversations/    your conversations (one-to-one in full; in groups and\n\
                              channels your own messages, the others' as placeholders)\n\

@@ -23,6 +23,7 @@ profile-api      = { workspace = true }
 post-api         = { workspace = true }
 comment-api      = { workspace = true }
 engagement-api   = { workspace = true }
+search-api       = { workspace = true }   # ListRecentSearches for the export (#816)
 social-graph-api = { workspace = true }
 chat-api         = { workspace = true }
 media-api        = { workspace = true }
