@@ -62,9 +62,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: cargo fetch (retried)
-        run: for i in 1 2 3; do cargo fetch && exit 0; echo "::warning::cargo fetch failed (attempt $i/3)"; sleep $((i * 15)); done; exit 1
+        run: for i in 1 2 3; do cargo fetch --locked && exit 0; echo "::warning::cargo fetch failed (attempt $i/3)"; sleep $((i * 15)); done; exit 1
       - name: cargo test --workspace
-        run: cargo test --workspace --quiet
+        run: cargo test --workspace --locked --quiet
 
   clippy:
     runs-on: ubuntu-latest
@@ -78,12 +78,12 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: cargo fetch (retried)
-        run: for i in 1 2 3; do cargo fetch && exit 0; echo "::warning::cargo fetch failed (attempt $i/3)"; sleep $((i * 15)); done; exit 1
+        run: for i in 1 2 3; do cargo fetch --locked && exit 0; echo "::warning::cargo fetch failed (attempt $i/3)"; sleep $((i * 15)); done; exit 1
       # Bare -D warnings: the tree was clippy-cleaned 2026-07-05 (53 sites —
       # auto-fixes, real refactors, and documented targeted #[allow]s for the
       # structural lints). Keep it clean; add targeted allows in code, not here.
       - name: cargo clippy --workspace --all-targets
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   # ── Live-backend integration suites ──────────────────────────────────────────
   # Every feature-gated `integration-<name>` suite, against real containers
@@ -134,7 +134,7 @@ jobs:
           # restore) — the compiled dep graph is common to every suite.
           shared-key: integration
       - name: cargo fetch (retried)
-        run: for i in 1 2 3; do cargo fetch && exit 0; echo "::warning::cargo fetch failed (attempt $i/3)"; sleep $((i * 15)); done; exit 1
+        run: for i in 1 2 3; do cargo fetch --locked && exit 0; echo "::warning::cargo fetch failed (attempt $i/3)"; sleep $((i * 15)); done; exit 1
       # The postgres storage suite predates test-support's containers: it
       # expects an externally supplied DATABASE_URL (the #545 gating). Give it
       # one; every other suite boots its own backends.
@@ -149,4 +149,4 @@ jobs:
       # (`containers::ensure_image`): the list is whatever the suite boots, so
       # there is no second image list to keep in sync here.
       - name: cargo test -p ${{ matrix.suite.pkg }} --features ${{ matrix.suite.feature }}
-        run: cargo test -p ${{ matrix.suite.pkg }} --features ${{ matrix.suite.feature }}
+        run: cargo test -p ${{ matrix.suite.pkg }} --features ${{ matrix.suite.feature }} --locked
