@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, SubsecRound, Utc};
 use cqrs::Envelope;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -206,7 +206,8 @@ impl PasskeyHandler {
             aaguid:          uuid::Uuid::from_bytes(made.aaguid),
             backup_eligible: made.backup_eligible,
             backed_up:       made.backed_up,
-            created_at:      now,
+            // Postgres keeps microseconds: the response and every later read agree.
+            created_at:      now.trunc_subsecs(6),
             last_used_at:    None,
         };
         self.passkeys.add(&account_id, &stored, MAX_PASSKEYS).await?;
