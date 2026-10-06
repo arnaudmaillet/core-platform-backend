@@ -3,12 +3,13 @@ use std::sync::Arc;
 use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::port::{ProfileCache, ProfileRepository};
+use crate::application::port::{EventPublisher, ProfileCache, ProfileRepository};
 use crate::domain::value_object::{FeedSettings, ProfileId};
 use crate::error::ProfileError;
 
-/// The owner sets their feed controls (#662). No event: only the owner's
-/// clients read them (from the profile view).
+/// The owner sets their feed controls (#662). Announced: timeline enforces
+/// `non_personalized` server-side. A teen may turn personalisation on (it is
+/// off by default for them).
 #[derive(Debug, Clone)]
 pub struct SetFeedSettingsCommand {
     pub profile_id: String,
@@ -27,13 +28,18 @@ impl Validate for SetFeedSettingsCommand {
 }
 
 pub struct SetFeedSettingsHandler {
-    repo:  Arc<dyn ProfileRepository>,
-    cache: Arc<dyn ProfileCache>,
+    repo:      Arc<dyn ProfileRepository>,
+    cache:     Arc<dyn ProfileCache>,
+    publisher: Arc<dyn EventPublisher>,
 }
 
 impl SetFeedSettingsHandler {
-    pub fn new(repo: Arc<dyn ProfileRepository>, cache: Arc<dyn ProfileCache>) -> Self {
-        Self { repo, cache }
+    pub fn new(
+        repo: Arc<dyn ProfileRepository>,
+        cache: Arc<dyn ProfileCache>,
+        publisher: Arc<dyn EventPublisher>,
+    ) -> Self {
+        Self { repo, cache, publisher }
     }
 }
 
@@ -48,10 +54,13 @@ impl CommandHandler<SetFeedSettingsCommand> for SetFeedSettingsHandler {
             .find_by_id(&id)
             .await?
             .ok_or_else(|| ProfileError::ProfileNotFound { id: cmd.profile_id.clone() })?;
-        if !profile.set_feed_settings(cmd.settings)? {
+        if !profile.set_feed_settings(cmd.settings, envelope.correlation_id)? {
             return Ok(());
         }
         self.repo.save(&profile).await?;
+        for event in profile.drain_events() {
+            self.publisher.publish(&event).await?;
+        }
         let _ = self.cache.invalidate_by_id(&id).await;
         let _ = self.cache.invalidate_account_profiles(&profile.account_id()).await;
         Ok(())

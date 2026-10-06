@@ -134,3 +134,45 @@ async fn interest_tags_rank_for_you_and_stay_under_the_holders_control() {
     react(&h, &reader, &other).await;
     assert_eq!(tags(&h, &reader).await.len(), 2);
 }
+
+#[tokio::test]
+async fn opting_out_erases_the_interests_and_stops_learning_until_opted_back_in() {
+    let h = TestHarness::start(HarnessOptions::default()).await;
+    let reader = harness::random_profile();
+    let tag = format!("it{}", Uuid::now_v7().simple());
+    let t = now_ms();
+    let first = publish(&h, &format!("one #{tag}"), t).await;
+    let second = publish(&h, &format!("two #{tag}"), t - 1_000).await;
+    let personalization = |on| DiscoverySignal::Personalization { profile_id: reader.to_string(), on };
+
+    react(&h, &reader, &first).await;
+    assert_eq!(tags(&h, &reader).await, vec![tag.clone()]);
+
+    // Off (profile FeedSettings.non_personalized, or a teen's default): what
+    // was learnt is erased, nothing new is learnt, For You is not ranked —
+    // whatever the request says.
+    signal(&h, personalization(false)).await;
+    assert!(tags(&h, &reader).await.is_empty());
+    react(&h, &reader, &second).await;
+    assert!(tags(&h, &reader).await.is_empty());
+    assert!(!for_you(&h, Some(reader)).await.personalized);
+
+    // The holder's reset keeps the opt-out.
+    let cmd = ResetInterestsCommand { profile_id: reader.to_string() };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("reset");
+    react(&h, &reader, &second).await;
+    assert!(tags(&h, &reader).await.is_empty());
+
+    // Back on: learning resumes from scratch (redelivered "off" or "on" is idempotent).
+    signal(&h, personalization(true)).await;
+    signal(&h, personalization(true)).await;
+    react(&h, &reader, &first).await;
+    assert_eq!(tags(&h, &reader).await, vec![tag.clone()]);
+    assert!(for_you(&h, Some(reader)).await.personalized);
+
+    // Erasure takes the opt-out with it.
+    signal(&h, personalization(false)).await;
+    signal(&h, DiscoverySignal::ProfileErased { profile_id: reader.to_string() }).await;
+    react(&h, &reader, &second).await;
+    assert_eq!(tags(&h, &reader).await, vec![tag]);
+}

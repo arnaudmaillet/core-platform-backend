@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 08b3bb74252ac24bc0eeb84f38294caf92e8a41b2ad766f2a4d2058172a0a591
+  source_sha256: 2c8c74708fc61310a6bc08877038acf3e1c8f1790963f5b957b14136e3d43457
   translated_at: 2026-10-06
   status: complete
 ---
@@ -191,17 +191,22 @@ pour un membre selon ses centres d'intérêt, sauf s'il l'a désactivé (#662).
 - **Centres d'intérêt (#662).** Le même consumer lit `engagement.reactions` : la *première* réaction d'un
   profil à un post du pool (`upserted` sans `old_kind` ; un post retiré ou supprimé n'apprend rien) ajoute
   du poids aux hashtags du post dans les centres d'intérêt du profil (Redis, ZSET
-  `timeline:int:{<profile>}`, plus `:seen` — un post compte une fois par 30 jours — et `:muted`, les tags
-  supprimés). Les poids décroissent avec une demi-vie de 30 jours (stockés gonflés par rapport à une époque
+  `timeline:int:{<profile>}`, plus `:seen` — un post compte une fois par 30 jours — `:muted`, les tags
+  supprimés, et `:off`, la désactivation). Les poids décroissent avec une demi-vie de 30 jours (stockés gonflés par rapport à une époque
   fixe, si bien qu'une écriture ne fait qu'incrémenter), les 100 plus lourds sont gardés, et un stockage
   inactif expire après 180 jours. Une page **FOR_YOU** lue avec `profile_id` (lié aux profils du jeton) est
   reclassée selon l'affinité de ses posts avec les 20 tags les plus lourds — dans la page, si bien que le
   curseur n'est pas touché ; l'ordre des flux est conservé entre égaux — et l'indique (`personalized`). Un
-  stockage injoignable sert la page sans reclassement. `non_personalized` (`FeedSettings` du profil, DSA
-  art. 38) désactive ce classement ; un invité n'est jamais personnalisé ; les autres classements et le fil
-  des abonnements ne le sont jamais. `ListInterests` / `RemoveInterest` (le tag reste exclu : les réactions
-  suivantes ne l'apprennent plus) / `ResetInterests` (tout, tags supprimés compris) sont réservés au
-  propriétaire. `ProfileDeleted` sur `profile.v1.events` efface les trois clés du profil (RGPD art. 17).
+  stockage injoignable sert la page sans reclassement. **Désactivation, appliquée ici :**
+  `ProfileFeedSettingsChanged` sur `profile.v1.events` avec `non_personalized` (`FeedSettings` du profil, DSA
+  art. 38) efface ce qui a été appris et pose `:off` : plus rien n'est appris et aucune page n'est reclassée
+  tant que le titulaire ne la réactive pas, quoi que dise la requête (son `non_personalized` ne coupe le
+  classement que pour une lecture). Un profil de **13 à 17 ans** naît désactivé (UK Children's Code) et peut
+  l'activer. Un invité n'est jamais personnalisé ; les autres classements et le fil des abonnements ne le
+  sont jamais. `ListInterests` / `RemoveInterest` (le tag reste exclu : les réactions
+  suivantes ne l'apprennent plus) / `ResetInterests` (tout, tags supprimés compris ; la désactivation reste)
+  sont réservés au propriétaire. `ProfileDeleted` sur `profile.v1.events` efface les quatre clés du profil
+  (RGPD art. 17).
 - **Pagination.** Le curseur porte une position par flux et est lié à son classement. Une page peut être
   courte (voire vide) avec un jeton non vide quand ses candidats ont été filtrés ; un post qui passe de
   frais à hot peut revenir sur une page suivante — les clients dédupliquent par `post_id`.
@@ -249,7 +254,7 @@ pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point *
 | `post.deleted` | `timeline-post-deleted` | VIP ZREM or Scylla purge | DLQ `{topic}.dlq` |
 | `social-graph.followed` | `timeline-sg-followed` | backfill recent posts + update following set | DLQ `{topic}.dlq` |
 | `social-graph.unfollowed` | `timeline-sg-unfollowed` | prune posts + update following set | DLQ `{topic}.dlq` |
-| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` · `engagement.reactions` · `profile.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction) ; centres d'intérêt (première réaction, effacement sur `ProfileDeleted`) | DLQ `{topic}.dlq` |
+| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` · `engagement.reactions` · `profile.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction) ; centres d'intérêt (première réaction, désactivation sur `ProfileFeedSettingsChanged`, effacement sur `ProfileDeleted`) | DLQ `{topic}.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** tous les workers s'exécutent sous `run_consumer` — commit manuel
 > après succès, retries bornés avec backoff + jitter, DLQ en cas d'épuisement/poison. Toutes les écritures

@@ -171,16 +171,20 @@ interest tags unless it opted out (#662).
 - **Interest tags (#662).** The same consumer reads `engagement.reactions`: a profile's *first* reaction
   to a pooled post (`upserted` without an `old_kind`; a post taken down or deleted teaches nothing) adds
   weight to the post's hashtags in the profile's interests (Redis, `timeline:int:{<profile>}` ZSET, plus
-  `:seen` — a post counts once per 30 days — and `:muted`, the removed tags). Weights decay with a 30-day
+  `:seen` — a post counts once per 30 days — `:muted`, the removed tags, and `:off`, the opt-out). Weights decay with a 30-day
   half-life (stored inflated to a fixed epoch, so a write only increments), the 100 heaviest are kept, and
   an idle store expires after 180 days. A **FOR_YOU** page read with `profile_id` (bound to the token's
   profiles) is re-ranked by the affinity of its posts with the 20 heaviest tags — within the page, so the
   cursor is untouched; the streams' order holds between equals — and says so (`personalized`). An
-  unreachable store serves the page unranked. `non_personalized` (profile `FeedSettings`, DSA Art. 38)
-  turns this off; a guest is never personalised; the other rankings and the following feed never are.
+  unreachable store serves the page unranked. **Opt-out, enforced here:** `ProfileFeedSettingsChanged` on
+  `profile.v1.events` with `non_personalized` (profile `FeedSettings`, DSA Art. 38) erases what was learnt
+  and sets `:off`, so nothing is learnt and no page is ranked until the holder turns it back on — whatever
+  the request says (its `non_personalized` only turns ranking off for one read). A **13–17** profile is born
+  opted out (UK Children's Code) and may opt in. A guest is never personalised; the other rankings and the
+  following feed never are.
   `ListInterests` / `RemoveInterest` (the tag stays out: later reactions no longer teach it) /
-  `ResetInterests` (everything, removed tags included) are owner-only. `ProfileDeleted` on
-  `profile.v1.events` erases the profile's three keys (GDPR Art. 17).
+  `ResetInterests` (everything, removed tags included; the opt-out stays) are owner-only. `ProfileDeleted`
+  on `profile.v1.events` erases the profile's four keys (GDPR Art. 17).
 - **Paging.** The cursor carries one position per stream and is bound to its ranking. A page can be short
   (even empty) with a non-empty token when its candidates were filtered out; a post moving from fresh to hot
   can come back on a later page — clients de-duplicate by `post_id`.
@@ -228,7 +232,7 @@ pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point *
 | `post.deleted` | `timeline-post-deleted` | VIP ZREM or Scylla purge | DLQ `{topic}.dlq` |
 | `social-graph.followed` | `timeline-sg-followed` | backfill recent posts + update following set | DLQ `{topic}.dlq` |
 | `social-graph.unfollowed` | `timeline-sg-unfollowed` | prune posts + update following set | DLQ `{topic}.dlq` |
-| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` · `engagement.reactions` · `profile.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction); interest tags (first reaction, `ProfileDeleted` erasure) | DLQ `{topic}.dlq` |
+| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` · `engagement.reactions` · `profile.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction); interest tags (first reaction, `ProfileFeedSettingsChanged` opt-out, `ProfileDeleted` erasure) | DLQ `{topic}.dlq` |
 
 > **Runtime contract (mandatory):** all workers run under `run_consumer` — manual commit after success,
 > bounded retry with backoff + jitter, DLQ on exhaustion/poison. All downstream writes are idempotent

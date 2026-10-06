@@ -115,6 +115,15 @@ pub enum ProfileEventWire {
         show_places: bool,
         occurred_at_ms: i64,
     },
+    /// The feed controls (#662): timeline projects `non_personalized` (stops
+    /// learning and erases the interest tags, stops ranking For You).
+    /// `sensitive_content` is `less` | `standard`.
+    ProfileFeedSettingsChanged {
+        profile_id: String,
+        sensitive_content: String,
+        non_personalized: bool,
+        occurred_at_ms: i64,
+    },
     ProfileDiscoverySettingsChanged {
         profile_id: String,
         activity_status: bool,
@@ -144,6 +153,7 @@ impl ProfileEventWire {
             | ProfileEventWire::ProfileInteractionSettingsChanged { profile_id, .. }
             | ProfileEventWire::ProfileLocationSettingsChanged { profile_id, .. }
             | ProfileEventWire::ProfileDiscoverySettingsChanged { profile_id, .. }
+            | ProfileEventWire::ProfileFeedSettingsChanged { profile_id, .. }
             | ProfileEventWire::ProfileCommentFiltersChanged { profile_id, .. }
             | ProfileEventWire::ProfileTabSettingsChanged { profile_id, .. } => profile_id,
         }
@@ -166,6 +176,7 @@ impl ProfileEventWire {
             }
             ProfileEventWire::ProfileLocationSettingsChanged { .. } => "ProfileLocationSettingsChanged",
             ProfileEventWire::ProfileDiscoverySettingsChanged { .. } => "ProfileDiscoverySettingsChanged",
+            ProfileEventWire::ProfileFeedSettingsChanged { .. } => "ProfileFeedSettingsChanged",
             ProfileEventWire::ProfileCommentFiltersChanged { .. } => "ProfileCommentFiltersChanged",
             ProfileEventWire::ProfileTabSettingsChanged { .. } => "ProfileTabSettingsChanged",
         }
@@ -246,6 +257,16 @@ impl From<&DomainEvent> for ProfileEventWire {
                 profile_id: e.profile_id.to_string(),
                 hidden_words: e.filters.hidden_words.clone(),
                 filter_offensive: e.filters.filter_offensive,
+                occurred_at_ms: e.occurred_at.timestamp_millis(),
+            },
+            DomainEvent::FeedSettingsChanged(e) => ProfileEventWire::ProfileFeedSettingsChanged {
+                profile_id: e.profile_id.to_string(),
+                sensitive_content: match e.settings.sensitive_content {
+                    crate::domain::value_object::SensitiveContent::Less => "less",
+                    crate::domain::value_object::SensitiveContent::Standard => "standard",
+                }
+                .to_owned(),
+                non_personalized: e.settings.non_personalized,
                 occurred_at_ms: e.occurred_at.timestamp_millis(),
             },
             DomainEvent::DiscoverySettingsChanged(e) => ProfileEventWire::ProfileDiscoverySettingsChanged {

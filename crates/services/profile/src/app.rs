@@ -176,6 +176,7 @@ impl App {
                 .register::<SetFeedSettingsCommand, _>(SetFeedSettingsHandler::new(
                     Arc::clone(&repository),
                     Arc::clone(&cache),
+                    Arc::clone(&publisher),
                 ))?
                 .register::<SetTabSettingsCommand, _>(SetTabSettingsHandler::new(
                     Arc::clone(&repository),

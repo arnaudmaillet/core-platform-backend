@@ -24,6 +24,12 @@ pub struct FeedSettings {
 }
 
 impl FeedSettings {
+    /// The teen defaults (13–17, #662): For You not personalised (no interest
+    /// profiling unless the holder turns it on — UK Children's Code).
+    pub fn teen() -> Self {
+        Self { non_personalized: true, ..Self::default() }
+    }
+
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
     }
@@ -45,5 +51,7 @@ mod tests {
         assert_eq!(FeedSettings::from_json(Some(&s.to_json())), s);
         // Stored before the flag existed: personalised.
         assert!(!FeedSettings::from_json(Some(r#"{"sensitive_content":"standard"}"#)).non_personalized);
+        assert!(FeedSettings::teen().non_personalized);
+        assert_eq!(FeedSettings::teen().sensitive_content, SensitiveContent::Less);
     }
 }

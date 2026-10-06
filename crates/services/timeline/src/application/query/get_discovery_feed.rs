@@ -434,6 +434,8 @@ mod tests {
         }
         async fn remove(&self, _: &ProfileId, _: &str) -> Result<(), TimelineError> { Ok(()) }
         async fn reset(&self, _: &ProfileId) -> Result<(), TimelineError> { Ok(()) }
+        async fn set_personalized(&self, _: &ProfileId, _: bool) -> Result<(), TimelineError> { Ok(()) }
+        async fn erase(&self, _: &ProfileId) -> Result<(), TimelineError> { Ok(()) }
     }
 
     #[async_trait]
