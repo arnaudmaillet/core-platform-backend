@@ -18,6 +18,9 @@ pub enum DiscoverySignal {
     /// `profile_id` newly reacted to the post (#662): its tags gain weight in
     /// the profile's interests.
     Reacted { post_id: String, profile_id: String, at_ms: i64 },
+    /// The holder's personalisation setting (profile `FeedSettings`): off
+    /// erases the interests and stops learning.
+    Personalization { profile_id: String, on: bool },
     /// The profile was deleted: its interests go with it.
     ProfileErased { profile_id: String },
 }
@@ -40,7 +43,7 @@ impl Validate for ApplyDiscoverySignalCommand {
             | DiscoverySignal::Restricted { post_id, .. }
             | DiscoverySignal::Popularity { post_id, .. }
             | DiscoverySignal::Reacted { post_id, .. } => post_id,
-            DiscoverySignal::ProfileErased { profile_id } => {
+            DiscoverySignal::ProfileErased { profile_id } | DiscoverySignal::Personalization { profile_id, .. } => {
                 if profile_id.trim().is_empty() {
                     return Err(vec![FieldViolation::new("profile_id", "TML-VAL-021", "profile_id must not be empty")]);
                 }
@@ -92,8 +95,11 @@ impl CommandHandler<ApplyDiscoverySignalCommand> for ApplyDiscoverySignalHandler
                 }
                 self.interests.reinforce(&profile_id, &post_id, &meta.tags, *at_ms).await
             }
+            DiscoverySignal::Personalization { profile_id, on } => {
+                self.interests.set_personalized(&ProfileId::try_from(profile_id.as_str())?, *on).await
+            }
             DiscoverySignal::ProfileErased { profile_id } => {
-                self.interests.reset(&ProfileId::try_from(profile_id.as_str())?).await
+                self.interests.erase(&ProfileId::try_from(profile_id.as_str())?).await
             }
         }
     }

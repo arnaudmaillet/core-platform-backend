@@ -6,7 +6,7 @@ use validate_core::{FieldViolation, Validate};
 use crate::application::port::{EventPublisher, ProfileCache, ProfileRepository};
 use crate::domain::aggregate::{Profile, ProfileCreateParams};
 use crate::domain::value_object::{
-    AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, InteractionSettings, Locale, LocationSettings, DiscoverySettings, ProfileKind,
+    AccountId, AvatarUrl, BannerUrl, Bio, DisplayName, Handle, InteractionSettings, Locale, LocationSettings, DiscoverySettings, FeedSettings, ProfileKind,
     ProfileVisibility,
 };
 use crate::error::ProfileError;
@@ -93,6 +93,7 @@ impl CommandHandler<CreateProfileCommand> for CreateProfileHandler {
             interaction: if cmd.minor { InteractionSettings::teen() } else { InteractionSettings::default() },
             location: if cmd.minor { LocationSettings::teen() } else { LocationSettings::default() },
             discovery: if cmd.minor { DiscoverySettings::teen() } else { DiscoverySettings::default() },
+            feed: if cmd.minor { FeedSettings::teen() } else { FeedSettings::default() },
             correlation_id: envelope.correlation_id,
         });
 

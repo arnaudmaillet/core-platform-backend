@@ -294,7 +294,9 @@ message SetTabSettingsRequest {
 // Timeline never serves STANDARD to a guest or a 13–17 holder.
 message FeedSettings {
     SensitiveContent sensitive_content = 1;
-    // For You not ranked by the profile's interest tags (DSA Art. 38).
+    // For You not ranked by the profile's interest tags, and none learnt (DSA
+    // Art. 38). Announced to timeline, which enforces it. On by default for a
+    // 13–17 holder, who may turn it off.
     bool             non_personalized  = 2;
 }
 

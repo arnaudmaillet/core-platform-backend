@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::domain::entity::ProfileLink;
 use crate::domain::event::{
     DomainEvent, HandleChanged, ProfileCreated, ProfileDeleted, ProfileHidden, ProfileRestored,
-    CommentFiltersChanged, DiscoverySettingsChanged, InteractionSettingsChanged, TabSettingsChanged, LocationSettingsChanged, ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
+    CommentFiltersChanged, DiscoverySettingsChanged, FeedSettingsChanged, InteractionSettingsChanged, TabSettingsChanged, LocationSettingsChanged, ProfileUpdated, ProfileVerified, TierChanged, VisibilityChanged,
 };
 use crate::domain::value_object::{
     AccountId, AvatarUrl, BannerUrl, Bio, BusinessInfo, CommentFilters, DisplayName, DiscoverySettings, Handle, InteractionSettings,
@@ -32,6 +32,9 @@ pub struct ProfileCreateParams {
     pub location: LocationSettings,
     /// [`DiscoverySettings::teen`] for a 13–17 holder; the defaults otherwise.
     pub discovery: DiscoverySettings,
+    /// [`FeedSettings::teen`] (not personalised) for a 13–17 holder; the
+    /// defaults otherwise.
+    pub feed: FeedSettings,
     pub correlation_id: Uuid,
 }
 
@@ -136,7 +139,7 @@ impl Profile {
             discovery: params.discovery,
             comment_filters: CommentFilters::default(),
             tab_settings: TabSettings::default(),
-            feed_settings: FeedSettings::default(),
+            feed_settings: params.feed,
             business_info: None,
             verified: false,
             verification_kind: None,
@@ -182,6 +185,14 @@ impl Profile {
             occurred_at: now,
             correlation_id: params.correlation_id,
         }));
+        if params.feed != FeedSettings::default() {
+            profile.pending_events.push(DomainEvent::FeedSettingsChanged(FeedSettingsChanged {
+                profile_id: id,
+                settings: params.feed,
+                occurred_at: now,
+                correlation_id: params.correlation_id,
+            }));
+        }
         if params.visibility == ProfileVisibility::Private {
             profile.pending_events.push(DomainEvent::VisibilityChanged(VisibilityChanged {
                 profile_id: id,
@@ -511,9 +522,9 @@ impl Profile {
         self.tab_settings
     }
 
-    /// Changes the feed controls. Unchanged ⇒ no-op. No event: only the
-    /// owner's clients read them.
-    pub fn set_feed_settings(&mut self, settings: FeedSettings) -> Result<bool, ProfileError> {
+    /// Changes the feed controls. Unchanged ⇒ no-op. Announced: timeline
+    /// projects `non_personalized` (#662).
+    pub fn set_feed_settings(&mut self, settings: FeedSettings, correlation_id: Uuid) -> Result<bool, ProfileError> {
         if self.status == ProfileStatus::Deleted {
             return Err(ProfileError::ProfileNotActive {
                 current: self.status.as_str().to_owned(),
@@ -523,7 +534,13 @@ impl Profile {
             return Ok(false);
         }
         self.feed_settings = settings;
-        self.touch_now();
+        let now = self.touch_now();
+        self.pending_events.push(DomainEvent::FeedSettingsChanged(FeedSettingsChanged {
+            profile_id: self.id,
+            settings,
+            occurred_at: now,
+            correlation_id,
+        }));
         Ok(true)
     }
 
@@ -800,6 +817,7 @@ mod tests {
             interaction: InteractionSettings::default(),
             location: LocationSettings::default(),
             discovery: DiscoverySettings::default(),
+            feed: FeedSettings::default(),
             correlation_id: Uuid::now_v7(),
         });
         p.drain_events(); // discard the ProfileCreated event
@@ -840,9 +858,11 @@ mod tests {
             interaction: InteractionSettings::teen(),
             location: LocationSettings::teen(),
             discovery: DiscoverySettings::teen(),
+            feed: FeedSettings::teen(),
             correlation_id: Uuid::now_v7(),
         });
         assert_eq!(p.visibility(), ProfileVisibility::Private);
+        assert!(p.feed_settings().non_personalized);
         assert_eq!(p.interaction(), InteractionSettings::teen());
         let events = p.drain_events();
         assert!(matches!(events.as_slice(), [
@@ -850,6 +870,7 @@ mod tests {
             DomainEvent::InteractionSettingsChanged(_),
             DomainEvent::LocationSettingsChanged(_),
             DomainEvent::DiscoverySettingsChanged(_),
+            DomainEvent::FeedSettingsChanged(FeedSettingsChanged { settings: FeedSettings { non_personalized: true, .. }, .. }),
             DomainEvent::VisibilityChanged(VisibilityChanged { visibility: ProfileVisibility::Private, .. })
         ]));
     }

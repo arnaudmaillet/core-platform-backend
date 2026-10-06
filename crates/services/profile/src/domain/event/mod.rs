@@ -1,5 +1,6 @@
 pub mod comment_filters_changed;
 pub mod discovery_settings_changed;
+pub mod feed_settings_changed;
 pub mod tab_settings_changed;
 pub mod handle_changed;
 pub mod interaction_settings_changed;
@@ -15,6 +16,7 @@ pub mod visibility_changed;
 
 pub use comment_filters_changed::CommentFiltersChanged;
 pub use discovery_settings_changed::DiscoverySettingsChanged;
+pub use feed_settings_changed::FeedSettingsChanged;
 pub use tab_settings_changed::TabSettingsChanged;
 pub use handle_changed::HandleChanged;
 pub use interaction_settings_changed::InteractionSettingsChanged;
@@ -41,6 +43,7 @@ pub enum DomainEvent {
     InteractionSettingsChanged(InteractionSettingsChanged),
     LocationSettingsChanged(LocationSettingsChanged),
     DiscoverySettingsChanged(DiscoverySettingsChanged),
+    FeedSettingsChanged(FeedSettingsChanged),
     CommentFiltersChanged(CommentFiltersChanged),
     TabSettingsChanged(TabSettingsChanged),
     VisibilityChanged(VisibilityChanged),

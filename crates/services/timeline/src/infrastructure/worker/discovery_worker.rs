@@ -13,8 +13,9 @@
 //! - `engagement.reactions` (tagged `event_type`, snake_case): a new reaction
 //!   (`upserted` without an `old_kind`) teaches the reactor the post's tags; a
 //!   changed or removed one teaches nothing;
-//! - `profile.v1.events` (tagged `type`): `ProfileDeleted` erases the
-//!   profile's interests.
+//! - `profile.v1.events` (tagged `type`): `ProfileFeedSettingsChanged`
+//!   applies the holder's personalisation setting (off erases and stops
+//!   learning), `ProfileDeleted` erases the profile's interests.
 //!
 //! Told apart by shape. Every pool write is idempotent and the moderation one
 //! is version-guarded, so redelivery and cross-topic reordering converge.
@@ -77,6 +78,9 @@ pub struct DiscoveryEvent {
     old_kind:        Option<String>,
     #[serde(default)]
     event_at_ms:     Option<i64>,
+    // profile.v1.events ProfileFeedSettingsChanged
+    #[serde(default)]
+    non_personalized: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +121,13 @@ fn outcome(event: &DiscoveryEvent) -> Outcome {
             None => Outcome::Poison("PostDeleted without a post_id".into()),
         },
         "enforcement_applied" | "enforcement_reversed" => moderation(event_type, event),
+        "ProfileFeedSettingsChanged" => match (&event.profile_id, event.non_personalized) {
+            (Some(profile_id), Some(non_personalized)) => Outcome::Apply(DiscoverySignal::Personalization {
+                profile_id: profile_id.clone(),
+                on:         !non_personalized,
+            }),
+            _ => Outcome::Poison("ProfileFeedSettingsChanged without profile_id or non_personalized".into()),
+        },
         "ProfileDeleted" => match &event.profile_id {
             Some(profile_id) => Outcome::Apply(DiscoverySignal::ProfileErased { profile_id: profile_id.clone() }),
             None => Outcome::Poison("ProfileDeleted without a profile_id".into()),
@@ -399,5 +410,17 @@ mod tests {
         );
         let updated = ProfileEventWire::ProfileUpdated { profile_id: AUTHOR.into(), occurred_at_ms: 1 };
         assert_eq!(outcome(&wire(serde_json::to_vec(&updated).unwrap())), Outcome::Skip);
+        for non_personalized in [true, false] {
+            let feed = ProfileEventWire::ProfileFeedSettingsChanged {
+                profile_id: AUTHOR.into(),
+                sensitive_content: "less".into(),
+                non_personalized,
+                occurred_at_ms: 1,
+            };
+            assert_eq!(
+                outcome(&wire(serde_json::to_vec(&feed).unwrap())),
+                Outcome::Apply(DiscoverySignal::Personalization { profile_id: AUTHOR.into(), on: !non_personalized })
+            );
+        }
     }
 }

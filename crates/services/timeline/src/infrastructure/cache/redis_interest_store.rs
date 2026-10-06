@@ -4,10 +4,12 @@
 //!   [`crate::domain::value_object::interest`]), capped to the heaviest tags;
 //! - `timeline:int:{<profile>}:seen` — a ZSET post → reaction time, so a post
 //!   counts once per dedup window;
-//! - `timeline:int:{<profile>}:muted` — a SET of the tags the profile removed.
+//! - `timeline:int:{<profile>}:muted` — a SET of the tags the profile removed;
+//! - `timeline:int:{<profile>}:off` — set while the holder opted out of
+//!   personalisation (no TTL: it lasts until they opt back in or are erased).
 //!
-//! Every key expires after the TTL without a write: an idle profile's
-//! interests fade out on their own.
+//! Every key but `:off` expires after the TTL without a write: an idle
+//! profile's interests fade out on their own.
 
 use async_trait::async_trait;
 use fred::interfaces::LuaInterface;
@@ -25,18 +27,20 @@ const MAX_SEEN: usize = 5_000;
 
 fn keys(profile: &ProfileId) -> Vec<String> {
     let base = format!("timeline:int:{{{profile}}}");
-    vec![base.clone(), format!("{base}:seen"), format!("{base}:muted")]
+    vec![base.clone(), format!("{base}:seen"), format!("{base}:muted"), format!("{base}:off")]
 }
 
 fn fred_err(e: fred::error::Error) -> TimelineError {
     TimelineError::Redis(redis_storage::RedisStorageError::from(e))
 }
 
-/// Counts a reaction once: returns 0 when the post was already counted.
+/// Counts a reaction once: returns 0 when the post was already counted or
+/// the holder opted out.
 ///
-/// KEYS = weights, seen, muted
+/// KEYS = weights, seen, muted, off
 /// ARGV = post, at_ms, seen cutoff_ms, increment, cap, max seen, ttl_secs, tags…
 const REINFORCE: &str = r#"
+if redis.call('EXISTS', KEYS[4]) == 1 then return 0 end
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', '(' .. ARGV[3])
 if redis.call('ZSCORE', KEYS[2], ARGV[1]) then return 0 end
 redis.call('ZADD', KEYS[2], ARGV[2], ARGV[1])
@@ -56,7 +60,7 @@ end
 return 1
 "#;
 
-/// KEYS = weights, seen, muted · ARGV = tag, ttl_secs
+/// KEYS = weights, seen, muted, off · ARGV = tag, ttl_secs
 const REMOVE: &str = r#"
 redis.call('ZREM', KEYS[1], ARGV[1])
 redis.call('SADD', KEYS[3], ARGV[1])
@@ -64,9 +68,24 @@ redis.call('EXPIRE', KEYS[3], ARGV[2])
 return 1
 "#;
 
-/// KEYS = weights, seen, muted
+/// KEYS = weights, seen, muted, off
 const RESET: &str = r#"
 return redis.call('DEL', KEYS[1], KEYS[2], KEYS[3])
+"#;
+
+/// Opts out (ARGV[1] = '0': erases and marks) or back in ('1': unmarks).
+///
+/// KEYS = weights, seen, muted, off · ARGV = on
+const PERSONALIZED: &str = r#"
+if ARGV[1] == '1' then return redis.call('DEL', KEYS[4]) end
+redis.call('DEL', KEYS[1], KEYS[2], KEYS[3])
+redis.call('SET', KEYS[4], '1')
+return 1
+"#;
+
+/// KEYS = weights, seen, muted, off
+const ERASE: &str = r#"
+return redis.call('DEL', KEYS[1], KEYS[2], KEYS[3], KEYS[4])
 "#;
 
 /// KEYS = weights · ARGV = count
@@ -144,6 +163,17 @@ impl InterestStore for RedisInterestStore {
 
     async fn reset(&self, profile: &ProfileId) -> Result<(), TimelineError> {
         let _: i64 = self.client.inner.eval(RESET, keys(profile), Vec::<String>::new()).await.map_err(fred_err)?;
+        Ok(())
+    }
+
+    async fn set_personalized(&self, profile: &ProfileId, on: bool) -> Result<(), TimelineError> {
+        let on = if on { "1" } else { "0" };
+        let _: i64 = self.client.inner.eval(PERSONALIZED, keys(profile), vec![on.to_owned()]).await.map_err(fred_err)?;
+        Ok(())
+    }
+
+    async fn erase(&self, profile: &ProfileId) -> Result<(), TimelineError> {
+        let _: i64 = self.client.inner.eval(ERASE, keys(profile), Vec::<String>::new()).await.map_err(fred_err)?;
         Ok(())
     }
 }

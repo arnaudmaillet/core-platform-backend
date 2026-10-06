@@ -9,7 +9,8 @@ use crate::error::TimelineError;
 pub trait InterestStore: Send + Sync + 'static {
     /// `profile` reacted to `post` (tagged `tags`) at `at_ms`: each tag gains
     /// weight, except those the profile removed. A post counts once per
-    /// dedup window, so a redelivery or a react-again changes nothing.
+    /// dedup window, so a redelivery or a react-again changes nothing. A
+    /// profile that opted out of personalisation learns nothing.
     async fn reinforce(
         &self,
         profile: &ProfileId,
@@ -25,7 +26,15 @@ pub trait InterestStore: Send + Sync + 'static {
     /// Drops `tag` and keeps it out: later reactions no longer teach it.
     async fn remove(&self, profile: &ProfileId, tag: &str) -> Result<(), TimelineError>;
 
-    /// Forgets everything about `profile`: weights, the posts counted and the
-    /// removed tags (a reset, and the erasure of a deleted profile).
+    /// Forgets what `profile` taught: weights, the posts counted and the
+    /// removed tags (the holder's reset). An opt-out stays.
     async fn reset(&self, profile: &ProfileId) -> Result<(), TimelineError>;
+
+    /// The holder's personalisation setting (#662, profile
+    /// `FeedSettings.non_personalized`, enforced here): off erases what was
+    /// learnt and stops learning until it is turned back on.
+    async fn set_personalized(&self, profile: &ProfileId, on: bool) -> Result<(), TimelineError>;
+
+    /// Forgets everything about a deleted profile, the opt-out included.
+    async fn erase(&self, profile: &ProfileId) -> Result<(), TimelineError>;
 }
