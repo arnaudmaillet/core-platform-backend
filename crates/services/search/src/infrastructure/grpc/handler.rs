@@ -10,7 +10,7 @@ use error::AppError;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use crate::application::port::AudienceGate;
+use crate::application::port::{AudienceGate, RecentSearches};
 use crate::application::query::{
     filter_results, filter_suggestions, RunSearch, RunSuggest, SearchHandler, SuggestHandler,
 };
@@ -31,6 +31,8 @@ pub struct SearchServiceHandler {
     suggest: Arc<SuggestHandler>,
     /// social-graph's access check: hits a client may not see are dropped.
     audience: Arc<dyn AudienceGate>,
+    /// Each profile's recent searches (#663); `None` ⇒ UNAVAILABLE.
+    recent: Option<Arc<dyn RecentSearches>>,
 }
 
 impl SearchServiceHandler {
@@ -39,7 +41,66 @@ impl SearchServiceHandler {
         suggest: Arc<SuggestHandler>,
         audience: Arc<dyn AudienceGate>,
     ) -> Self {
-        Self { search, suggest, audience }
+        Self { search, suggest, audience, recent: None }
+    }
+
+    /// With the recent-searches store (#663).
+    pub fn with_recent(mut self, recent: Arc<dyn RecentSearches>) -> Self {
+        self.recent = Some(recent);
+        self
+    }
+
+    fn recent(&self) -> Result<&Arc<dyn RecentSearches>, Status> {
+        self.recent.as_ref().ok_or_else(|| Status::unavailable("recent searches are not configured"))
+    }
+
+    /// The list as it now stands, as the response to every recent-search RPC.
+    async fn recent_list(&self, profile_id: &str) -> Result<Response<proto::RecentSearchesResponse>, Status> {
+        let searches = self.recent()?.list(profile_id, chrono::Utc::now()).await.map_err(to_status)?;
+        Ok(Response::new(proto::RecentSearchesResponse {
+            searches: searches
+                .into_iter()
+                .map(|s| proto::RecentSearch { query: s.query, searched_at_ms: s.at.timestamp_millis() })
+                .collect(),
+        }))
+    }
+
+    pub async fn record_recent_search(
+        &self,
+        request: Request<proto::RecordRecentSearchRequest>,
+    ) -> Result<Response<proto::RecentSearchesResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        self.recent()?.record(&req.profile_id, &req.query, chrono::Utc::now()).await.map_err(to_status)?;
+        self.recent_list(&req.profile_id).await
+    }
+
+    pub async fn list_recent_searches(
+        &self,
+        request: Request<proto::ListRecentSearchesRequest>,
+    ) -> Result<Response<proto::RecentSearchesResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        self.recent_list(&request.into_inner().profile_id).await
+    }
+
+    pub async fn delete_recent_search(
+        &self,
+        request: Request<proto::DeleteRecentSearchRequest>,
+    ) -> Result<Response<proto::RecentSearchesResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        self.recent()?.delete(&req.profile_id, &req.query).await.map_err(to_status)?;
+        self.recent_list(&req.profile_id).await
+    }
+
+    pub async fn clear_search_history(
+        &self,
+        request: Request<proto::ClearSearchHistoryRequest>,
+    ) -> Result<Response<proto::RecentSearchesResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        self.recent()?.clear(&req.profile_id).await.map_err(to_status)?;
+        self.recent_list(&req.profile_id).await
     }
 
     pub async fn search(

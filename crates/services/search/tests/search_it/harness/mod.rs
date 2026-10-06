@@ -40,6 +40,11 @@ pub struct Harness {
 }
 
 impl Harness {
+    /// The recent-searches store (#663), straight on the adapter.
+    pub fn recent(&self) -> &dyn search::application::port::RecentSearches {
+        self.index.as_ref()
+    }
+
     pub async fn start() -> Self {
         let base_url = test_support::containers::opensearch_ready().await;
         // Fresh per-scenario namespace so parallel scenarios never collide.
@@ -74,7 +79,8 @@ impl Harness {
         let projection = ProjectionHandler::new(Arc::clone(&port));
         // The harness calls the handler without an edge principal (the mesh),
         // so the audience filter never runs; any gate will do.
-        let handler = App::compose(port, Arc::new(NoAudienceCheck));
+        let handler = App::compose(port, Arc::new(NoAudienceCheck))
+            .with_recent(Arc::clone(&index) as Arc<dyn search::application::port::RecentSearches>);
         Self {
             handler,
             projection,

@@ -96,6 +96,14 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS where it
 
 The synchronous surface is deliberately **read-only**: `Search` (federated, filterable by entity type, cursor-paginated), `Suggest`/autocomplete (prefix), and `MultiSearch` (fan-out + merge). **There is no write/index RPC** — ingestion is Kafka-only — and search **publishes no events** (it is a terminal read-model).
 
+**Recent searches (#663)** are the one thing search stores *for* a profile, so every device shows the same list:
+- `RecordRecentSearch` — the app calls it when a search is submitted or a result is tapped, not on keystrokes.
+- `ListRecentSearches`, `DeleteRecentSearch` (case-insensitive), `ClearSearchHistory`.
+
+All four RPCs are on the edge, `authenticated` + `require_profile`, and each answers the list as it now stands: newest first, at most 50, none older than 90 days. A query is trimmed, its whitespace collapsed and cut to 100 characters, and an identical earlier search, whatever its case, moves up rather than repeats.
+
+The storage is one document per profile in `<prefix>-recent-searches` (not indexed, never searched), kept by a painless scripted upsert. Watch history stays on the device (no view stream exists).
+
 > **Wire contract:** results are references — `(entity_type, id, score, highlight/snippet)` plus the minimal indexed display fields (handle, display name, thumbnail key, `author_id`, `created_at`). Callers MUST hydrate volatile/authoritative fields (live counts, signed media URLs, follow-state, current bio) from `post`/`profile`. Search returns no authoritative entity.
 
 ### Rust ports (hexagonal contract) *(Phase 3)*

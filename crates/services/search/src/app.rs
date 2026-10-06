@@ -79,7 +79,8 @@ impl App {
             .connect_lazy();
         let audience: Arc<dyn AudienceGate> = Arc::new(GrpcAudienceGate::new(social_graph));
 
-        let handler = App::compose(index_port, audience);
+        let handler = App::compose(index_port, audience)
+            .with_recent(Arc::clone(&index) as Arc<dyn crate::application::port::RecentSearches>);
         Ok(App {
             handler,
             projection,

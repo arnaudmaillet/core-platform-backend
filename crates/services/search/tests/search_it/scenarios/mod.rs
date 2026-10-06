@@ -5,3 +5,4 @@ mod query;
 mod versioning;
 mod post_window;
 mod takedown_reversal;
+mod recent_searches;

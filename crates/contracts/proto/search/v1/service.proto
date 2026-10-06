@@ -35,4 +35,15 @@ service SearchService {
     // Batch of independent searches in a single round-trip (responses are
     // positional, 1:1 with the requests).
     rpc MultiSearch(MultiSearchRequest) returns (MultiSearchResponse);
+
+    // ── Recent searches (#663) ──────────────────────────────────────────────
+    // A profile's recent searches, kept server-side so every device shows the
+    // same list: the newest 50, none older than 90 days. The app records a
+    // search when it is submitted or a result tapped (not on every
+    // keystroke). Edge: one of the caller's profiles. Each answers the list
+    // as it now stands.
+    rpc RecordRecentSearch(RecordRecentSearchRequest) returns (RecentSearchesResponse);
+    rpc ListRecentSearches(ListRecentSearchesRequest) returns (RecentSearchesResponse);
+    rpc DeleteRecentSearch(DeleteRecentSearchRequest) returns (RecentSearchesResponse);
+    rpc ClearSearchHistory(ClearSearchHistoryRequest) returns (RecentSearchesResponse);
 }

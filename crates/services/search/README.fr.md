@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 6f626c4cf08653e3168d98b5523047733d5218a43c1be367459eb95d890612b4
-  translated_at: 2026-10-05
+  source_sha256: 9bb77e9980ef6fb079e3e3b1a2f3eb7f2415cb4b84d9e6d9627119818012168e
+  translated_at: 2026-10-06
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -106,6 +106,14 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS là où 
 ### gRPC — `search.v1.SearchService` *(Phase 1)*
 
 La surface synchrone est délibérément en **lecture seule** : `Search` (fédérée, filtrable par type d'entité, paginée par curseur), `Suggest`/autocomplétion (préfixe), et `MultiSearch` (fan-out + fusion). **Il n'y a aucun RPC d'écriture/d'indexation** — l'ingestion est exclusivement Kafka — et search **ne publie aucun événement** (c'est un modèle de lecture terminal).
+
+**Les recherches récentes (#663)** sont la seule chose que search garde *pour* un profil, afin que chaque appareil affiche la même liste :
+- `RecordRecentSearch` — l'app l'appelle quand une recherche est validée ou un résultat touché, pas à chaque frappe.
+- `ListRecentSearches`, `DeleteRecentSearch` (insensible à la casse), `ClearSearchHistory`.
+
+Les quatre RPC sont exposés en périphérie, `authenticated` + `require_profile`, et chacun répond la liste telle qu'elle est : la plus récente d'abord, 50 au plus, aucune de plus de 90 jours. Une requête est rognée, ses espaces fusionnés, coupée à 100 caractères, et une recherche identique plus ancienne, quelle que soit sa casse, remonte plutôt que de se répéter.
+
+Le stockage tient en un document par profil dans `<prefix>-recent-searches` (non indexé, jamais cherché), tenu par un upsert scripté painless. L'historique de visionnage reste sur l'appareil (aucun flux de vues n'existe).
 
 > **Contrat de fil :** les résultats sont des références — `(entity_type, id, score, highlight/snippet)` plus les champs d'affichage minimaux indexés (handle, nom affiché, clé de miniature, `author_id`, `created_at`). Les appelants DOIVENT hydrater les champs volatils/autoritatifs (compteurs vivants, URLs média signées, état de suivi, bio courante) depuis `post`/`profile`. Search ne renvoie aucune entité autoritative.
 
