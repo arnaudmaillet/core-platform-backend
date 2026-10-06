@@ -12,13 +12,15 @@ enum FanOutMode {
     FAN_OUT_MODE_READ        = 2;
 }
 
-// How GetDiscoveryFeed orders its pool. v1 is non-personalised: the same
-// request returns the same order for every viewer, before the audience filter.
+// How GetDiscoveryFeed orders its pool. The same request returns the same
+// order for every viewer, before the audience filter, except a FOR_YOU page
+// read for a profile with interest tags (#662), re-ranked within the page.
 enum DiscoveryRanking {
     // Treated as FOR_YOU.
     DISCOVERY_RANKING_UNSPECIFIED = 0;
     // Three TRENDING items for one fresh item (a recent post nobody has
-    // engaged with yet), so new posts get a chance to be seen.
+    // engaged with yet), so new posts get a chance to be seen; each page
+    // re-ranked by the reader's interest tags unless non_personalized.
     DISCOVERY_RANKING_FOR_YOU     = 1;
     // Time-decayed popularity ("hot"): log10(popularity) plus a gravity term on
     // the publication time. Only posts that have some popularity.

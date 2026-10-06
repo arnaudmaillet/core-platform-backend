@@ -39,17 +39,22 @@ use crate::application::command::ingest_audio_index::{
 use crate::application::command::ingest_post_published::{
     IngestPostPublishedCommand, IngestPostPublishedHandler,
 };
+use crate::application::command::manage_interests::{
+    ManageInterestsHandler, RemoveInterestCommand, ResetInterestsCommand,
+};
 use crate::application::command::prune_follow::{PruneFollowCommand, PruneFollowHandler};
 use crate::application::command::remove_post::{RemovePostCommand, RemovePostHandler};
 use crate::application::port::{
-    AuthorPostRepository, DiscoveryPool, FeedRepository, FeedStore, FollowingStore, NearbyPosts,
+    AuthorPostRepository, DiscoveryPool, FeedRepository, FeedStore, FollowingStore, InterestStore, NearbyPosts,
     SocialGraphClient, TierCache, VipRegistry,
 };
 use crate::application::query::get_audio_feed::{GetAudioFeedHandler, GetAudioFeedQuery};
 use crate::application::query::get_discovery_feed::{GetDiscoveryFeedHandler, GetDiscoveryFeedQuery};
 use crate::application::query::get_following_feed::{GetFollowingFeedHandler, GetFollowingFeedQuery};
+use crate::application::query::list_interests::{ListInterestsHandler, ListInterestsQuery};
 use crate::infrastructure::cache::{
-    RedisAudioFeedStore, RedisDiscoveryPool, RedisFeedStore, RedisFollowingStore, RedisTierCache, RedisVipRegistry,
+    RedisAudioFeedStore, RedisDiscoveryPool, RedisFeedStore, RedisFollowingStore, RedisInterestStore, RedisTierCache,
+    RedisVipRegistry,
 };
 use crate::infrastructure::persistence::{
     ScyllaAudioFeedRepository, ScyllaAuthorPostRepository, ScyllaFeedRepository,
@@ -117,6 +122,7 @@ pub struct App {
     pub audio_feed_store: Arc<RedisAudioFeedStore>,
     pub audio_feed_repo:  Arc<ScyllaAudioFeedRepository>,
     pub discovery_pool:   Arc<dyn DiscoveryPool>,
+    pub interests:        Arc<dyn InterestStore>,
     /// Live storage clients, retained so the runtime's readiness loop can probe
     /// their liveness (see [`crate::service`]).
     pub scylla:           Arc<ScyllaClient>,
@@ -151,6 +157,7 @@ impl App {
             config.discovery_pool_cap,
             config.discovery_hot_gravity_secs,
         ));
+        let interests: Arc<dyn InterestStore> = Arc::new(RedisInterestStore::new(redis_client.clone()));
 
         // ── Persistence adapters ─────────────────────────────────────────────
         let feed_repository = Arc::new(ScyllaFeedRepository::new(Arc::clone(&scylla_client)));
@@ -204,8 +211,11 @@ impl App {
                     audio_feed_cap:   config.audio_feed_cap,
                 })?
                 .register::<ApplyDiscoverySignalCommand, _>(ApplyDiscoverySignalHandler {
-                    pool: Arc::clone(&discovery_pool),
+                    pool:      Arc::clone(&discovery_pool),
+                    interests: Arc::clone(&interests),
                 })?
+                .register::<RemoveInterestCommand, _>(ManageInterestsHandler { interests: Arc::clone(&interests) })?
+                .register::<ResetInterestsCommand, _>(ManageInterestsHandler { interests: Arc::clone(&interests) })?
                 .build(),
         );
 
@@ -242,7 +252,9 @@ impl App {
                     max_page_size:     config.max_page_size,
                     nearby_candidates: config.nearby_candidates,
                     hot_gravity_secs:  config.discovery_hot_gravity_secs,
+                    interests:         Arc::clone(&interests),
                 })?
+                .register::<ListInterestsQuery, _>(ListInterestsHandler { interests: Arc::clone(&interests) })?
                 .build(),
         );
 
@@ -302,6 +314,7 @@ impl App {
             audio_feed_store,
             audio_feed_repo,
             discovery_pool,
+            interests,
             scylla: scylla_client,
             redis: redis_client,
         })

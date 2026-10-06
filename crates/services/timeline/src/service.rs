@@ -61,6 +61,10 @@ impl Service for TimelineService {
         // Viewer-aware (audience via CheckAccess, fail closed): members and
         // guests; a guest always gets the RESTRICTED content level.
         public_read("/timeline.v1.TimelineService/GetDiscoveryFeed"),
+        // Interest tags (#662): owner only (`require_profile`).
+        authenticated("/timeline.v1.TimelineService/ListInterests"),
+        authenticated("/timeline.v1.TimelineService/RemoveInterest"),
+        authenticated("/timeline.v1.TimelineService/ResetInterests"),
     ];
 
     async fn build(infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -134,7 +138,8 @@ impl Service for TimelineService {
     }
 
     fn register(self, routes: &mut RoutesBuilder) -> anyhow::Result<()> {
-        let handler = TimelineServiceHandler::new(Arc::clone(&self.app.query_bus));
+        let handler = TimelineServiceHandler::new(Arc::clone(&self.app.query_bus))
+            .with_command_bus(Arc::clone(&self.app.command_bus));
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
             .build_v1()?;

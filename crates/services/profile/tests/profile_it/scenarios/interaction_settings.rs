@@ -200,7 +200,7 @@ async fn feed_settings_round_trip_owner_only() {
     let profile = h.get_by_handle(&handle).await.expect("created");
     assert_eq!(profile.feed_settings, Some(FeedSettings::default()), "less by default");
 
-    let standard = FeedSettings { sensitive_content: SensitiveContent::Standard };
+    let standard = FeedSettings { sensitive_content: SensitiveContent::Standard, non_personalized: true };
     let cmd = SetFeedSettingsCommand { profile_id: profile.id.clone(), settings: standard };
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("set");
 

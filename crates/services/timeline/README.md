@@ -126,9 +126,16 @@ message FeedItem { string post_id=1; string author_id=2; int64 published_at_ms=3
 rpc GetDiscoveryFeed(GetDiscoveryFeedRequest) returns (GetDiscoveryFeedResponse);   // edge public_read
 
 message GetDiscoveryFeedRequest  { DiscoveryRanking ranking=1; string region=2; optional double lat=3;
-                                   optional double lng=4; ContentLevel content_level=5; string page_token=6; int32 limit=7; }
+                                   optional double lng=4; ContentLevel content_level=5; string page_token=6; int32 limit=7;
+                                   string profile_id=8; bool non_personalized=9; }
 message GetDiscoveryFeedResponse { repeated FeedItem items=1; string next_page_token=2; string region_applied=3;
-                                   ContentLevel content_level_applied=4; }
+                                   ContentLevel content_level_applied=4; bool personalized=5; }
+
+// Interest tags (#662), edge authenticated + require_profile; each returns the tags left, heaviest first.
+rpc ListInterests(ListInterestsRequest)   returns (InterestsResponse);   // { string profile_id=1; }
+rpc RemoveInterest(RemoveInterestRequest) returns (InterestsResponse);   // { string profile_id=1; string tag=2; }
+rpc ResetInterests(ResetInterestsRequest) returns (InterestsResponse);   // { string profile_id=1; }
+message InterestsResponse { repeated Interest interests=1; }             // Interest { string tag=1; double weight=2; }
 ```
 
 > **Wire contract:** the cursor is `base64url("{published_at_ms}:{post_id_hyphenated}")` — opaque to
@@ -137,13 +144,15 @@ message GetDiscoveryFeedResponse { repeated FeedItem items=1; string next_page_t
 
 ### Discovery feed (`GetDiscoveryFeed`)
 
-A non-personalised feed that needs no follow graph: For You for guests and members (#673, B3).
+A feed that needs no follow graph: For You for guests and members (#673, B3), ranked for a member by its
+interest tags unless it opted out (#662).
 
 - **Pool** (Redis, `timeline:{disc}:recent|fresh|hot` + a `timeline:disc:post:<id>` hash per post): posts
   published in the last `TIMELINE_DISCOVERY_WINDOW_SECS` (72 h), capped at `TIMELINE_DISCOVERY_POOL_CAP`. Fed
-  by one consumer (`timeline-discovery`) on `post.v1.events` (published / deleted), `counter.v1.popularity`
-  (all-time popularity) and `moderation.v1.events` (version-guarded restriction, recorded even before the
-  publication is seen). Cache-like: if Redis loses it, it refills within one window.
+  by one consumer (`timeline-discovery`) on `post.v1.events` (published with the caption's hashtags /
+  deleted), `counter.v1.popularity` (all-time popularity) and `moderation.v1.events` (version-guarded
+  restriction, recorded even before the publication is seen). Cache-like: if Redis loses it, it refills
+  within one window.
 - **Rankings.** `TRENDING` = the hot score `log10(max(popularity, 1)) + (published_s − epoch) / gravity`
   (`TIMELINE_DISCOVERY_HOT_GRAVITY_SECS`, 12.5 h: a post that much newer ranks like one ten times more
   popular), posts with some popularity only; `RECENT` = newest first; `FOR_YOU` = three hot for one *fresh*
@@ -153,13 +162,25 @@ A non-personalised feed that needs no follow graph: For You for guests and membe
 - **Filters.** Deleted, removed and visibility-limited posts are never shown; age-gated ones only at
   `CONTENT_LEVEL_STANDARD`. A **guest or a 13–17 reader (the token's `age` bracket) always gets
   `RESTRICTED`**; anyone else gets what it asks for (the client sends the profile's sensitive-content
-  setting, #662), `RESTRICTED` by default. The discovery feeds involve no profiling (DSA Art. 38: FOR_YOU
-  ranks one global pool by popularity and recency), and the following feed is chronological. The reader comes from the token
+  setting, #662), `RESTRICTED` by default. The reader comes from the token
   (`edge::viewer`): authors it may not see (`CheckAccess` ≠ `VISIBLE`) are left out, and the read **fails
   closed** (`TML-8002`, UNAVAILABLE) when social-graph cannot answer. Mesh callers are unfiltered by audience.
 - **Mutes (#659).** Posts by authors any of the reader's profiles muted (scope posts) are left out of the
   discovery feed, and posts by authors the feed's profile muted out of the **following feed** (a muted VIP is
   not even read; the cursor moves past skipped posts). One `ListMutedProfiles` call per request, failing open.
+- **Interest tags (#662).** The same consumer reads `engagement.reactions`: a profile's *first* reaction
+  to a pooled post (`upserted` without an `old_kind`; a post taken down or deleted teaches nothing) adds
+  weight to the post's hashtags in the profile's interests (Redis, `timeline:int:{<profile>}` ZSET, plus
+  `:seen` — a post counts once per 30 days — and `:muted`, the removed tags). Weights decay with a 30-day
+  half-life (stored inflated to a fixed epoch, so a write only increments), the 100 heaviest are kept, and
+  an idle store expires after 180 days. A **FOR_YOU** page read with `profile_id` (bound to the token's
+  profiles) is re-ranked by the affinity of its posts with the 20 heaviest tags — within the page, so the
+  cursor is untouched; the streams' order holds between equals — and says so (`personalized`). An
+  unreachable store serves the page unranked. `non_personalized` (profile `FeedSettings`, DSA Art. 38)
+  turns this off; a guest is never personalised; the other rankings and the following feed never are.
+  `ListInterests` / `RemoveInterest` (the tag stays out: later reactions no longer teach it) /
+  `ResetInterests` (everything, removed tags included) are owner-only. `ProfileDeleted` on
+  `profile.v1.events` erases the profile's three keys (GDPR Art. 17).
 - **Paging.** The cursor carries one position per stream and is bound to its ranking. A page can be short
   (even empty) with a non-empty token when its candidates were filtered out; a post moving from fresh to hot
   can come back on a later page — clients de-duplicate by `post_id`.
@@ -175,6 +196,7 @@ pub trait FollowingStore: Send + Sync { /* following set (SADD/SREM/SMEMBERS) */
 pub trait FeedRepository / AuthorPostRepository: Send + Sync { /* ScyllaDB cold layer */ }
 pub trait SocialGraphClient: Send + Sync { /* paginated gRPC to social-graph */ }
 pub trait DiscoveryPool: Send + Sync { /* discovery indices + per-post meta (Redis) */ }
+pub trait InterestStore: Send + Sync { /* a profile's interest tags: reinforce / top / remove / reset (Redis) */ }
 pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point */ }
 ```
 
@@ -206,7 +228,7 @@ pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point *
 | `post.deleted` | `timeline-post-deleted` | VIP ZREM or Scylla purge | DLQ `{topic}.dlq` |
 | `social-graph.followed` | `timeline-sg-followed` | backfill recent posts + update following set | DLQ `{topic}.dlq` |
 | `social-graph.unfollowed` | `timeline-sg-unfollowed` | prune posts + update following set | DLQ `{topic}.dlq` |
-| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction) | DLQ `{topic}.dlq` |
+| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` · `engagement.reactions` · `profile.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction); interest tags (first reaction, `ProfileDeleted` erasure) | DLQ `{topic}.dlq` |
 
 > **Runtime contract (mandatory):** all workers run under `run_consumer` — manual commit after success,
 > bounded retry with backoff + jitter, DLQ on exhaustion/poison. All downstream writes are idempotent

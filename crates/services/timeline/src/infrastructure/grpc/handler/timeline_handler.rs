@@ -1,12 +1,17 @@
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use cqrs::{Envelope, QueryBus};
+use std::sync::Arc;
+
+use cqrs::command::InMemoryCommandBus;
+use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
+use crate::application::command::manage_interests::{RemoveInterestCommand, ResetInterestsCommand};
 use crate::application::query::get_audio_feed::GetAudioFeedQuery;
 use crate::application::query::get_discovery_feed::GetDiscoveryFeedQuery;
-use crate::domain::value_object::{ContentLevel, DiscoveryRanking, Viewer};
+use crate::application::query::list_interests::ListInterestsQuery;
+use crate::domain::value_object::{ContentLevel, DiscoveryRanking, Interest, ProfileId, Viewer};
 use crate::application::query::get_following_feed::GetFollowingFeedQuery;
 
 // ── Proto inclusion ───────────────────────────────────────────────────────────
@@ -19,7 +24,9 @@ pub struct TimelineServiceHandler<QB>
 where
     QB: QueryBus + Send + Sync + 'static,
 {
-    query_bus: QB,
+    query_bus:   QB,
+    /// The interest controls' writes (#662); `None` answers them UNAVAILABLE.
+    command_bus: Option<Arc<InMemoryCommandBus>>,
 }
 
 impl<QB> TimelineServiceHandler<QB>
@@ -27,7 +34,12 @@ where
     QB: QueryBus + Send + Sync + 'static,
 {
     pub fn new(query_bus: QB) -> Self {
-        Self { query_bus }
+        Self { query_bus, command_bus: None }
+    }
+
+    pub fn with_command_bus(mut self, command_bus: Arc<InMemoryCommandBus>) -> Self {
+        self.command_bus = Some(command_bus);
+        self
     }
 }
 
@@ -121,6 +133,15 @@ where
             .flatten();
         // 13–17 (the token's `age` bracket, #652) never see sensitive content.
         let minor = edge::principal(&request).is_some_and(|p| p.is_minor());
+        // Interests rank a page only for one of the caller's own profiles.
+        let personalize_for = if request.get_ref().profile_id.is_empty() || request.get_ref().non_personalized || guest {
+            None
+        } else {
+            edge::require_profile(&request, &request.get_ref().profile_id)?;
+            Some(ProfileId::try_from(request.get_ref().profile_id.as_str()).map_err(|_| {
+                Status::invalid_argument("profile_id must be a UUID")
+            })?)
+        };
         let req = request.into_inner();
 
         let ranking = match proto::DiscoveryRanking::try_from(req.ranking) {
@@ -140,6 +161,7 @@ where
             lng:        req.lng,
             limit:      req.limit,
             page_token: if req.page_token.is_empty() { None } else { Some(req.page_token) },
+            personalize_for,
         };
 
         let page = self
@@ -159,6 +181,7 @@ where
             .collect();
 
         Ok(Response::new(proto::GetDiscoveryFeedResponse {
+            personalized:          page.personalized,
             items,
             next_page_token:       page.next_page_token.unwrap_or_default(),
             region_applied:        String::new(), // v1: one global pool
@@ -166,6 +189,55 @@ where
                 ContentLevel::Restricted => proto::ContentLevel::Restricted,
                 ContentLevel::Standard => proto::ContentLevel::Standard,
             } as i32,
+        }))
+    }
+}
+
+impl<QB> TimelineServiceHandler<QB>
+where
+    QB: QueryBus + Send + Sync + 'static,
+{
+    pub async fn list_interests(
+        &self,
+        request: Request<proto::ListInterestsRequest>,
+    ) -> Result<Response<proto::InterestsResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        self.interests_of(request.into_inner().profile_id).await
+    }
+
+    pub async fn remove_interest(
+        &self,
+        request: Request<proto::RemoveInterestRequest>,
+    ) -> Result<Response<proto::InterestsResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        self.command(RemoveInterestCommand { profile_id: req.profile_id.clone(), tag: req.tag }).await?;
+        self.interests_of(req.profile_id).await
+    }
+
+    pub async fn reset_interests(
+        &self,
+        request: Request<proto::ResetInterestsRequest>,
+    ) -> Result<Response<proto::InterestsResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        self.command(ResetInterestsCommand { profile_id: req.profile_id.clone() }).await?;
+        self.interests_of(req.profile_id).await
+    }
+
+    async fn command<C: cqrs::Command + 'static>(&self, command: C) -> Result<(), Status> {
+        let bus = self.command_bus.as_ref().ok_or_else(|| Status::unavailable("interest controls are not wired"))?;
+        bus.dispatch(Envelope::new(Uuid::now_v7(), command)).await.map_err(cqrs_to_status)
+    }
+
+    async fn interests_of(&self, profile_id: String) -> Result<Response<proto::InterestsResponse>, Status> {
+        let interests: Vec<Interest> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), ListInterestsQuery { profile_id }))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::InterestsResponse {
+            interests: interests.into_iter().map(|i| proto::Interest { tag: i.tag, weight: i.weight }).collect(),
         }))
     }
 }
@@ -219,6 +291,27 @@ where
         request: Request<proto::GetDiscoveryFeedRequest>,
     ) -> Result<Response<proto::GetDiscoveryFeedResponse>, Status> {
         self.get_discovery_feed(request).await
+    }
+
+    async fn list_interests(
+        &self,
+        request: Request<proto::ListInterestsRequest>,
+    ) -> Result<Response<proto::InterestsResponse>, Status> {
+        self.list_interests(request).await
+    }
+
+    async fn remove_interest(
+        &self,
+        request: Request<proto::RemoveInterestRequest>,
+    ) -> Result<Response<proto::InterestsResponse>, Status> {
+        self.remove_interest(request).await
+    }
+
+    async fn reset_interests(
+        &self,
+        request: Request<proto::ResetInterestsRequest>,
+    ) -> Result<Response<proto::InterestsResponse>, Status> {
+        self.reset_interests(request).await
     }
 }
 

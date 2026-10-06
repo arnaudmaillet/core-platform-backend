@@ -94,6 +94,8 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("profile.v1.events", "post"),
     ("profile.v1.events", "social-graph"),
     ("profile.v1.events", "geo-discovery"),
+    // a deleted profile's interest tags (#662) → timeline erases them
+    ("profile.v1.events", "timeline"),
     // post (legacy)
     ("post.published", "notification"),
     ("post.published", "geo-discovery"),
@@ -112,6 +114,9 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     // engagement reactions → counter aggregation, notif fan-out, write-behind
     ("engagement.reactions", "counter"),
     ("engagement.reactions", "notification"),
+    // a first reaction teaches the reactor the post's hashtags (#662: the
+    // interest tags that rank For You)
+    ("engagement.reactions", "timeline"),
     // follows, follow requests and their approval (#755)
     ("social-graph.followed", "notification"),
     ("social-graph.follow_requested", "notification"),

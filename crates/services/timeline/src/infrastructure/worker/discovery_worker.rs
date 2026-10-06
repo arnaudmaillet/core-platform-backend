@@ -1,13 +1,20 @@
-//! Feeds the discovery pool from three streams, one consumer group:
+//! Feeds the discovery pool and the interest tags (#662) from five streams,
+//! one consumer group:
 //!
 //! - `post.v1.events` (post's `DomainEvent`, tagged `type`, PascalCase):
-//!   `PostPublished` pools a post, `PostDeleted` drops it for good;
+//!   `PostPublished` pools a post with its caption's hashtags, `PostDeleted`
+//!   drops it for good;
 //! - `moderation.v1.events` (moderation's `DomainEvent`, tagged `type`,
 //!   snake_case): `enforcement_applied` with a content action on a `post`
 //!   restricts it (`remove_content` / `visibility_limit` hide it, `age_gate`
 //!   keeps it for STANDARD readers only), `enforcement_reversed` lifts it;
 //! - `counter.v1.popularity` (untagged `{entity_type, entity_id, score}`): a
-//!   post's all-time popularity, which drives its hot score.
+//!   post's all-time popularity, which drives its hot score;
+//! - `engagement.reactions` (tagged `event_type`, snake_case): a new reaction
+//!   (`upserted` without an `old_kind`) teaches the reactor the post's tags; a
+//!   changed or removed one teaches nothing;
+//! - `profile.v1.events` (tagged `type`): `ProfileDeleted` erases the
+//!   profile's interests.
 //!
 //! Told apart by shape. Every pool write is idempotent and the moderation one
 //! is version-guarded, so redelivery and cross-topic reordering converge.
@@ -25,14 +32,17 @@ use uuid::Uuid;
 use cqrs::{CommandBus, Envelope};
 
 use crate::application::command::apply_discovery_signal::{ApplyDiscoverySignalCommand, DiscoverySignal};
+use crate::domain::value_object::interest::hashtags;
 use crate::domain::value_object::Restriction;
 use crate::infrastructure::worker::{build_dlq_producer, dispatch_outcome};
 
 const TOPIC_POST: &str = "post.v1.events";
 const TOPIC_MODERATION: &str = "moderation.v1.events";
 const TOPIC_POPULARITY: &str = "counter.v1.popularity";
+const TOPIC_REACTIONS: &str = "engagement.reactions";
+const TOPIC_PROFILE: &str = "profile.v1.events";
 
-/// A lenient superset of the three payloads.
+/// A lenient superset of the five payloads.
 #[derive(Debug, Deserialize)]
 pub struct DiscoveryEvent {
     #[serde(rename = "type", default)]
@@ -44,6 +54,8 @@ pub struct DiscoveryEvent {
     profile_id:      Option<String>,
     #[serde(default)]
     published_at_ms: Option<i64>,
+    #[serde(default)]
+    caption:         Option<String>,
     // moderation.v1.events
     #[serde(default)]
     subject:         Option<Subject>,
@@ -58,6 +70,13 @@ pub struct DiscoveryEvent {
     entity_id:       Option<String>,
     #[serde(default)]
     score:           Option<f64>,
+    // engagement.reactions (`post_id`, `profile_id` = the reactor)
+    #[serde(rename = "event_type", default)]
+    reaction:        Option<String>,
+    #[serde(default)]
+    old_kind:        Option<String>,
+    #[serde(default)]
+    event_at_ms:     Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +94,9 @@ enum Outcome {
 }
 
 fn outcome(event: &DiscoveryEvent) -> Outcome {
+    if let Some(reaction_type) = event.reaction.as_deref() {
+        return reaction(reaction_type, event);
+    }
     let Some(event_type) = event.event_type.as_deref() else {
         return popularity(event);
     };
@@ -85,6 +107,7 @@ fn outcome(event: &DiscoveryEvent) -> Outcome {
                     post_id:   post_id.clone(),
                     author_id: author_id.clone(),
                     published_at_ms,
+                    tags:      hashtags(event.caption.as_deref().unwrap_or_default()),
                 })
             }
             _ => Outcome::Poison("PostPublished without post_id, profile_id or published_at_ms".into()),
@@ -94,7 +117,27 @@ fn outcome(event: &DiscoveryEvent) -> Outcome {
             None => Outcome::Poison("PostDeleted without a post_id".into()),
         },
         "enforcement_applied" | "enforcement_reversed" => moderation(event_type, event),
+        "ProfileDeleted" => match &event.profile_id {
+            Some(profile_id) => Outcome::Apply(DiscoverySignal::ProfileErased { profile_id: profile_id.clone() }),
+            None => Outcome::Poison("ProfileDeleted without a profile_id".into()),
+        },
         _ => Outcome::Skip,
+    }
+}
+
+/// A first reaction to a post teaches its tags; a kind changed (an
+/// `old_kind`) or a reaction removed teaches nothing.
+fn reaction(reaction_type: &str, event: &DiscoveryEvent) -> Outcome {
+    if reaction_type != "upserted" || event.old_kind.is_some() {
+        return Outcome::Skip;
+    }
+    match (&event.post_id, &event.profile_id, event.event_at_ms) {
+        (Some(post_id), Some(profile_id), Some(at_ms)) => Outcome::Apply(DiscoverySignal::Reacted {
+            post_id:    post_id.clone(),
+            profile_id: profile_id.clone(),
+            at_ms,
+        }),
+        _ => Outcome::Poison("reaction upserted without post_id, profile_id or event_at_ms".into()),
     }
 }
 
@@ -166,7 +209,7 @@ impl<CB: CommandBus + 'static> DiscoveryWorker<CB> {
         config.enable_auto_commit = false;
 
         let handle = KafkaConsumerBuilder::new(config)
-            .subscribe_many([TOPIC_POST, TOPIC_MODERATION, TOPIC_POPULARITY])
+            .subscribe_many([TOPIC_POST, TOPIC_MODERATION, TOPIC_POPULARITY, TOPIC_REACTIONS, TOPIC_PROFILE])
             .build()
             .map_err(|e| e.to_string())?;
         tracing::info!(group = %self.group_id, "discovery consumer started");
@@ -220,7 +263,7 @@ mod tests {
             author_tier:     0,
             audio_id:        None,
             audio_kind:      None,
-            caption:         String::new(),
+            caption:         "Sunset #Paris #paris #golden_hour".into(),
             thumbnail_url:   None,
             lat:             None,
             lng:             None,
@@ -250,6 +293,7 @@ mod tests {
                 post_id:         POST.into(),
                 author_id:       AUTHOR.into(),
                 published_at_ms: 1_760_000_000_000,
+                tags:            vec!["paris".into(), "golden_hour".into()],
             })
         );
         let deleted = PostEvent::PostDeleted(PostDeletedEvent {
@@ -312,5 +356,48 @@ mod tests {
         };
         assert_eq!(outcome(&wire(serde_json::to_vec(&profile).unwrap())), Outcome::Skip);
         assert!(matches!(outcome(&wire(b"{}".to_vec())), Outcome::Poison(_)));
+    }
+
+    #[test]
+    fn a_first_reaction_teaches_the_tags_a_change_or_removal_does_not() {
+        use engagement::domain::event::reaction_event::ReactionKafkaEvent;
+        use engagement::domain::event::{ReactionRemovedEvent, ReactionUpsertedEvent};
+        use engagement::domain::value_object::ReactionKind;
+
+        const READER: &str = "0190f0a0-0000-7000-8000-0000000000bb";
+        let upserted = |old_kind| {
+            wire(serde_json::to_vec(&ReactionKafkaEvent::Upserted(ReactionUpsertedEvent {
+                post_id:     POST.into(),
+                profile_id:  READER.into(),
+                new_kind:    ReactionKind::Fire,
+                new_weight:  2,
+                old_kind,
+                old_weight:  old_kind.map(|_| 1),
+                event_at_ms: 1_760_000_000_500,
+            }))
+            .unwrap())
+        };
+        assert_eq!(
+            outcome(&upserted(None)),
+            Outcome::Apply(DiscoverySignal::Reacted { post_id: POST.into(), profile_id: READER.into(), at_ms: 1_760_000_000_500 })
+        );
+        assert_eq!(outcome(&upserted(Some(ReactionKind::Heart))), Outcome::Skip);
+        let removed = ReactionKafkaEvent::Removed(ReactionRemovedEvent {
+            post_id: POST.into(), profile_id: READER.into(), kind: ReactionKind::Fire, weight: 2, event_at_ms: 1,
+        });
+        assert_eq!(outcome(&wire(serde_json::to_vec(&removed).unwrap())), Outcome::Skip);
+    }
+
+    #[test]
+    fn a_deleted_profile_erases_its_interests_other_profile_events_skip() {
+        use profile::infrastructure::publisher::wire::ProfileEventWire;
+
+        let deleted = ProfileEventWire::ProfileDeleted { profile_id: AUTHOR.into(), occurred_at_ms: 1 };
+        assert_eq!(
+            outcome(&wire(serde_json::to_vec(&deleted).unwrap())),
+            Outcome::Apply(DiscoverySignal::ProfileErased { profile_id: AUTHOR.into() })
+        );
+        let updated = ProfileEventWire::ProfileUpdated { profile_id: AUTHOR.into(), occurred_at_ms: 1 };
+        assert_eq!(outcome(&wire(serde_json::to_vec(&updated).unwrap())), Outcome::Skip);
     }
 }

@@ -153,6 +153,8 @@ pub struct DiscoveryMeta {
     pub popularity:      f64,
     pub restriction:     Restriction,
     pub deleted:         bool,
+    /// The caption's hashtags, normalized (#662: what a reaction teaches).
+    pub tags:            Vec<String>,
 }
 
 impl DiscoveryMeta {
@@ -306,6 +308,7 @@ mod tests {
             popularity:      0.0,
             restriction:     Restriction::None,
             deleted:         false,
+            tags:            Vec::new(),
         };
         assert!(base.shown_at(ContentLevel::Restricted));
         let gated = DiscoveryMeta { restriction: Restriction::AgeGated, ..base.clone() };

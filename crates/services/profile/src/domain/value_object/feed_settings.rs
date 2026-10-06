@@ -13,12 +13,14 @@ pub enum SensitiveContent {
 }
 
 /// The holder's feed controls, synced across their devices; the client sends
-/// the level with each discovery request. Stored as one JSON column; a profile
+/// them with each discovery request. Stored as one JSON column; a profile
 /// without one has the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FeedSettings {
     pub sensitive_content: SensitiveContent,
+    /// For You not ranked by the profile's interest tags (timeline, #662).
+    pub non_personalized:  bool,
 }
 
 impl FeedSettings {
@@ -38,7 +40,10 @@ mod tests {
     #[test]
     fn the_default_is_less_and_the_stored_form_round_trips() {
         assert_eq!(FeedSettings::from_json(None).sensitive_content, SensitiveContent::Less);
-        let s = FeedSettings { sensitive_content: SensitiveContent::Standard };
+        assert!(!FeedSettings::from_json(None).non_personalized);
+        let s = FeedSettings { sensitive_content: SensitiveContent::Standard, non_personalized: true };
         assert_eq!(FeedSettings::from_json(Some(&s.to_json())), s);
+        // Stored before the flag existed: personalised.
+        assert!(!FeedSettings::from_json(Some(r#"{"sensitive_content":"standard"}"#)).non_personalized);
     }
 }

@@ -3,6 +3,7 @@ pub mod author_id;
 pub mod author_tier;
 pub mod cursor;
 pub mod discovery;
+pub mod interest;
 pub mod post_id;
 pub mod profile_id;
 
@@ -14,5 +15,6 @@ pub use discovery::{
     hot_score, ContentAccess, ContentLevel, DiscoveryCursor, DiscoveryMeta, DiscoveryRanking,
     DiscoveryStream, Restriction, StreamPosition, Viewer, TRENDING_PER_FRESH,
 };
+pub use interest::Interest;
 pub use post_id::PostId;
 pub use profile_id::ProfileId;

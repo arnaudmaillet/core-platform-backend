@@ -290,9 +290,12 @@ message SetTabSettingsRequest {
 
 // Feed controls (#662), synced across the holder's devices: the client sends
 // the level as timeline's content_level (LESS → RESTRICTED, STANDARD →
-// STANDARD). Timeline never serves STANDARD to a guest or a 13–17 holder.
+// STANDARD), and non_personalized as GetDiscoveryFeed's non_personalized.
+// Timeline never serves STANDARD to a guest or a 13–17 holder.
 message FeedSettings {
     SensitiveContent sensitive_content = 1;
+    // For You not ranked by the profile's interest tags (DSA Art. 38).
+    bool             non_personalized  = 2;
 }
 
 message SetFeedSettingsRequest {
