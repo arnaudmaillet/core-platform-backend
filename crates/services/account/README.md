@@ -176,8 +176,8 @@ phone hash column needs no normalization.
 **GDPR data export (#653, Art. 15/20).** `RequestDataExport` marks the export pending; the **export
 pass** (`ExportDueData`) then builds, per pending account, a ZIP of JSON files — the holder's own
 account record (contact details, consents, sign-in settings; **no** password hash, MFA material or
-internal fields), the other services' files (`ExportSources`: profiles, posts, comments, reactions, the
-social graph, conversations, media links), a `README.txt` — stores it privately
+internal fields), the other services' files (`ExportSources`: profiles, posts, comments, reactions, recent
+searches, the social graph, conversations, media links), a `README.txt` — stores it privately
 (`exports/<account>/<id>.zip`, `S3ExportStore`: static keys, `ACCOUNT_EXPORT_*`) and records its **object
 key** on the GDPR record — never a signed link, which is a bearer credential: `GetGdprRecord` signs the
 link on read for what is left of the 7 days (`data_export_url` / `data_export_expires_at`, shown to the
@@ -187,7 +187,8 @@ archive) and the pass retries it (`ACC-7005`); the save is version-checked, so a
 export was being built is built anew. Pending accounts come from a partial index (migration 0005). The
 sources are the other services' **mesh-only** RPCs (`MeshExportPeers`, every page, each message
 transcoded to JSON through the service's own descriptor set): per profile its profile, posts, comments
-(`ListCommentsByAuthor`), reactions (`ListReactionsByProfile`), social graph, and conversations
+(`ListCommentsByAuthor`), reactions (`ListReactionsByProfile`), recent searches (search's
+`ListRecentSearches`, over the mesh, #816), social graph, and conversations
 (`ListConversationsByMember`, then: a `DIRECT` conversation in full through `GetHistory`; a group or
 channel through chat's mesh-only `GetFormerMemberHistory`, the holder's own messages with the others' as
 `{"from": "another member"}` placeholders — direct is the conversation's kind, never its roster size;
@@ -300,6 +301,7 @@ async fn main() -> anyhow::Result<()> {
 | `ACCOUNT_EXPORT_BUCKET` · `ACCOUNT_EXPORT_S3_ENDPOINT` · `ACCOUNT_EXPORT_S3_PUBLIC_ENDPOINT` · `ACCOUNT_EXPORT_S3_REGION` | No | unset · `https://s3.amazonaws.com` · = endpoint · `us-east-1` | The GDPR export store (#653). Unset bucket: exports stay pending. |
 | `ACCOUNT_EXPORT_S3_ACCESS_KEY` · `ACCOUNT_EXPORT_S3_SECRET_KEY` | No | unset | Static keys for that bucket (a 7-day presign needs non-session credentials). |
 | `ACCOUNT_EXPORT_INTERVAL_SECS` | No | `300` | How often the export pass runs; `0` turns it off. |
+| `ACCOUNT_SEARCH_GRPC_ENDPOINT` | No | `http://localhost:50062` | search's mesh address: the profiles' recent searches in the export (#816). |
 | `ACCOUNT_{PROFILE,POST,COMMENT,ENGAGEMENT,SOCIAL_GRAPH,CHAT,MEDIA}_GRPC_ENDPOINT` | No | `http://localhost:<port>` | The export's mesh sources. An unreachable one leaves the export pending. |
 
 > Full connection/timeout/pool tuning lives in the shared `postgres-storage` and `transport` crates.

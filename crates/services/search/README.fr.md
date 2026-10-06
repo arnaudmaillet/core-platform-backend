@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 9bb77e9980ef6fb079e3e3b1a2f3eb7f2415cb4b84d9e6d9627119818012168e
+  source_sha256: a6ee9aba34f0d8180c66384f64879c14cd79af5d7ca6c8bde6932d7ec7b7508a
   translated_at: 2026-10-06
   status: complete
 ---
@@ -113,7 +113,7 @@ La surface synchrone est délibérément en **lecture seule** : `Search` (fédé
 
 Les quatre RPC sont exposés en périphérie, `authenticated` + `require_profile`, et chacun répond la liste telle qu'elle est : la plus récente d'abord, 50 au plus, aucune de plus de 90 jours. Une requête est rognée, ses espaces fusionnés, coupée à 100 caractères, et une recherche identique plus ancienne, quelle que soit sa casse, remonte plutôt que de se répéter.
 
-Le stockage tient en un document par profil dans `<prefix>-recent-searches` (non indexé, jamais cherché), tenu par un upsert scripté painless. L'historique de visionnage reste sur l'appareil (aucun flux de vues n'existe).
+Le stockage tient en un document par profil dans `<prefix>-recent-searches` (non indexé, jamais cherché), tenu par un upsert scripté painless. Ce sont des données personnelles : l'export RGPD d'account les lit via `ListRecentSearches` sur le mesh (#816 ; `require_profile` accepte un appelant mesh), et elles sont effacées avec le profil. L'historique de visionnage reste sur l'appareil (aucun flux de vues n'existe).
 
 > **Contrat de fil :** les résultats sont des références — `(entity_type, id, score, highlight/snippet)` plus les champs d'affichage minimaux indexés (handle, nom affiché, clé de miniature, `author_id`, `created_at`). Les appelants DOIVENT hydrater les champs volatils/autoritatifs (compteurs vivants, URLs média signées, état de suivi, bio courante) depuis `post`/`profile`. Search ne renvoie aucune entité autoritative.
 

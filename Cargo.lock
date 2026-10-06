@@ -26,6 +26,7 @@ dependencies = [
  "prost-types",
  "reqwest",
  "rusty-s3",
+ "search-api",
  "serde",
  "serde_json",
  "service-runtime",

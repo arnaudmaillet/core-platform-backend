@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 67ba951ac2454da4206e69526e4f40cfa0cfc7d815f5d2aedf08584e0ad22982
-  translated_at: 2026-10-05
+  source_sha256: 55dfce8bdaba1ed7ceaf0bedf4b1a920f4ae210df8bd29976e198f9ea21b365e
+  translated_at: 2026-10-06
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -194,7 +194,7 @@ normalisation.
 **passe d'export** (`ExportDueData`) construit alors, pour chaque compte en attente, un ZIP de fichiers
 JSON — le dossier de compte du titulaire (coordonnées, consentements, réglages de connexion ; **ni**
 empreinte de mot de passe, ni matériel MFA, ni champ interne), les fichiers des autres services
-(`ExportSources` : profils, posts, commentaires, réactions, graphe social, conversations, liens vers les
+(`ExportSources` : profils, posts, commentaires, réactions, recherches récentes, graphe social, conversations, liens vers les
 médias), un `README.txt` — le stocke en privé (`exports/<compte>/<id>.zip`, `S3ExportStore` : clés
 statiques, `ACCOUNT_EXPORT_*`) et inscrit sa **clé d'objet** dans le dossier RGPD — jamais un lien signé,
 qui est un secret au porteur : `GetGdprRecord` signe le lien à la lecture pour ce qu'il reste des 7 jours
@@ -205,7 +205,8 @@ passe le réessaie (`ACC-7005`) ; l'écriture est versionnée, donc une demande 
 construction d'un export est reconstruite. Les comptes en attente viennent d'un index partiel (migration
 0005). Les sources sont les RPC **mesh uniquement** des autres services (`MeshExportPeers`, chaque page,
 chaque message converti en JSON via le jeu de descripteurs du service) : par profil son profil, ses posts,
-commentaires (`ListCommentsByAuthor`), réactions (`ListReactionsByProfile`), graphe social et conversations
+commentaires (`ListCommentsByAuthor`), réactions (`ListReactionsByProfile`), recherches récentes
+(`ListRecentSearches` de search, via le mesh, #816), graphe social et conversations
 (`ListConversationsByMember`, puis : une conversation `DIRECT` en entier via `GetHistory` ; un groupe ou un
 canal via le `GetFormerMemberHistory` mesh de chat, ses propres messages et ceux des autres en placeholders
 `{"from": "another member"}` — « directe » est le type de la conversation, jamais la taille de ses membres ;
@@ -321,6 +322,7 @@ async fn main() -> anyhow::Result<()> {
 | `ACCOUNT_EXPORT_BUCKET` · `ACCOUNT_EXPORT_S3_ENDPOINT` · `ACCOUNT_EXPORT_S3_PUBLIC_ENDPOINT` · `ACCOUNT_EXPORT_S3_REGION` | Non | non défini · `https://s3.amazonaws.com` · = endpoint · `us-east-1` | Le stockage des exports RGPD (#653). Bucket non défini : les exports restent en attente. |
 | `ACCOUNT_EXPORT_S3_ACCESS_KEY` · `ACCOUNT_EXPORT_S3_SECRET_KEY` | Non | non défini | Clés statiques de ce bucket (un presign de 7 jours exige des identifiants hors session). |
 | `ACCOUNT_EXPORT_INTERVAL_SECS` | Non | `300` | Fréquence de la passe d'export ; `0` la désactive. |
+| `ACCOUNT_SEARCH_GRPC_ENDPOINT` | Non | `http://localhost:50062` | Adresse mesh de search : les recherches récentes des profils dans l'export (#816). |
 | `ACCOUNT_{PROFILE,POST,COMMENT,ENGAGEMENT,SOCIAL_GRAPH,CHAT,MEDIA}_GRPC_ENDPOINT` | Non | `http://localhost:<port>` | Les sources mesh de l'export. Une source injoignable laisse l'export en attente. |
 
 > Le réglage complet connexion/timeout/pool vit dans les crates partagés `postgres-storage` et `transport`.

@@ -74,6 +74,8 @@ pub trait ExportPeers: Send + Sync + 'static {
     async fn posts(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError>;
     async fn comments(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError>;
     async fn reactions(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError>;
+    /// The profile's recent searches, newest first (#816; search keeps 50 for 90 days).
+    async fn recent_searches(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError>;
     /// `{following, followers, blocks}`.
     async fn social(&self, profile_id: &str) -> Result<serde_json::Value, AccountError>;
     async fn conversations(&self, profile_id: &str) -> Result<Vec<ConversationExport>, AccountError>;
