@@ -39,12 +39,28 @@ pub enum ApplyOutcome {
 }
 
 pub struct ProjectionHandler {
-    index: Arc<dyn SearchIndex>,
+    index:  Arc<dyn SearchIndex>,
+    /// Recent searches (#663): erased with the profile.
+    recent: Option<Arc<dyn crate::application::port::RecentSearches>>,
 }
 
 impl ProjectionHandler {
     pub fn new(index: Arc<dyn SearchIndex>) -> Self {
-        Self { index }
+        Self { index, recent: None }
+    }
+
+    /// With the recent-searches store: a deleted profile's, and a purged
+    /// author's, recent searches are erased with it (GDPR Art. 17, #663).
+    pub fn with_recent(mut self, recent: Arc<dyn crate::application::port::RecentSearches>) -> Self {
+        self.recent = Some(recent);
+        self
+    }
+
+    async fn erase_recent(&self, profile_id: &str) -> Result<(), SearchError> {
+        match &self.recent {
+            Some(recent) => recent.clear(profile_id).await,
+            None => Ok(()),
+        }
     }
 
     pub async fn apply(
@@ -73,10 +89,14 @@ impl ProjectionHandler {
             },
             IndexMutation::Delete { kind, id } => {
                 self.index.delete(kind, &id).await?;
+                if kind == crate::domain::EntityKind::Profile {
+                    self.erase_recent(&id).await?;
+                }
                 ApplyOutcome::Deleted
             }
             IndexMutation::PurgeByAuthor { author_id } => {
                 let removed = self.index.purge_by_author(&author_id).await?;
+                self.erase_recent(author_id.as_str()).await?;
                 ApplyOutcome::Purged(removed)
             }
             IndexMutation::SetPostWindow {

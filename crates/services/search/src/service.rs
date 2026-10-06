@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::Context;
 use async_trait::async_trait;
 use service_runtime::{FnProbe, HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::public_read;
+use service_runtime::edge::{authenticated, public_read};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -54,6 +54,10 @@ impl Service for SearchService {
         public_read("/search.v1.SearchService/Search"),
         public_read("/search.v1.SearchService/Suggest"),
         public_read("/search.v1.SearchService/MultiSearch"),
+        authenticated("/search.v1.SearchService/RecordRecentSearch"),
+        authenticated("/search.v1.SearchService/ListRecentSearches"),
+        authenticated("/search.v1.SearchService/DeleteRecentSearch"),
+        authenticated("/search.v1.SearchService/ClearSearchHistory"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

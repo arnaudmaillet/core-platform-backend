@@ -12,6 +12,7 @@ pub mod event;
 pub mod mutation;
 pub mod projector;
 pub mod query;
+pub mod recent_search;
 pub mod value_object;
 
 pub use audience::{ContentAccess, Viewer};

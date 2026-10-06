@@ -154,6 +154,23 @@ impl OpenSearchIndex {
         }
     }
 
+    /// Whether `profile_id` has a recent-searches document at all (erasure
+    /// checks: an empty list is not proof the document is gone).
+    pub async fn has_recent_searches_document(&self, profile_id: &str) -> Result<bool, SearchError> {
+        let path = format!("{}/_doc/{}", encode_path(&self.recent_index()), encode(profile_id));
+        let (status, value) = self.send(Method::GET, &path, None).await?;
+        match status {
+            StatusCode::NOT_FOUND => Ok(false),
+            s if s.is_success() => Ok(value["found"].as_bool().unwrap_or(false)),
+            s => Err(write_status_error(s, &value)),
+        }
+    }
+
+    /// Recent searches (#663): one document per profile.
+    fn recent_index(&self) -> String {
+        format!("{}-recent-searches", self.config.index_prefix)
+    }
+
     fn read_alias(&self, kind: EntityKind) -> String {
         format!("{}-{}", self.config.index_prefix, plural(kind))
     }
@@ -381,6 +398,19 @@ impl SearchIndex for OpenSearchIndex {
 #[async_trait]
 impl IndexAdmin for OpenSearchIndex {
     async fn ensure_indices(&self) -> Result<(), SearchError> {
+        // Recent searches (#663): one document per profile, never searched.
+        let (status, value) = self
+            .send(
+                Method::PUT,
+                &encode_path(&self.recent_index()),
+                Some(json!({ "mappings": { "dynamic": false, "properties": {
+                    "entries": { "type": "object", "enabled": false }
+                } } })),
+            )
+            .await?;
+        if !status.is_success() && !already_exists(&value) {
+            return Err(write_status_error(status, &value));
+        }
         for kind in [EntityKind::Profile, EntityKind::Post, EntityKind::Hashtag] {
             let physical = self.physical(kind, MAPPING_VERSION);
             // Create the physical index; tolerate "already exists".
@@ -717,4 +747,98 @@ fn encode(segment: &str) -> String {
 /// are already URL-safe; this is a no-op guard for clarity at call sites.
 fn encode_path(index: &str) -> String {
     index.to_owned()
+}
+
+/// Puts the new entry first, drops the same query (case-insensitive key) and
+/// anything past the retention, and keeps at most `max`.
+const RECORD_RECENT_SCRIPT: &str = "\
+if (ctx._source.entries == null) { ctx._source.entries = []; } \
+def kept = [params.entry]; \
+for (e in ctx._source.entries) { \
+  if (kept.size() >= params.max) { break; } \
+  if (e.key != params.entry.key && e.at_ms >= params.cutoff_ms) { kept.add(e); } \
+} \
+ctx._source.entries = kept;";
+
+const DELETE_RECENT_SCRIPT: &str = "\
+if (ctx._source.entries != null) { ctx._source.entries.removeIf(e -> e.key == params.key); }";
+
+#[async_trait]
+impl crate::application::port::RecentSearches for OpenSearchIndex {
+    async fn record(&self, profile_id: &str, query: &str, at: chrono::DateTime<chrono::Utc>) -> Result<(), SearchError> {
+        use crate::domain::recent_search::{normalize_query, query_key, MAX_RECENT_SEARCHES, RECENT_SEARCH_RETENTION};
+        let Some(query) = normalize_query(query) else { return Ok(()) };
+        let body = json!({
+            "scripted_upsert": true,
+            "upsert": { "entries": [] },
+            "script": {
+                "lang": "painless",
+                "source": RECORD_RECENT_SCRIPT,
+                "params": {
+                    "entry": { "q": query, "key": query_key(&query), "at_ms": at.timestamp_millis() },
+                    "max": MAX_RECENT_SEARCHES,
+                    "cutoff_ms": (at - RECENT_SEARCH_RETENTION).timestamp_millis(),
+                }
+            }
+        });
+        let path = format!("{}/_update/{}?retry_on_conflict=3", encode_path(&self.recent_index()), encode(profile_id));
+        let (status, value) = self.send(Method::POST, &path, Some(body)).await?;
+        if !status.is_success() {
+            return Err(write_status_error(status, &value));
+        }
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        profile_id: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::domain::recent_search::RecentSearch>, SearchError> {
+        use crate::domain::recent_search::{RecentSearch, RECENT_SEARCH_RETENTION};
+        let path = format!("{}/_doc/{}", encode_path(&self.recent_index()), encode(profile_id));
+        let (status, value) = self.send(Method::GET, &path, None).await?;
+        if status == StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        if !status.is_success() {
+            return Err(write_status_error(status, &value));
+        }
+        let cutoff = (now - RECENT_SEARCH_RETENTION).timestamp_millis();
+        Ok(value["_source"]["entries"]
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|e| {
+                        let at_ms = e["at_ms"].as_i64()?;
+                        let at = chrono::DateTime::from_timestamp_millis(at_ms)?;
+                        Some(RecentSearch { query: e["q"].as_str()?.to_owned(), at }).filter(|_| at_ms >= cutoff)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    async fn delete(&self, profile_id: &str, query: &str) -> Result<(), SearchError> {
+        use crate::domain::recent_search::{normalize_query, query_key};
+        let Some(query) = normalize_query(query) else { return Ok(()) };
+        let body = json!({
+            "script": { "lang": "painless", "source": DELETE_RECENT_SCRIPT, "params": { "key": query_key(&query) } }
+        });
+        let path = format!("{}/_update/{}?retry_on_conflict=3", encode_path(&self.recent_index()), encode(profile_id));
+        let (status, value) = self.send(Method::POST, &path, Some(body)).await?;
+        if !status.is_success() && status != StatusCode::NOT_FOUND {
+            return Err(write_status_error(status, &value));
+        }
+        Ok(())
+    }
+
+    async fn clear(&self, profile_id: &str) -> Result<(), SearchError> {
+        let path = format!("{}/_doc/{}", encode_path(&self.recent_index()), encode(profile_id));
+        let (status, value) = self.send(Method::DELETE, &path, None).await?;
+        if !status.is_success() && status != StatusCode::NOT_FOUND {
+            return Err(write_status_error(status, &value));
+        }
+        Ok(())
+    }
 }

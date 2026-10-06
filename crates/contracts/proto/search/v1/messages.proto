@@ -122,3 +122,35 @@ message MultiSearchResponse {
     // Positional, 1:1 with `MultiSearchRequest.searches`.
     repeated SearchResponse  responses = 1;
 }
+
+// ── Recent searches (#663) ────────────────────────────────────────────────────
+
+message RecordRecentSearchRequest {
+    string profile_id = 1;
+    // Trimmed, whitespace collapsed, at most 100 characters; an identical
+    // earlier search (whatever its case) moves up rather than repeats.
+    string query      = 2;
+}
+
+message ListRecentSearchesRequest {
+    string profile_id = 1;
+}
+
+message DeleteRecentSearchRequest {
+    string profile_id = 1;
+    string query      = 2;
+}
+
+message ClearSearchHistoryRequest {
+    string profile_id = 1;
+}
+
+message RecentSearch {
+    string query          = 1;
+    int64  searched_at_ms = 2;
+}
+
+message RecentSearchesResponse {
+    // Newest first.
+    repeated RecentSearch searches = 1;
+}
