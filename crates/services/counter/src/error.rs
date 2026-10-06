@@ -26,6 +26,7 @@ use thiserror::Error;
 /// | CTR-3002 | CacheWriteFailed         | 500  | Medium   | **Yes**   |
 /// | CTR-3003 | SignalPublishFailed      | 500  | Medium   | **Yes**   |
 /// | CTR-4001 | HotStoreUnavailable      | 503  | **High** | **Yes**   |
+/// | CTR-4005 | PostUnavailable          | 503  | **High** | **Yes**   |
 /// | CTR-4002 | LedgerUnavailable        | 503  | **High** | **Yes**   |
 /// | CTR-4003 | TimeSeriesUnavailable    | 503  | **High** | **Yes**   |
 /// | CTR-4004 | StoreTimeout             | 504  | **High** | **Yes**   |
@@ -97,6 +98,11 @@ pub enum CounterError {
     #[error("the hot counter store (Redis) is unavailable")]
     HotStoreUnavailable,
 
+    /// post could not say whose posts these are or whether their authors hide
+    /// like counts (#809): likes are withheld, never shown.
+    #[error("post is unavailable: {reason}")]
+    PostUnavailable { reason: String },
+
     #[error("the warm counter ledger (Postgres) is unavailable")]
     LedgerUnavailable,
 
@@ -163,6 +169,7 @@ impl AppError for CounterError {
             CounterError::SignalPublishFailed { .. } => "CTR-3003",
 
             CounterError::HotStoreUnavailable => "CTR-4001",
+            CounterError::PostUnavailable { .. } => "CTR-4005",
             CounterError::LedgerUnavailable => "CTR-4002",
             CounterError::TimeSeriesUnavailable => "CTR-4003",
             CounterError::StoreTimeout => "CTR-4004",
@@ -187,6 +194,7 @@ impl AppError for CounterError {
 
             CounterError::HotStoreUnavailable
             | CounterError::LedgerUnavailable
+            | CounterError::PostUnavailable { .. }
             | CounterError::TimeSeriesUnavailable => StatusCode::SERVICE_UNAVAILABLE,
 
             CounterError::StoreTimeout => StatusCode::GATEWAY_TIMEOUT,
@@ -212,6 +220,7 @@ impl AppError for CounterError {
             CounterError::FlushFailed { .. }
             | CounterError::HotStoreUnavailable
             | CounterError::LedgerUnavailable
+            | CounterError::PostUnavailable { .. }
             | CounterError::TimeSeriesUnavailable
             | CounterError::StoreTimeout
             | CounterError::DriftThresholdExceeded { .. } => Severity::High,
@@ -240,6 +249,7 @@ impl AppError for CounterError {
             | CounterError::SignalPublishFailed { .. }
             | CounterError::HotStoreUnavailable
             | CounterError::LedgerUnavailable
+            | CounterError::PostUnavailable { .. }
             | CounterError::TimeSeriesUnavailable
             | CounterError::StoreTimeout
             | CounterError::SourceReplayFailed { .. } => true,
@@ -267,6 +277,7 @@ impl AppError for CounterError {
 
             CounterError::HotStoreUnavailable
             | CounterError::LedgerUnavailable
+            | CounterError::PostUnavailable { .. }
             | CounterError::TimeSeriesUnavailable
             | CounterError::StoreTimeout => {
                 "Counts are temporarily unavailable. Please try again."

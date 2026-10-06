@@ -12,8 +12,10 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::application::query::{
-    BatchGetHandler, RunBatchGet, RunTimeSeries, RunTrending, TimeSeriesHandler, TrendingHandler,
+    BatchGetHandler, CountReader, LikeGuard, RunBatchGet, RunTimeSeries, RunTrending, TimeSeriesHandler,
+    TrendingHandler,
 };
+use transport::grpc::edge;
 use crate::domain::{
     BatchGetQuery, BatchReadout, CountSnapshot, EntityId, EntityKind, EntityRef, Metric,
     MetricKind, TimeGranularity, TimeSeriesBucket, TimeSeriesQuery, TrendingItem, TrendingQuery,
@@ -29,6 +31,18 @@ pub struct CounterServiceHandler {
     batch: Arc<BatchGetHandler>,
     trending: Arc<TrendingHandler>,
     timeseries: Arc<TimeSeriesHandler>,
+    /// Hidden like counts (#809); off by default.
+    likes: LikeGuard,
+}
+
+/// The reader from how the request arrived: hidden likes (#809) reach only
+/// the author (one of the caller's profiles) and the mesh.
+fn reader_of<T>(request: &Request<T>) -> CountReader {
+    match edge::viewer(request) {
+        edge::Viewer::Internal => CountReader::Internal,
+        edge::Viewer::Anonymous => CountReader::Profiles(Vec::new()),
+        edge::Viewer::Member { profile_ids, .. } => CountReader::Profiles(profile_ids),
+    }
 }
 
 impl CounterServiceHandler {
@@ -41,13 +55,21 @@ impl CounterServiceHandler {
             batch,
             trending,
             timeseries,
+            likes: LikeGuard::default(),
         }
+    }
+
+    /// Withholds hidden like counts (#809).
+    pub fn with_like_guard(mut self, likes: LikeGuard) -> Self {
+        self.likes = likes;
+        self
     }
 
     pub async fn batch_get_counters(
         &self,
         request: Request<proto::BatchGetCountersRequest>,
     ) -> Result<Response<proto::BatchGetCountersResponse>, Status> {
+        let reader = reader_of(&request);
         let req = request.into_inner();
         let entities = req
             .entities
@@ -58,11 +80,12 @@ impl CounterServiceHandler {
         let metrics = req.metrics.into_iter().filter_map(metric_from_proto).collect();
 
         let query = BatchGetQuery::new(entities, metrics).map_err(to_status)?;
-        let readout = self
+        let mut readout = self
             .batch
             .handle(Envelope::new(Uuid::now_v7(), RunBatchGet { query }))
             .await
             .map_err(to_status)?;
+        self.likes.apply_batch(&reader, &mut readout).await;
         Ok(Response::new(batch_to_proto(readout)))
     }
 
@@ -70,6 +93,7 @@ impl CounterServiceHandler {
         &self,
         request: Request<proto::GetTrendingRequest>,
     ) -> Result<Response<proto::GetTrendingResponse>, Status> {
+        let reader = reader_of(&request);
         let req = request.into_inner();
         let scope = scope_from_proto(req.scope);
         let metric = metric_from_proto(req.metric).ok_or_else(|| {
@@ -83,6 +107,7 @@ impl CounterServiceHandler {
             .handle(Envelope::new(Uuid::now_v7(), RunTrending { query }))
             .await
             .map_err(to_status)?;
+        let items = self.likes.apply_trending(&reader, metric, items).await;
         Ok(Response::new(proto::GetTrendingResponse {
             entries: items.into_iter().map(trending_to_proto).collect(),
             degraded: false,

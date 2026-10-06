@@ -107,6 +107,14 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS where it
 
 The synchronous surface is deliberately **read-only**: `BatchGetCounters` (magnitudes for a batch of entity references + metric mask — the feed-hydration hot path), `GetTrending` (top-K for a scope, served from CMS + a bounded heap), and `GetTimeSeries` (historical buckets — the one RPC allowed to touch the cold Scylla tier, explicitly *not* sub-ms and off the feed path). **There is no write/increment RPC** — ingestion is Kafka-only.
 
+**Hidden like counts (#809).** When a post's author hides like counts, its `LIKE` value is dropped from
+`BatchGetCounters` for anyone but the author (one of the caller's profiles, from the token) — guests
+included — and a `LIKE` `GetTrending` drops the post (the ranks close up, so its place does not tell
+either). Other metrics are untouched; the mesh reads everything. Whose post it is and the author's setting
+come from post (`BatchGetLikeVisibility`, cached 60 s per instance); when post cannot answer, every
+post's `LIKE` is withheld and the readout is marked `degraded` — never an error. Without
+`COUNTER_POST_GRPC_ENDPOINT` nothing is withheld (a warning at boot).
+
 > **Wire contract:** results are magnitudes attached to a reference — `(entity_type, id, metric, value)` plus approximate-vs-exact provenance. Callers MUST hydrate the entity itself (post body, profile, media URL) from its SoR. `counter` returns no authoritative entity and no per-actor membership.
 
 ### Rust ports (hexagonal contract) *(Phase 3)*
@@ -219,6 +227,8 @@ async fn main() -> anyhow::Result<()> {
 | `COUNTER_SOCIAL_GRAPH_GRPC_ENDPOINT` | No | `http://localhost:50053` | `social-graph` endpoint — authoritative follower/following counts for reconciliation |
 | `COUNTER_SOCIAL_GRAPH_RPC_TIMEOUT_MS` | No | `5000` | per-request deadline on `social-graph` RPCs — a hung call would otherwise stall the reconcile loop |
 | `COUNTER_SOCIAL_GRAPH_CONNECT_TIMEOUT_MS` | No | `2000` | connect deadline when dialing the `social-graph` channel |
+| `COUNTER_POST_GRPC_ENDPOINT` | No | unset | `post`'s mesh address (e.g. `http://post:50056`), read server only: hidden like counts are withheld (#809). Unset → withheld from nobody |
+| `COUNTER_POST_RPC_TIMEOUT_MS` · `COUNTER_POST_CONNECT_TIMEOUT_MS` | No | `500` · `1000` | deadlines of that call |
 
 ### Inherited infrastructure variables
 

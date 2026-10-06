@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 43ba0e16e92afa82b4405693024a6bd24be647302f79de527a1a2fa4b763d2ee
+  source_sha256: 7d7bda30381338d3923fc25e86dcb50a8d65ef4edffbe201e39a9524bb04b5e6
   translated_at: 2026-10-06
   status: complete
 ---
@@ -145,8 +145,7 @@ sert des clients retient aussi — avec `downloads_disabled` (l'app ne propose p
 rendus média nécessaires pour le voir restent servis) et `like_counts_hidden`. Les services qui servent
 des compteurs retiennent les likes pour tout autre que l'auteur grâce à `BatchGetLikeVisibility`, réservé
 au mesh (l'auteur de chaque post et s'il masque ses compteurs de likes ; posts inconnus absents) :
-`GetPostEngagement` d'engagement le fait ; **`BatchGetCounters` (`LIKE`) de counter pas encore** (#809, à
-venir), si bien que d'ici là le drapeau n'y est qu'une indication.
+`GetPostEngagement` d'engagement et `BatchGetCounters` / `GetTrending` (`LIKE`) de counter.
 
 **Mentions (#656).** Une légende mentionne un profil par un lien `[@handle](profile:<uuid>)`. `CreatePost` et
 `UpdatePost` interrogent social-graph `CheckInteraction(MENTION)` pour chaque profil mentionné (une fois

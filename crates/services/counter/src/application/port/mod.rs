@@ -12,12 +12,14 @@
 
 pub mod counter_ledger;
 pub mod counter_store;
+pub mod like_visibility;
 pub mod reconciliation_source;
 pub mod signal_publisher;
 pub mod time_series;
 
 pub use counter_ledger::{CounterLedger, FlushOutcome, reconcile_cursor};
 pub use counter_store::CounterStore;
+pub use like_visibility::{LikeVisibility, PostLikeVisibility};
 pub use reconciliation_source::ReconciliationSource;
 pub use signal_publisher::SignalPublisher;
 pub use time_series::TimeSeriesStore;

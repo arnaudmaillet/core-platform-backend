@@ -130,9 +130,8 @@ teens default to no downloads). `GetPost` marks the post for anyone but the auth
 so a service serving clients withholds too — with `downloads_disabled` (the app offers no save; the media
 renditions needed to view it are still served) and `like_counts_hidden`. The services that serve counts
 withhold likes from anyone but the author through the mesh-only `BatchGetLikeVisibility` (each post's
-author and whether they hide like counts; unknown posts absent): engagement's `GetPostEngagement` does;
-**counter's `BatchGetCounters` (`LIKE`) does not yet** (#809, next), so until then the flag is only a hint
-there.
+author and whether they hide like counts; unknown posts absent): engagement's `GetPostEngagement` and
+counter's `BatchGetCounters` / `GetTrending` (`LIKE`).
 
 **Mentions (#656).** A caption mentions a profile with a link `[@handle](profile:<uuid>)`. `CreatePost` and
 `UpdatePost` ask social-graph `CheckInteraction(MENTION)` for each mentioned profile (each once, oneself
