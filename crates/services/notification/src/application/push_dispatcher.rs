@@ -80,7 +80,13 @@ impl PushDispatcher {
             match self.sender.send(device, &message).await {
                 Ok(PushOutcome::Delivered) => delivered += 1,
                 Ok(PushOutcome::TokenGone) => {
-                    tracing::info!(device_id = %device.device_id, "push token gone: device forgotten");
+                    // `BadDeviceToken` also answers a token sent to the wrong APNs
+                    // host: the environment shows a build registered as the other.
+                    tracing::info!(
+                        device_id = %device.device_id,
+                        environment = device.environment.as_str(),
+                        "push token gone: device forgotten"
+                    );
                     if let Err(error) = self.devices.unregister(&target, &device.device_id).await {
                         tracing::warn!(%error, "could not forget a gone push token");
                     }

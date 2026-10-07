@@ -165,6 +165,10 @@ push never delays nor fails the write, and is not retried. Off until the APNs ke
   (`BadDeviceToken`) is forgotten; any other refusal (e.g. `DeviceTokenNotForTopic`, a configuration
   fault) only logs (`NTF-3002`), so a misconfiguration never wipes the registrations. Android devices
   are skipped until an FCM sender exists.
+- **`environment` must match the build:** APNs answers `BadDeviceToken` to a sandbox token sent to
+  production (and the reverse), so a device registered with the wrong `environment` is forgotten at
+  its first push — "push stopped working" on one device. The `push token gone` log line carries the
+  environment; development builds register `SANDBOX`, TestFlight and the App Store `PRODUCTION`.
 
 ### Rust ports (hexagonal contract)
 

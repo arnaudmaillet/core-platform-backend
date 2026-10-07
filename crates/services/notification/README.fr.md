@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 970cfe435644298d691759f1d4ce2f66a4669803245359c2d261a6ec9f6dba5d
+  source_sha256: 06140b8350e0334b741e2c22907fb2fc7656aa395ebd3b12a17c3b93a0c6fc82
   translated_at: 2026-10-07
   status: complete
 ---
@@ -185,6 +185,11 @@ que la clé APNs n'est pas configurée.
   erreur de configuration) est seulement journalisé (`NTF-3002`), pour qu'une mauvaise configuration
   n'efface jamais les inscriptions. Les appareils Android sont ignorés tant qu'il n'existe pas
   d'émetteur FCM.
+- **`environment` doit correspondre au build :** APNs répond `BadDeviceToken` à un jeton sandbox envoyé
+  en production (et l'inverse), donc un appareil inscrit avec le mauvais `environment` est oublié à son
+  premier push — « les push ne marchent plus » sur un appareil. La ligne de log `push token gone` porte
+  l'environnement ; les builds de développement s'inscrivent en `SANDBOX`, TestFlight et l'App Store en
+  `PRODUCTION`.
 
 ### Ports Rust (contrat hexagonal)
 
