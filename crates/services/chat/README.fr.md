@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 6461739c04f3d279debaf34345270884b771d14ed6df72a33bb3630be6cd7f9b
-  translated_at: 2026-10-07
+  source_sha256: 71e297f289fbd4c814f30fc813c4d20df0443db5831dbb2e280fa9529d8184e3
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -324,7 +324,11 @@ et qui n'a pas mis la conversation en sourdine. Les messages système ne sont ja
 notification l'envoie une fois par message, selon la préférence `messages`, la pause et les heures
 calmes de chaque destinataire. Sans broker, rien n'est envoyé. Le topic (et son `.dlq`) est gardé
 **24 heures** (`event_topology::RETENTION`, appliquée par le topic provisioner) : il porte du texte de
-message qu'aucun effacement n'atteint sur le broker, donc il expire vite.
+message qu'aucun effacement n'atteint sur le broker, donc il expire vite. `chat.message.sent` (le
+corps complet de chaque message) et son `.dlq` sont gardés **2 jours** pour la même raison. C'est la
+fenêtre de reprise de la projection d'inbox : un `InboxWorker` arrêté ou en retard de plus de 2 jours
+perd les mises à jour plus anciennes (les inbox montrent une dernière activité plus ancienne ; les
+messages eux-mêmes restent dans le journal de chat).
 - `MuteConversation(conversation_id, member_id, muted, until_ms)` (edge `authenticated`, lié à
   `member_id`) : met en sourdine les push de la conversation pour ce membre jusqu'à `until_ms` (dans
   l'année) ou, avec `0`, jusqu'à ce qu'il la lève ; `muted = false` la lève. Stockée sur la ligne du
@@ -428,6 +432,7 @@ de personne ; jamais la réponse à un blocage), `CHT-1012` (aucune demande d'un
 | Redis indisponible | les messages temps réel s'arrêtent ; présence/saisie disparaissent | **Souple** — `SendMessage` réussit toujours (durable) ; les invités lisent encore l'historique depuis Scylla | vérifier Redis Cluster ; les clients re-`GetHistory` |
 | Cache hot-tail Redis froid/évincé | la latence des lecteurs passifs augmente | **Souple & sûr** — les lectures retombent sur Scylla (source de vérité durable) | vérifier le taux de hits / la capacité ; se rétablit en général seul |
 | Kafka indisponible | la fermeture à l'unpublish est retardée ; les événements aval s'arrêtent | **Souple** — fan-out non affecté ; la fermeture reprend depuis le dernier offset committé | vérifier les brokers ; surveiller le lag de `chat-visibility-consumer` |
+| `InboxWorker` arrêté ou en retard de plus de 2 jours | les inbox montrent une dernière activité plus ancienne, ces messages ne sont pas envoyés en push | `chat.message.sent` est gardé 2 jours : les mises à jour plus anciennes ont quitté le broker (les messages restent dans le journal de chat) | garder le lag de `chat-inbox` bien sous 2 jours ; le message suivant d'un membre répare son entrée |
 | Consommateur de flux lent (lag) | le client reçoit `Status::data_loss` | abandonné par plan ; **les backpressions membre et audience sont indépendantes** — un invité lent ne bloque jamais un membre | le client se reconnecte + re-`GetHistory` ; scaler les pods / augmenter le buffer |
 | Crash de pod | état présence/shard périmé | les sorted sets expirants vieillissent sans nettoyage explicite ; les drop guards libèrent les abonnements à la déconnexion | aucune — auto-réparation |
 
@@ -548,6 +553,7 @@ async fn main() -> anyhow::Result<()> {
 | Scylla `messages_by_conversation` read p99 by profile | cold-history read pressure / cache miss | p99 > SLO ⇒ verify hot-tail cache hit rate |
 | Hot-tail cache hit ratio | read offload health | sustained drop ⇒ Redis pressure / cap too small |
 | Kafka consumer lag (`chat-visibility-consumer`) | delayed Audience-Plane teardown | lag > threshold ⇒ broker/Redis investigation |
+| Kafka consumer lag (`chat-inbox`) | inbox projection behind; `chat.message.sent` is kept 2 days | lag > 1 h ⇒ investigate; lag > 1 day ⇒ page (updates are lost past 2 days) |
 | DLQ produce rate (`chat.*.dlq`) | poison / retry-exhausted events | any sustained rate ⇒ page |
 | Active member vs audience subscriptions per pod | fan-out skew / hotspotting | imbalance ⇒ rebalance shards |
 
