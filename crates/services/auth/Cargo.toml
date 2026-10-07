@@ -92,6 +92,8 @@ http      = { workspace = true }
 integration-auth = []
 
 [dev-dependencies]
+# Wire-contract test: audit reads the app-consent events as auth publishes them (#667).
+audit = { workspace = true }
 account      = { workspace = true }
 # `Router::oneshot` in the JWKS endpoint tests.
 tower = { workspace = true }

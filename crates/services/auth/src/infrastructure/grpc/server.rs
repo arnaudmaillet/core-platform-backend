@@ -81,6 +81,34 @@ impl AuthService for AuthServiceHandler {
         self.remove_passkey(request).await
     }
 
+    async fn list_authorized_apps(
+        &self,
+        request: Request<proto::ListAuthorizedAppsRequest>,
+    ) -> Result<Response<proto::ListAuthorizedAppsResponse>, Status> {
+        self.list_authorized_apps(request).await
+    }
+
+    async fn revoke_app_authorization(
+        &self,
+        request: Request<proto::RevokeAppAuthorizationRequest>,
+    ) -> Result<Response<proto::ListAuthorizedAppsResponse>, Status> {
+        self.revoke_app_authorization(request).await
+    }
+
+    async fn record_app_authorization(
+        &self,
+        request: Request<proto::RecordAppAuthorizationRequest>,
+    ) -> Result<Response<proto::AuthorizedApp>, Status> {
+        self.record_app_authorization(request).await
+    }
+
+    async fn note_app_use(
+        &self,
+        request: Request<proto::NoteAppUseRequest>,
+    ) -> Result<Response<proto::NoteAppUseResponse>, Status> {
+        self.note_app_use(request).await
+    }
+
     async fn complete_login(
         &self,
         request: Request<proto::CompleteLoginRequest>,

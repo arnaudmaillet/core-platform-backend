@@ -56,7 +56,8 @@ pub use account_decode::{
     map_phone_changed, map_role_assigned, map_role_revoked,
 };
 pub use auth_decode::{
-    AuthEventWire, TOPIC_AUTH_EVENTS, map_session_issued, map_session_revoked,
+    AuthEventWire, TOPIC_AUTH_EVENTS, map_app_authorization_revoked, map_app_authorized, map_session_issued,
+    map_session_revoked,
 };
 pub use kms::{AwsKms, KmsCipher, KmsConfig, KmsSigner, LocalCheckpointSigner};
 pub use subject_cipher::{AesGcmSubjectCipher, KmsSubjectCipher};

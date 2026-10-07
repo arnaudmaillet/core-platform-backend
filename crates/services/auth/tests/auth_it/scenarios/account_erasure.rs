@@ -49,6 +49,15 @@ async fn an_erased_account_leaves_nothing_in_auth() {
     .execute(&h.pool)
     .await
     .unwrap();
+    // A third-party app authorisation (#667).
+    sqlx::query(
+        "INSERT INTO app_authorizations (account_id, app_id, display_name, scopes, granted_at) \
+         VALUES ($1, 'partner.app', 'Partner', ARRAY['email'], now())",
+    )
+    .bind(member)
+    .execute(&h.pool)
+    .await
+    .unwrap();
     // Someone else, signed in too.
     let other = h.login(&random_user()).await.expect("login").tokens.unwrap();
     let other = Uuid::parse_str(&h.introspect(&other.access_token).await.unwrap().account_id).unwrap();
@@ -69,6 +78,7 @@ async fn an_erased_account_leaves_nothing_in_auth() {
         ("SELECT COUNT(*) FROM refresh_tokens WHERE account_id = $1", member),
         ("SELECT COUNT(*) FROM subject_links WHERE account_id = $1", member),
         ("SELECT COUNT(*) FROM passkeys WHERE account_id = $1", member),
+        ("SELECT COUNT(*) FROM app_authorizations WHERE account_id = $1", member),
         ("SELECT COUNT(*) FROM guest_principals WHERE guest_id = $1", guest_id),
         ("SELECT COUNT(*) FROM sessions WHERE account_id = $1", guest_id),
         ("SELECT COUNT(*) FROM refresh_tokens WHERE account_id = $1", guest_id),

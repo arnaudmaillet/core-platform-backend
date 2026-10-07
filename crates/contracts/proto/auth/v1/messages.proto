@@ -493,6 +493,48 @@ message RemovePasskeyRequest {
     string credential_id = 1;
 }
 
+// A third-party app the holder authorised (#667).
+message AuthorizedApp {
+    string                    app_id       = 1;
+    string                    display_name = 2;
+    // https URL; empty when the app has none.
+    string                    icon_url     = 3;
+    // What it may do, sorted (e.g. "email", "profile:read").
+    repeated string           scopes       = 4;
+    google.protobuf.Timestamp granted_at   = 5;
+    // Unset until it first uses the grant.
+    google.protobuf.Timestamp last_used_at = 6;
+}
+
+message ListAuthorizedAppsRequest {}
+
+message ListAuthorizedAppsResponse {
+    repeated AuthorizedApp apps = 1;
+}
+
+message RevokeAppAuthorizationRequest {
+    string app_id = 1;
+}
+
+message RecordAppAuthorizationRequest {
+    string          account_id   = 1;
+    // 1–64 of [a-z0-9._:-].
+    string          app_id       = 2;
+    // 1–100 characters.
+    string          display_name = 3;
+    // https, ≤ 512; empty for none.
+    string          icon_url     = 4;
+    // 1–20 of [a-z0-9._:-], ≤ 64 each.
+    repeated string scopes       = 5;
+}
+
+message NoteAppUseRequest {
+    string account_id = 1;
+    string app_id     = 2;
+}
+
+message NoteAppUseResponse {}
+
 message DisableMfaRequest {}
 
 message DisableMfaResponse {}

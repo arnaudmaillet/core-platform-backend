@@ -1,7 +1,9 @@
+pub mod app_authorization;
 pub mod session_issued;
 pub mod session_revoked;
 pub mod subject_linked;
 
+pub use app_authorization::{AppAuthorizationRevoked, AppAuthorized};
 pub use session_issued::SessionIssued;
 pub use session_revoked::SessionRevoked;
 pub use subject_linked::SubjectLinked;
@@ -22,6 +24,8 @@ pub enum DomainEvent {
     SessionIssued(SessionIssued),
     SessionRevoked(SessionRevoked),
     SubjectLinked(SubjectLinked),
+    AppAuthorized(AppAuthorized),
+    AppAuthorizationRevoked(AppAuthorizationRevoked),
 }
 
 impl DomainEvent {
@@ -31,6 +35,8 @@ impl DomainEvent {
             Self::SessionIssued(_) => "auth.session_issued",
             Self::SessionRevoked(_) => "auth.session_revoked",
             Self::SubjectLinked(_) => "auth.subject_linked",
+            Self::AppAuthorized(_) => "auth.app_authorized",
+            Self::AppAuthorizationRevoked(_) => "auth.app_authorization_revoked",
         }
     }
 }

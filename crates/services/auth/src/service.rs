@@ -79,6 +79,10 @@ impl Service for AuthService {
         authenticated("/auth.v1.AuthService/FinishPasskeyRegistration"),
         authenticated("/auth.v1.AuthService/ListPasskeys"),
         authenticated("/auth.v1.AuthService/RemovePasskey"),
+        // #667: the holder's third-party app authorisations (Record… / NoteAppUse
+        // stay mesh-only: the future OAuth server's).
+        authenticated("/auth.v1.AuthService/ListAuthorizedApps"),
+        authenticated("/auth.v1.AuthService/RevokeAppAuthorization"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -201,4 +205,20 @@ fn spawn_account_event_consumer(
             tokio::time::sleep(CONSUMER_RESPAWN_BACKOFF).await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #667: the holder lists and withdraws app authorisations on the edge;
+    /// recording a grant and its use stays on the mesh (the OAuth server's).
+    #[test]
+    fn app_authorizations_on_the_edge_are_the_holders_only() {
+        let on_edge = |method: &str| AuthService::EDGE_POLICY.iter().any(|rule| rule.method == method);
+        assert!(on_edge("/auth.v1.AuthService/ListAuthorizedApps"));
+        assert!(on_edge("/auth.v1.AuthService/RevokeAppAuthorization"));
+        assert!(!on_edge("/auth.v1.AuthService/RecordAppAuthorization"));
+        assert!(!on_edge("/auth.v1.AuthService/NoteAppUse"));
+    }
 }

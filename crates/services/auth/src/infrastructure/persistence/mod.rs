@@ -14,6 +14,7 @@
 
 pub mod model;
 pub mod pg_account_eraser;
+pub mod pg_app_authorization_repository;
 pub mod pg_guest_registry;
 pub mod pg_passkey_repository;
 pub mod pg_refresh_token_repository;
@@ -21,6 +22,7 @@ pub mod pg_session_repository;
 pub mod pg_subject_link_repository;
 
 pub use pg_account_eraser::PgAccountEraser;
+pub use pg_app_authorization_repository::PgAppAuthorizationRepository;
 pub use pg_guest_registry::PgGuestRegistry;
 pub use pg_passkey_repository::PgPasskeyRepository;
 pub use pg_refresh_token_repository::PgRefreshTokenRepository;

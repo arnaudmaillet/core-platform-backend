@@ -170,6 +170,28 @@ service AuthService {
     // told. AUT-5027 when the account has no such passkey.
     rpc RemovePasskey(RemovePasskeyRequest) returns (ListPasskeysResponse);
 
+    // ── Third-party app authorisations (#667) ─────────────────────────────────
+
+    // The apps the caller authorised (partners' "Sign in with"), most recently
+    // granted first. Empty while no partner integration exists.
+    rpc ListAuthorizedApps(ListAuthorizedAppsRequest) returns (ListAuthorizedAppsResponse);
+
+    // Withdraws the caller's authorisation of an app — and so every token
+    // issued under it — and returns the apps left. Idempotent; AUT-5030 when
+    // the caller never authorised it. No step-up: withdrawing consent must be
+    // as easy as giving it (GDPR Art. 7(3)). Recorded on the audit plane.
+    rpc RevokeAppAuthorization(RevokeAppAuthorizationRequest) returns (ListAuthorizedAppsResponse);
+
+    // INTERNAL (mesh only, the OAuth server): records a grant the holder
+    // consented to. The same scopes again on an active grant change nothing;
+    // other scopes, or a revoked app, make a new consent. Recorded on the
+    // audit plane.
+    rpc RecordAppAuthorization(RecordAppAuthorizationRequest) returns (AuthorizedApp);
+
+    // INTERNAL (mesh only, the OAuth server): an app used its grant. AUT-5030
+    // when it has no active one — the token must then be refused.
+    rpc NoteAppUse(NoteAppUseRequest) returns (NoteAppUseResponse);
+
     // ── Introspection & device management ─────────────────────────────────────
 
     // INTERNAL. Server-side token introspection returning the normalized

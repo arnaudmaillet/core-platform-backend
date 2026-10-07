@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: edfb6383940ca341ebf5a5819023a310fcdd62d43f23cec6c78a88e96793681c
-  translated_at: 2026-10-06
+  source_sha256: da4a57883ecbe0fe5c11b451369012d9a6aa8c0bd9738622228aa9347af6cb58
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -20,7 +20,7 @@ i18n:
 > | **Tier** | **TIER-0** — chaque requête authentifiée dépend des jetons émis par ce service |
 > | **Déployable** | `crates/apps/auth-server` (crate bibliothèque : `crates/services/auth`) |
 > | **Stockage** | PostgreSQL/CockroachDB (db `auth`) · Redis Cluster (sessions/blacklist) |
-> | **Asynchrone** | publie `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked) · consomme `account.v1.events` (`account_deleted` → effacement RGPD) |
+> | **Asynchrone** | publie `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked/AppAuthorized/AppAuthorizationRevoked) · consomme `account.v1.events` (`account_deleted` → effacement RGPD) |
 > | **Appelants amont** | gateway / edge, clients utilisateurs (login & refresh) |
 > | **Dépendances aval** | Keycloak (IdP), `account` (gRPC, SoR d'identité), PostgreSQL, Redis Cluster |
 > | **SLO** | `<TODO: 99.95%>` dispo · login p99 `<TODO>` · refresh p99 `<TODO>` |
@@ -281,6 +281,22 @@ exclure. `FinishPasskeyRegistration` vérifie la réponse de l'authentificateur 
 (`passkeys`, sur le shard du compte ; 10 au plus — `AUT-5025` ; le même authentificateur deux fois —
 `AUT-5026`). `ListPasskeys` / `RemovePasskey` (step-up ; `AUT-5027`). Chaque ajout et suppression est
 envoyé par e-mail à l'adresse du compte. Les passkeys sont effacées avec le compte.
+
+**Autorisations d'apps tierces (#667).** Les apps qu'un titulaire a laissées le connecter ou agir pour
+lui (« Se connecter avec » des partenaires ; Réglages → Apps et sites web). Gardées dans Postgres
+(`app_authorizations`, migration 0008, sur le shard du compte ; une autorisation retirée garde sa ligne
+avec `revoked_at`) ; effacées avec le compte. Le titulaire : `ListAuthorizedApps` (edge, la plus
+récemment accordée d'abord ; vide tant qu'aucune intégration partenaire n'existe) et
+`RevokeAppAuthorization(app_id)` (edge, **sans step-up** : retirer son consentement doit être aussi
+simple que le donner, RGPD art. 7(3) ; idempotent ; `AUT-5030` pour une app jamais autorisée) — tout
+jeton émis sous l'autorisation doit alors être refusé. Le futur serveur OAuth, sur le mesh :
+`RecordAppAuthorization(account_id, app_id, display_name, icon_url, scopes)` (validé : id d'app et
+scopes `[a-z0-9._:-]`, icône https, 1 à 20 scopes ; les mêmes scopes sur une autorisation active ne
+changent rien ; d'autres scopes ou une app retirée font un nouveau consentement) et `NoteAppUse`
+(`AUT-5030` une fois retirée : refuser le jeton). Chaque autorisation et chaque retrait sont publiés
+(`auth.app_authorized` / `auth.app_authorization_revoked`, via l'outbox) et gardés par audit comme un
+enregistrement `consent` (la preuve du consentement, art. 7(1)) ; une nouvelle tentative répète son
+instant, donc audit n'en garde qu'un.
 
 **Se connecter avec une passkey.** `StartPasskeySignIn` (public) délivre un challenge (à usage unique,
 5 minutes, `auth:{pkauth:<hash>}` ; découvrable, sans liste d'autorisation). L'assertion va ensuite à
