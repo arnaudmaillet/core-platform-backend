@@ -68,6 +68,7 @@ impl Service for ChatService {
         authenticated("/chat.v1.ChatService/Unsubscribe"),
         authenticated("/chat.v1.ChatService/SendMessage"),
         authenticated("/chat.v1.ChatService/MarkRead"),
+        authenticated("/chat.v1.ChatService/MuteConversation"),
         authenticated("/chat.v1.ChatService/SendTyping"),
         authenticated("/chat.v1.ChatService/Heartbeat"),
         authenticated("/chat.v1.ChatService/GetHistory"),

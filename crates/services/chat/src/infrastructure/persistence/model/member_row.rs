@@ -13,4 +13,5 @@ pub struct MemberRow {
     pub role:      i8,
     pub joined_at: CqlTimestamp,
     pub last_read: Option<Uuid>,
+    pub muted_until: Option<CqlTimestamp>,
 }

@@ -40,11 +40,18 @@ impl NotificationKind {
 }
 
 /// One push, the same for every device of the recipient.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PushMessage {
-    /// `NTF_PUSH_<KIND>` (args: the sender's name), `…_OTHERS` (args: the
-    /// name, how many others) or `…_ANON` (no args: the name is unknown).
-    pub loc_key:         String,
+    /// A plain title (a chat message: its sender's name).
+    pub title:           Option<String>,
+    /// A localized title, when there is no plain one.
+    pub title_loc_key:   Option<&'static str>,
+    /// A plain body (a chat message: its text).
+    pub body:            Option<String>,
+    /// A localized body: `NTF_PUSH_<KIND>` (args: the sender's name),
+    /// `…_OTHERS` (args: the name, how many others) or `…_ANON` (no args: the
+    /// name is unknown); `NTF_PUSH_MESSAGE_MEDIA` for an attachment.
+    pub loc_key:         Option<String>,
     pub loc_args:        Vec<String>,
     /// The unread count, for the app icon.
     pub badge:           Option<u32>,
@@ -52,6 +59,7 @@ pub struct PushMessage {
     pub thread_id:       String,
     /// A newer push about the same notification replaces the older one.
     pub collapse_id:     String,
+    /// The notification's id; a chat message's id for `kind = message`.
     pub notification_id: String,
     pub kind:            &'static str,
     pub subject_kind:    &'static str,
@@ -73,10 +81,7 @@ pub struct PushSubject<'a> {
 impl PushMessage {
     pub fn new(subject: PushSubject<'_>) -> Self {
         let stem = subject.kind.loc_stem();
-        let name = subject
-            .sender_name
-            .map(|n| n.trim().chars().take(MAX_NAME_CHARS).collect::<String>())
-            .filter(|n| !n.is_empty());
+        let name = clean_name(subject.sender_name);
         let others = subject.sender_count.saturating_sub(1);
         let (loc_key, loc_args) = match name {
             None => (format!("{stem}_ANON"), Vec::new()),
@@ -84,7 +89,7 @@ impl PushMessage {
             Some(name) => (stem.to_owned(), vec![name]),
         };
         Self {
-            loc_key,
+            loc_key: Some(loc_key),
             loc_args,
             badge: subject.badge,
             thread_id: subject.subject_id.clone(),
@@ -93,8 +98,49 @@ impl PushMessage {
             kind: subject.kind.as_str(),
             subject_kind: subject.subject_kind,
             subject_id: subject.subject_id,
+            ..Self::default()
         }
     }
+
+    /// A chat message's push (#654): its sender as the title, its text as the
+    /// body (an attachment: `NTF_PUSH_MESSAGE_MEDIA`). No badge: the unread
+    /// count is the activity feed's, which a message does not change.
+    pub fn chat_message(message: ChatMessage<'_>) -> Self {
+        let name = clean_name(message.sender_name);
+        let text = message.preview.trim();
+        let (body, loc_key) = if message.media || text.is_empty() {
+            (None, Some("NTF_PUSH_MESSAGE_MEDIA".to_owned()))
+        } else {
+            (Some(text.to_owned()), None)
+        };
+        Self {
+            title_loc_key: name.is_none().then_some("NTF_PUSH_MESSAGE_ANON"),
+            title: name,
+            body,
+            loc_key,
+            thread_id: message.conversation_id.to_owned(),
+            collapse_id: message.message_id.to_owned(),
+            notification_id: message.message_id.to_owned(),
+            kind: "message",
+            subject_kind: "conversation",
+            subject_id: message.conversation_id.to_owned(),
+            ..Self::default()
+        }
+    }
+}
+
+/// What a chat message's push is built from.
+#[derive(Debug, Clone, Copy)]
+pub struct ChatMessage<'a> {
+    pub message_id:      &'a str,
+    pub conversation_id: &'a str,
+    pub media:           bool,
+    pub preview:         &'a str,
+    pub sender_name:     Option<&'a str>,
+}
+
+fn clean_name(name: Option<&str>) -> Option<String> {
+    name.map(|n| n.trim().chars().take(MAX_NAME_CHARS).collect::<String>()).filter(|n| !n.is_empty())
 }
 
 #[cfg(test)]
@@ -116,12 +162,12 @@ mod tests {
     #[test]
     fn the_alert_names_the_sender_and_counts_the_others() {
         let one = PushMessage::new(subject(NotificationKind::Reaction, Some("Alice"), 1));
-        assert_eq!((one.loc_key.as_str(), one.loc_args.clone()), ("NTF_PUSH_REACTION", vec!["Alice".to_owned()]));
+        assert_eq!((one.loc_key.as_deref(), one.loc_args.clone()), (Some("NTF_PUSH_REACTION"), vec!["Alice".to_owned()]));
         let many = PushMessage::new(subject(NotificationKind::Reaction, Some("Alice"), 13));
-        assert_eq!(many.loc_key, "NTF_PUSH_REACTION_OTHERS");
+        assert_eq!(many.loc_key.as_deref(), Some("NTF_PUSH_REACTION_OTHERS"));
         assert_eq!(many.loc_args, vec!["Alice".to_owned(), "12".to_owned()]);
         let anon = PushMessage::new(subject(NotificationKind::FollowRequest, Some("  "), 1));
-        assert_eq!((anon.loc_key.as_str(), anon.loc_args.len()), ("NTF_PUSH_FOLLOW_REQUEST_ANON", 0));
+        assert_eq!((anon.loc_key.as_deref(), anon.loc_args.len()), (Some("NTF_PUSH_FOLLOW_REQUEST_ANON"), 0));
         let long = "x".repeat(200);
         assert_eq!(PushMessage::new(subject(NotificationKind::Follow, Some(&long), 1)).loc_args[0].len(), MAX_NAME_CHARS);
         assert_eq!((one.thread_id.as_str(), one.collapse_id.as_str(), one.badge), ("s", "n", Some(3)));
@@ -133,5 +179,28 @@ mod tests {
         assert_eq!(NotificationKind::Reply.push_category(), Some(PushCategory::Comments));
         assert_eq!(NotificationKind::FollowAccepted.push_category(), Some(PushCategory::FollowRequests));
         assert_eq!(NotificationKind::AppealUpheld.push_category(), None, "feed only");
+    }
+
+    #[test]
+    fn a_chat_message_shows_its_sender_and_text() {
+        let chat = |media: bool, preview: &'static str, name: Option<&'static str>| {
+            PushMessage::chat_message(ChatMessage {
+                message_id: "m",
+                conversation_id: "c",
+                media,
+                preview,
+                sender_name: name,
+            })
+        };
+        let text = chat(false, "on se voit ce soir ?", Some("Alice"));
+        assert_eq!((text.title.as_deref(), text.body.as_deref()), (Some("Alice"), Some("on se voit ce soir ?")));
+        assert_eq!((text.loc_key, text.title_loc_key, text.badge), (None, None, None));
+        assert_eq!((text.kind, text.subject_kind, text.subject_id.as_str(), text.thread_id.as_str()), ("message", "conversation", "c", "c"));
+        assert_eq!((text.notification_id.as_str(), text.collapse_id.as_str()), ("m", "m"));
+
+        let media = chat(true, "", Some("Alice"));
+        assert_eq!((media.body, media.loc_key.as_deref()), (None, Some("NTF_PUSH_MESSAGE_MEDIA")));
+        let anon = chat(false, "salut", None);
+        assert_eq!((anon.title, anon.title_loc_key), (None, Some("NTF_PUSH_MESSAGE_ANON")));
     }
 }

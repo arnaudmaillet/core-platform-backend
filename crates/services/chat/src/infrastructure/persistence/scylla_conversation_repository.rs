@@ -10,7 +10,7 @@ use crate::domain::value_object::{
 };
 use crate::error::ChatError;
 use crate::infrastructure::persistence::model::ConversationRow;
-use crate::infrastructure::persistence::statement::{fast, row_err, scylla_err, strict};
+use crate::infrastructure::persistence::statement::{fast, row_err, scylla_err, strict, lwt_applied};
 use crate::infrastructure::persistence::time::{to_cql, to_utc};
 
 /// ScyllaDB adapter for the [`Conversation`] aggregate (`chat.conversations`).
@@ -235,13 +235,3 @@ impl ConversationRepository for ScyllaConversationRepository {
     }
 }
 
-/// The `[applied]` flag of an LWT result. The row's shape varies (bare
-/// `[applied]`, or with the existing row's columns — and Scylla 5.4 returns
-/// the columns even on success), so only column 0 is read, untyped.
-fn lwt_applied(rows: scylla::response::query_result::QueryRowsResult, ctx: &'static str) -> Result<bool, ChatError> {
-    let row = rows.maybe_first_row::<scylla::value::Row>().map_err(|e| row_err(ctx, e))?;
-    Ok(matches!(
-        row.and_then(|r| r.columns.into_iter().next().flatten()),
-        Some(scylla::value::CqlValue::Boolean(true))
-    ))
-}

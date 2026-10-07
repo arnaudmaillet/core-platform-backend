@@ -16,7 +16,7 @@ use cqrs::{CommandBus, Envelope, QueryBus};
 use transport::grpc::edge;
 use crate::application::command::{
     CreateConversationCommand, DirectMessaging, InviteMemberCommand, JoinAsMemberCommand, LeaveConversationCommand,
-    MarkReadCommand,
+    MarkReadCommand, Mute, MuteConversationCommand,
     SendMessageCommand, SendMessages, SubscribeCommand, ToggleVisibilityCommand, UnsubscribeCommand,
 };
 use crate::application::port::{
@@ -28,6 +28,7 @@ use crate::application::query::{
     ListSubscriptionsQuery, MemberConversation, MemberView as QueryMemberView,
 };
 use crate::application::port::Folder;
+use crate::domain::aggregate::participant::muted_forever;
 use crate::domain::value_object::{ContentType, ConversationId, MessageId, ProfileId};
 use crate::error::ChatError;
 use crate::infrastructure::cache::keys::audience_shard_for;
@@ -396,6 +397,28 @@ where
         Ok(ok_response())
     }
 
+    /// The member's own pushes from the conversation (#654).
+    pub async fn mute_conversation(
+        &self,
+        request: Request<proto::MuteConversationRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().member_id)?;
+        let req = request.into_inner();
+        let mute = match (req.muted, req.until_ms) {
+            (false, _) => Mute::Off,
+            (true, 0) => Mute::Forever,
+            (true, ms) => Mute::Until(
+                chrono::DateTime::from_timestamp_millis(ms).ok_or_else(|| Status::invalid_argument("until_ms"))?,
+            ),
+        };
+        let cmd = MuteConversationCommand { conversation_id: req.conversation_id, member_id: req.member_id, mute };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(ok_response())
+    }
+
     async fn send_typing(
         &self,
         request: Request<proto::SendTypingRequest>,
@@ -575,6 +598,12 @@ where
                     }),
                     unread:           item.unread,
                     request:          item.request,
+                    muted:            item.muted_until.is_some(),
+                    muted_until_ms:   item
+                        .muted_until
+                        .filter(|until| *until < muted_forever())
+                        .map(|until| until.timestamp_millis())
+                        .unwrap_or_default(),
                 })
                 .collect(),
             next_page_token: page.next_page_token.unwrap_or_default(),
@@ -993,6 +1022,13 @@ where
         request: Request<proto::MarkReadRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
         self.mark_read(request).await
+    }
+
+    async fn mute_conversation(
+        &self,
+        request: Request<proto::MuteConversationRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.mute_conversation(request).await
     }
 
     async fn send_typing(

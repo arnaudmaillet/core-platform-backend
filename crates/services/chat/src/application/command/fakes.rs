@@ -222,7 +222,11 @@ type EndedMemberships = HashMap<(ConversationId, ProfileId), (Role, DateTime<Utc
 
 /// The roster, and the memberships that ended.
 #[derive(Default)]
-pub struct FakeMembers(Mutex<HashMap<(ConversationId, ProfileId), Role>>, Mutex<EndedMemberships>);
+pub struct FakeMembers(
+    Mutex<HashMap<(ConversationId, ProfileId), Role>>,
+    Mutex<EndedMemberships>,
+    Mutex<HashMap<(ConversationId, ProfileId), DateTime<Utc>>>,
+);
 
 impl FakeMembers {
     pub fn has(&self, c: &ConversationId, p: &ProfileId) -> bool {
@@ -266,11 +270,29 @@ impl MemberRepository for FakeMembers {
     }
 
     async fn find(&self, c: &ConversationId, m: &ProfileId) -> Result<Option<Participant>, ChatError> {
-        Ok(self.0.lock().unwrap().get(&(*c, *m)).map(|&role| Participant::reconstitute(*m, role, Utc::now(), None)))
+        let muted = self.2.lock().unwrap().get(&(*c, *m)).copied();
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .get(&(*c, *m))
+            .map(|&role| Participant::reconstitute(*m, role, Utc::now(), None).with_muted_until(muted)))
     }
 
     async fn update_last_read(&self, _: &ConversationId, _: &ProfileId, _: MessageId) -> Result<(), ChatError> {
         Ok(())
+    }
+
+    async fn set_muted_until(&self, c: &ConversationId, m: &ProfileId, until: Option<DateTime<Utc>>) -> Result<bool, ChatError> {
+        if !self.has(c, m) {
+            return Ok(false);
+        }
+        let mut mutes = self.2.lock().unwrap();
+        match until {
+            Some(until) => mutes.insert((*c, *m), until),
+            None => mutes.remove(&(*c, *m)),
+        };
+        Ok(true)
     }
 
     async fn list(&self, c: &ConversationId) -> Result<Vec<Participant>, ChatError> {
@@ -280,7 +302,10 @@ impl MemberRepository for FakeMembers {
             .unwrap()
             .iter()
             .filter(|((conv, _), _)| conv == c)
-            .map(|(&(_, p), &role)| Participant::reconstitute(p, role, Utc::now(), None))
+            .map(|(&(_, p), &role)| {
+                let muted = self.2.lock().unwrap().get(&(*c, p)).copied();
+                Participant::reconstitute(p, role, Utc::now(), None).with_muted_until(muted)
+            })
             .collect())
     }
 
@@ -540,5 +565,23 @@ impl Fixture {
         let conversation = self.conversations.load(&self.conversation_id).unwrap();
         let invitation = conversation.invite(&owner, invitee).unwrap();
         self.invitations.0.lock().unwrap().insert((self.conversation_id, invitee), invitation);
+    }
+}
+
+/// The pushes asked for (#654), oldest first.
+#[derive(Default)]
+pub struct FakePushes(Mutex<Vec<crate::application::port::MessagePush>>);
+
+impl FakePushes {
+    pub fn asked(&self) -> Vec<crate::application::port::MessagePush> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl crate::application::port::MessagePushes for FakePushes {
+    async fn request(&self, push: &crate::application::port::MessagePush) -> Result<(), ChatError> {
+        self.0.lock().unwrap().push(push.clone());
+        Ok(())
     }
 }

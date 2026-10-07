@@ -4,7 +4,7 @@ use transport::error::TransportError;
 use transport::kafka::envelope::EventEnvelope;
 use transport::kafka::producer::handle::KafkaProducerHandle;
 
-use crate::application::port::EventPublisher;
+use crate::application::port::{EventPublisher, MessagePush, MessagePushes};
 use crate::domain::event::{DomainEvent, MessageEvent};
 use crate::error::ChatError;
 
@@ -14,6 +14,8 @@ const TOPIC_UNPUBLISHED:  &str = "chat.conversation.unpublished";
 const TOPIC_MEMBER_JOINED: &str = "chat.member.joined";
 const TOPIC_MEMBER_LEFT:  &str = "chat.member.left";
 const TOPIC_MESSAGE_SENT: &str = "chat.message.sent";
+/// A message's push for the notification service (#654).
+const TOPIC_MESSAGE_PUSH: &str = "chat.message.push";
 
 /// Kafka-backed [`EventPublisher`]. Each event family is keyed by
 /// `conversation_id` so all events for one conversation land on the same
@@ -79,6 +81,13 @@ impl EventPublisher for KafkaEventPublisher {
                 self.emit(TOPIC_MESSAGE_SENT, &e.conversation_id, "MessageSent", e.clone()).await
             }
         }
+    }
+}
+
+#[async_trait]
+impl MessagePushes for KafkaEventPublisher {
+    async fn request(&self, push: &MessagePush) -> Result<(), ChatError> {
+        self.emit(TOPIC_MESSAGE_PUSH, &push.conversation_id, "MessagePush", push.clone()).await
     }
 }
 

@@ -106,8 +106,22 @@ impl ApnsSender {
 /// The APNs request body: a localized alert, the badge, and the ids the app
 /// opens the notification with.
 pub fn payload(message: &PushMessage) -> serde_json::Value {
+    let mut alert = serde_json::Map::new();
+    if let Some(title) = &message.title {
+        alert.insert("title".into(), json!(title));
+    }
+    if let Some(key) = message.title_loc_key {
+        alert.insert("title-loc-key".into(), json!(key));
+    }
+    if let Some(body) = &message.body {
+        alert.insert("body".into(), json!(body));
+    }
+    if let Some(key) = &message.loc_key {
+        alert.insert("loc-key".into(), json!(key));
+        alert.insert("loc-args".into(), json!(message.loc_args));
+    }
     let mut aps = json!({
-        "alert": { "loc-key": message.loc_key, "loc-args": message.loc_args },
+        "alert": alert,
         "sound": "default",
         "thread-id": message.thread_id,
     });
@@ -202,6 +216,18 @@ mod tests {
         assert_eq!(body["aps"]["thread-id"], "p-1");
         assert_eq!((body["notification_id"].as_str(), body["subject_kind"].as_str()), (Some("n-1"), Some("post")));
         assert!(payload(&message(None))["aps"].get("badge").is_none());
+        assert!(body["aps"]["alert"].get("title").is_none() && body["aps"]["alert"].get("body").is_none());
+
+        let chat = payload(&PushMessage::chat_message(crate::domain::push_message::ChatMessage {
+            message_id:      "m-1",
+            conversation_id: "c-1",
+            media:           false,
+            preview:         "salut",
+            sender_name:     Some("Alice"),
+        }));
+        assert_eq!(chat["aps"]["alert"], json!({ "title": "Alice", "body": "salut" }));
+        assert_eq!((chat["kind"].as_str(), chat["subject_id"].as_str()), (Some("message"), Some("c-1")));
+        assert!(chat["aps"].get("badge").is_none());
     }
 
     #[test]

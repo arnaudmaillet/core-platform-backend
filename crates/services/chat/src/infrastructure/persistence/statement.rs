@@ -63,3 +63,14 @@ pub(crate) fn strict_batch(client: &ScyllaClient) -> Batch {
     batch.set_history_listener(Arc::clone(&client.history_listener) as Arc<dyn HistoryListener>);
     batch
 }
+
+/// The `[applied]` flag of an LWT result. The row's shape varies (bare
+/// `[applied]`, or with the existing row's columns — and Scylla 5.4 returns
+/// the columns even on success), so only column 0 is read, untyped.
+pub(crate) fn lwt_applied(rows: scylla::response::query_result::QueryRowsResult, ctx: &'static str) -> Result<bool, ChatError> {
+    let row = rows.maybe_first_row::<scylla::value::Row>().map_err(|e| row_err(ctx, e))?;
+    Ok(matches!(
+        row.and_then(|r| r.columns.into_iter().next().flatten()),
+        Some(scylla::value::CqlValue::Boolean(true))
+    ))
+}

@@ -34,6 +34,15 @@ pub trait MemberRepository: Send + Sync + 'static {
         last_read:       MessageId,
     ) -> Result<(), ChatError>;
 
+    /// Mutes (`Some`: until then) or unmutes a member's pushes from the
+    /// conversation (#654). `false` when they are not a member.
+    async fn set_muted_until(
+        &self,
+        conversation_id: &ConversationId,
+        member_id:       &ProfileId,
+        muted_until:     Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<bool, ChatError>;
+
     /// Lists the full (bounded) roster.
     async fn list(
         &self,

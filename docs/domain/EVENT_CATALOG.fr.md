@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 477d47ed47b6d570ac2a30e23f09dd840c84687a293276f03fe354996934c124
+  source_sha256: 3b0ba437c18d320f32b4ce892c6f869d216658ee70103b9e73e556b6fa4b5716
   translated_at: 2026-10-07
   status: complete
 ---
@@ -61,6 +61,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `chat.member.joined` | `chat` | `chat` |
 | `chat.member.left` | `chat` | `chat` |
 | `chat.message.sent` | `chat` | `chat` |
+| `chat.message.push` | `chat` | `notification` |
 | `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery`, `timeline` |
 | `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline`, `notification` |
 | `auth.v1.events` | `auth` | `audit` |
@@ -171,7 +172,8 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 |---|---|---|---|
 | `chat.conversation.created` / `chat.conversation.published` / `chat.conversation.unpublished` | faits de cycle de vie de conversation | création / publication / dépublication | `VisibilityWorker` (démantèlement du plan audience) ; `InboxWorker` (created : l'entrée de boîte du propriétaire, #656) |
 | `chat.member.joined` / `chat.member.left` | l'appartenance a changé | join/leave | `InboxWorker` (l'entrée de boîte du membre, ajoutée / retirée, #656) |
-| `chat.message.sent` | un message a été commité dans le journal ; `withheld` (visible de son seul expéditeur) et `request` (le message unique d'une demande) depuis #656 | l'envoi commite | `InboxWorker` (l'entrée de chaque membre remonte en tête — un message retenu ne déplace que celle de son expéditeur) ; plan live propre de chat (**non** consommé par `realtime` — Separate Ways). Un futur consommateur push doit ignorer les messages `withheld` et `request` |
+| `chat.message.sent` | un message a été commité dans le journal ; `withheld` (visible de son seul expéditeur) et `request` (le message unique d'une demande) depuis #656 | l'envoi commite | `InboxWorker` (l'entrée de chaque membre remonte en tête — un message retenu ne déplace que celle de son expéditeur) ; plan live propre de chat (**non** consommé par `realtime` — Separate Ways). Les push passent par `chat.message.push` ci-dessous, pas par ce topic |
+| `chat.message.push` | le push d'un message (#654) : son expéditeur, un aperçu du texte de 100 caractères (vide pour un média) et les `recipients` — les membres qu'il atteint dans leur inbox (ni son expéditeur, ni le destinataire d'une demande, ni quelqu'un qui bloque l'expéditeur) qui n'ont pas mis la conversation en sourdine. Les messages système ne sont jamais envoyés en push. Gardé 24 h (`RETENTION`) : il porte du texte de message | `InboxWorker` une fois les entrées d'inbox écrites (au moins une fois) | `notification` (`ChatPushWorker` : l'envoie une fois par message — claim Redis sur `message_id` — vers les appareils iOS de chaque destinataire, selon sa préférence `messages`, sa pause et ses heures calmes) |
 
 ## Média — `media.v1.events` (producteur : `media`)
 

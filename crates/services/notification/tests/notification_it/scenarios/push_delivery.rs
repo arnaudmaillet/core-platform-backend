@@ -15,6 +15,7 @@ use notification::application::port::PushNotifier;
 use notification::application::push_dispatcher::PushDispatcher;
 use notification::infrastructure::cache::{RedisBlockCache, RedisUnreadCounter};
 use notification::infrastructure::persistence::{ScyllaNotificationRepository, ScyllaPushSettings};
+use notification::infrastructure::worker::chat_push_worker::{ChatPushPayload, ChatPushWorker};
 use notification::infrastructure::worker::follow_worker::{FollowEventPayload, FollowNotificationWorker};
 
 use crate::notification_it::harness::{
@@ -35,6 +36,28 @@ async fn register(h: &TestHarness, profile: &ProfileId) -> String {
         .await
         .expect("register");
     token
+}
+
+fn dispatcher(h: &TestHarness) -> Arc<PushDispatcher> {
+    let settings = Arc::new(ScyllaPushSettings::new(Arc::clone(&h.scylla)));
+    Arc::new(PushDispatcher {
+        devices:     Arc::clone(&settings) as _,
+        preferences: settings as _,
+        counter:     Arc::clone(&h.counter),
+        names:       Arc::new(AliceNames),
+        sender:      Arc::clone(&h.pushes) as _,
+    })
+}
+
+async fn set_category(h: &TestHarness, profile: &ProfileId, category: proto::PushCategory, on: bool) {
+    h.handler
+        .update_notification_preferences(Request::new(proto::UpdateNotificationPreferencesRequest {
+            profile_id: profile.as_str(),
+            categories: vec![proto::CategoryChannels { category: category as i32, push: on, email: false }],
+            ..Default::default()
+        }))
+        .await
+        .expect("update");
 }
 
 async fn likes(h: &TestHarness, profile: &ProfileId, on: bool) {
@@ -61,7 +84,7 @@ async fn a_like_is_pushed_with_the_name_and_badge_until_likes_are_off() {
     h.create(&target, &sender).await;
     await_until("the like is pushed", DEADLINE, || async { !h.pushes.sent_to(&token).is_empty() }).await;
     let push = h.pushes.sent_to(&token).remove(0);
-    assert_eq!(push.loc_key, "NTF_PUSH_REACTION");
+    assert_eq!(push.loc_key.as_deref(), Some("NTF_PUSH_REACTION"));
     assert_eq!(push.loc_args, vec!["Alice".to_owned()]);
     assert_eq!(push.badge, Some(1));
 
@@ -112,5 +135,47 @@ async fn a_redelivered_follow_is_pushed_once() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     let pushes = h.pushes.sent_to(&token);
     assert_eq!(pushes.len(), 1, "once");
-    assert_eq!(pushes[0].loc_key, "NTF_PUSH_FOLLOW");
+    assert_eq!(pushes[0].loc_key.as_deref(), Some("NTF_PUSH_FOLLOW"));
+}
+
+#[tokio::test]
+async fn a_chat_message_is_pushed_once_to_its_recipients_under_their_preferences() {
+    let h = TestHarness::start().await;
+    let (sender, alice, bob) = (random_profile(), random_profile(), random_profile());
+    let (alice_token, bob_token) = (register(&h, &alice).await, register(&h, &bob).await);
+    set_category(&h, &bob, proto::PushCategory::Messages, false).await;
+
+    let worker = ChatPushWorker::new(
+        KafkaClientConfig::default(),
+        h.redis.clone(),
+        dispatcher(&h),
+        3_600,
+        "it-chat-push",
+    );
+    let push = ChatPushPayload {
+        message_id:      Uuid::now_v7().to_string(),
+        conversation_id: Uuid::now_v7().to_string(),
+        sender_id:       sender.as_str(),
+        content_type:    "text".into(),
+        preview:         "on se voit ce soir ?".into(),
+        recipients:      vec![alice.as_str(), bob.as_str()],
+        created_at_ms:   Utc::now().timestamp_millis(),
+    };
+    assert_eq!(worker.process(&push).await.unwrap(), 1, "Alice only: Bob turned messages off");
+    assert_eq!(worker.process(&push).await.unwrap(), 0, "redelivered: sent once");
+
+    let sent = h.pushes.sent_to(&alice_token);
+    assert_eq!(sent.len(), 1);
+    assert_eq!((sent[0].title.as_deref(), sent[0].body.as_deref()), (Some("Alice"), Some("on se voit ce soir ?")));
+    assert_eq!((sent[0].kind, sent[0].subject_id.clone(), sent[0].badge), ("message", push.conversation_id.clone(), None));
+    assert!(h.pushes.sent_to(&bob_token).is_empty());
+    assert_eq!(h.counter.get(&alice).await.unwrap(), 0, "the activity feed is untouched");
+
+    // A day-old message (a backlog) is not pushed.
+    let stale = ChatPushPayload {
+        message_id:    Uuid::now_v7().to_string(),
+        created_at_ms: Utc::now().timestamp_millis() - 25 * 3_600_000,
+        ..push.clone()
+    };
+    assert_eq!(worker.process(&stale).await.unwrap(), 0);
 }

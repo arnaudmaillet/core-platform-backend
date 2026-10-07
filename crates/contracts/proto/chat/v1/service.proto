@@ -27,6 +27,9 @@ service ChatService {
     // ── Messaging ───────────────────────────────────────────────────────────
     rpc SendMessage (SendMessageRequest) returns (SendMessageResponse);
     rpc MarkRead    (MarkReadRequest)    returns (CommandResponse);
+    // The member's pushes from the conversation, off for a while or until
+    // they unmute (#654). The member's own setting; NOT_FOUND to a non-member.
+    rpc MuteConversation (MuteConversationRequest) returns (CommandResponse);
 
     // ── Member-Plane signals (presence/typing) ──────────────────────────────
     rpc SendTyping (SendTypingRequest) returns (CommandResponse);

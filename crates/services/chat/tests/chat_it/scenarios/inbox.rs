@@ -124,3 +124,53 @@ async fn the_inbox_worker_follows_chats_topics() {
     })
     .await;
 }
+
+async fn mute(h: &TestHarness, conv: &str, member: &ProfileId, muted: bool, until_ms: i64) -> Result<(), tonic::Status> {
+    ChatService::mute_conversation(
+        &h.handler,
+        Request::new(proto::MuteConversationRequest {
+            conversation_id: conv.to_owned(),
+            member_id: member.as_str(),
+            muted,
+            until_ms,
+        }),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// #654: a member mutes a conversation's pushes — for a while or until they
+/// unmute — and their inbox shows it; the roster stays readable (messages
+/// still project), and a non-member cannot mute.
+#[tokio::test]
+async fn a_member_mutes_a_conversation_and_the_inbox_shows_it() {
+    let h = TestHarness::start(HarnessOptions::default()).await;
+    let (me, friend) = (harness::random_profile(), harness::random_profile());
+    let (conversation, _) = h.open_direct(&me, &friend).await.unwrap();
+    h.send_text(&conversation, &friend, "hi").await;
+    let dm = conversation.as_str();
+    assert!(!h.inbox(&me, Inbox).await[0].muted);
+
+    let until = chrono::Utc::now().timestamp_millis() + 3_600_000;
+    mute(&h, &dm, &me, true, until).await.expect("mute for an hour");
+    let entry = &h.inbox(&me, Inbox).await[0];
+    assert!(entry.muted);
+    assert_eq!(entry.muted_until_ms, until);
+    assert!(!h.inbox(&friend, Inbox).await[0].muted, "one member's own setting");
+
+    mute(&h, &dm, &me, true, 0).await.expect("mute until unmuted");
+    let entry = &h.inbox(&me, Inbox).await[0];
+    assert!(entry.muted && entry.muted_until_ms == 0);
+
+    // The roster still reads: a new message lands in both inboxes.
+    h.send_text(&conversation, &friend, "still there?").await;
+    assert_eq!(h.inbox(&me, Inbox).await[0].last_message.as_ref().unwrap().preview, "still there?");
+
+    mute(&h, &dm, &me, false, 0).await.expect("unmute");
+    assert!(!h.inbox(&me, Inbox).await[0].muted);
+
+    let outsider = harness::random_profile();
+    assert!(mute(&h, &dm, &outsider, true, 0).await.is_err(), "not a member");
+    let past = chrono::Utc::now().timestamp_millis() - 1_000;
+    assert!(mute(&h, &dm, &me, true, past).await.is_err(), "a mute ends in the future");
+}

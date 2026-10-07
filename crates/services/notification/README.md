@@ -153,7 +153,15 @@ unless their preferences hold its category (category off, pause, quiet hours). F
 push never delays nor fails the write, and is not retried. Off until the APNs key is configured.
 - Categories: reaction → likes, comment / reply → comments, mention → mentions, follow → new
   followers, follow request / accepted → follow requests. **Appeal outcomes are never pushed** (feed
-  only, until their recipient is decided). Chat messages are pushed by a later change.
+  only, until their recipient is decided).
+- **Chat messages** (`chat.message.push`, consumer group `notification-chat-push`, only when push is
+  on): chat names the recipients (its inbox rules and per-conversation mutes); each gets it under
+  their `messages` preference, pause and quiet hours. Sent **at most once** per message (a Redis claim
+  on its id, kept `NOTIFICATION_DEDUPE_TTL_SECS`); a message older than a day is not pushed (a
+  backlog). Alert: `title` = the sender's name (else `title-loc-key` `NTF_PUSH_MESSAGE_ANON`), `body`
+  = the text (an attachment: `loc-key` `NTF_PUSH_MESSAGE_MEDIA`); no badge (the activity feed is
+  untouched); `kind = message`, `subject_kind = conversation`, `subject_id` = the conversation,
+  `notification_id` = the message.
 - Alert: localized by the app (`loc-key` + `loc-args`): `NTF_PUSH_<KIND>` (args: the sender's name),
   `NTF_PUSH_<KIND>_OTHERS` (args: the name, how many others — a collapsed notification),
   `NTF_PUSH_<KIND>_ANON` (no args: the name is unknown). The name is the sender's display name (else
@@ -204,6 +212,7 @@ identifiers — via the shared `error` crate.
 | `moderation.v1.events` (`appeal_resolved` only) | `notification-appeal-consumer` | an appeal's outcome → `APPEAL_UPHELD` / `APPEAL_OVERTURNED` to **every profile** moderation names (`profile_ids`: the appellant account's profiles, #744). Subject: the appeal (`SUBJECT_KIND_APPEAL`, the app opens it via `ListMyAppeals`). A platform notice: no sender (nil `sender_profile_id`, `sender_count` 0), not block-gated; one notification per (appeal, profile) (deterministic id). Other moderation events are ignored | DLQ `{topic}.dlq` |
 | `comment.created` | `notification-comment-consumer` | comment notifications (block-gated, self-guarded; none for a `quiet` event: a restricted author, #659) | DLQ `{topic}.dlq` |
 | `post.published` | `notification-mention-consumer` | parse `@mentions`, cache post author | DLQ `{topic}.dlq` |
+| `chat.message.push` | `notification-chat-push` | a chat message's push to the recipients chat names (#654), once per message (Redis claim), under each one's `messages` preference; nothing written to the feed. Only when push is on; `latest` reset (a new group never pushes the past) | DLQ `{topic}.dlq` |
 
 > **Runtime contract (mandatory):** all workers run under `run_consumer` — manual commit after success
 > (`enable_auto_commit=false`, earliest reset), bounded retry with backoff + jitter, DLQ on

@@ -154,6 +154,7 @@ service ChatService {
   // Messaging
   rpc SendMessage (SendMessageRequest) returns (SendMessageResponse);
   rpc MarkRead    (MarkReadRequest)    returns (CommandResponse);
+  rpc MuteConversation (MuteConversationRequest) returns (CommandResponse); // #654: the member's own pushes
   // Member-Plane signals
   rpc SendTyping (SendTypingRequest) returns (CommandResponse);
   rpc Heartbeat  (HeartbeatRequest)  returns (CommandResponse);
@@ -275,7 +276,8 @@ conversations, groups, and the channels one writes in; subscribed channels stay 
 - the last delivered message (sender, a 100-character preview);
 - `unread`: someone else's last message, newer than the caller's read position. A request stays
   unread until it is answered, since its recipient keeps no receipt;
-- `request`: the caller's own request, awaiting an answer.
+- `request`: the caller's own request, awaiting an answer;
+- `muted` / `muted_until_ms`: the caller muted the conversation's pushes (0: until they unmute).
 
 How the entries are kept:
 - **Storage.** The entries live in `chat.inbox_entries`, plus `chat.inbox_by_activity` for the
@@ -288,6 +290,22 @@ How the entries are kept:
   block that came after a request hides it too. The gate is unreachable ⇒ `CHT-5001`.
 - **Answers.** Accepting moves the entry to INBOX. Declining removes it for the decliner only.
 - **Replays.** An entry never moves back on a replay.
+
+**Pushes (#654).** Once a message's inbox entries are written, the `InboxWorker` asks the notification
+service for its push on `chat.message.push`: one event per message, with the sender, a 100-character
+text preview (empty for media) and the `recipients`. A recipient is a member the message reaches in
+their **inbox** — not its sender, not a pending request's recipient (a request waits unpushed), not
+someone blocking the sender (a withheld message) — who has not muted the conversation. System
+messages are never pushed. notification sends it once per message, under each recipient's `messages`
+preference, pause and quiet hours. Without a broker, nothing is pushed. The topic (and its `.dlq`) is
+kept **24 hours** (`event_topology::RETENTION`, applied by the topic provisioner): it carries message
+text that no erasure reaches on the broker, so it ages out fast.
+- `MuteConversation(conversation_id, member_id, muted, until_ms)` (edge `authenticated`, bound to
+  `member_id`): mutes the member's pushes from the conversation until `until_ms` (within a year) or,
+  with `0`, until they unmute; `muted = false` unmutes. Stored on the roster row
+  (`members_by_conversation.muted_until`, migration 0014, written with `IF EXISTS` so a racing
+  departure never leaves a role-less row), so leaving clears it. A non-member is answered like
+  `MarkRead` (`NOT_FOUND` on a private conversation); a past or over-a-year end is `CHT-9004`.
 - **Hidden requests (#810).** A request whose sender's message contains one of the caller's hidden
   words, or an offensive term while their offensive filter is on, lists under **HIDDEN_REQUESTS**
   instead of REQUESTS (the recipient can still open it; requests are never notified). It is sorted at
@@ -355,7 +373,8 @@ block), `CHT-1012` (no request from someone else to answer).
 | `chat.conversation.unpublished` | visibility → Private | `conversation_id` | **`chat` itself** (VisibilityWorker) |
 | `chat.member.joined` | member added to roster | `conversation_id` | **`chat` itself** (InboxWorker) |
 | `chat.member.left` | member removed from roster | `conversation_id` | **`chat` itself** (InboxWorker) |
-| `chat.message.sent` | message durably written (`withheld`, `request` since #656: a push consumer must skip both) | `conversation_id` | **`chat` itself** (InboxWorker) |
+| `chat.message.sent` | message durably written (`withheld`, `request` since #656) | `conversation_id` | **`chat` itself** (InboxWorker) |
+| `chat.message.push` | a message's push and its recipients (#654), once its inbox entries are written | `conversation_id` | `notification` (sends it) |
 
 **Consumes:**
 

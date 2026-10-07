@@ -20,7 +20,8 @@ use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 
 use crate::application::port::{
-    ConversationRepository, Folder, InboxEntry, InboxStore, LastMessage, MemberRepository, PREVIEW_CHARS,
+    ConversationRepository, Folder, InboxEntry, InboxStore, LastMessage, MemberRepository, MessagePush, MessagePushes,
+    PREVIEW_CHARS,
 };
 use crate::domain::aggregate::Conversation;
 use crate::domain::event::{DomainEvent, MessageSentEvent};
@@ -51,6 +52,8 @@ pub struct InboxProjector {
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub member_repo:       Arc<dyn MemberRepository>,
     pub inbox:             Arc<dyn InboxStore>,
+    /// Asks for the message's push (#654) for the members it reaches.
+    pub pushes:            Arc<dyn MessagePushes>,
 }
 
 impl InboxProjector {
@@ -69,17 +72,28 @@ impl InboxProjector {
         };
         let conversation = &conversation;
         let last = &last;
+        let now = Utc::now();
+        let mut entries = Vec::new();
+        let mut recipients = Vec::new();
+        for participant in self.member_repo.list(&conversation_id).await? {
+            let member = participant.profile_id();
+            // A withheld message is its sender's alone.
+            if event.withheld && member != sender {
+                continue;
+            }
+            let Some(folder) = folder_for(conversation, member) else { continue };
+            // Pushed to the members it reaches in their inbox (a request
+            // waits in its recipient's requests, unpushed) who did not mute it.
+            if member != sender && folder == Folder::Inbox && !participant.is_muted(now) {
+                recipients.push(member.as_str());
+            }
+            entries.push((member, folder));
+        }
         // A group's roster (up to 500) is written a few entries at a time: each
         // `put` is idempotent and per member.
-        futures::stream::iter(self.member_repo.list(&conversation_id).await?)
+        futures::stream::iter(entries)
             .map(Ok::<_, ChatError>)
-            .try_for_each_concurrent(PUTS_IN_FLIGHT, |member| async move {
-                let member = member.profile_id();
-                // A withheld message is its sender's alone.
-                if event.withheld && member != sender {
-                    return Ok(());
-                }
-                let Some(folder) = folder_for(conversation, member) else { return Ok(()) };
+            .try_for_each_concurrent(PUTS_IN_FLIGHT, |(member, folder)| async move {
                 let entry = InboxEntry {
                     conversation_id,
                     kind: conversation.kind(),
@@ -90,7 +104,24 @@ impl InboxProjector {
                 };
                 self.inbox.put(&member, &entry).await
             })
-            .await
+            .await?;
+
+        // Once the inbox is written: a failure retries the whole projection
+        // (idempotent), and notification sends a message's push once.
+        if recipients.is_empty() || last.content_type == ContentType::System {
+            return Ok(());
+        }
+        let push = MessagePush {
+            message_id:        event.message_id.clone(),
+            conversation_id:   event.conversation_id.clone(),
+            conversation_kind: conversation.kind().as_str().to_owned(),
+            sender_id:         event.sender_id.clone(),
+            content_type:      last.content_type.as_str().to_owned(),
+            preview:           if last.content_type == ContentType::Text { last.preview.clone() } else { String::new() },
+            recipients,
+            created_at_ms:     event.created_at_ms,
+        };
+        self.pushes.request(&push).await
     }
 
     /// A conversation's lifecycle: its owner in at creation, members in as
@@ -153,7 +184,7 @@ pub(crate) async fn file_answer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::command::fakes::{FakeConversations, FakeInbox, FakeMembers};
+    use crate::application::command::fakes::{FakeConversations, FakeInbox, FakeMembers, FakePushes};
     use crate::domain::aggregate::Participant;
     use crate::domain::event::{ConversationCreatedEvent, MemberJoinedEvent, MemberLeftEvent};
     use crate::domain::value_object::{ConversationKind, Role};
@@ -166,18 +197,21 @@ mod tests {
         conversations: Arc<FakeConversations>,
         members:       Arc<FakeMembers>,
         inbox:         Arc<FakeInbox>,
+        pushes:        Arc<FakePushes>,
         projector:     InboxProjector,
     }
 
     fn world() -> World {
         let (conversations, members, inbox) =
             (Arc::<FakeConversations>::default(), Arc::<FakeMembers>::default(), Arc::<FakeInbox>::default());
+        let pushes = Arc::<FakePushes>::default();
         let projector = InboxProjector {
             conversation_repo: Arc::clone(&conversations) as Arc<dyn ConversationRepository>,
             member_repo:       Arc::clone(&members) as Arc<dyn MemberRepository>,
             inbox:             Arc::clone(&inbox) as Arc<dyn InboxStore>,
+            pushes:            Arc::clone(&pushes) as Arc<dyn MessagePushes>,
         };
-        World { conversations, members, inbox, projector }
+        World { conversations, members, inbox, pushes, projector }
     }
 
     impl World {
@@ -191,11 +225,15 @@ mod tests {
         }
 
         async fn sent(&self, id: ConversationId, sender: ProfileId, at_ms: i64, withheld: bool) {
+            self.sent_as(id, sender, at_ms, withheld, "text").await;
+        }
+
+        async fn sent_as(&self, id: ConversationId, sender: ProfileId, at_ms: i64, withheld: bool, content_type: &str) {
             let event = MessageSentEvent {
                 conversation_id: id.as_str(),
                 message_id:      MessageId::new().as_str(),
                 sender_id:       sender.as_str(),
-                content_type:    "text".to_owned(),
+                content_type:    content_type.to_owned(),
                 body:            "x".repeat(150),
                 media_ref:       None,
                 reply_to:        None,
@@ -288,5 +326,39 @@ mod tests {
             .await
             .unwrap();
         assert!(w.inbox.entry(&joiner, &id).is_none());
+    }
+
+    /// #654: a message is pushed to the members it reaches in their inbox,
+    /// except its sender and those who muted the conversation; a request, a
+    /// withheld message and a system message are not pushed.
+    #[tokio::test]
+    async fn a_message_is_pushed_to_whom_it_reaches_unless_muted() {
+        let w = world();
+        let (a, b) = (pid(), pid());
+        let open = w.direct(a, b, false).await;
+        w.sent(open, a, 1_000, false).await;
+        let asked = w.pushes.asked();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].recipients, vec![b.as_str()]);
+        assert_eq!((asked[0].conversation_kind.as_str(), asked[0].preview.chars().count()), ("direct", PREVIEW_CHARS));
+
+        // A request waits unpushed; so does a message from someone blocked.
+        let request = w.direct(pid(), b, true).await;
+        let requester = w.conversations.find(&request).await.unwrap().unwrap().owner_id();
+        w.sent(request, requester, 2_000, false).await;
+        w.sent(open, a, 3_000, true).await;
+        // A media message shows no text; a system message is never pushed.
+        w.sent_as(open, a, 4_000, false, "media").await;
+        w.sent_as(open, a, 5_000, false, "system").await;
+        let asked = w.pushes.asked();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert_eq!((asked[1].content_type.as_str(), asked[1].preview.as_str()), ("media", ""));
+
+        // b mutes the conversation: a's next message is pushed to no one.
+        let until = Utc::now() + chrono::Duration::hours(1);
+        assert!(w.members.set_muted_until(&open, &b, Some(until)).await.unwrap());
+        w.sent(open, a, 6_000, false).await;
+        assert_eq!(w.pushes.asked().len(), 2, "muted");
+        assert!(w.inbox.entry(&b, &open).unwrap().activity.timestamp_millis() == 6_000, "still in the inbox");
     }
 }
