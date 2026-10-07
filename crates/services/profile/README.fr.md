@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: d7363a4424d3401e39727676b66c863271decf73b5b092e3787a2015823071a5
-  translated_at: 2026-10-06
+  source_sha256: 05e9a6374f79f27e3628dc31b2a09b28c6f64ddc86e8e3626c714d8e6014f8c6
+  translated_at: 2026-10-07
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -65,6 +65,9 @@ gRPC ─► ProfileServiceHandler ─► Command bus            Query bus ─►
    Redis cache-aside: profile:v1:{id} TTL 300s · handle:v1:{handle} TTL 600s · account:profiles:v1:{id} TTL 120s
 
    Kafka account.v1.events ─► account_suspended / account_deactivated / account_deleted → masquer chaque profil du compte · account_activated → restaurer ceux que la suspension ou la désactivation a masqués
+                            account_deleted efface aussi les demandes de vérification du compte (#777)
+
+   gRPC media (mesh) ─► GetAsset : les documents privés d'une demande de vérification sont ceux du demandeur, READY (#777)
 ```
 
 **Versionnement des clés de cache.** Toutes les clés portent un préfixe `v1:` — incrémenter le suffixe
@@ -149,7 +152,7 @@ service ProfileService {
   rpc SetCommentFilters(SetCommentFiltersRequest) returns (CommandResponse); // #660 mots masqués (≤ 200, normalisés) + filtre offensant (activé par défaut) ; réservé au propriétaire sur la vue ; comment les applique
   rpc SetDiscoverySettings(SetDiscoverySettingsRequest) returns (CommandResponse); // #661 statut d'activité, accusés de lecture, trouvable par téléphone / e-mail / recherche de handle / QR / suggestions (partiel ; réservé au propriétaire sur la vue) ; les ados démarrent introuvables par téléphone, e-mail, suggestions ; search applique by_handle_search ; `in_suggestions` ne peut être activé que si le jeton dit 18+ (PRF-9001 : un ado n'est jamais suggéré) ; social-graph le projette pour SuggestProfiles, account lit by_phone / by_email pour FindProfilesByContacts
   rpc SetAccountType(SetAccountTypeRequest) returns (CommandResponse); // #668 personnel / professionnel (créateur) / marque (entreprise) + la fiche de contact publique d'une marque ; un bot reste un bot ; créateur et entreprise réservés aux 18 ans et plus (un jeton 13–17 reçoit FAILED_PRECONDITION)
-  rpc RequestVerification(RequestVerificationRequest) returns (CommandResponse); // #668 propriétaire : catégorie + 1 à 5 documents → file du personnel
+  rpc RequestVerification(RequestVerificationRequest) returns (CommandResponse); // #668 propriétaire : catégorie + 1 à 5 justificatifs (liens https et/ou documents privés, #777) → file du personnel
   rpc GetVerificationRequest(GetVerificationRequestRequest) returns (GetVerificationRequestResponse); // #668 propriétaire : en attente / approuvée / refusée (+ motif)
   rpc ListPendingVerificationRequests(ListPendingVerificationRequestsRequest) returns (ListPendingVerificationRequestsResponse); // personnel, mesh uniquement
   rpc DecideVerificationRequest(DecideVerificationRequestRequest) returns (CommandResponse); // personnel, mesh uniquement : approuver vérifie le profil ; refuser exige un motif
@@ -204,6 +207,8 @@ réactivement).
 | PRF-5001 | `ProfileAlreadyVerified` | 409 | No |
 | PRF-5002 | `VerificationPending` (une demande est déjà en cours d'examen) | 409 | No |
 | PRF-5003 | `NoPendingVerification` (rien à décider) | 409 | No |
+| PRF-5004 | `VerificationDocumentInvalid` (un document privé n'est pas un document prêt du demandeur) | 422 | No |
+| PRF-5005 | `MediaUnavailable` (media n'a pas pu vérifier un document privé) | 503 | **Yes** |
 | PRF-9001–9010 | domain / parse / validation | 422 | No |
 | SDB-* / RDB-* | storage (delegated) | varies | varies |
 
@@ -215,7 +220,7 @@ réactivement).
 
 | Topic | Déclencheur | Clé | Consommateurs |
 |---|---|---|---|
-| `profile.v1.events` | chaque mutation de cycle de vie — `ProfileCreated` / `ProfileUpdated` / `HandleChanged` / `ProfileVerified` / `ProfileHidden` / `ProfileRestored` / `ProfileDeleted` / `ProfileTierChanged` / `ProfileVisibilityChanged` (`public`/`private` ; `SetVisibility` n'émet que celui-ci) | `profile_id` | `search` (indexation des profils), `post` (dénormalisation du palier auteur), `social-graph` (projection d'audience pour le contrôle d'accès) |
+| `profile.v1.events` | chaque mutation de cycle de vie — `ProfileCreated` / `ProfileUpdated` / `HandleChanged` / `ProfileVerified` / `ProfileHidden` / `ProfileRestored` / `ProfileDeleted` / `ProfileTierChanged` / `ProfileVisibilityChanged` (`public`/`private` ; `SetVisibility` n'émet que celui-ci) / `ProfileVerificationDecided` (le personnel a tranché une demande de vérification : `account_id`, `approved`, `document_asset_ids` = ses documents privés, `decided_at_ms` ; #777) | `profile_id` | `search` (indexation des profils), `post` (dénormalisation du palier auteur), `social-graph` (projection d'audience pour le contrôle d'accès), `media` (`ProfileVerificationDecided` : les documents privés sont purgés 30 jours après la décision) |
 
 > **Contrat de fil :** un topic versionné unique, tagué en interne sur `type` (convention du service moderation), clé `profile_id` pour l'ordre par-profil. Les événements sont **fins** (ids + horodatages, sans contenu d'affichage) — un consommateur qui a besoin du profil complet l'hydrate via `GetProfileById`. Chaque command handler draine les événements en attente de l'agrégat et les publie **après** l'écriture durable (durable-first ; un publisher no-op couvre la composition sans broker).
 
@@ -223,7 +228,7 @@ réactivement).
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
-| `account.v1.events` | `profile-account-events` | le `DomainEvent` d'account (tagué sur `type`, snake_case) : `account_suspended` / `account_deactivated` / `account_deleted` → masquer **chaque** profil du compte (`HideAccountProfiles`, le type d'événement sert de raison de masquage) ; `account_activated` → restaurer les profils masqués par la suspension ou la désactivation (`RestoreAccountProfiles` ; un masquage pour violation de politique reste). Idempotent par profil : une redélivrance termine un parcours partiel. Autres types = commit no-op | DLQ `account.v1.events.dlq` |
+| `account.v1.events` | `profile-account-events` | le `DomainEvent` d'account (tagué sur `type`, snake_case) : `account_suspended` / `account_deactivated` / `account_deleted` → masquer **chaque** profil du compte (`HideAccountProfiles`, le type d'événement sert de raison de masquage) ; `account_activated` → restaurer les profils masqués par la suspension ou la désactivation (`RestoreAccountProfiles` ; un masquage pour violation de politique reste). Idempotent par profil : une redélivrance termine un parcours partiel. `account_deleted` efface ensuite les demandes de vérification du compte (`EraseAccountVerifications`, #777 ; idempotent). Autres types = commit no-op | DLQ `account.v1.events.dlq` |
 | `social-graph.author_tier_changed` | `profile-author-tier` | dénormalise le palier auteur sur le profil (`SetProfileTier`) → ré-émet sur `profile.v1.events` (`ProfileTierChanged`) ; idempotent si palier inchangé | DLQ `social-graph.author_tier_changed.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** le consommateur d'événements compte s'exécute sous
@@ -241,6 +246,7 @@ réactivement).
 | Redis indisponible / froid | la latence monte | **Souple** — toutes les lectures retombent sur Scylla (profil Fast) | vérifier le taux de hit ; se rétablit en général seul |
 | Course LWT sur handle | `PRF-1002` à l'écrivain perdant | sérialisation correcte à la couche store | aucune — remonter à l'utilisateur pour choisir un autre handle |
 | Lag du consommateur d'événements compte | profils non masqués à la suspension/suppression | retries dans le budget ; offset non committé | vérifier le lag ; re-dispatcher le masquage au besoin |
+| media injoignable (`PROFILE_MEDIA_GRPC_ENDPOINT`) | une demande de vérification avec documents privés échoue | `PRF-5005` (retryable) ; les demandes avec liens seuls ne sont pas touchées ; non définie → documents privés refusés | vérifier media / la NetworkPolicy profile → media |
 
 **Backpressure & limites.** Les écritures utilisent le profil Scylla **Strict** (`LocalQuorum`) ; les
 lectures utilisent **Fast** (`LocalOne` + retry spéculatif déclenchant 1 requête supplémentaire après
@@ -293,6 +299,8 @@ async fn main() -> anyhow::Result<()> {
 | `KAFKA_BROKERS` | **Yes** | `127.0.0.1:9092` | Kafka brokers. |
 | `KAFKA_CONSUMER_GROUP` | No | `profile-service` | account-event consumer group. |
 | `PROFILE_GRPC_ADDR` | No | `0.0.0.0:50052` | gRPC bind address. |
+| `PROFILE_MEDIA_GRPC_ENDPOINT` | No | — | endpoint mesh de media : vérifie les documents privés d'une demande de vérification (#777). Non définie : les demandes ne prennent que des liens. |
+| `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS` | No | `500` / `1000` | délais de cet appel. |
 
 > Le réglage complet `SCYLLA_*` / `REDIS_*` / `KAFKA_*` est documenté dans les crates partagés
 > storage/transport. Les profils de TTL `[cache]` sont consommés depuis `infrastructure.toml`, pas via env.

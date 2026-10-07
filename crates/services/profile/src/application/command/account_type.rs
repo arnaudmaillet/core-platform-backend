@@ -6,9 +6,10 @@ use chrono::Utc;
 use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::port::{EventPublisher, ProfileCache, ProfileRepository, VerificationStore};
+use crate::application::port::{EventPublisher, PrivateDocuments, ProfileCache, ProfileRepository, VerificationStore};
 use crate::domain::entity::{VerificationRequest, VerificationStatus};
-use crate::domain::value_object::{BusinessInfo, ProfileId, ProfileKind, VerificationKind};
+use crate::domain::event::{DomainEvent, VerificationDecided};
+use crate::domain::value_object::{AccountId, BusinessInfo, ProfileId, ProfileKind, VerificationKind};
 use crate::error::ProfileError;
 
 fn profile_id_present(id: &str) -> Result<(), Vec<FieldViolation>> {
@@ -67,12 +68,16 @@ impl CommandHandler<SetAccountTypeCommand> for SetAccountTypeHandler {
     }
 }
 
-/// The owner asks for a verification badge, with supporting documents.
+/// The owner asks for a verification badge, with supporting evidence: links
+/// and/or their own private documents (#777).
 #[derive(Debug, Clone)]
 pub struct RequestVerificationCommand {
     pub profile_id: String,
     pub category:   VerificationKind,
+    /// `https://` links.
     pub documents:  Vec<String>,
+    /// Media asset ids of the requester's `PRIVATE_DOCUMENT`s.
+    pub private_documents: Vec<String>,
 }
 
 impl Command for RequestVerificationCommand {}
@@ -86,6 +91,9 @@ impl Validate for RequestVerificationCommand {
 pub struct RequestVerificationHandler {
     pub repo:          Arc<dyn ProfileRepository>,
     pub verifications: Arc<dyn VerificationStore>,
+    /// Checks private documents with media (#777); `None` (no media endpoint):
+    /// links only — a private document is refused (`MediaUnavailable`).
+    pub documents:     Option<Arc<dyn PrivateDocuments>>,
 }
 
 impl CommandHandler<RequestVerificationCommand> for RequestVerificationHandler {
@@ -105,7 +113,22 @@ impl CommandHandler<RequestVerificationCommand> for RequestVerificationHandler {
         if self.verifications.get(&id).await?.is_some_and(|r| r.status == VerificationStatus::Pending) {
             return Err(ProfileError::VerificationPending);
         }
-        let request = VerificationRequest::submit(cmd.category, cmd.documents.clone(), Utc::now())?;
+        let request = VerificationRequest::submit(
+            cmd.category,
+            cmd.documents.clone(),
+            cmd.private_documents.clone(),
+            Utc::now(),
+        )?;
+        // Each private document must be the requester's own, ready one.
+        if !request.private_documents.is_empty() {
+            let documents = self.documents.as_ref().ok_or_else(|| ProfileError::MediaUnavailable {
+                reason: "private documents are not wired".into(),
+            })?;
+            let account = profile.account_id();
+            for asset_id in &request.private_documents {
+                documents.check_owned(asset_id, &account).await?;
+            }
+        }
         self.verifications.put(&id, &request).await
     }
 }
@@ -141,14 +164,15 @@ impl CommandHandler<DecideVerificationCommand> for DecideVerificationHandler {
         let cmd = &envelope.payload;
         let id = ProfileId::try_from(cmd.profile_id.as_str())?;
         let mut request = self.verifications.get(&id).await?.ok_or(ProfileError::NoPendingVerification)?;
-        request.decide(cmd.approve, cmd.reason.clone(), Utc::now())?;
+        let now = Utc::now();
+        request.decide(cmd.approve, cmd.reason.clone(), now)?;
+        let mut profile = self
+            .repo
+            .find_by_id(&id)
+            .await?
+            .ok_or_else(|| ProfileError::ProfileNotFound { id: cmd.profile_id.clone() })?;
 
         if cmd.approve {
-            let mut profile = self
-                .repo
-                .find_by_id(&id)
-                .await?
-                .ok_or_else(|| ProfileError::ProfileNotFound { id: cmd.profile_id.clone() })?;
             match profile.verify(request.category, envelope.correlation_id) {
                 // Verified meanwhile (the admin path): the request is approved all the same.
                 Ok(()) | Err(ProfileError::ProfileAlreadyVerified) => {}
@@ -162,6 +186,60 @@ impl CommandHandler<DecideVerificationCommand> for DecideVerificationHandler {
                 let _ = self.cache.invalidate_by_id(&id).await;
             }
         }
+        // Announced before the request is stored: a failed store retries the
+        // whole decision (the request is still pending) and announces again,
+        // which media takes idempotently. It starts the documents' retention.
+        let decided = DomainEvent::VerificationDecided(VerificationDecided {
+            profile_id:        id,
+            account_id:        profile.account_id(),
+            approved:          cmd.approve,
+            private_documents: request.private_documents.clone(),
+            occurred_at:       now,
+            correlation_id:    envelope.correlation_id,
+        });
+        self.publisher.publish(&decided).await?;
         self.verifications.put(&id, &request).await
+    }
+}
+
+/// GDPR erasure (#777): `account_deleted` forgets every verification request of
+/// the account's profiles (their links and private-document ids).
+#[derive(Debug, Clone)]
+pub struct EraseAccountVerificationsCommand {
+    pub account_id: String,
+}
+
+impl Command for EraseAccountVerificationsCommand {}
+
+impl Validate for EraseAccountVerificationsCommand {
+    fn validate(&self) -> Result<(), Vec<FieldViolation>> {
+        if self.account_id.trim().is_empty() {
+            return Err(vec![FieldViolation::new("account_id", "VAL-3090", "account_id must not be empty")]);
+        }
+        Ok(())
+    }
+}
+
+pub struct EraseAccountVerificationsHandler {
+    pub repo:          Arc<dyn ProfileRepository>,
+    pub verifications: Arc<dyn VerificationStore>,
+}
+
+impl CommandHandler<EraseAccountVerificationsCommand> for EraseAccountVerificationsHandler {
+    type Error = ProfileError;
+
+    async fn handle(&self, envelope: Envelope<EraseAccountVerificationsCommand>) -> Result<(), ProfileError> {
+        let account = AccountId::try_from(envelope.payload.account_id.as_str())?;
+        let mut token: Option<String> = None;
+        loop {
+            let (page, next) = self.repo.list_by_account(&account, 100, token.as_deref()).await?;
+            for summary in page {
+                self.verifications.remove(&summary.profile_id).await?;
+            }
+            match next {
+                Some(t) if !t.is_empty() => token = Some(t),
+                _ => return Ok(()),
+            }
+        }
     }
 }

@@ -17,9 +17,10 @@ use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 
 use profile::app::{App, Backends};
 use profile::application::command::{CreateProfileCommand, DeleteProfileCommand, UpdateProfileCommand};
-use profile::application::port::{EventPublisher, ProfileCache, ProfileRepository};
+use profile::application::port::{EventPublisher, PrivateDocuments, ProfileCache, ProfileRepository};
 use profile::application::query::{GetProfileByHandleQuery, GetProfileByIdQuery};
-use profile::domain::event::DomainEvent;
+use profile::domain::event::{DomainEvent, VerificationDecided};
+use profile::domain::value_object::AccountId;
 use profile::error::ProfileError;
 use profile::infrastructure::publisher::wire::ProfileEventWire;
 
@@ -61,7 +62,8 @@ ttl_secs = 600
 /// assert the durable write emitted the right `profile.v1.events` notification.
 #[derive(Default)]
 pub struct CapturingEventPublisher {
-    events: Mutex<Vec<String>>,
+    events:  Mutex<Vec<String>>,
+    decided: Mutex<Vec<VerificationDecided>>,
 }
 
 #[async_trait::async_trait]
@@ -69,6 +71,9 @@ impl EventPublisher for CapturingEventPublisher {
     async fn publish(&self, event: &DomainEvent) -> Result<(), ProfileError> {
         let kind = ProfileEventWire::from(event).event_type();
         self.events.lock().unwrap().push(kind.to_owned());
+        if let DomainEvent::VerificationDecided(decided) = event {
+            self.decided.lock().unwrap().push(decided.clone());
+        }
         Ok(())
     }
 }
@@ -76,6 +81,35 @@ impl EventPublisher for CapturingEventPublisher {
 impl CapturingEventPublisher {
     pub fn published(&self) -> Vec<String> {
         self.events.lock().unwrap().clone()
+    }
+
+    /// The verification decisions announced (#777), oldest first.
+    pub fn decided(&self) -> Vec<VerificationDecided> {
+        self.decided.lock().unwrap().clone()
+    }
+}
+
+/// Media, as far as verification evidence goes (#777): the private documents
+/// each account owns, ready.
+#[derive(Default)]
+pub struct FakePrivateDocuments {
+    owned: Mutex<Vec<(String, String)>>,
+}
+
+impl FakePrivateDocuments {
+    /// `account` uploaded a private document; returns its asset id.
+    pub fn upload(&self, account: &str) -> String {
+        let asset = Uuid::now_v7().to_string();
+        self.owned.lock().unwrap().push((asset.clone(), account.to_owned()));
+        asset
+    }
+}
+
+#[async_trait::async_trait]
+impl PrivateDocuments for FakePrivateDocuments {
+    async fn check_owned(&self, asset_id: &str, account: &AccountId) -> Result<(), ProfileError> {
+        let owned = self.owned.lock().unwrap().iter().any(|(a, o)| a == asset_id && *o == account.to_string());
+        if owned { Ok(()) } else { Err(ProfileError::VerificationDocumentInvalid { id: asset_id.to_owned() }) }
     }
 }
 
@@ -86,6 +120,7 @@ pub struct TestHarness {
     pub repository:  Arc<dyn ProfileRepository>,
     pub cache:       Arc<dyn ProfileCache>,
     pub publisher:   Arc<CapturingEventPublisher>,
+    pub documents:   Arc<FakePrivateDocuments>,
     /// A raw session, for scenarios that must shape rows directly (e.g. age a
     /// handle tombstone past its reservation).
     pub scylla:      Arc<ScyllaClient>,
@@ -126,10 +161,12 @@ impl TestHarness {
         );
 
         let publisher = Arc::new(CapturingEventPublisher::default());
+        let documents = Arc::new(FakePrivateDocuments::default());
         let app = App::build(
             backends,
             cache_registry,
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
+            Some(Arc::clone(&documents) as Arc<dyn PrivateDocuments>),
         )
         .await
         .expect("integration: build profile app");
@@ -140,6 +177,7 @@ impl TestHarness {
             repository:  app.repository,
             cache:       app.cache,
             publisher,
+            documents,
             scylla,
         }
     }
