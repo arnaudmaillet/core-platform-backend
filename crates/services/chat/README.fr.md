@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: c85e4debd73cb3e58aee83ee0f29884fac7b89f01012d41d1a88d9071655ba11
+  source_sha256: 6461739c04f3d279debaf34345270884b771d14ed6df72a33bb3630be6cd7f9b
   translated_at: 2026-10-07
   status: complete
 ---
@@ -322,7 +322,9 @@ que le message atteint dans son **inbox** — ni son expéditeur, ni le destinat
 attente (une demande attend sans push), ni quelqu'un qui bloque l'expéditeur (un message retenu) —
 et qui n'a pas mis la conversation en sourdine. Les messages système ne sont jamais envoyés en push.
 notification l'envoie une fois par message, selon la préférence `messages`, la pause et les heures
-calmes de chaque destinataire. Sans broker, rien n'est envoyé.
+calmes de chaque destinataire. Sans broker, rien n'est envoyé. Le topic (et son `.dlq`) est gardé
+**24 heures** (`event_topology::RETENTION`, appliquée par le topic provisioner) : il porte du texte de
+message qu'aucun effacement n'atteint sur le broker, donc il expire vite.
 - `MuteConversation(conversation_id, member_id, muted, until_ms)` (edge `authenticated`, lié à
   `member_id`) : met en sourdine les push de la conversation pour ce membre jusqu'à `until_ms` (dans
   l'année) ou, avec `0`, jusqu'à ce qu'il la lève ; `muted = false` la lève. Stockée sur la ligne du

@@ -297,7 +297,9 @@ text preview (empty for media) and the `recipients`. A recipient is a member the
 their **inbox** — not its sender, not a pending request's recipient (a request waits unpushed), not
 someone blocking the sender (a withheld message) — who has not muted the conversation. System
 messages are never pushed. notification sends it once per message, under each recipient's `messages`
-preference, pause and quiet hours. Without a broker, nothing is pushed.
+preference, pause and quiet hours. Without a broker, nothing is pushed. The topic (and its `.dlq`) is
+kept **24 hours** (`event_topology::RETENTION`, applied by the topic provisioner): it carries message
+text that no erasure reaches on the broker, so it ages out fast.
 - `MuteConversation(conversation_id, member_id, muted, until_ms)` (edge `authenticated`, bound to
   `member_id`): mutes the member's pushes from the conversation until `until_ms` (within a year) or,
   with `0`, until they unmute; `muted = false` unmutes. Stored on the roster row

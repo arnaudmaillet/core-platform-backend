@@ -382,6 +382,22 @@ pub fn all_stream_topics() -> Vec<&'static str> {
     topics
 }
 
+/// Topics kept shorter than the broker default (in ms), and their `.dlq`: a
+/// topic carrying user content that no erasure can reach on the broker ages out
+/// fast instead.
+pub const RETENTION: &[(&str, i64)] = &[
+    // A message's push carries its first 100 characters (#654); the consumer
+    // skips anything older than a day anyway.
+    ("chat.message.push", 24 * 3_600_000),
+];
+
+/// The retention of `topic` (a `.dlq` follows its topic), when it is not the
+/// broker default.
+pub fn retention_ms(topic: &str) -> Option<i64> {
+    let base = topic.strip_suffix(".dlq").unwrap_or(topic);
+    RETENTION.iter().find(|(t, _)| *t == base).map(|(_, ms)| *ms)
+}
+
 /// Deduplicated set of consumed topics — the subscriptions whose `run_consumer` loops can
 /// dead-letter, i.e. the topics that need a `<topic>.dlq` counterpart on the broker.
 pub fn consumed_stream_topics() -> Vec<&'static str> {
@@ -597,5 +613,17 @@ mod tests {
             "docs/domain/EVENT_CATALOG.fr.md generated block is STALE — \
              run `tools/event-catalog/sync.sh --write` and commit"
         );
+    }
+
+    /// A retention names a registry topic, and covers its DLQ.
+    #[test]
+    fn retentions_name_registry_topics() {
+        let topics = all_stream_topics();
+        for (topic, ms) in RETENTION {
+            assert!(topics.contains(topic), "{topic} is not in the registry");
+            assert!(*ms > 0);
+        }
+        assert_eq!(retention_ms("chat.message.push.dlq"), Some(24 * 3_600_000));
+        assert_eq!(retention_ms("chat.message.sent"), None);
     }
 }

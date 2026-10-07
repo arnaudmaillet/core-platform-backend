@@ -20,11 +20,15 @@
 //! - `TOPIC_PARTITIONS` — partitions per topic (default 12, matching the KEDA
 //!   workers' `maxReplicaCount` cap: a consumer group cannot parallelize beyond
 //!   its partitions).
+//!
+//! A topic with a registry retention (`event_topology::RETENTION`, and its
+//! `.dlq`) is created with `retention.ms`, and the setting is re-applied to it on
+//! every run, so a topic that already existed (or a changed retention) follows.
 
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
+use rdkafka::admin::{AdminClient, AdminOptions, AlterConfig, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::types::RDKafkaErrorCode;
 use transport::kafka::config::KafkaClientConfig;
@@ -58,9 +62,19 @@ async fn main() -> Result<()> {
         .create()
         .context("build Kafka admin client")?;
 
+    let retentions: Vec<(String, String)> = names
+        .iter()
+        .filter_map(|name| event_topology::retention_ms(name).map(|ms| (name.clone(), ms.to_string())))
+        .collect();
     let new_topics: Vec<NewTopic> = names
         .iter()
-        .map(|name| NewTopic::new(name, partitions, TopicReplication::Fixed(replication)))
+        .map(|name| {
+            let topic = NewTopic::new(name, partitions, TopicReplication::Fixed(replication));
+            match retentions.iter().find(|(t, _)| t == name) {
+                Some((_, ms)) => topic.set("retention.ms", ms),
+                None => topic,
+            }
+        })
         .collect();
 
     let results = admin
@@ -85,6 +99,30 @@ async fn main() -> Result<()> {
             Err((topic, code)) => {
                 println!("  [FAILED]  {topic}: {code}");
                 failed.push((topic, code));
+            }
+        }
+    }
+
+    // Re-applied every run: a topic that predates its retention follows too.
+    let alters: Vec<AlterConfig> = retentions
+        .iter()
+        .map(|(topic, ms)| AlterConfig::new(ResourceSpecifier::Topic(topic)).set("retention.ms", ms))
+        .collect();
+    if !alters.is_empty() {
+        let results = admin
+            .alter_configs(
+                alters.iter(),
+                &AdminOptions::new().operation_timeout(Some(Duration::from_secs(admin_timeout))),
+            )
+            .await
+            .context("alter_configs admin call")?;
+        for result in results {
+            match result {
+                Ok(resource) => println!("  [retention] {resource:?}"),
+                Err((resource, code)) => {
+                    println!("  [FAILED]  retention of {resource:?}: {code}");
+                    failed.push((format!("{resource:?}"), code));
+                }
             }
         }
     }
