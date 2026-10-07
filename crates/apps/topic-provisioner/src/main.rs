@@ -104,6 +104,12 @@ async fn main() -> Result<()> {
     }
 
     // Re-applied every run: a topic that predates its retention follows too.
+    // rdkafka's `alter_configs` is Kafka's NON-incremental AlterConfigs: it
+    // replaces the topic's whole set of dynamic configs, so any other override
+    // on these topics (min.insync.replicas, cleanup.policy, … set by hand or by
+    // infra) is reset to the cluster default on every run. Harmless while the
+    // registry sets nothing else on them; before adding more per-topic settings,
+    // pass the full intended set here (or move to IncrementalAlterConfigs).
     let alters: Vec<AlterConfig> = retentions
         .iter()
         .map(|(topic, ms)| AlterConfig::new(ResourceSpecifier::Topic(topic)).set("retention.ms", ms))
