@@ -338,44 +338,64 @@ mod tests {
         assert_eq!(status.code(), Code::NotFound);
     }
 
-    fn staff<T>(message: T, permissions: &[&str]) -> Request<T> {
-        let raw: auth_context::OidcClaims =
-            serde_json::from_value(serde_json::json!({ "sub": "staff-1", "exp": 4_102_444_800_i64 })).unwrap();
+    /// Bearer tokens as staff tooling sends them on the mesh (#837).
+    struct Tokens;
+
+    impl transport::grpc::edge::StaffVerifier for Tokens {
+        fn verify<'a>(&'a self, token: &'a str) -> transport::grpc::edge::StaffVerification<'a> {
+            let permissions: Option<&[&str]> = match token {
+                "reviewer" => Some(&[transport::grpc::edge::VERIFICATION_REVIEW]),
+                "member" => Some(&[]),
+                _ => None,
+            };
+            let principal = permissions.map(|permissions| {
+                let raw: auth_context::OidcClaims =
+                    serde_json::from_value(serde_json::json!({ "sub": "staff-1", "exp": 4_102_444_800_i64 })).unwrap();
+                auth_context::CurrentPrincipal {
+                    user_id: auth_context::PrincipalId::new("staff-1"),
+                    tenant_id: None,
+                    permissions: permissions.iter().map(|p| auth_context::Permission::new(*p)).collect(),
+                    raw_claims: raw,
+                }
+            });
+            Box::pin(async move { principal })
+        }
+    }
+
+    fn with_token<T>(message: T, token: Option<&str>) -> Request<T> {
         let mut request = Request::new(message);
-        request.extensions_mut().insert(transport::grpc::edge::EdgePrincipal::new(Arc::new(
-            auth_context::CurrentPrincipal {
-                user_id: auth_context::PrincipalId::new("staff-1"),
-                tenant_id: None,
-                permissions: permissions.iter().map(|p| auth_context::Permission::new(*p)).collect(),
-                raw_claims: raw,
-            },
-        )));
+        if let Some(token) = token {
+            request.metadata_mut().insert("authorization", format!("Bearer {token}").parse().unwrap());
+        }
         request
     }
 
-    /// #837: a private document's link takes a staff token holding
-    /// `verification:review`; the mesh and a token without it are refused, and
-    /// the link handed out is on the audit plane.
+    /// #837: a private document's link is a mesh call carrying a staff token
+    /// that holds `verification:review`; no token, a member's token or a
+    /// forged one is refused, and the link handed out is on the audit plane.
     #[tokio::test]
     async fn a_private_document_link_is_for_reviewers_only_and_recorded() {
         let fx = Fixture::new();
-        let handler = handler_from_fakes(&fx);
+        let handler = handler_from_fakes(&fx)
+            .with_staff_gate(transport::grpc::edge::StaffGate::new(Arc::new(Tokens)));
         let (doc, _) = fx.ready_asset(crate::domain::value_object::MediaKind::PrivateDocument).await;
         let ask = || proto::GetPrivateDocumentUrlRequest { asset_id: doc.as_str() };
 
-        let mesh = handler.get_private_document_url(Request::new(ask())).await.unwrap_err();
-        assert_eq!(mesh.code(), Code::PermissionDenied);
-        let member = handler.get_private_document_url(staff(ask(), &["read:public"])).await.unwrap_err();
-        assert_eq!(member.code(), Code::PermissionDenied);
+        for (token, code) in
+            [(None, Code::Unauthenticated), (Some("forged"), Code::Unauthenticated), (Some("member"), Code::PermissionDenied)]
+        {
+            let denied = handler.get_private_document_url(with_token(ask(), token)).await.unwrap_err();
+            assert_eq!(denied.code(), code, "{token:?}");
+        }
         assert!(fx.access_log.views().is_empty(), "nothing handed out, nothing recorded");
 
-        let link = handler
-            .get_private_document_url(staff(ask(), &[transport::grpc::edge::VERIFICATION_REVIEW]))
-            .await
-            .unwrap()
-            .into_inner();
+        let link = handler.get_private_document_url(with_token(ask(), Some("reviewer"))).await.unwrap().into_inner();
         assert!(!link.url.is_empty());
         let views = fx.access_log.views();
         assert_eq!((views.len(), views[0].viewer.as_str(), views[0].asset_id), (1, "staff-1", doc));
+
+        // The default gate (no verifier configured) denies everyone.
+        let closed = handler_from_fakes(&fx).get_private_document_url(with_token(ask(), Some("reviewer"))).await;
+        assert_eq!(closed.unwrap_err().code(), Code::Unauthenticated);
     }
 }

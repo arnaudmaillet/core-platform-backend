@@ -19,7 +19,7 @@ use infra_config::InfraRegistry;
 use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 use service_runtime::{HealthProbe, Service};
-use service_runtime::edge::{authenticated, permission, public_read, VERIFICATION_REVIEW};
+use service_runtime::edge::{authenticated, public_read};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -81,13 +81,11 @@ impl Service for ProfileService {
         authenticated("/profile.v1.ProfileService/SetCommentFilters"),
         authenticated("/profile.v1.ProfileService/SetTabSettings"),
         authenticated("/profile.v1.ProfileService/SetFeedSettings"),
-        // #668: the owner's account type and verification request.
+        // #668: the owner's account type and verification request (staff's
+        // ListPending… / Decide… stay mesh-only and check the staff token, #837).
         authenticated("/profile.v1.ProfileService/SetAccountType"),
         authenticated("/profile.v1.ProfileService/RequestVerification"),
         authenticated("/profile.v1.ProfileService/GetVerificationRequest"),
-        // #837: staff review, by token only (the handlers refuse the mesh).
-        permission("/profile.v1.ProfileService/ListPendingVerificationRequests", VERIFICATION_REVIEW),
-        permission("/profile.v1.ProfileService/DecideVerificationRequest", VERIFICATION_REVIEW),
         authenticated("/profile.v1.ProfileService/DeleteProfile"),
         public_read("/profile.v1.ProfileService/GetProfileById"),
         public_read("/profile.v1.ProfileService/GetProfileByHandle"),
@@ -140,7 +138,9 @@ impl Service for ProfileService {
         let handler = ProfileServiceHandler::new(
             Arc::clone(&self.app.command_bus),
             Arc::clone(&self.app.query_bus),
-        );
+        )
+        // Staff verification review on the mesh checks the staff token (#837).
+        .with_staff_gate(service_runtime::staff_gate_from_env());
 
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
@@ -246,15 +246,14 @@ fn private_documents_from_env() -> anyhow::Result<Option<Arc<dyn crate::applicat
 mod tests {
     use super::*;
 
-    /// #837: the staff verification RPCs are on the edge for reviewers only.
+    /// #837: the staff verification RPCs stay off the client edge.
     #[test]
-    fn verification_review_takes_the_permission_on_the_edge() {
+    fn verification_review_stays_off_the_edge() {
         for method in [
             "/profile.v1.ProfileService/ListPendingVerificationRequests",
             "/profile.v1.ProfileService/DecideVerificationRequest",
         ] {
-            let rule = ProfileService::EDGE_POLICY.iter().find(|r| r.method == method).expect(method);
-            assert_eq!(rule.access, service_runtime::edge::EdgeAccess::Permission(VERIFICATION_REVIEW));
+            assert!(ProfileService::EDGE_POLICY.iter().all(|r| r.method != method), "{method}");
         }
     }
 }

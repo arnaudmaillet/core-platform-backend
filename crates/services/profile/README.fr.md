@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 82b846dbdad16de13c5dbbea6b9cab8eb72a37fc347d629cb342fe24b5e7cc05
+  source_sha256: 5bfb9e0b0e592f8bfe5c55bc67aadc7f2d74fd0c24c65b686a394c2919168af4
   translated_at: 2026-10-08
   status: complete
 ---
@@ -154,8 +154,8 @@ service ProfileService {
   rpc SetAccountType(SetAccountTypeRequest) returns (CommandResponse); // #668 personnel / professionnel (créateur) / marque (entreprise) + la fiche de contact publique d'une marque ; un bot reste un bot ; créateur et entreprise réservés aux 18 ans et plus (un jeton 13–17 reçoit FAILED_PRECONDITION)
   rpc RequestVerification(RequestVerificationRequest) returns (CommandResponse); // #668 propriétaire : catégorie + 1 à 5 justificatifs (liens web et/ou documents privés, #777) → file du personnel
   rpc GetVerificationRequest(GetVerificationRequestRequest) returns (GetVerificationRequestResponse); // #668 propriétaire : en attente / approuvée / refusée (+ motif)
-  rpc ListPendingVerificationRequests(ListPendingVerificationRequestsRequest) returns (ListPendingVerificationRequestsResponse); // personnel : jeton edge avec verification:review (#837) ; le mesh est refusé
-  rpc DecideVerificationRequest(DecideVerificationRequestRequest) returns (CommandResponse); // personnel (verification:review, #837) : approuver vérifie le profil ; refuser exige un motif
+  rpc ListPendingVerificationRequests(ListPendingVerificationRequestsRequest) returns (ListPendingVerificationRequestsResponse); // personnel, mesh uniquement : le jeton staff (Bearer, verification:review) est vérifié (#837)
+  rpc DecideVerificationRequest(DecideVerificationRequestRequest) returns (CommandResponse); // personnel, mesh uniquement (Bearer, verification:review, #837) : approuver vérifie le profil ; refuser exige un motif
   rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
   rpc HideProfile(HideProfileRequest) returns (CommandResponse);
   rpc RestoreProfile(RestoreProfileRequest) returns (CommandResponse);

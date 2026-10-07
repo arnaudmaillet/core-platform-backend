@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 87c7db1fa80e91e64d748f2f2c4dcd64a79e9f6d696ecfa61d9473f3d9d312f7
+  source_sha256: 40f312d5e8da3969b1e8971c09ee5190002aa93bb4e30060bfda7530faf5ed0a
   translated_at: 2026-10-08
   status: complete
 ---
@@ -211,9 +211,12 @@ la même vérification de retrait et le même filtrage CSAM, puis **déplace les
 jamais d'objet — et le marque READY **sans aucun rendu**. Il n'est **jamais diffusé** : `ResolveDelivery`
 répond NOT_FOUND et `BatchResolveDelivery` l'omet ; `GetAsset` ne le montre qu'à son propriétaire (un autre
 compte : NOT_FOUND ; le mesh le lit) ; la dédup ne s'y applique jamais, dans aucun sens. Le staff les examine
-via `GetPrivateDocumentUrl` (un GET signé valide `MEDIA_SIGNED_URL_TTL_SECS`), **réservé au staff (#837)** :
-un jeton edge portant `verification:review` (modérateurs de contenu, admins), exposé par une règle edge
-`permission` ; le mesh et tout autre jeton reçoivent `PERMISSION_DENIED`. Chaque lien est enregistré sur le
+via `GetPrivateDocumentUrl` (un GET signé valide `MEDIA_SIGNED_URL_TTL_SECS`), **mesh uniquement et réservé au staff (#837)** :
+l'outil staff envoie le jeton edge du membre du staff (`authorization: Bearer`), que media vérifie
+lui-même avec le JWKS d'`auth` (`EDGE_JWKS_URL` / `EDGE_TOKEN_ISSUER` / `EDGE_TOKEN_AUDIENCE`, les
+réglages du listener edge) et qui doit porter `verification:review` (modérateurs de contenu, admins). Pas
+de jeton ou un jeton invalide : `UNAUTHENTICATED` ; un autre jeton : `PERMISSION_DENIED` ; sans ces
+réglages, tout appel est refusé. Chaque lien est enregistré sur le
 plan d'audit **avant** d'être rendu : un événement `data_access` sur `audit.v1.events`
 (`media.private_document.viewed` : le compte staff, le document, son propriétaire, l'heure, l'expiration du
 lien) ; un enregistrement en échec retient le lien (`MED-7004`, 503, retentable). Sans broker, la

@@ -186,9 +186,11 @@ to `private/documents/{asset_id}`** — a prefix the CDN's origin access is not 
 it READY with **no rendition**. It is **never delivered**: `ResolveDelivery` answers NOT_FOUND and
 `BatchResolveDelivery` omits it; `GetAsset` shows it to its owner only (another account: NOT_FOUND; the
 mesh reads it); dedup never applies to it, either way. Staff review it through `GetPrivateDocumentUrl`
-(a signed GET valid `MEDIA_SIGNED_URL_TTL_SECS`), **staff only (#837)**: an edge token holding
-`verification:review` (content moderators, admins), exposed as an edge `permission` rule; the mesh and
-any other token get `PERMISSION_DENIED`. Every link is recorded on the audit plane **before** it is
+(a signed GET valid `MEDIA_SIGNED_URL_TTL_SECS`), **mesh only and staff only (#837)**: staff tooling
+sends the staff member's edge token (`authorization: Bearer`), which media verifies itself against
+`auth`'s JWKS (`EDGE_JWKS_URL` / `EDGE_TOKEN_ISSUER` / `EDGE_TOKEN_AUDIENCE`, the edge listener's own
+settings) and which must hold `verification:review` (content moderators, admins). No or an invalid token
+is `UNAUTHENTICATED`, another token `PERMISSION_DENIED`; without those settings every call is refused. Every link is recorded on the audit plane **before** it is
 returned: a `data_access` event on `audit.v1.events` (`media.private_document.viewed`: the staff account,
 the document, its owner, when, the link's expiry); a failed record withholds the link (`MED-7004`, 503,
 retryable). Without a broker the view is only logged. The GDPR export lists it with a

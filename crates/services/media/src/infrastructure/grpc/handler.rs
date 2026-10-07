@@ -43,6 +43,8 @@ pub struct MediaServiceHandler {
     by_owner: Option<Arc<ListAssetsByOwnerHandler>>,
     /// Staff links to private documents (#777); `None` answers UNIMPLEMENTED.
     private_documents: Option<Arc<PrivateDocumentUrlHandler>>,
+    /// Verifies the staff token on staff calls (#837); denies all by default.
+    staff: edge::StaffGate,
 }
 
 impl MediaServiceHandler {
@@ -54,7 +56,23 @@ impl MediaServiceHandler {
         get: Arc<GetAssetHandler>,
         resolve: Arc<ResolveDeliveryHandler>,
     ) -> Self {
-        Self { issue, commit, delete, process, get, resolve, by_owner: None, private_documents: None }
+        Self {
+            issue,
+            commit,
+            delete,
+            process,
+            get,
+            resolve,
+            by_owner: None,
+            private_documents: None,
+            staff: edge::StaffGate::deny_all(),
+        }
+    }
+
+    /// The staff-token verifier for staff RPCs (#837).
+    pub fn with_staff_gate(mut self, gate: edge::StaffGate) -> Self {
+        self.staff = gate;
+        self
     }
 
     /// Enables `ListAssetsByOwner` (#653).
@@ -68,14 +86,15 @@ impl MediaServiceHandler {
         self
     }
 
-    /// A staff link to a private document (#777): staff only, by token
-    /// (`verification:review`, #837) — the mesh is refused — and recorded on
-    /// the audit plane before it is returned.
+    /// A staff link to a private document (#777). Mesh only, and staff only
+    /// (#837): the staff member's token (`authorization: Bearer`, holding
+    /// `verification:review`) is verified here; recorded on the audit plane
+    /// before it is returned.
     pub async fn get_private_document_url(
         &self,
         request: Request<proto::GetPrivateDocumentUrlRequest>,
     ) -> Result<Response<proto::GetPrivateDocumentUrlResponse>, Status> {
-        let viewer = edge::require_staff(&request, edge::VERIFICATION_REVIEW)?.account_id().to_owned();
+        let viewer = self.staff.require(&request, edge::VERIFICATION_REVIEW).await?.account_id().to_owned();
         let handler = self
             .private_documents
             .as_ref()
