@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: f50fe95416464898824d0e3ecfb5e55516570ca7a891891d3661b425aec35158
+  source_sha256: 4aa9fbde2a8692a3d6d3750fd60928b93ec13571195361e0ab5bf72cd8226b68
   translated_at: 2026-10-08
   status: complete
 ---
@@ -203,7 +203,13 @@ les espaces et les tirets, et lit O/I/L comme 0/1/1) ; l'autre appelle
 `AcceptSupervisionInvite(account_id, code)` et prend l'autre rôle. Les âges sont lus dans la date de
 naissance des deux côtés (un âge inconnu ne convient à aucun rôle : `ACC-3002` ; un ado devenu majeur
 entre-temps annule son invitation : `ACC-3001`) ; son propre code donne `ACC-3006` ; un ado a **deux
-superviseurs au plus** (`ACC-3003`) ; un parent peut superviser plusieurs ados. `ListSupervisions`
+superviseurs au plus** (`ACC-3003`) ; un parent peut superviser plusieurs ados. Après ces vérifications,
+l'invitation est **réservée** à celui qui l'accepte par un compare-and-set (`claimed_by`, migration
+0010) : deux comptes en concurrence sur un même code ne s'appairent jamais tous les deux (l'autre reçoit
+`ACC-3001`), une nouvelle tentative du même compte aboutit, et un mauvais destinataire (qui échoue à une
+vérification) ne la consomme jamais. Un code inconnu ou expiré compte contre le compte : **10 par
+heure**, puis `ACC-3007` (`RESOURCE_EXHAUSTED`) — l'énumération est fermée pour une chose aussi sensible
+que la supervision d'un mineur. `ListSupervisions`
 montre le lien **aux deux côtés** (le compte et les profils actifs de l'autre, depuis quand) — l'ado voit
 toujours qui le supervise. `EndSupervision(account_id, other_account_id)` y met fin, de l'un ou l'autre
 côté (`ACC-3005` s'il n'y en a pas). Une supervision prend fin d'elle-même quand l'ado a 18 ans (le

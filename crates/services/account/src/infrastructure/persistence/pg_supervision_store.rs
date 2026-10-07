@@ -101,6 +101,47 @@ impl SupervisionStore for PgSupervisionStore {
         }))
     }
 
+    #[instrument(name = "account.supervision.claim_invite", skip(self, code))]
+    async fn claim_invite(&self, code: &InviteCode, acceptor: &AccountId) -> Result<bool, AccountError> {
+        // A compare-and-set: the first acceptor wins; theirs again is a retry.
+        let claimed: Option<(uuid::Uuid,)> = sqlx::query_as(
+            "UPDATE supervision_invites SET claimed_by = $2 \
+             WHERE code = $1 AND (claimed_by IS NULL OR claimed_by = $2) RETURNING creator_id",
+        )
+        .bind(code.as_str())
+        .bind(acceptor.as_uuid())
+        .fetch_optional(self.tx.pool_for(code.as_str()).map_err(AccountError::Storage)?)
+        .await
+        .map_err(storage)?;
+        Ok(claimed.is_some())
+    }
+
+    #[instrument(name = "account.supervision.failed_accepts", skip(self))]
+    async fn failed_accepts(&self, account: &AccountId, hour: DateTime<Utc>) -> Result<i64, AccountError> {
+        let failures: Option<(i32,)> =
+            sqlx::query_as("SELECT failures FROM supervision_accept_failures WHERE account_id = $1 AND hour = $2")
+                .bind(account.as_uuid())
+                .bind(hour)
+                .fetch_optional(self.pool(account)?)
+                .await
+                .map_err(storage)?;
+        Ok(failures.map_or(0, |(n,)| i64::from(n)))
+    }
+
+    #[instrument(name = "account.supervision.record_failed_accept", skip(self))]
+    async fn record_failed_accept(&self, account: &AccountId, hour: DateTime<Utc>) -> Result<(), AccountError> {
+        sqlx::query(
+            "INSERT INTO supervision_accept_failures AS f (account_id, hour, failures) VALUES ($1, $2, 1) \
+             ON CONFLICT (account_id, hour) DO UPDATE SET failures = f.failures + 1",
+        )
+        .bind(account.as_uuid())
+        .bind(hour)
+        .execute(self.pool(account)?)
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
     #[instrument(name = "account.supervision.delete_invite", skip(self, code))]
     async fn delete_invite(&self, code: &InviteCode) -> Result<(), AccountError> {
         sqlx::query("DELETE FROM supervision_invites WHERE code = $1")
@@ -229,6 +270,12 @@ impl SupervisionStore for PgSupervisionStore {
                 .await
                 .map_err(storage)?
                 .rows_affected();
+            // Failure counts outlive their hour by a day at most.
+            sqlx::query("DELETE FROM supervision_accept_failures WHERE hour < $1")
+                .bind(now - chrono::Duration::days(1))
+                .execute(pool)
+                .await
+                .map_err(storage)?;
         }
         Ok(purged)
     }

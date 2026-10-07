@@ -185,7 +185,12 @@ hours**; typing ignores case, spaces and dashes, and reads O/I/L as 0/1/1); the 
 `AcceptSupervisionInvite(account_id, code)` and takes the other side. Ages are read from the date of
 birth at both ends (an unknown age fits neither side: `ACC-3002`; a teen who turned 18 meanwhile voids
 their invite: `ACC-3001`); one's own code is `ACC-3006`; a teen has **two supervisors at most**
-(`ACC-3003`); a parent may supervise several teens. `ListSupervisions` shows **both sides** the link
+(`ACC-3003`); a parent may supervise several teens. After those checks the invite is **claimed** for
+the acceptor with a compare-and-set (`claimed_by`, migration 0010): two accounts racing on one code
+never both pair (the other gets `ACC-3001`), the same acceptor's retry completes, and a wrong acceptor
+(failing a check) never spends it. An unknown or expired code counts against the account: **10 per
+hour**, then `ACC-3007` (`RESOURCE_EXHAUSTED`) — enumeration is closed for something as sensitive as
+supervising a minor. `ListSupervisions` shows **both sides** the link
 (the other side's account and active profiles, since when) — the teen always sees who supervises them.
 `EndSupervision(account_id, other_account_id)` ends it from either side (`ACC-3005` when there is none).
 A supervision ends by itself when the teen turns 18 (the sweep, `ACCOUNT_SUPERVISION_SWEEP_INTERVAL_SECS`,

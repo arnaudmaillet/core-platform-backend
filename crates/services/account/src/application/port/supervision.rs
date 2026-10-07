@@ -24,6 +24,17 @@ pub enum Linked {
 pub trait SupervisionStore: Send + Sync + 'static {
     async fn put_invite(&self, invite: &SupervisionInvite) -> Result<(), AccountError>;
     async fn find_invite(&self, code: &InviteCode) -> Result<Option<SupervisionInvite>, AccountError>;
+
+    /// Claims the invite for `acceptor`, atomically: `true` when it is
+    /// unclaimed or already `acceptor`'s (a retry), `false` when another
+    /// account claimed it (or it is gone).
+    async fn claim_invite(&self, code: &InviteCode, acceptor: &AccountId) -> Result<bool, AccountError>;
+
+    /// `account`'s failed accepts in the hour starting at `hour`.
+    async fn failed_accepts(&self, account: &AccountId, hour: DateTime<Utc>) -> Result<i64, AccountError>;
+
+    /// Counts one failed accept for `account` in the hour starting at `hour`.
+    async fn record_failed_accept(&self, account: &AccountId, hour: DateTime<Utc>) -> Result<(), AccountError>;
     async fn delete_invite(&self, code: &InviteCode) -> Result<(), AccountError>;
 
     /// Pairs `link.teen` with `link.supervisor` (teen's shard, then the

@@ -13,6 +13,8 @@ use crate::error::AccountError;
 pub const INVITE_TTL: Duration = Duration::hours(24);
 /// A teen has at most this many supervisors (two parents).
 pub const MAX_SUPERVISORS: usize = 2;
+/// Failed accepts an account may make per hour (unknown or expired codes).
+pub const MAX_FAILED_ACCEPTS_PER_HOUR: i64 = 10;
 /// Characters of an invite code (Crockford base32: no I, L, O, U).
 const CODE_LEN: usize = 10;
 const ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";

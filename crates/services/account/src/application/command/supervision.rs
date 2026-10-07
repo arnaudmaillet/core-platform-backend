@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, DurationRound, Utc};
 use uuid::Uuid;
 
 use crate::application::port::{
@@ -14,7 +14,8 @@ use crate::application::port::{
 };
 use crate::domain::event::{DomainEvent, SupervisionEnded, SupervisionStarted};
 use crate::domain::supervision::{
-    InviteCode, Supervision, SupervisionEnd, SupervisionInvite, SupervisionRole, MAX_SUPERVISORS,
+    InviteCode, Supervision, SupervisionEnd, SupervisionInvite, SupervisionRole, MAX_FAILED_ACCEPTS_PER_HOUR,
+    MAX_SUPERVISORS,
 };
 use crate::domain::value_object::AccountId;
 use crate::error::AccountError;
@@ -60,16 +61,41 @@ impl Supervisions {
     }
 
     /// `account` accepts an invite: the pairing, seen from `account`.
+    ///
+    /// An unknown or expired code counts against the account's hourly cap
+    /// (`ACC-3007` past [`MAX_FAILED_ACCEPTS_PER_HOUR`]). The invite is then
+    /// claimed for `account` atomically — after the checks, so a wrong
+    /// acceptor never spends it: a second acceptor racing on the same code
+    /// gets `ACC-3001`; the same acceptor's retry completes.
     pub async fn accept(&self, account: &str, code: &str, now: DateTime<Utc>) -> Result<SupervisionView, AccountError> {
         let account = AccountId::try_from(account)?;
-        let code = InviteCode::parse(code).ok_or(AccountError::SupervisionInviteInvalid)?;
-        let invite = self.store.find_invite(&code).await?.ok_or(AccountError::SupervisionInviteInvalid)?;
+        let hour = now.duration_trunc(chrono::TimeDelta::hours(1)).unwrap_or(now);
+        if self.store.failed_accepts(&account, hour).await? >= MAX_FAILED_ACCEPTS_PER_HOUR {
+            return Err(AccountError::SupervisionAttemptsExceeded);
+        }
+        let found = match InviteCode::parse(code) {
+            Some(code) => self.store.find_invite(&code).await?.map(|invite| (code, invite)),
+            None => None,
+        };
+        let Some((code, invite)) = found else {
+            self.store.record_failed_accept(&account, hour).await?;
+            return Err(AccountError::SupervisionInviteInvalid);
+        };
         let today = now.date_naive();
         // The creator must still fit their side (a teen may have turned 18).
         if !invite.role.fits(self.ages.age_bracket(&invite.creator, today).await?) {
             return Err(AccountError::SupervisionInviteInvalid);
         }
-        let link = invite.accept(account, self.ages.age_bracket(&account, today).await?, now)?;
+        let link = match invite.accept(account, self.ages.age_bracket(&account, today).await?, now) {
+            Err(AccountError::SupervisionInviteInvalid) => {
+                self.store.record_failed_accept(&account, hour).await?;
+                return Err(AccountError::SupervisionInviteInvalid);
+            }
+            other => other?,
+        };
+        if !self.store.claim_invite(&code, &account).await? {
+            return Err(AccountError::SupervisionInviteInvalid);
+        }
         // Linked first, announced, then the invite spent: a retry of a
         // half-done accept (the invite still there) completes it, at the cost
         // of announcing twice.
@@ -197,6 +223,8 @@ mod tests {
     #[derive(Default)]
     struct Store {
         invites: Mutex<HashMap<String, SupervisionInvite>>,
+        claims:  Mutex<HashMap<String, AccountId>>,
+        failures: Mutex<HashMap<(AccountId, DateTime<Utc>), i64>>,
         links:   Mutex<Vec<Supervision>>,
         /// Teens who are 18 on any day asked.
         adults:  Mutex<HashSet<AccountId>>,
@@ -213,6 +241,20 @@ mod tests {
         }
         async fn delete_invite(&self, code: &InviteCode) -> Result<(), AccountError> {
             self.invites.lock().unwrap().remove(code.as_str());
+            Ok(())
+        }
+        async fn claim_invite(&self, code: &InviteCode, acceptor: &AccountId) -> Result<bool, AccountError> {
+            if !self.invites.lock().unwrap().contains_key(code.as_str()) {
+                return Ok(false);
+            }
+            let mut claims = self.claims.lock().unwrap();
+            Ok(*claims.entry(code.as_str().to_owned()).or_insert(*acceptor) == *acceptor)
+        }
+        async fn failed_accepts(&self, account: &AccountId, hour: DateTime<Utc>) -> Result<i64, AccountError> {
+            Ok(self.failures.lock().unwrap().get(&(*account, hour)).copied().unwrap_or(0))
+        }
+        async fn record_failed_accept(&self, account: &AccountId, hour: DateTime<Utc>) -> Result<(), AccountError> {
+            *self.failures.lock().unwrap().entry((*account, hour)).or_insert(0) += 1;
             Ok(())
         }
         async fn link(&self, link: &Supervision, max: usize) -> Result<Linked, AccountError> {
@@ -418,5 +460,53 @@ mod tests {
             w.handler.accept(&w.account(AgeBracket::Adult).to_string(), invite.code.as_str(), Utc::now()).await,
             Err(AccountError::SupervisionInviteInvalid)
         ));
+    }
+
+    /// A code claimed by one acceptor is not another's: a leaked teen code
+    /// racing the real parent never pairs both. The same acceptor's retry
+    /// goes through.
+    #[tokio::test]
+    async fn a_claimed_code_is_one_acceptors_only() {
+        let w = world();
+        let teen = w.account(AgeBracket::Teen13To15);
+        let invite = w.handler.create_invite(&teen.to_string(), SupervisionRole::Teen, Utc::now()).await.unwrap();
+        let (parent, stranger) = (w.account(AgeBracket::Adult), w.account(AgeBracket::Adult));
+        // The parent's claim lands first (as if their accept were mid-way).
+        assert!(w.store.claim_invite(&invite.code, &parent).await.unwrap());
+        assert!(matches!(
+            w.handler.accept(&stranger.to_string(), invite.code.as_str(), Utc::now()).await,
+            Err(AccountError::SupervisionInviteInvalid)
+        ));
+        w.handler.accept(&parent.to_string(), invite.code.as_str(), Utc::now()).await.expect("the claimant completes");
+        assert_eq!(w.handler.list(&teen.to_string()).await.unwrap().len(), 1, "only the parent");
+    }
+
+    /// A wrong acceptor never spends the code; guessing is capped per hour.
+    #[tokio::test]
+    async fn a_wrong_acceptor_keeps_the_code_alive_and_guessing_is_capped() {
+        let w = world();
+        let teen = w.account(AgeBracket::Teen16To17);
+        let invite = w.handler.create_invite(&teen.to_string(), SupervisionRole::Teen, Utc::now()).await.unwrap();
+        let other_teen = w.account(AgeBracket::Teen13To15);
+        assert!(matches!(
+            w.handler.accept(&other_teen.to_string(), invite.code.as_str(), Utc::now()).await,
+            Err(AccountError::SupervisionRoleNotAllowed { .. })
+        ));
+        let parent = w.account(AgeBracket::Adult);
+        w.handler.accept(&parent.to_string(), invite.code.as_str(), Utc::now()).await.expect("still claimable");
+
+        let guesser = w.account(AgeBracket::Adult);
+        for _ in 0..MAX_FAILED_ACCEPTS_PER_HOUR {
+            let wrong = InviteCode::generate();
+            assert!(matches!(
+                w.handler.accept(&guesser.to_string(), wrong.as_str(), Utc::now()).await,
+                Err(AccountError::SupervisionInviteInvalid)
+            ));
+        }
+        let fresh = w.handler.create_invite(&w.account(AgeBracket::Teen13To15).to_string(), SupervisionRole::Teen, Utc::now()).await.unwrap();
+        assert!(matches!(
+            w.handler.accept(&guesser.to_string(), fresh.code.as_str(), Utc::now()).await,
+            Err(AccountError::SupervisionAttemptsExceeded)
+        ), "even a right code, past the cap");
     }
 }
