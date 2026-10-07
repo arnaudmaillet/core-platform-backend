@@ -19,7 +19,7 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    ApplyModerationHandler, CommitUploadHandler, DeleteAssetHandler, IssueUploadTicketHandler,
+    ApplyModerationHandler, CommitUploadHandler, DeleteAssetHandler, IssueUploadTicketHandler, OwnerErasure,
     ProcessAssetHandler, TranscodeAssetHandler,
 };
 use crate::application::port::{
@@ -69,6 +69,8 @@ pub struct App {
     pub process: Arc<ProcessAssetHandler>,
     pub transcode: Arc<TranscodeAssetHandler>,
     pub apply_moderation: Arc<ApplyModerationHandler>,
+    /// Erases a deleted account's media (#777), fed by the account consumer.
+    pub erasure: Arc<OwnerErasure>,
     pub pool: PgPool,
     pub redis: RedisClient,
     pub store: Arc<S3Client>,
@@ -200,8 +202,18 @@ impl App {
         };
 
         let (process, transcode, apply_moderation) = App::build_workers(&deps);
+        let erasure = Arc::new(OwnerErasure::new(
+            Arc::clone(&deps.assets),
+            Arc::new(DeleteAssetHandler::new(
+                Arc::clone(&deps.assets),
+                Arc::clone(&deps.store),
+                Arc::clone(&deps.cdn),
+                Arc::clone(&deps.cache),
+                Arc::clone(&deps.publisher),
+            )),
+        ));
         let handler = App::compose(deps, Arc::clone(&process));
-        Ok(App { handler, process, transcode, apply_moderation, pool, redis, store })
+        Ok(App { handler, process, transcode, apply_moderation, erasure, pool, redis, store })
     }
 }
 

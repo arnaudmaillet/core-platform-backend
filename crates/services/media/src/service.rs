@@ -26,11 +26,11 @@ use transport::kafka::producer::{KafkaProducerBuilder, KafkaProducerHandle};
 
 use crate::app::{App, Backends};
 use crate::application::command::{
-    ApplyModerationHandler, ProcessAssetHandler, TranscodeAssetHandler,
+    ApplyModerationHandler, OwnerErasure, ProcessAssetHandler, TranscodeAssetHandler,
 };
 use crate::config::MediaConfig;
 use crate::infrastructure::consumer::{
-    run_moderation_consumer, run_process_consumer, run_transcode_consumer,
+    run_account_consumer, run_moderation_consumer, run_process_consumer, run_transcode_consumer,
 };
 use crate::infrastructure::grpc::{FILE_DESCRIPTOR_SET, MediaServiceHandler, MediaServiceServer};
 
@@ -41,6 +41,8 @@ const PROCESS_GROUP: &str = "media-processor";
 const TRANSCODE_GROUP: &str = "media-transcoder";
 const MODERATION_TOPIC: &str = "moderation.v1.events";
 const MODERATION_GROUP: &str = "media-moderation-consumer";
+const ACCOUNT_TOPIC: &str = "account.v1.events";
+const ACCOUNT_GROUP: &str = "media-account-consumer";
 /// Backoff before respawning a consumer after the runner returns.
 const CONSUMER_RESPAWN_BACKOFF: Duration = Duration::from_secs(5);
 
@@ -85,6 +87,7 @@ impl Service for MediaService {
         // Plane B pipeline (off media.v1.events) + moderation takedowns.
         spawn_process_consumer(Arc::clone(&app.process));
         spawn_moderation_consumer(Arc::clone(&app.apply_moderation));
+        spawn_account_consumer(Arc::clone(&app.erasure));
 
         Ok(Self { app })
     }
@@ -193,6 +196,25 @@ fn spawn_moderation_consumer(handler: Arc<ApplyModerationHandler>) {
                 }
                 Err(error) => {
                     tracing::error!(%error, "failed to build moderation consumer; retrying")
+                }
+            }
+            tokio::time::sleep(CONSUMER_RESPAWN_BACKOFF).await;
+        }
+    });
+}
+
+/// Spawns the supervised account consumer: a deleted account's media are
+/// erased (#777).
+fn spawn_account_consumer(erasure: Arc<OwnerErasure>) {
+    tokio::spawn(async move {
+        loop {
+            match build_consumer(ACCOUNT_TOPIC, ACCOUNT_GROUP) {
+                Ok((consumer, producer)) => {
+                    run_account_consumer(consumer, Arc::clone(&erasure), producer).await;
+                    tracing::warn!("media account consumer exited; respawning after backoff");
+                }
+                Err(error) => {
+                    tracing::error!(%error, "failed to build account consumer; retrying")
                 }
             }
             tokio::time::sleep(CONSUMER_RESPAWN_BACKOFF).await;

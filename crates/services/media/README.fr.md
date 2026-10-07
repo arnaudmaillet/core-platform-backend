@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 80c59b43beabf8a2039c60c95bc01d7c6108f4bff03d983ba785ef50c083151b
-  translated_at: 2026-10-05
+  source_sha256: c6d770abb4b5e5bf213af95f5598071f3ad719c1c7a9bd3e01076360301869fb
+  translated_at: 2026-10-07
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -20,7 +20,7 @@ i18n:
 > | **Tier** | TIER-1 (posture mixte : plan de diffusion fail-**open** · porte de conformité fail-**closed**) |
 > | **Déployable** | `crates/apps/media-server` (crate bibliothèque : `crates/services/media`) |
 > | **Datastores** | Stockage objet (S3 / MinIO — octets canoniques) · Postgres db `media` (SoR des métadonnées) · Redis Cluster (cache de diffusion + réservations de tickets) |
-> | **Async** | publie `media.v1.events` · consomme les notifications de finalisation du stockage objet, `moderation.v1.events`, `post.v1.events`, `profile.v1.events` (Kafka) |
+> | **Async** | publie `media.v1.events` · consomme les notifications de finalisation du stockage objet, `moderation.v1.events`, `account.v1.events`, `post.v1.events`, `profile.v1.events` (Kafka) |
 > | **Appelants amont** | gateway/BFF, `post`, `profile` |
 > | **Dépendances aval** | Stockage objet, CDN, `moderation` (Screen), Postgres, Redis, Kafka |
 > | **SLO** | `<99.9%>` dispo plan de contrôle · `<p99 ResolveDelivery < N ms>` · latence de traitement suivie, non garantie |
@@ -237,6 +237,7 @@ Chaque faute implémente `error::AppError` avec un code `MED-XXXX` stable, mapp�
 |---|---|---|---|
 | finalize du stockage objet (bridgé) | `media-finalize-consumer` | finalisation d'upload (source de vérité au-dessus de `CommitUpload`) | DLQ |
 | `moderation.v1.events` | `media-moderation-consumer` | quarantaine / restauration (révoquer / réactiver la diffusion) | DLQ |
+| `account.v1.events` | `media-account-consumer` | `account_deleted` → chaque asset du compte est supprimé comme par son propriétaire (octets, rendus, copies en quarantaine, staging, tombstone, `AssetDeleted`, cache, CDN) ; les assets sous gel légal sont gardés et journalisés (RGPD art. 17, #777 ; idempotent) | DLQ |
 | `post.v1.events` / `profile.v1.events` | `media-binding-consumer` | marquer les assets liés ; GC des uploads abandonnés | DLQ |
 
 > **Contrat d'exécution (obligatoire) :** tous les consommateurs tournent sous
@@ -381,7 +382,8 @@ anti-malware (le port `MalwareScanner` livre un stub passe-tout) ; le consommate
 de GC des orphelins (réclamation des uploads abandonnés non liés après TTL) ;
 l'encodage WebP/AVIF (v1 émet du JPEG) ; et le purge RGPD conscient du refcount de
 dédup (la dédup est livrée derrière un flag off-par-défaut tant que ce chemin n'a
-pas de couverture live).
+pas de couverture live ; l'effacement d'un compte garde déjà un objet qu'un autre
+asset utilise encore).
 
 ---
 

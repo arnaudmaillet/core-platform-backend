@@ -8,11 +8,15 @@
 //!   can be scaled as a separate deployment of the same image.)
 //! * `moderation_consumer` — consumes `moderation.v1.events`, applying takedowns /
 //!   restores to the byte plane.
+//! * `account_consumer` — consumes `account.v1.events`: `account_deleted` erases
+//!   the account's media (GDPR Art. 17, #777).
 
+pub mod account_consumer;
 pub mod moderation_consumer;
 pub mod process_consumer;
 pub mod transcode_consumer;
 
+pub use account_consumer::run_account_consumer;
 pub use moderation_consumer::run_moderation_consumer;
 pub use process_consumer::run_process_consumer;
 pub use transcode_consumer::run_transcode_consumer;

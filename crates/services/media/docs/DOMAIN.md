@@ -146,4 +146,4 @@ blurhash, and transitions the asset to `ready` (or `quarantined`).
 - **Classification:** Supporting — necessary media plumbing; bespoke pipeline.
 - **Volatility:** medium — new media kinds/renditions are additive.
 - **Known modeling debt:** images-first; video transcoding deferred.
-- **Deferred capabilities:** video transcoding, real malware sidecar, orphan-GC consumer, WebP/AVIF, CloudFront invalidation, dedup-refcount GDPR purge.
+- **Deferred capabilities:** real malware sidecar, orphan-GC consumer, WebP/AVIF, dedup-refcount GDPR purge. An account's media are erased with the account (`account_deleted`, #777; legal holds kept).
