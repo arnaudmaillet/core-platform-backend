@@ -300,11 +300,11 @@ async fn verification_evidence_is_checked_announced_and_erased_with_the_account(
         found
     };
 
-    // Someone else's document, a plain-http link: refused, nothing stored.
+    // Someone else's document, a link without a scheme: refused, nothing stored.
     let foreign = h.documents.upload(&harness::random_account_id());
     let refusals = [
         (vec![], vec![foreign], "is not one of your private documents"),
-        (vec!["http://alice.example".to_owned()], vec![], "https URL"),
+        (vec!["alice.example".to_owned()], vec![], "http(s) URL"),
     ];
     for (links, docs, why) in refusals {
         let err = h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), ask(links, docs))).await.unwrap_err();

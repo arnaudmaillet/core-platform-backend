@@ -74,7 +74,7 @@ impl CommandHandler<SetAccountTypeCommand> for SetAccountTypeHandler {
 pub struct RequestVerificationCommand {
     pub profile_id: String,
     pub category:   VerificationKind,
-    /// `https://` links.
+    /// Web links (`http(s)://`).
     pub documents:  Vec<String>,
     /// Media asset ids of the requester's `PRIVATE_DOCUMENT`s.
     pub private_documents: Vec<String>,
@@ -186,9 +186,10 @@ impl CommandHandler<DecideVerificationCommand> for DecideVerificationHandler {
                 let _ = self.cache.invalidate_by_id(&id).await;
             }
         }
-        // Announced before the request is stored: a failed store retries the
-        // whole decision (the request is still pending) and announces again,
-        // which media takes idempotently. It starts the documents' retention.
+        // Stored, then announced (it starts the documents' 30-day retention):
+        // announcing first could purge the documents of a request still
+        // pending. A lost announcement leaves them to media's 90-day backstop.
+        self.verifications.put(&id, &request).await?;
         let decided = DomainEvent::VerificationDecided(VerificationDecided {
             profile_id:        id,
             account_id:        profile.account_id(),
@@ -197,8 +198,7 @@ impl CommandHandler<DecideVerificationCommand> for DecideVerificationHandler {
             occurred_at:       now,
             correlation_id:    envelope.correlation_id,
         });
-        self.publisher.publish(&decided).await?;
-        self.verifications.put(&id, &request).await
+        self.publisher.publish(&decided).await
     }
 }
 

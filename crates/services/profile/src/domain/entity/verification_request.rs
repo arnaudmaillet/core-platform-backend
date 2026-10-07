@@ -35,7 +35,7 @@ impl VerificationStatus {
 pub struct VerificationRequest {
     pub request_id:   Uuid,
     pub category:     VerificationKind,
-    /// Supporting links (`https://`: an official site, press coverage, a
+    /// Supporting links (web addresses: an official site, press coverage, a
     /// business registry).
     pub documents:    Vec<String>,
     /// The requester's private documents (#777): media asset ids of
@@ -76,10 +76,10 @@ impl VerificationRequest {
                 message: format!("1–{MAX_VERIFICATION_DOCUMENTS} links and private documents"),
             });
         }
-        if documents.iter().any(|d| !d.starts_with("https://") || d.len() > MAX_LINK_CHARS || d.contains(char::is_whitespace)) {
+        if documents.iter().any(|d| !is_web_link(d)) {
             return Err(ProfileError::DomainViolation {
                 field:   "documents".into(),
-                message: format!("a link is an https URL of at most {MAX_LINK_CHARS} characters"),
+                message: format!("a link is an http(s) URL of at most {MAX_LINK_CHARS} characters"),
             });
         }
         if private_documents.iter().any(|d| Uuid::parse_str(d).is_err()) {
@@ -116,6 +116,15 @@ impl VerificationRequest {
     }
 }
 
+/// A web address as the client sends it: `http://` or `https://` (any case),
+/// no whitespace, at most [`MAX_LINK_CHARS`].
+fn is_web_link(link: &str) -> bool {
+    let scheme = link.split_once("://").map(|(s, _)| s.to_ascii_lowercase());
+    matches!(scheme.as_deref(), Some("http" | "https"))
+        && link.len() <= MAX_LINK_CHARS
+        && !link.contains(char::is_whitespace)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,7 +136,11 @@ mod tests {
         let doc = || Uuid::now_v7().to_string();
         assert!(VerificationRequest::submit(VerificationKind::Notable, vec![], vec![], now).is_err());
         assert!(VerificationRequest::submit(VerificationKind::Notable, (0..3).map(link).collect(), vec![doc(), doc(), doc()], now).is_err(), "6 in all");
-        assert!(VerificationRequest::submit(VerificationKind::Notable, vec!["http://plain.org".into()], vec![], now).is_err(), "https only");
+        assert!(VerificationRequest::submit(VerificationKind::Notable, vec!["media/id.jpg".into()], vec![], now).is_err(), "a web link");
+        assert!(VerificationRequest::submit(VerificationKind::Notable, vec!["ftp://files.org/a".into()], vec![], now).is_err(), "http(s) only");
+        for link in ["http://plain.org", "HTTPS://Example.org/About"] {
+            assert!(VerificationRequest::submit(VerificationKind::Notable, vec![link.into()], vec![], now).is_ok(), "{link}");
+        }
         assert!(VerificationRequest::submit(VerificationKind::Notable, vec![], vec!["media/id.jpg".into()], now).is_err(), "an asset id");
         let both = VerificationRequest::submit(VerificationKind::Notable, vec![link(1), link(1)], vec![doc()], now).unwrap();
         assert_eq!((both.documents.len(), both.private_documents.len()), (1, 1), "deduplicated");

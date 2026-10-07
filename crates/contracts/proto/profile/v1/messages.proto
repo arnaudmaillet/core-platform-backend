@@ -333,7 +333,7 @@ enum VerificationRequestStatus {
 message VerificationRequestView {
     string                    profile_id      = 1;
     VerificationKind          category        = 2;
-    // `https://` links.
+    // Web links (`http(s)://`).
     repeated string           documents       = 3;
     VerificationRequestStatus status          = 4;
     // Why it was rejected.
@@ -345,15 +345,15 @@ message VerificationRequestView {
     repeated string           private_document_ids = 8;
 }
 
-// Ask for a badge with 1–5 pieces of evidence in all: `https://` links and/or
+// Ask for a badge with 1–5 pieces of evidence in all: web links and/or
 // private documents (#777). PRF-5001 if already verified, PRF-5002 if a request
-// is pending, PRF-9001 if a link is not `https://` (or the count is not 1–5),
+// is pending, PRF-9001 if a link is not `http(s)://` (or the count is not 1–5),
 // PRF-5004 if a private document is not the caller's own ready
 // `MEDIA_KIND_PRIVATE_DOCUMENT`, PRF-5005 (retryable) if media cannot be asked.
 message RequestVerificationRequest {
     string           profile_id = 1;
     VerificationKind category   = 2;
-    // `https://` links (≤ 512 characters each).
+    // Web links: `http://` or `https://`, ≤ 512 characters each.
     repeated string  documents  = 3;
     // Media asset ids of `MEDIA_KIND_PRIVATE_DOCUMENT` uploads, READY. Kept
     // 30 days after the decision, then purged by media.
