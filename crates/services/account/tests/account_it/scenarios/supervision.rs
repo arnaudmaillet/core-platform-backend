@@ -176,3 +176,41 @@ async fn the_supervisor_index_follows_the_teens_rows() {
     pair(&supervisions, &parent, &teen).await.unwrap();
     assert_eq!(supervisions.list(&parent).await.unwrap().len(), 1);
 }
+
+/// A teen's code racing between two adults pairs exactly one; failed codes
+/// are capped per account per hour (#846 review).
+#[tokio::test]
+async fn one_code_pairs_one_acceptor_and_guessing_is_capped() {
+    let h = TestHarness::start().await;
+    let supervisions = Arc::new(Supervisions::new(
+        Arc::new(PgSupervisionStore::new(TransactionManager::new(h.pool.clone()))),
+        Arc::new(RepoAccountAges(Arc::clone(&h.repository))),
+        Arc::new(Profiles),
+        Arc::new(Published::default()),
+    ));
+    let teen = account(&h, 15).await;
+    let (parent, stranger) = (account(&h, 40).await, account(&h, 33).await);
+    let invite = supervisions.create_invite(&teen, SupervisionRole::Teen, Utc::now()).await.unwrap();
+    let code = invite.code.as_str().to_owned();
+
+    let (a, b) = tokio::join!(
+        supervisions.accept(&parent, &code, Utc::now()),
+        supervisions.accept(&stranger, &code, Utc::now()),
+    );
+    assert!(a.is_ok() != b.is_ok(), "exactly one pairs: {a:?} / {b:?}");
+    let loser = if a.is_ok() { b } else { a };
+    assert!(matches!(loser, Err(AccountError::SupervisionInviteInvalid)));
+    assert_eq!(supervisions.list(&teen).await.unwrap().len(), 1);
+
+    let guesser = account(&h, 50).await;
+    for _ in 0..10 {
+        let wrong = account::domain::supervision::InviteCode::generate();
+        assert!(supervisions.accept(&guesser, wrong.as_str(), Utc::now()).await.is_err());
+    }
+    let other_teen = account(&h, 16).await;
+    let fresh = supervisions.create_invite(&other_teen, SupervisionRole::Teen, Utc::now()).await.unwrap();
+    assert!(matches!(
+        supervisions.accept(&guesser, fresh.code.as_str(), Utc::now()).await,
+        Err(AccountError::SupervisionAttemptsExceeded)
+    ));
+}

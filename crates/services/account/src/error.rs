@@ -106,6 +106,10 @@ pub enum AccountError {
     #[error("an account cannot supervise itself")]
     SelfSupervision,
 
+    /// Too many failed invite codes this hour.
+    #[error("too many invalid codes; try again later")]
+    SupervisionAttemptsExceeded,
+
     #[error("concurrent modification detected; reload the account and retry")]
     ConcurrentModification,
 
@@ -228,6 +232,7 @@ impl AppError for AccountError {
             AccountError::AlreadySupervised                => "ACC-3004",
             AccountError::SupervisionNotFound              => "ACC-3005",
             AccountError::SelfSupervision                  => "ACC-3006",
+            AccountError::SupervisionAttemptsExceeded      => "ACC-3007",
 
             AccountError::ConcurrentModification           => "ACC-4001",
 
@@ -286,7 +291,8 @@ impl AppError for AccountError {
 
             AccountError::DataExportUnavailable { .. }
             | AccountError::DirectoryUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
-            AccountError::ContactLookupQuotaExceeded { .. } => StatusCode::TOO_MANY_REQUESTS,
+            AccountError::ContactLookupQuotaExceeded { .. }
+            | AccountError::SupervisionAttemptsExceeded => StatusCode::TOO_MANY_REQUESTS,
 
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         }
@@ -357,6 +363,7 @@ impl AppError for AccountError {
             AccountError::AlreadySupervised => "These accounts are already paired.",
             AccountError::SupervisionNotFound => "This supervision was not found.",
             AccountError::SelfSupervision => "You cannot supervise your own account.",
+            AccountError::SupervisionAttemptsExceeded => "Too many invalid codes. Please try again in an hour.",
             AccountError::RoleAlreadyAssigned(_)           => "This role is already assigned to the account.",
             AccountError::RoleNotAssigned(_)               => "This role is not assigned to the account.",
             _                                              => "A domain constraint was violated.",
