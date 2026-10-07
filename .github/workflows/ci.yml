@@ -58,7 +58,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build deps (protoc, librdkafka toolchain)
-        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake zlib1g-dev
+        # A stalled mirror must fail a request (30 s), so apt's retries move on,
+        # and the step must fail fast if it still hangs (a re-run fixes it).
+        timeout-minutes: 10
+        run: sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update && sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake zlib1g-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: cargo fetch (retried)
@@ -72,7 +75,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build deps (protoc, librdkafka toolchain)
-        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake zlib1g-dev
+        # A stalled mirror must fail a request (30 s), so apt's retries move on,
+        # and the step must fail fast if it still hangs (a re-run fixes it).
+        timeout-minutes: 10
+        run: sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update && sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake zlib1g-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -123,7 +129,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build deps (protoc, librdkafka toolchain)
-        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake zlib1g-dev
+        # A stalled mirror must fail a request (30 s), so apt's retries move on,
+        # and the step must fail fast if it still hangs (a re-run fixes it).
+        timeout-minutes: 10
+        run: sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update && sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends protobuf-compiler libprotobuf-dev cmake zlib1g-dev
       # OpenSearch containers refuse to start below this (search/media suites).
       - name: Raise vm.max_map_count for OpenSearch
         run: sudo sysctl -w vm.max_map_count=262144

@@ -224,6 +224,7 @@ jobs:
     name: Create multi-arch manifests
     needs: build-and-push
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -280,6 +281,7 @@ jobs:
     name: Pin staging overlay (core-platform-infra) to immutable tags
     needs: stitch-manifests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Only auto-pin for the standard staging build (skip manual one-off tags).
     if: ${{ github.event_name == 'push' || (github.event.inputs.tag || 'staging') == 'staging' }}
     # Two develop pushes in a row must not race on the same overlay file.
