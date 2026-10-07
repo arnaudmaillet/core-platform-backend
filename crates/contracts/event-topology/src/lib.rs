@@ -389,6 +389,10 @@ pub const RETENTION: &[(&str, i64)] = &[
     // A message's push carries its first 100 characters (#654); the consumer
     // skips anything older than a day anyway.
     ("chat.message.push", 24 * 3_600_000),
+    // Every message's full body: chat keeps it in its own store, where
+    // erasure and moderation reach it. The broker copy only feeds the inbox
+    // projection, so two days of lag is the recovery window.
+    ("chat.message.sent", 2 * 24 * 3_600_000),
 ];
 
 /// The retention of `topic` (a `.dlq` follows its topic), when it is not the
@@ -624,6 +628,7 @@ mod tests {
             assert!(*ms > 0);
         }
         assert_eq!(retention_ms("chat.message.push.dlq"), Some(24 * 3_600_000));
-        assert_eq!(retention_ms("chat.message.sent"), None);
+        assert_eq!(retention_ms("chat.message.sent"), Some(2 * 24 * 3_600_000));
+        assert_eq!(retention_ms("chat.member.joined"), None);
     }
 }

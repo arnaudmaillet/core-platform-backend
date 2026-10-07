@@ -299,7 +299,12 @@ someone blocking the sender (a withheld message) — who has not muted the conve
 messages are never pushed. notification sends it once per message, under each recipient's `messages`
 preference, pause and quiet hours. Without a broker, nothing is pushed. The topic (and its `.dlq`) is
 kept **24 hours** (`event_topology::RETENTION`, applied by the topic provisioner): it carries message
-text that no erasure reaches on the broker, so it ages out fast.
+text that no erasure reaches on the broker, so it ages out fast. `chat.message.sent` (every
+message's full body) and its `.dlq` are kept **2 days** for the same reason. That is the inbox
+projection's recovery window: an `InboxWorker` down or lagging more than 2 days loses the older
+updates (the inboxes show an older last activity; the messages themselves stay in chat's log).
+Resetting `chat-inbox` to the earliest offset therefore replays only 2 days: rebuilding the inbox
+beyond that has to read chat's log in Scylla, not the topic.
 - `MuteConversation(conversation_id, member_id, muted, until_ms)` (edge `authenticated`, bound to
   `member_id`): mutes the member's pushes from the conversation until `until_ms` (within a year) or,
   with `0`, until they unmute; `muted = false` unmutes. Stored on the roster row
@@ -398,6 +403,7 @@ block), `CHT-1012` (no request from someone else to answer).
 | Redis unavailable | live messages stop; presence/typing gone | **Soft** — `SendMessage` still succeeds (durable); guests still read history from Scylla | check Redis Cluster; clients re-poll `GetHistory` |
 | Redis hot-tail cache cold/evicted | passive-reader latency rises | **Soft & safe** — reads fall back to Scylla (durable source of truth) | verify cache hit ratio / cap; usually self-heals |
 | Kafka unavailable | unpublish teardown delayed; downstream events stop | **Soft** — fan-out unaffected; teardown resumes from last committed offset | check brokers; watch `chat-visibility-consumer` lag |
+| `InboxWorker` down or lagging > 2 days | inboxes show an older last activity, those messages unpushed | `chat.message.sent` is kept 2 days: older updates are gone from the broker (the messages stay in chat's log) | keep `chat-inbox` lag well under 2 days; a member's next message repairs their entry |
 | Slow stream consumer (lag) | client gets `Status::data_loss` | dropped per-plane; **member and audience backpressure are independent** — a slow guest never stalls a member | client reconnects + re-polls `GetHistory`; scale pods / raise buffer |
 | Pod crash | presence/shard state stale | expiring sorted sets age out without explicit cleanup; drop guards release subs on disconnect | none — self-healing |
 
@@ -515,6 +521,7 @@ async fn main() -> anyhow::Result<()> {
 | Scylla `messages_by_conversation` read p99 by profile | cold-history read pressure / cache miss | p99 > SLO ⇒ verify hot-tail cache hit rate |
 | Hot-tail cache hit ratio | read offload health | sustained drop ⇒ Redis pressure / cap too small |
 | Kafka consumer lag (`chat-visibility-consumer`) | delayed Audience-Plane teardown | lag > threshold ⇒ broker/Redis investigation |
+| Kafka consumer lag (`chat-inbox`) | inbox projection behind; `chat.message.sent` is kept 2 days | lag > 1 h ⇒ investigate; lag > 1 day ⇒ page (updates are lost past 2 days) |
 | DLQ produce rate (`chat.*.dlq`) | poison / retry-exhausted events | any sustained rate ⇒ page |
 | Active member vs audience subscriptions per pod | fan-out skew / hotspotting | imbalance ⇒ rebalance shards |
 
