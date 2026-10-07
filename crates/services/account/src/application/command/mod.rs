@@ -20,6 +20,7 @@ pub mod resume_deactivated_account;
 pub mod revoke_mfa;
 pub mod revoke_role;
 pub mod set_date_of_birth;
+pub mod supervision;
 pub mod suspend_account;
 pub mod update_consents;
 pub mod update_kyc_status;
@@ -51,6 +52,7 @@ pub use resume_deactivated_account::{
 pub use revoke_mfa::{RevokeMfaCommand, RevokeMfaHandler};
 pub use revoke_role::{RevokeRoleCommand, RevokeRoleHandler};
 pub use set_date_of_birth::{SetDateOfBirthCommand, SetDateOfBirthHandler};
+pub use supervision::{SupervisionView, Supervisions};
 pub use suspend_account::{SuspendAccountCommand, SuspendAccountHandler};
 pub use update_consents::{UpdateConsentsCommand, UpdateConsentsHandler};
 pub use update_kyc_status::{UpdateKycStatusCommand, UpdateKycStatusHandler};

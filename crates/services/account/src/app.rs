@@ -31,7 +31,7 @@ use crate::application::command::{
     RevokeMfaCommand, RevokeMfaHandler, RevokeRoleCommand, RevokeRoleHandler, SuspendAccountCommand,
     SuspendAccountHandler, UpdateConsentsCommand, UpdateConsentsHandler, UpdateKycStatusCommand, UpdateKycStatusHandler, VerifyEmailCommand,
     VerifyEmailHandler, VerifyPhoneCommand, VerifyPhoneHandler, ChangeEmailCommand, ChangeEmailHandler,
-    ChangePhoneCommand, ChangePhoneHandler,
+    ChangePhoneCommand, ChangePhoneHandler, Supervisions,
 };
 use crate::application::port::{
     AccountRepository, ContactIndex, ContactLookupQuota, EventPublisher, ExportStore, ProfileDirectory,
@@ -45,7 +45,7 @@ use crate::application::query::{
     GetGdprRecordHandler, GetGdprRecordQuery, GetMfaSecretHandler, GetMfaSecretQuery, ListAccountsByStatusHandler,
     ListAccountsByStatusQuery,
 };
-use crate::infrastructure::persistence::PgAccountRepository;
+use crate::infrastructure::persistence::{PgAccountRepository, PgSupervisionStore, RepoAccountAges};
 
 /// A fully-wired account service bound to its Postgres pool. The buses exposed
 /// here are the *same* instances the handlers are registered into; `repository`
@@ -58,6 +58,8 @@ pub struct App {
     pub contacts:    Arc<dyn ContactIndex>,
     /// Contact matching's daily budget (#661), for scenarios.
     pub quota:       Arc<dyn ContactLookupQuota>,
+    /// Family supervision (#670); `None` without the profile directory.
+    pub supervisions: Option<Arc<Supervisions>>,
 }
 
 impl App {
@@ -79,11 +81,20 @@ impl App {
         exports: Option<Arc<dyn ExportStore>>,
         directory: Option<Arc<dyn ProfileDirectory>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let pg = Arc::new(PgAccountRepository::new(TransactionManager::new(pool), publisher));
+        let tx = TransactionManager::new(pool);
+        let pg = Arc::new(PgAccountRepository::new(tx.clone(), Arc::clone(&publisher)));
         let repository: Arc<dyn AccountRepository> = Arc::clone(&pg) as Arc<dyn AccountRepository>;
         let contacts: Arc<dyn ContactIndex> = Arc::clone(&pg) as Arc<dyn ContactIndex>;
         let quota: Arc<dyn ContactLookupQuota> = pg;
         let budget = Arc::clone(&quota);
+        let supervisions = directory.as_ref().map(|profiles| {
+            Arc::new(Supervisions::new(
+                Arc::new(PgSupervisionStore::new(tx.clone())),
+                Arc::new(RepoAccountAges(Arc::clone(&repository))),
+                Arc::clone(profiles),
+                Arc::clone(&publisher),
+            ))
+        });
 
         let command_bus = Arc::new(
             CommandBusBuilder::new()
@@ -136,6 +147,6 @@ impl App {
                 .build(),
         );
 
-        Ok(Self { command_bus, query_bus, repository, contacts, quota })
+        Ok(Self { command_bus, query_bus, repository, contacts, quota, supervisions })
     }
 }

@@ -18,6 +18,7 @@ pub mod password_changed;
 pub mod phone_changed;
 pub mod role_assigned;
 pub mod role_revoked;
+pub mod supervision;
 
 pub use account_activated::AccountActivated;
 pub use account_created::AccountCreated;
@@ -39,6 +40,7 @@ pub use password_changed::PasswordChanged;
 pub use phone_changed::PhoneChanged;
 pub use role_assigned::RoleAssigned;
 pub use role_revoked::RoleRevoked;
+pub use supervision::{SupervisionEnded, SupervisionStarted};
 
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +71,8 @@ pub enum DomainEvent {
     ConsentsUpdated(ConsentsUpdated),
     GdprDeletionCancelled(GdprDeletionCancelled),
     DateOfBirthSet(DateOfBirthSet),
+    SupervisionStarted(SupervisionStarted),
+    SupervisionEnded(SupervisionEnded),
 }
 
 impl DomainEvent {
@@ -94,6 +98,8 @@ impl DomainEvent {
             Self::ConsentsUpdated(_)         => "account.consents_updated",
             Self::GdprDeletionCancelled(_)   => "account.gdpr_deletion_cancelled",
             Self::DateOfBirthSet(_)          => "account.date_of_birth_set",
+            Self::SupervisionStarted(_)      => "account.supervision_started",
+            Self::SupervisionEnded(_)        => "account.supervision_ended",
         }
     }
 }

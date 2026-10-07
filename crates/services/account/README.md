@@ -145,6 +145,11 @@ service AccountService {
   rpc UpdateConsents (UpdateConsentsRequest) returns (GdprRecordView);         // GDPR Art. 7 consents + history
   rpc ListAccountsByStatus (ListAccountsByStatusRequest) returns (ListAccountsByStatusResponse);
   rpc FindProfilesByContacts (FindProfilesByContactsRequest) returns (FindProfilesByContactsResponse); // #661, the caller's own account on the edge
+  // Family supervision (#670), the caller's own account on the edge
+  rpc CreateSupervisionInvite (CreateSupervisionInviteRequest) returns (SupervisionInviteView);
+  rpc AcceptSupervisionInvite (AcceptSupervisionInviteRequest) returns (SupervisionView);
+  rpc ListSupervisions (ListSupervisionsRequest) returns (ListSupervisionsResponse);
+  rpc EndSupervision (EndSupervisionRequest) returns (ListSupervisionsResponse);
 }
 ```
 
@@ -172,6 +177,26 @@ social-graph unreachable ⇒ `ACC-7006` (`UNAVAILABLE`, retryable). Hashes of ph
 atomically before anything is matched; past it ⇒ `ACC-7007` (`RESOURCE_EXHAUSTED`, `retry-after-secs` =
 until the next UTC midnight). Stored phone numbers are E.164 already (validated on every write), so the
 phone hash column needs no normalization.
+
+**Family supervision (#670), part 1: pairing.** A parent (a **known adult**: 18+ by date of birth) pairs
+with a teen (13–17). Either side calls `CreateSupervisionInvite(account_id, role)` (its own side) and
+shares the code (10 characters of Crockford base32, ~50 bits; shown or as a QR code; **single use, 24
+hours**; typing ignores case, spaces and dashes, and reads O/I/L as 0/1/1); the other side calls
+`AcceptSupervisionInvite(account_id, code)` and takes the other side. Ages are read from the date of
+birth at both ends (an unknown age fits neither side: `ACC-3002`; a teen who turned 18 meanwhile voids
+their invite: `ACC-3001`); one's own code is `ACC-3006`; a teen has **two supervisors at most**
+(`ACC-3003`); a parent may supervise several teens. `ListSupervisions` shows **both sides** the link
+(the other side's account and active profiles, since when) — the teen always sees who supervises them.
+`EndSupervision(account_id, other_account_id)` ends it from either side (`ACC-3005` when there is none).
+A supervision ends by itself when the teen turns 18 (the sweep, `ACCOUNT_SUPERVISION_SWEEP_INTERVAL_SECS`,
+which also drops expired codes) and when either account is erased (the GDPR janitor ends them first; a
+failure leaves the account for its next pass). Storage (migration 0009): `supervision_invites` on the
+shard of the code; `supervisions` on the **teen's** shard (an advisory lock keeps "two at most" atomic;
+coming of age joins the teen's `accounts` row there), with `supervisions_by_supervisor` on the
+supervisor's shard — written teen-first, idempotent, a stale index entry dropped on read. Every start
+and end is published (`SupervisionStarted` / `SupervisionEnded { ended_by: by_teen | by_supervisor |
+came_of_age | account_deleted }`, `account_id` = the teen) with both sides' profile ids, so each side can
+be told. Limits and what a supervisor sees come with parts 2 and 3. Edge: the caller's account.
 
 **GDPR data export (#653, Art. 15/20).** `RequestDataExport` marks the export pending; the **export
 pass** (`ExportDueData`) then builds, per pending account, a ZIP of JSON files — the holder's own
@@ -235,7 +260,7 @@ Stable codes are `ACC-1xxx` (lifecycle) … `ACC-9xxx` (identifiers), via the sh
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet` | `account_id` | `profile` (suspend/deactivate/delete → mask; activate → restore) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet`, `SupervisionStarted`, `SupervisionEnded` (#670; `account_id` = the teen) | `account_id` | `profile` (suspend/deactivate/delete → mask; activate → restore) |
 
 **Consumes:** none — `account` is a pure event producer.
 
@@ -298,6 +323,7 @@ async fn main() -> anyhow::Result<()> {
 | `ACCOUNT_GRPC_ADDR` | No | `0.0.0.0:50059` | gRPC bind address. |
 | `ACCOUNT_REQUIRE_STEP_UP` | No | `false` | `DeactivateAccount` and `RequestGdprDeletion` on the edge need a credential proof under 5 min old (the token's `auth_time`, from `auth.v1.Login` / `VerifyCredentials`); otherwise `PERMISSION_DENIED` `step_up_required…`. Turn on once clients step up. |
 | `ACCOUNT_GDPR_JANITOR_INTERVAL_SECS` | No | `3600` | How often account-server anonymizes the accounts whose erasure grace period (30 days) has ended; `0` turns the janitor off. Safe on every replica (optimistic CAS). |
+| `ACCOUNT_SUPERVISION_SWEEP_INTERVAL_SECS` | No | `3600` | How often supervisions whose teen turned 18 end and expired supervision invites go (#670); `0` turns it off. Idempotent, safe on every replica. |
 | `ACCOUNT_EXPORT_BUCKET` · `ACCOUNT_EXPORT_S3_ENDPOINT` · `ACCOUNT_EXPORT_S3_PUBLIC_ENDPOINT` · `ACCOUNT_EXPORT_S3_REGION` | No | unset · `https://s3.amazonaws.com` · = endpoint · `us-east-1` | The GDPR export store (#653). Unset bucket: exports stay pending. |
 | `ACCOUNT_EXPORT_S3_ACCESS_KEY` · `ACCOUNT_EXPORT_S3_SECRET_KEY` | No | unset | Static keys for that bucket (a 7-day presign needs non-session credentials). |
 | `ACCOUNT_EXPORT_INTERVAL_SECS` | No | `300` | How often the export pass runs; `0` turns it off. |

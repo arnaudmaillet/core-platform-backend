@@ -50,6 +50,7 @@ serde        = { workspace = true }
 # ── Domain types ──────────────────────────────────────────────────────────────
 uuid         = { workspace = true }
 chrono       = { workspace = true }
+rand         = { workspace = true }   # supervision invite codes (#670)
 
 # ── Error handling ────────────────────────────────────────────────────────────
 thiserror    = { workspace = true }

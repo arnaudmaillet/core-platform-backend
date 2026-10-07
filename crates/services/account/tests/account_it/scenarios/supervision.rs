@@ -1,0 +1,178 @@
+//! #670 over real Postgres: a parent and a teen pair through an invite code;
+//! both see the link; a teen has two supervisors at most; either side ends
+//! it; it ends when the teen turns 18; expired codes go; the supervisor's
+//! index follows the teen's rows.
+
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use chrono::{Datelike, Duration, Utc};
+use cqrs::{CommandBus, Envelope};
+use postgres_storage::TransactionManager;
+use uuid::Uuid;
+
+use account::application::command::{CreateAccountCommand, Supervisions};
+use account::application::port::{DirectoryProfile, EventPublisher, ProfileDirectory};
+use account::domain::event::DomainEvent;
+use account::domain::supervision::SupervisionRole;
+use account::domain::value_object::AccountId;
+use account::error::AccountError;
+use account::infrastructure::persistence::{PgSupervisionStore, RepoAccountAges};
+
+use crate::account_it::harness::{self, TestHarness, DEADLINE};
+
+struct Profiles;
+
+#[async_trait]
+impl ProfileDirectory for Profiles {
+    async fn profiles_of(&self, account_id: &AccountId) -> Result<Vec<DirectoryProfile>, AccountError> {
+        Ok(vec![DirectoryProfile {
+            profile_id:   format!("p-{account_id}"),
+            handle:       "h".into(),
+            display_name: "Name".into(),
+            avatar_url:   None,
+            active:       true,
+            by_email:     false,
+            by_phone:     false,
+        }])
+    }
+    async fn hidden_from(&self, _: &[String], _: &[String]) -> Result<HashSet<String>, AccountError> {
+        Ok(HashSet::new())
+    }
+}
+
+#[derive(Default)]
+struct Published(Mutex<Vec<String>>);
+
+#[async_trait]
+impl EventPublisher for Published {
+    async fn publish(&self, event: &DomainEvent) -> Result<(), AccountError> {
+        if let DomainEvent::SupervisionEnded(e) = event {
+            self.0.lock().unwrap().push(e.ended_by.clone());
+        }
+        Ok(())
+    }
+}
+
+fn born_years_ago(years: i32) -> String {
+    let today = Utc::now().date_naive();
+    let dob = today.with_year(today.year() - years).unwrap_or(today - Duration::days(365 * years as i64));
+    dob.format("%Y-%m-%d").to_string()
+}
+
+/// A new account of age `years`; its id.
+async fn account(h: &TestHarness, years: i32) -> String {
+    let identity = harness::random_identity();
+    let cmd = CreateAccountCommand {
+        identity_id: identity.clone(),
+        email: harness::random_email(),
+        phone: None,
+        password_hash: None,
+        country_of_residence: None,
+        role: None,
+        created_by: None,
+        date_of_birth: Some(born_years_ago(years)),
+    };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("create");
+    let identity_q = identity.clone();
+    harness::await_until("account readable", DEADLINE, || {
+        let identity_q = identity_q.clone();
+        async move { h.get_by_identity(&identity_q).await.is_ok() }
+    })
+    .await;
+    h.get_by_identity(&identity).await.unwrap().id
+}
+
+async fn pair(s: &Supervisions, parent: &str, teen: &str) -> Result<(), AccountError> {
+    let invite = s.create_invite(parent, SupervisionRole::Supervisor, Utc::now()).await?;
+    s.accept(teen, &invite.code.as_str().to_lowercase(), Utc::now()).await.map(|_| ())
+}
+
+#[tokio::test]
+async fn a_parent_and_a_teen_pair_end_and_age_out_over_postgres() {
+    let h = TestHarness::start().await;
+    let published = Arc::new(Published::default());
+    let supervisions = Supervisions::new(
+        Arc::new(PgSupervisionStore::new(TransactionManager::new(h.pool.clone()))),
+        Arc::new(RepoAccountAges(Arc::clone(&h.repository))),
+        Arc::new(Profiles),
+        Arc::clone(&published) as _,
+    );
+    let (mum, dad, aunt) = (account(&h, 40).await, account(&h, 41).await, account(&h, 35).await);
+    let teen = account(&h, 15).await;
+
+    // A teen cannot supervise; an adult cannot be supervised.
+    assert!(matches!(
+        supervisions.create_invite(&teen, SupervisionRole::Supervisor, Utc::now()).await,
+        Err(AccountError::SupervisionRoleNotAllowed { .. })
+    ));
+
+    pair(&supervisions, &mum, &teen).await.expect("mum pairs");
+    pair(&supervisions, &dad, &teen).await.expect("dad pairs");
+    assert!(matches!(pair(&supervisions, &aunt, &teen).await, Err(AccountError::SupervisorLimitReached)));
+
+    let teen_view = supervisions.list(&teen).await.unwrap();
+    assert_eq!(teen_view.len(), 2, "the teen sees both");
+    assert!(teen_view.iter().all(|v| v.role == SupervisionRole::Supervisor));
+    let mum_view = supervisions.list(&mum).await.unwrap();
+    assert_eq!((mum_view.len(), mum_view[0].account.to_string()), (1, teen.clone()));
+
+    // The teen ends dad's; mum's stays.
+    supervisions.end(&teen, &dad, Utc::now()).await.unwrap();
+    assert!(supervisions.list(&dad).await.unwrap().is_empty());
+    assert_eq!(supervisions.list(&teen).await.unwrap().len(), 1);
+
+    // The teen turns 18: the sweep ends mum's too.
+    sqlx::query("UPDATE accounts SET date_of_birth = $2 WHERE id = $1")
+        .bind(Uuid::parse_str(&teen).unwrap())
+        .bind(chrono::NaiveDate::parse_from_str(&born_years_ago(18), "%Y-%m-%d").unwrap())
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    assert!(supervisions.sweep(Utc::now()).await.unwrap() >= 1);
+    assert!(supervisions.list(&mum).await.unwrap().is_empty());
+    assert!(supervisions.list(&teen).await.unwrap().is_empty());
+    assert_eq!(*published.0.lock().unwrap(), vec!["by_teen", "came_of_age"]);
+
+    // An expired invite goes with the sweep; a spent one cannot be reused.
+    let other_teen = account(&h, 14).await;
+    let stale = supervisions.create_invite(&aunt, SupervisionRole::Supervisor, Utc::now() - Duration::days(2)).await.unwrap();
+    supervisions.sweep(Utc::now()).await.unwrap();
+    assert!(matches!(
+        supervisions.accept(&other_teen, stale.code.as_str(), Utc::now()).await,
+        Err(AccountError::SupervisionInviteInvalid)
+    ));
+}
+
+#[tokio::test]
+async fn the_supervisor_index_follows_the_teens_rows() {
+    let h = TestHarness::start().await;
+    let supervisions = Supervisions::new(
+        Arc::new(PgSupervisionStore::new(TransactionManager::new(h.pool.clone()))),
+        Arc::new(RepoAccountAges(Arc::clone(&h.repository))),
+        Arc::new(Profiles),
+        Arc::new(Published::default()),
+    );
+    let (parent, teen) = (account(&h, 45).await, account(&h, 16).await);
+    pair(&supervisions, &parent, &teen).await.unwrap();
+
+    // A half-done ending (the teen's row gone, the index left behind) reads
+    // as ended, and the stale index entry is dropped.
+    sqlx::query("DELETE FROM supervisions WHERE teen_id = $1")
+        .bind(Uuid::parse_str(&teen).unwrap())
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    assert!(supervisions.list(&parent).await.unwrap().is_empty());
+    let (left,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM supervisions_by_supervisor WHERE supervisor_id = $1")
+        .bind(Uuid::parse_str(&parent).unwrap())
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+
+    // The same pair again: a fresh link, not a duplicate.
+    pair(&supervisions, &parent, &teen).await.unwrap();
+    assert_eq!(supervisions.list(&parent).await.unwrap().len(), 1);
+}

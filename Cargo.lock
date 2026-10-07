@@ -24,6 +24,7 @@ dependencies = [
  "prost 0.14.4",
  "prost-reflect",
  "prost-types",
+ "rand 0.9.2",
  "reqwest",
  "rusty-s3",
  "search-api",

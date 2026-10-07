@@ -172,4 +172,29 @@ service AccountService {
     // settings), never blocked either way, never the caller's own. Edge:
     // the caller's account.
     rpc FindProfilesByContacts(FindProfilesByContactsRequest) returns (FindProfilesByContactsResponse);
+
+    // ── Family supervision (#670) ──────────────────────────────────────────
+    // A parent (18+ by date of birth) pairs with a teen (13–17): either side
+    // creates an invite, the other accepts it. Both always see the link;
+    // either ends it; it ends by itself at 18. A teen has at most two
+    // supervisors. Edge: the caller's account.
+
+    // An invite code to share (shown or as a QR code): 10 characters, single
+    // use, 24 hours. `role` is the caller's side. ACC-3002 when the caller's
+    // age does not fit it (or is unknown).
+    rpc CreateSupervisionInvite(CreateSupervisionInviteRequest) returns (SupervisionInviteView);
+
+    // Accepts an invite: the caller takes the other side. ACC-3001 unknown,
+    // used or expired code; ACC-3002 the caller's age does not fit;
+    // ACC-3003 the teen already has two supervisors; ACC-3006 one's own code.
+    rpc AcceptSupervisionInvite(AcceptSupervisionInviteRequest) returns (SupervisionView);
+
+    // The caller's supervisions, both sides: its supervisors (as a teen) and
+    // the teens it supervises.
+    rpc ListSupervisions(ListSupervisionsRequest) returns (ListSupervisionsResponse);
+
+    // Ends the caller's supervision with `other_account_id` (either side
+    // may; the other is told) and returns those left. ACC-3005 when there is
+    // none.
+    rpc EndSupervision(EndSupervisionRequest) returns (ListSupervisionsResponse);
 }

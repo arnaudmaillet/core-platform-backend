@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 55dfce8bdaba1ed7ceaf0bedf4b1a920f4ae210df8bd29976e198f9ea21b365e
-  translated_at: 2026-10-06
+  source_sha256: f50fe95416464898824d0e3ecfb5e55516570ca7a891891d3661b425aec35158
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -158,6 +158,11 @@ service AccountService {
   rpc SetDateOfBirth (SetDateOfBirthRequest) returns (AccountView);          // une fois, si absente ; âge minimum 13 ans (16 en AU)
   rpc GetGdprRecord (GetGdprRecordRequest) returns (GdprRecordView);          // le sien propre en périphérie
   rpc FindProfilesByContacts (FindProfilesByContactsRequest) returns (FindProfilesByContactsResponse); // #661, le compte de l'appelant en périphérie
+  // Supervision familiale (#670), le compte de l'appelant en périphérie
+  rpc CreateSupervisionInvite (CreateSupervisionInviteRequest) returns (SupervisionInviteView);
+  rpc AcceptSupervisionInvite (AcceptSupervisionInviteRequest) returns (SupervisionView);
+  rpc ListSupervisions (ListSupervisionsRequest) returns (ListSupervisionsResponse);
+  rpc EndSupervision (EndSupervisionRequest) returns (ListSupervisionsResponse);
   rpc UpdateConsents (UpdateConsentsRequest) returns (GdprRecordView);         // GDPR Art. 7 consents + history
   rpc ListAccountsByStatus (ListAccountsByStatusRequest) returns (ListAccountsByStatusResponse);
 }
@@ -189,6 +194,29 @@ trouvée ou non, réservée atomiquement avant toute recherche ; au-delà ⇒ `A
 (`RESOURCE_EXHAUSTED`, `retry-after-secs` = jusqu'au prochain minuit UTC). Les numéros stockés sont déjà
 en E.164 (validés à chaque écriture) : la colonne d'empreinte des téléphones n'a pas besoin de
 normalisation.
+
+**Supervision familiale (#670), partie 1 : l'appairage.** Un parent (un **adulte connu** : 18 ans ou
+plus selon sa date de naissance) s'appaire avec un ado (13–17 ans). L'un ou l'autre appelle
+`CreateSupervisionInvite(account_id, role)` (son propre rôle) et partage le code (10 caractères en base32
+de Crockford, ~50 bits ; affiché ou en QR code ; **usage unique, 24 heures** ; la saisie ignore la casse,
+les espaces et les tirets, et lit O/I/L comme 0/1/1) ; l'autre appelle
+`AcceptSupervisionInvite(account_id, code)` et prend l'autre rôle. Les âges sont lus dans la date de
+naissance des deux côtés (un âge inconnu ne convient à aucun rôle : `ACC-3002` ; un ado devenu majeur
+entre-temps annule son invitation : `ACC-3001`) ; son propre code donne `ACC-3006` ; un ado a **deux
+superviseurs au plus** (`ACC-3003`) ; un parent peut superviser plusieurs ados. `ListSupervisions`
+montre le lien **aux deux côtés** (le compte et les profils actifs de l'autre, depuis quand) — l'ado voit
+toujours qui le supervise. `EndSupervision(account_id, other_account_id)` y met fin, de l'un ou l'autre
+côté (`ACC-3005` s'il n'y en a pas). Une supervision prend fin d'elle-même quand l'ado a 18 ans (le
+passage périodique, `ACCOUNT_SUPERVISION_SWEEP_INTERVAL_SECS`, qui supprime aussi les codes expirés) et
+quand l'un des comptes est effacé (le janitor RGPD les termine d'abord ; un échec laisse le compte pour
+son passage suivant). Stockage (migration 0009) : `supervision_invites` sur le shard du code ;
+`supervisions` sur le shard de **l'ado** (un verrou consultatif garde « deux au plus » atomique ; la
+majorité se lit en joignant la ligne `accounts` de l'ado, sur ce même shard), avec
+`supervisions_by_supervisor` sur le shard du superviseur — écrit ado d'abord, idempotent, une entrée
+d'index périmée supprimée à la lecture. Chaque début et fin est publié (`SupervisionStarted` /
+`SupervisionEnded { ended_by: by_teen | by_supervisor | came_of_age | account_deleted }`, `account_id` =
+l'ado) avec les ids de profil des deux côtés, pour que chacun puisse être prévenu. Les limites et ce que
+voit un superviseur viennent avec les parties 2 et 3. Edge : le compte de l'appelant.
 
 **Export de données RGPD (#653, art. 15/20).** `RequestDataExport` marque l'export en attente ; la
 **passe d'export** (`ExportDueData`) construit alors, pour chaque compte en attente, un ZIP de fichiers
@@ -255,7 +283,7 @@ Les codes stables vont de `ACC-1xxx` (lifecycle) à `ACC-9xxx` (identifiers), vi
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet` | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet`, `SupervisionStarted`, `SupervisionEnded` (#670 ; `account_id` = l'ado) | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
 
 **Consomme :** rien — `account` est un producteur d'événements pur.
 
@@ -319,6 +347,7 @@ async fn main() -> anyhow::Result<()> {
 | `ACCOUNT_GRPC_ADDR` | No | `0.0.0.0:50059` | gRPC bind address. |
 | `ACCOUNT_REQUIRE_STEP_UP` | No | `false` | `DeactivateAccount` et `RequestGdprDeletion` en périphérie exigent une preuve d'identifiant de moins de 5 min (l'`auth_time` du jeton, issu de `auth.v1.Login` / `VerifyCredentials`) ; sinon `PERMISSION_DENIED` `step_up_required…`. À activer une fois que les clients font le step-up. |
 | `ACCOUNT_GDPR_JANITOR_INTERVAL_SECS` | No | `3600` | Fréquence à laquelle account-server anonymise les comptes dont le délai de grâce d'effacement (30 jours) est écoulé ; `0` désactive le janitor. Sûr sur chaque réplique (CAS optimiste). |
+| `ACCOUNT_SUPERVISION_SWEEP_INTERVAL_SECS` | No | `3600` | Fréquence à laquelle les supervisions dont l'ado a eu 18 ans prennent fin et les invitations expirées sont supprimées (#670) ; `0` le désactive. Idempotent, sûr sur chaque réplique. |
 | `ACCOUNT_EXPORT_BUCKET` · `ACCOUNT_EXPORT_S3_ENDPOINT` · `ACCOUNT_EXPORT_S3_PUBLIC_ENDPOINT` · `ACCOUNT_EXPORT_S3_REGION` | Non | non défini · `https://s3.amazonaws.com` · = endpoint · `us-east-1` | Le stockage des exports RGPD (#653). Bucket non défini : les exports restent en attente. |
 | `ACCOUNT_EXPORT_S3_ACCESS_KEY` · `ACCOUNT_EXPORT_S3_SECRET_KEY` | Non | non défini | Clés statiques de ce bucket (un presign de 7 jours exige des identifiants hors session). |
 | `ACCOUNT_EXPORT_INTERVAL_SECS` | Non | `300` | Fréquence de la passe d'export ; `0` la désactive. |
