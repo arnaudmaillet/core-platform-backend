@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use postgres_storage::PostgresConfig;
 use redis_storage::RedisConfig;
 use service_runtime::{FnProbe, HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::{authenticated, public_read};
+use service_runtime::edge::{authenticated, permission, public_read, VERIFICATION_REVIEW};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -73,6 +73,9 @@ impl Service for MediaService {
         authenticated("/media.v1.MediaService/DeleteAsset"),
         public_read("/media.v1.MediaService/ResolveDelivery"),
         public_read("/media.v1.MediaService/BatchResolveDelivery"),
+        // #837: staff review of verification evidence, by token only (the
+        // handler refuses the mesh).
+        permission("/media.v1.MediaService/GetPrivateDocumentUrl", VERIFICATION_REVIEW),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -305,8 +308,10 @@ mod tests {
     fn listing_by_owner_is_mesh_only() {
         let method = "/media.v1.MediaService/ListAssetsByOwner";
         assert!(MediaService::EDGE_POLICY.iter().all(|rule| rule.method != method));
-        // #777: the staff link to a private document never reaches a client.
+        // #837: the staff link to a private document takes a staff token
+        // (`verification:review`); no member token reaches it.
         let staff = "/media.v1.MediaService/GetPrivateDocumentUrl";
-        assert!(MediaService::EDGE_POLICY.iter().all(|rule| rule.method != staff));
+        let rule = MediaService::EDGE_POLICY.iter().find(|rule| rule.method == staff).expect("on the edge");
+        assert_eq!(rule.access, service_runtime::edge::EdgeAccess::Permission(VERIFICATION_REVIEW));
     }
 }

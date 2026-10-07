@@ -1057,6 +1057,7 @@ mod tests {
                 "audit:record".to_owned(),
                 "audit:verify".to_owned(),
                 "compliance:hold".to_owned(),
+                "verification:review".to_owned(),
             ]
         );
     }

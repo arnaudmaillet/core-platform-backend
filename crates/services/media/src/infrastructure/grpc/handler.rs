@@ -68,17 +68,20 @@ impl MediaServiceHandler {
         self
     }
 
-    /// Mesh only (#777): a staff link to a private document.
+    /// A staff link to a private document (#777): staff only, by token
+    /// (`verification:review`, #837) — the mesh is refused — and recorded on
+    /// the audit plane before it is returned.
     pub async fn get_private_document_url(
         &self,
         request: Request<proto::GetPrivateDocumentUrlRequest>,
     ) -> Result<Response<proto::GetPrivateDocumentUrlResponse>, Status> {
+        let viewer = edge::require_staff(&request, edge::VERIFICATION_REVIEW)?.account_id().to_owned();
         let handler = self
             .private_documents
             .as_ref()
             .ok_or_else(|| Status::unimplemented("private documents are not wired"))?;
         let asset_id = AssetId::try_from(request.into_inner().asset_id.as_str()).map_err(to_status)?;
-        let resolved = handler.handle_at(asset_id, Utc::now()).await.map_err(to_status)?;
+        let resolved = handler.handle_at(asset_id, &viewer, Utc::now()).await.map_err(to_status)?;
         Ok(Response::new(proto::GetPrivateDocumentUrlResponse {
             url:        resolved.url,
             expires_at: resolved.expires_at.map(to_timestamp),

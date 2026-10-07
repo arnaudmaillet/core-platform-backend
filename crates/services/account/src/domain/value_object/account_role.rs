@@ -51,6 +51,9 @@ impl AccountRole {
     /// * `audit:verify` — integrity verification (chain reports, no payloads)
     /// * `audit:export` — evidence-bundle egress (stricter than read)
     /// * `audit:record` — the synchronous break-glass record lane
+    /// * `verification:review` — review verification requests and open their
+    ///   private documents (#837: profile's staff queue and decision, media's
+    ///   `GetPrivateDocumentUrl`), held by content moderators and admins
     ///
     /// Admin gets read+verify (operate and prove the ledger, no bulk egress);
     /// SuperAdmin adds export and the break-glass lane. Per-account exceptions
@@ -59,11 +62,11 @@ impl AccountRole {
     pub fn granted_permissions(&self) -> &'static [&'static str] {
         match self {
             Self::User             => &[],
-            Self::ContentModerator => &[],
+            Self::ContentModerator => &["verification:review"],
             Self::SupportAgent     => &[],
             Self::FinanceOperator  => &[],
-            Self::Admin            => &["audit:read", "audit:verify"],
-            Self::SuperAdmin       => &["audit:read", "audit:verify", "audit:export", "audit:record"],
+            Self::Admin            => &["audit:read", "audit:verify", "verification:review"],
+            Self::SuperAdmin       => &["audit:read", "audit:verify", "audit:export", "audit:record", "verification:review"],
         }
     }
 
@@ -122,14 +125,13 @@ mod tests {
     /// export; only SuperAdmin holds the egress + break-glass grants.
     #[test]
     fn audit_grants_follow_privilege_boundaries() {
-        for role in [
-            AccountRole::User,
-            AccountRole::ContentModerator,
-            AccountRole::SupportAgent,
-            AccountRole::FinanceOperator,
-        ] {
+        for role in [AccountRole::User, AccountRole::SupportAgent, AccountRole::FinanceOperator] {
             assert!(role.granted_permissions().is_empty(), "{role} must grant nothing");
         }
+        assert!(
+            AccountRole::ContentModerator.granted_permissions().iter().all(|p| !p.starts_with("audit:")),
+            "a moderator holds no audit grant"
+        );
 
         let admin = AccountRole::Admin.granted_permissions();
         assert!(admin.contains(&"audit:read") && admin.contains(&"audit:verify"));
@@ -138,6 +140,18 @@ mod tests {
         let sa = AccountRole::SuperAdmin.granted_permissions();
         for p in ["audit:read", "audit:verify", "audit:export", "audit:record"] {
             assert!(sa.contains(&p), "SuperAdmin must grant {p}");
+        }
+    }
+
+    /// #837: verification review (identity documents) is moderators' and
+    /// admins' — not support, not finance, not users.
+    #[test]
+    fn verification_review_is_moderators_and_admins() {
+        for role in [AccountRole::ContentModerator, AccountRole::Admin, AccountRole::SuperAdmin] {
+            assert!(role.granted_permissions().contains(&"verification:review"), "{role}");
+        }
+        for role in [AccountRole::User, AccountRole::SupportAgent, AccountRole::FinanceOperator] {
+            assert!(!role.granted_permissions().contains(&"verification:review"), "{role}");
         }
     }
 }

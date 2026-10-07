@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: d6aa2beffc7c845a18e7ad4a63474e21ddba9e234edea2be182c60f128612f9d
-  translated_at: 2026-10-07
+  source_sha256: 82b846dbdad16de13c5dbbea6b9cab8eb72a37fc347d629cb342fe24b5e7cc05
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -154,8 +154,8 @@ service ProfileService {
   rpc SetAccountType(SetAccountTypeRequest) returns (CommandResponse); // #668 personnel / professionnel (créateur) / marque (entreprise) + la fiche de contact publique d'une marque ; un bot reste un bot ; créateur et entreprise réservés aux 18 ans et plus (un jeton 13–17 reçoit FAILED_PRECONDITION)
   rpc RequestVerification(RequestVerificationRequest) returns (CommandResponse); // #668 propriétaire : catégorie + 1 à 5 justificatifs (liens web et/ou documents privés, #777) → file du personnel
   rpc GetVerificationRequest(GetVerificationRequestRequest) returns (GetVerificationRequestResponse); // #668 propriétaire : en attente / approuvée / refusée (+ motif)
-  rpc ListPendingVerificationRequests(ListPendingVerificationRequestsRequest) returns (ListPendingVerificationRequestsResponse); // personnel, mesh uniquement
-  rpc DecideVerificationRequest(DecideVerificationRequestRequest) returns (CommandResponse); // personnel, mesh uniquement : approuver vérifie le profil ; refuser exige un motif
+  rpc ListPendingVerificationRequests(ListPendingVerificationRequestsRequest) returns (ListPendingVerificationRequestsResponse); // personnel : jeton edge avec verification:review (#837) ; le mesh est refusé
+  rpc DecideVerificationRequest(DecideVerificationRequestRequest) returns (CommandResponse); // personnel (verification:review, #837) : approuver vérifie le profil ; refuser exige un motif
   rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
   rpc HideProfile(HideProfileRequest) returns (CommandResponse);
   rpc RestoreProfile(RestoreProfileRequest) returns (CommandResponse);

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3571109bd11154101becfdd5aea72c76a477e7cc838a2c75239c91241519f6c3
-  translated_at: 2026-10-04
+  source_sha256: 8ce5443647855324bb8178b5979608bf1a509bc3dcbc078fc6880c09f6feb787
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -130,7 +130,7 @@ Chaque faute implémente `error::AppError` avec un code `AUD-XXXX` stable, mapp�
 
 | Topic | Groupe de consommateurs | But | Sur poison/épuisement |
 |---|---|---|---|
-| `audit.v1.events` | `audit-ingest` | le firehose d'événements de conformité de toute la flotte → dédup → chaîne → persiste → archive | DLQ `audit.v1.events.dlq` |
+| `audit.v1.events` | `audit-ingest` | le firehose d'événements de conformité de toute la flotte → dédup → chaîne → persiste → archive. Produit aujourd'hui par `media` : chaque consultation par le staff d'un document privé (`data_access`, `media.private_document.viewed`, #837) | DLQ `audit.v1.events.dlq` |
 | `moderation.v1.events` ✅ câblé | `audit-moderation` | `decision_recorded` (l'autorité + le motif DSA — scellé dans une enveloppe crypto-effaçable à l'ingestion) et `enforcement_applied` ; les autres variants sont un skip inoffensif | DLQ `moderation.v1.events.dlq` |
 | `auth.v1.events` ✅ câblé | `audit-auth` | `session_issued` / `session_revoked` (le cycle de vie d'authentification — métadonnées structurées, sans PII, sans scellement) ; les autres variants sont un skip inoffensif | DLQ `auth.v1.events.dlq` |
 | `account.v1.events` ✅ câblé | `audit-account` | toute la surface account — `account_created` / `email_changed` / `email_verified` / `phone_changed` porteurs de PII (scellée dans une enveloppe crypto-effaçable), sécurité (`password_changed`, `mfa_*` → Authentication), cycle de vie d'identité (`activated`/`deactivated`/`suspended`/`deleted`, `kyc_status_changed` → **Identity**), autorisation (`role_*` → Authorization), les événements GDPR (`gdpr_deletion_requested` / `gdpr_deletion_cancelled` → DataErasure, `gdpr_data_export_requested` → DataExport) et `consents_updated` → **Consent** (preuve art. 7(1)) — et `deleted` (l'effacement lui-même, après le délai de grâce de 30 jours) **crypto-efface aussi le sujet** (Art. 17, boucle bouclée) | DLQ `account.v1.events.dlq` |

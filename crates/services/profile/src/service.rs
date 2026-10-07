@@ -19,7 +19,7 @@ use infra_config::InfraRegistry;
 use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 use service_runtime::{HealthProbe, Service};
-use service_runtime::edge::{authenticated, public_read};
+use service_runtime::edge::{authenticated, permission, public_read, VERIFICATION_REVIEW};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -81,11 +81,13 @@ impl Service for ProfileService {
         authenticated("/profile.v1.ProfileService/SetCommentFilters"),
         authenticated("/profile.v1.ProfileService/SetTabSettings"),
         authenticated("/profile.v1.ProfileService/SetFeedSettings"),
-        // #668: the owner's account type and verification request (staff's
-        // ListPending… / Decide… stay mesh-only).
+        // #668: the owner's account type and verification request.
         authenticated("/profile.v1.ProfileService/SetAccountType"),
         authenticated("/profile.v1.ProfileService/RequestVerification"),
         authenticated("/profile.v1.ProfileService/GetVerificationRequest"),
+        // #837: staff review, by token only (the handlers refuse the mesh).
+        permission("/profile.v1.ProfileService/ListPendingVerificationRequests", VERIFICATION_REVIEW),
+        permission("/profile.v1.ProfileService/DecideVerificationRequest", VERIFICATION_REVIEW),
         authenticated("/profile.v1.ProfileService/DeleteProfile"),
         public_read("/profile.v1.ProfileService/GetProfileById"),
         public_read("/profile.v1.ProfileService/GetProfileByHandle"),
@@ -239,3 +241,20 @@ fn private_documents_from_env() -> anyhow::Result<Option<Arc<dyn crate::applicat
     Ok(Some(Arc::new(crate::infrastructure::client::GrpcPrivateDocuments::new(channel))))
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #837: the staff verification RPCs are on the edge for reviewers only.
+    #[test]
+    fn verification_review_takes_the_permission_on_the_edge() {
+        for method in [
+            "/profile.v1.ProfileService/ListPendingVerificationRequests",
+            "/profile.v1.ProfileService/DecideVerificationRequest",
+        ] {
+            let rule = ProfileService::EDGE_POLICY.iter().find(|r| r.method == method).expect(method);
+            assert_eq!(rule.access, service_runtime::edge::EdgeAccess::Permission(VERIFICATION_REVIEW));
+        }
+    }
+}

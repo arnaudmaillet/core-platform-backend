@@ -53,12 +53,12 @@ producer's `DOMAIN.md §8`.
 | `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline`, `notification` |
 | `auth.v1.events` | `auth` | `audit` |
 | `media.v1.events` | `media` | `media` |
+| `audit.v1.events` | `media` | `audit` |
 
 ### Deferred — consumed, producer intentionally not in-repo
 
 | Topic | Consumer(s) | Why |
 |---|---|---|
-| `audit.v1.events` | `audit` | Generic privileged-record ingest lane. Domain producers emit their own topics (account/auth/moderation .v1.events) which audit consumes directly; this lane is fed by the sync gRPC RecordPrivileged path and future generic producers. |
 | `moderation.reports` | `moderation` | External user-report intake — produced by the client/edge, not a fleet service. |
 | `moderation.signals` | `moderation` | External ML-classifier signals — produced off-fleet. |
 | `view.v1.events` | `counter` | Upstream view telemetry producer not yet built (counter-analytics blueprint deferral). |

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: e3e143afe94cb8b3ec0a5ef4652bbd21df9eef8d00b5e822e1189bc525b14a3b
+  source_sha256: d4967f519ee185f9ae5df7550f4498f00f07c37146ab681340e683da970084f2
   translated_at: 2026-10-08
   status: complete
 ---
@@ -66,12 +66,12 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline`, `notification` |
 | `auth.v1.events` | `auth` | `audit` |
 | `media.v1.events` | `media` | `media` |
+| `audit.v1.events` | `media` | `audit` |
 
 ### Deferred — consumed, producer intentionally not in-repo
 
 | Topic | Consumer(s) | Why |
 |---|---|---|
-| `audit.v1.events` | `audit` | Generic privileged-record ingest lane. Domain producers emit their own topics (account/auth/moderation .v1.events) which audit consumes directly; this lane is fed by the sync gRPC RecordPrivileged path and future generic producers. |
 | `moderation.reports` | `moderation` | External user-report intake — produced by the client/edge, not a fleet service. |
 | `moderation.signals` | `moderation` | External ML-classifier signals — produced off-fleet. |
 | `view.v1.events` | `counter` | Upstream view telemetry producer not yet built (counter-analytics blueprint deferral). |

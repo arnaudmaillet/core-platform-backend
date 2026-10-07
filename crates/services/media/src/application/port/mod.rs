@@ -10,6 +10,7 @@
 //! layer. A handler asks for a pre-signed URL or a delivery URL; the bytes travel
 //! client ⇄ store ⇄ CDN, out of band.
 
+pub mod access_log;
 pub mod asset_repository;
 pub mod cdn_gateway;
 pub mod delivery_cache;
@@ -21,6 +22,7 @@ pub mod moderation_screen;
 pub mod object_store;
 pub mod video_transcoder;
 
+pub use access_log::{AccessLog, DocumentView};
 pub use asset_repository::AssetRepository;
 pub use cdn_gateway::{CdnGateway, ResolvedUrl};
 pub use delivery_cache::DeliveryCache;

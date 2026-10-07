@@ -328,6 +328,22 @@ pub fn require_permission<T>(request: &tonic::Request<T>, permission: &str) -> R
     }
 }
 
+/// The permission staff need to review verification requests and their
+/// evidence (#837): minted by `auth` from the account's role.
+pub const VERIFICATION_REVIEW: &str = "verification:review";
+
+/// Requires a verified **staff** caller carrying `permission`, and returns it.
+/// Unlike the actor helpers, the mesh (no principal) is **refused**: a staff
+/// surface trusts no network position, only a token. Expose the method on the
+/// edge with [`permission`] so staff tooling reaches it with their token.
+pub fn require_staff<'a, T>(request: &'a tonic::Request<T>, permission: &str) -> Result<&'a EdgePrincipal, Status> {
+    match principal(request) {
+        Some(p) if p.has_permission(permission) => Ok(p),
+        Some(_) => Err(Status::permission_denied("missing permission")),
+        None => Err(Status::permission_denied("a staff token is required")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,5 +566,23 @@ mod tests {
         assert_eq!(p.account_id(), "acct-1");
         assert_eq!(p.session_id(), Some("s-1"));
         assert_eq!(p.profile_ids().collect::<Vec<_>>(), vec!["p-1"]);
+    }
+
+    /// #837: a staff surface takes a token carrying the permission, and refuses
+    /// the mesh (no principal) and an anonymous edge call alike.
+    #[test]
+    fn a_staff_surface_needs_the_permission_and_refuses_the_mesh() {
+        let staff = edge_request(principal_with(&[], &[VERIFICATION_REVIEW]));
+        assert_eq!(require_staff(&staff, VERIFICATION_REVIEW).unwrap().account_id(), "acct-1");
+
+        let member = edge_request(principal_with(&["p-1"], &[]));
+        assert_eq!(require_staff(&member, VERIFICATION_REVIEW).unwrap_err().code(), tonic::Code::PermissionDenied);
+
+        let mesh = tonic::Request::new(());
+        assert_eq!(require_staff(&mesh, VERIFICATION_REVIEW).unwrap_err().code(), tonic::Code::PermissionDenied);
+
+        let mut anonymous = tonic::Request::new(());
+        anonymous.extensions_mut().insert(EdgeAnonymous);
+        assert!(require_staff(&anonymous, VERIFICATION_REVIEW).is_err());
     }
 }

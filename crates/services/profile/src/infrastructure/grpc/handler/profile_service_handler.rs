@@ -480,11 +480,13 @@ where
         }))
     }
 
-    /// Staff queue (mesh-only, absent from the edge policy).
+    /// Staff queue: a staff token holding `verification:review` (#837); the
+    /// mesh is refused.
     pub async fn list_pending_verification_requests(
         &self,
         request: Request<proto::ListPendingVerificationRequestsRequest>,
     ) -> Result<Response<proto::ListPendingVerificationRequestsResponse>, Status> {
+        edge::require_staff(&request, edge::VERIFICATION_REVIEW)?;
         use crate::application::query::ListPendingVerificationsQuery;
         use crate::domain::entity::VerificationRequest;
         use crate::domain::value_object::ProfileId;
@@ -504,11 +506,13 @@ where
         }))
     }
 
-    /// Staff decision (mesh-only, absent from the edge policy).
+    /// Staff decision: a staff token holding `verification:review` (#837); the
+    /// mesh is refused.
     pub async fn decide_verification_request(
         &self,
         request: Request<proto::DecideVerificationRequestRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
+        let reviewer = edge::require_staff(&request, edge::VERIFICATION_REVIEW)?.account_id().to_owned();
         use crate::application::command::DecideVerificationCommand;
         let req = request.into_inner();
         let cmd = DecideVerificationCommand {
@@ -516,6 +520,7 @@ where
             approve:    req.approve,
             reason:     Some(req.reason).filter(|r| !r.is_empty()),
         };
+        tracing::info!(reviewer = %reviewer, profile_id = %req.profile_id, approve = req.approve, "verification decided");
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await
@@ -1026,5 +1031,65 @@ mod account_type_tests {
         assert!(!account_type_allowed(ProfileKind::Brand, true));
         assert!(!account_type_allowed(ProfileKind::Professional, true));
         assert!(account_type_allowed(ProfileKind::Personal, true));
+    }
+}
+
+/// #837: the staff verification queue and decision take a staff token holding
+/// `verification:review`; the mesh and a member token are refused.
+#[cfg(test)]
+mod staff_gate_tests {
+    use std::sync::Arc;
+
+    use cqrs::command::CommandBusBuilder;
+    use cqrs::query::QueryBusBuilder;
+    use tonic::Code;
+
+    use super::*;
+
+    fn with_principal<T>(message: T, permissions: &[&str]) -> Request<T> {
+        let raw: auth_context::OidcClaims =
+            serde_json::from_value(serde_json::json!({ "sub": "staff-1", "exp": 4_102_444_800_i64 })).unwrap();
+        let mut request = Request::new(message);
+        request.extensions_mut().insert(edge::EdgePrincipal::new(Arc::new(auth_context::CurrentPrincipal {
+            user_id: auth_context::PrincipalId::new("staff-1"),
+            tenant_id: None,
+            permissions: permissions.iter().map(|p| auth_context::Permission::new(*p)).collect(),
+            raw_claims: raw,
+        })));
+        request
+    }
+
+    #[tokio::test]
+    async fn the_review_rpcs_refuse_the_mesh_and_members() {
+        let handler = ProfileServiceHandler::new(
+            Arc::new(CommandBusBuilder::new().build()),
+            Arc::new(QueryBusBuilder::new().build()),
+        );
+        let list = || proto::ListPendingVerificationRequestsRequest { limit: 10, page_token: String::new() };
+        let decide = || proto::DecideVerificationRequestRequest {
+            profile_id: Uuid::now_v7().to_string(),
+            approve:    true,
+            reason:     String::new(),
+        };
+
+        for denied in [
+            handler.list_pending_verification_requests(Request::new(list())).await.unwrap_err(),
+            handler.list_pending_verification_requests(with_principal(list(), &["read:public"])).await.unwrap_err(),
+        ] {
+            assert_eq!(denied.code(), Code::PermissionDenied);
+        }
+        for denied in [
+            handler.decide_verification_request(Request::new(decide())).await.unwrap_err(),
+            handler.decide_verification_request(with_principal(decide(), &["read:public"])).await.unwrap_err(),
+        ] {
+            assert_eq!(denied.code(), Code::PermissionDenied);
+        }
+
+        // A reviewer gets through the gate (the empty bus then answers).
+        let reviewer = handler
+            .list_pending_verification_requests(with_principal(list(), &[edge::VERIFICATION_REVIEW]))
+            .await
+            .unwrap_err();
+        assert_ne!(reviewer.code(), Code::PermissionDenied);
     }
 }

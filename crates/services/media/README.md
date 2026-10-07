@@ -185,8 +185,13 @@ to `private/documents/{asset_id}`** — a prefix the CDN's origin access is not 
 `quarantine/`), keyed by the asset so identical bytes from two accounts never share an object — and marks
 it READY with **no rendition**. It is **never delivered**: `ResolveDelivery` answers NOT_FOUND and
 `BatchResolveDelivery` omits it; `GetAsset` shows it to its owner only (another account: NOT_FOUND; the
-mesh reads it); dedup never applies to it, either way. Staff review it through the mesh-only
-`GetPrivateDocumentUrl` (a signed GET valid `MEDIA_SIGNED_URL_TTL_SECS`). The GDPR export lists it with a
+mesh reads it); dedup never applies to it, either way. Staff review it through `GetPrivateDocumentUrl`
+(a signed GET valid `MEDIA_SIGNED_URL_TTL_SECS`), **staff only (#837)**: an edge token holding
+`verification:review` (content moderators, admins), exposed as an edge `permission` rule; the mesh and
+any other token get `PERMISSION_DENIED`. Every link is recorded on the audit plane **before** it is
+returned: a `data_access` event on `audit.v1.events` (`media.private_document.viewed`: the staff account,
+the document, its owner, when, the link's expiry); a failed record withholds the link (`MED-7004`, 503,
+retryable). Without a broker the view is only logged. The GDPR export lists it with a
 signed download. **Retention:** READY sets a backstop purge 90 days out; `ProfileVerificationDecided`
 (`profile.v1.events`, `media-profile-consumer`) moves it to the decision + `MEDIA_DOCUMENT_RETENTION_DAYS`
 (30), only for the requester's own documents; a sweeper (every `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS`)

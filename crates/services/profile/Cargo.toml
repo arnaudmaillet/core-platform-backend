@@ -62,6 +62,8 @@ fred   = { workspace = true }
 integration-profile = []
 
 [dev-dependencies]
+# A staff edge principal in the verification-review gate tests (#837).
+auth-context = { workspace = true }
 tokio = { workspace = true }
 # Wire contract test in the account-event consumer: decode events serialized by
 # account's own types, so a shape drift fails here.
