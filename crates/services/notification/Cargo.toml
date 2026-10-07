@@ -63,6 +63,8 @@ tokio = { workspace = true }
 social-graph = { workspace = true }
 # Wire contract test of the appeal worker against moderation's own events.
 moderation = { workspace = true }
+# Wire-contract test: supervision events as account serializes them (#670).
+account = { workspace = true }
 # Edge principals (the token's claims) in the integration suite.
 auth-context = { workspace = true }
 

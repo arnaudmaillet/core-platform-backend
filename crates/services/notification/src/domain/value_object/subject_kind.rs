@@ -9,6 +9,8 @@ pub enum SubjectKind {
     Profile,
     /// A moderation appeal (its outcome, #744).
     Appeal,
+    /// An account: the other side of a family supervision (#670).
+    Account,
 }
 
 impl SubjectKind {
@@ -18,6 +20,7 @@ impl SubjectKind {
             Self::Comment => 2,
             Self::Profile => 3,
             Self::Appeal  => 4,
+            Self::Account => 5,
         }
     }
 
@@ -28,6 +31,7 @@ impl SubjectKind {
             Self::Comment => "comment",
             Self::Profile => "profile",
             Self::Appeal  => "appeal",
+            Self::Account => "account",
         }
     }
 
@@ -37,6 +41,7 @@ impl SubjectKind {
             2 => Ok(Self::Comment),
             3 => Ok(Self::Profile),
             4 => Ok(Self::Appeal),
+            5 => Ok(Self::Account),
             n => Err(NotificationError::UnknownSubjectKind { kind: n.to_string() }),
         }
     }

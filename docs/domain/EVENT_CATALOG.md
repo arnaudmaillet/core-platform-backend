@@ -27,7 +27,7 @@ producer's `DOMAIN.md §8`.
 
 | Topic | Producer | Consumers |
 |---|---|---|
-| `account.v1.events` | `account` | `audit`, `auth`, `profile`, `media` |
+| `account.v1.events` | `account` | `audit`, `auth`, `profile`, `media`, `notification` |
 | `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `timeline`, `media`, `comment`, `chat` |
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |
@@ -89,6 +89,7 @@ producer's `DOMAIN.md §8`.
 | `gdpr_data_export_requested` | the right to access/portability was invoked | user/DPO request | export fulfilment (downstream) |
 | `date_of_birth_set` | the holder recorded a date of birth (≥ the minimum age; the date itself stays in account) | `CreateAccount` with one / `SetDateOfBirth` | none (the age bracket travels in the edge token's `age` claim) |
 | `consents_updated` | the holder gave or withdrew consents (Art. 7), effective changes only, with the policy version | `UpdateConsents` changes something | `audit` (Consent — the tamper-evident copy of `account_consent_history`) |
+| `supervision_started` / `supervision_ended` | a parent and a teen paired / their supervision ended (#670; `account_id` = the teen, `supervisor_id`, both sides' profile ids; `ended_by`: `by_teen`, `by_supervisor`, `came_of_age`, `account_deleted`) | an invite is accepted / either side ends it, the teen turns 18 (sweep), an account is erased (janitor) | `notification` (`SupervisionNotificationWorker`: the side(s) that must know are told — both at the start, the other side when one ends it, both at 18 or on erasure); every other consumer skips them |
 
 ## Authentication — `auth.v1.events` (producer: `auth`)
 

@@ -20,6 +20,8 @@ impl NotificationKind {
             Self::Follow => Some(PushCategory::NewFollowers),
             Self::FollowRequest | Self::FollowAccepted => Some(PushCategory::FollowRequests),
             Self::AppealUpheld | Self::AppealOverturned => None,
+            // Feed only: no preference category covers supervision notices.
+            Self::SupervisionStarted | Self::SupervisionEnded | Self::SupervisionCameOfAge => None,
         }
     }
 
@@ -35,6 +37,9 @@ impl NotificationKind {
             Self::FollowAccepted => "NTF_PUSH_FOLLOW_ACCEPTED",
             Self::AppealUpheld => "NTF_PUSH_APPEAL_UPHELD",
             Self::AppealOverturned => "NTF_PUSH_APPEAL_OVERTURNED",
+            Self::SupervisionStarted => "NTF_PUSH_SUPERVISION_STARTED",
+            Self::SupervisionEnded => "NTF_PUSH_SUPERVISION_ENDED",
+            Self::SupervisionCameOfAge => "NTF_PUSH_SUPERVISION_CAME_OF_AGE",
         }
     }
 }

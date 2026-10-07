@@ -129,6 +129,8 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     // follows, follow requests and their approval (#755)
     ("social-graph.followed", "notification"),
     ("social-graph.follow_requested", "notification"),
+    // family supervision notices (#670)
+    ("account.v1.events", "notification"),
     // chat messages' pushes (#654)
     ("chat.message.push", "notification"),
     ("engagement.reactions", "engagement"),

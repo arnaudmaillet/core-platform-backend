@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: d4967f519ee185f9ae5df7550f4498f00f07c37146ab681340e683da970084f2
+  source_sha256: 9be98fa359d43c6fbe0425ba55359294782aaf606c346c16c6a2b92eb98d762b
   translated_at: 2026-10-08
   status: complete
 ---
@@ -40,7 +40,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 
 | Topic | Producer | Consumers |
 |---|---|---|
-| `account.v1.events` | `account` | `audit`, `auth`, `profile`, `media` |
+| `account.v1.events` | `account` | `audit`, `auth`, `profile`, `media`, `notification` |
 | `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `timeline`, `media`, `comment`, `chat` |
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |
@@ -102,6 +102,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `gdpr_data_export_requested` | le droit d'accès/portabilité a été invoqué | demande utilisateur/DPO | exécution de l'export (en aval) |
 | `date_of_birth_set` | le titulaire a enregistré une date de naissance (≥ l'âge minimum ; la date reste dans account) | `CreateAccount` avec une date / `SetDateOfBirth` | aucun (la tranche d'âge voyage dans le claim `age` du jeton edge) |
 | `consents_updated` | le titulaire a donné ou retiré des consentements (art. 7), changements effectifs seulement, avec la version de la politique | `UpdateConsents` change quelque chose | `audit` (Consent — la copie inviolable de `account_consent_history`) |
+| `supervision_started` / `supervision_ended` | un parent et un ado se sont appairés / leur supervision a pris fin (#670 ; `account_id` = l'ado, `supervisor_id`, les ids de profil des deux côtés ; `ended_by` : `by_teen`, `by_supervisor`, `came_of_age`, `account_deleted`) | une invitation est acceptée / l'un des côtés y met fin, l'ado a 18 ans (passage périodique), un compte est effacé (janitor) | `notification` (`SupervisionNotificationWorker` : le ou les côtés concernés sont prévenus — les deux au début, l'autre côté quand l'un y met fin, les deux à 18 ans ou à l'effacement) ; les autres consommateurs les ignorent |
 
 ## Authentification — `auth.v1.events` (producteur : `auth`)
 
