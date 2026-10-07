@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 71e297f289fbd4c814f30fc813c4d20df0443db5831dbb2e280fa9529d8184e3
+  source_sha256: 0e2b63c159a26b07413b2e2fbda4477c507771c1c3981fe104a335dcfd631c61
   translated_at: 2026-10-08
   status: complete
 ---
@@ -328,7 +328,9 @@ message qu'aucun effacement n'atteint sur le broker, donc il expire vite. `chat.
 corps complet de chaque message) et son `.dlq` sont gardés **2 jours** pour la même raison. C'est la
 fenêtre de reprise de la projection d'inbox : un `InboxWorker` arrêté ou en retard de plus de 2 jours
 perd les mises à jour plus anciennes (les inbox montrent une dernière activité plus ancienne ; les
-messages eux-mêmes restent dans le journal de chat).
+messages eux-mêmes restent dans le journal de chat). Remettre `chat-inbox` à l'offset le plus ancien
+ne rejoue donc que 2 jours : reconstruire l'inbox au-delà doit lire le journal de chat dans Scylla,
+pas le topic.
 - `MuteConversation(conversation_id, member_id, muted, until_ms)` (edge `authenticated`, lié à
   `member_id`) : met en sourdine les push de la conversation pour ce membre jusqu'à `until_ms` (dans
   l'année) ou, avec `0`, jusqu'à ce qu'il la lève ; `muted = false` la lève. Stockée sur la ligne du

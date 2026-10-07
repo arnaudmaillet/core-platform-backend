@@ -303,6 +303,8 @@ text that no erasure reaches on the broker, so it ages out fast. `chat.message.s
 message's full body) and its `.dlq` are kept **2 days** for the same reason. That is the inbox
 projection's recovery window: an `InboxWorker` down or lagging more than 2 days loses the older
 updates (the inboxes show an older last activity; the messages themselves stay in chat's log).
+Resetting `chat-inbox` to the earliest offset therefore replays only 2 days: rebuilding the inbox
+beyond that has to read chat's log in Scylla, not the topic.
 - `MuteConversation(conversation_id, member_id, muted, until_ms)` (edge `authenticated`, bound to
   `member_id`): mutes the member's pushes from the conversation until `until_ms` (within a year) or,
   with `0`, until they unmute; `muted = false` unmutes. Stored on the roster row
