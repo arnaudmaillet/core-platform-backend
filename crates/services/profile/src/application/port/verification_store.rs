@@ -13,6 +13,9 @@ pub trait VerificationStore: Send + Sync + 'static {
     /// Stores the request; a pending one joins the queue, a decided one leaves it.
     async fn put(&self, profile: &ProfileId, request: &VerificationRequest) -> Result<(), ProfileError>;
 
+    /// Forgets the profile's request, out of the queue too (GDPR erasure, #777).
+    async fn remove(&self, profile: &ProfileId) -> Result<(), ProfileError>;
+
     /// The pending requests, oldest first. The page token is opaque.
     async fn pending(&self, limit: i32, page_token: Option<&str>) -> Result<(Vec<ProfileId>, Option<String>), ProfileError>;
 }

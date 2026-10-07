@@ -12,6 +12,7 @@ pub mod profile_restored;
 pub mod profile_updated;
 pub mod profile_verified;
 pub mod tier_changed;
+pub mod verification_decided;
 pub mod visibility_changed;
 
 pub use comment_filters_changed::CommentFiltersChanged;
@@ -28,6 +29,7 @@ pub use profile_restored::ProfileRestored;
 pub use profile_updated::ProfileUpdated;
 pub use profile_verified::ProfileVerified;
 pub use tier_changed::TierChanged;
+pub use verification_decided::VerificationDecided;
 pub use visibility_changed::VisibilityChanged;
 
 #[derive(Debug, Clone)]
@@ -47,4 +49,5 @@ pub enum DomainEvent {
     CommentFiltersChanged(CommentFiltersChanged),
     TabSettingsChanged(TabSettingsChanged),
     VisibilityChanged(VisibilityChanged),
+    VerificationDecided(VerificationDecided),
 }

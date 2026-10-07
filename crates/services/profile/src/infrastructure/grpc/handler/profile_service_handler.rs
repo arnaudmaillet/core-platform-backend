@@ -448,7 +448,12 @@ where
         let category = verification_kind_i32_to_str(req.category)
             .and_then(|k| VerificationKind::try_from(k).ok())
             .ok_or_else(|| Status::invalid_argument("unknown category"))?;
-        let cmd = RequestVerificationCommand { profile_id: req.profile_id.clone(), category, documents: req.documents };
+        let cmd = RequestVerificationCommand {
+            profile_id: req.profile_id.clone(),
+            category,
+            documents: req.documents,
+            private_documents: req.private_document_ids,
+        };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await
@@ -951,6 +956,7 @@ fn verification_to_proto(profile_id: &str, r: crate::domain::entity::Verificatio
         reason:          r.reason.unwrap_or_default(),
         submitted_at_ms: r.submitted_at.timestamp_millis(),
         decided_at_ms:   r.decided_at.map(|t| t.timestamp_millis()).unwrap_or_default(),
+        private_document_ids: r.private_documents,
     }
 }
 

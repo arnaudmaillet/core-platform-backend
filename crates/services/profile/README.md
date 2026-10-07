@@ -52,6 +52,9 @@ gRPC ─► ProfileServiceHandler ─► Command bus            Query bus ─►
    Redis cache-aside: profile:v1:{id} TTL 300s · handle:v1:{handle} TTL 600s · account:profiles:v1:{id} TTL 120s
 
    Kafka account.v1.events ─► account_suspended / account_deactivated / account_deleted → hide every profile of the account · account_activated → restore the ones the suspension or deactivation hid
+                            account_deleted also erases the account's verification requests (#777)
+
+   gRPC media (mesh) ─► GetAsset: a verification request's private documents are the requester's own, READY (#777)
 ```
 
 **Cache-key versioning.** All keys carry a `v1:` prefix — bumping the suffix performs a zero-downtime
@@ -135,7 +138,7 @@ service ProfileService {
   rpc SetCommentFilters(SetCommentFiltersRequest) returns (CommandResponse); // #660 hidden words (≤ 200, normalised) + offensive filter (on by default); owner-only on the view; comment applies them
   rpc SetDiscoverySettings(SetDiscoverySettingsRequest) returns (CommandResponse); // #661 activity status, read receipts, findable by phone / email / handle search / QR / suggestions (partial; owner-only on the view); teens start unfindable by phone, email, suggestions; search applies by_handle_search; `in_suggestions` cannot be turned on unless the token says 18+ (PRF-9001: a teen is never suggested); social-graph projects it for SuggestProfiles, account reads by_phone / by_email for FindProfilesByContacts
   rpc SetAccountType(SetAccountTypeRequest) returns (CommandResponse); // #668 personal / professional (creator) / brand (business) + a brand's public contact card; bots stay bots; creator and business are 18+ (a 13–17 token gets FAILED_PRECONDITION)
-  rpc RequestVerification(RequestVerificationRequest) returns (CommandResponse); // #668 owner: category + 1–5 documents → staff queue
+  rpc RequestVerification(RequestVerificationRequest) returns (CommandResponse); // #668 owner: category + 1–5 pieces of evidence (web links and/or private documents, #777) → staff queue
   rpc GetVerificationRequest(GetVerificationRequestRequest) returns (GetVerificationRequestResponse); // #668 owner: pending / approved / rejected (+ reason)
   rpc ListPendingVerificationRequests(ListPendingVerificationRequestsRequest) returns (ListPendingVerificationRequestsResponse); // staff, mesh-only
   rpc DecideVerificationRequest(DecideVerificationRequestRequest) returns (CommandResponse); // staff, mesh-only: approve verifies the profile; reject needs a reason
@@ -189,6 +192,8 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 | PRF-5001 | `ProfileAlreadyVerified` | 409 | No |
 | PRF-5002 | `VerificationPending` (a request is already under review) | 409 | No |
 | PRF-5003 | `NoPendingVerification` (nothing to decide) | 409 | No |
+| PRF-5004 | `VerificationDocumentInvalid` (a private document is not the requester's own ready one) | 422 | No |
+| PRF-5005 | `MediaUnavailable` (media could not check a private document) | 503 | **Yes** |
 | PRF-9001–9010 | domain / parse / validation | 422 | No |
 | SDB-* / RDB-* | storage (delegated) | varies | varies |
 
@@ -200,7 +205,7 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 
 | Topic | Trigger | Key | Consumers |
 |---|---|---|---|
-| `profile.v1.events` | every profile lifecycle mutation — `ProfileCreated` / `ProfileUpdated` / `HandleChanged` / `ProfileVerified` / `ProfileHidden` / `ProfileRestored` / `ProfileDeleted` / `ProfileTierChanged` / `ProfileVisibilityChanged` (`public`/`private`; `SetVisibility` emits only this) | `profile_id` | `search` (profile indexing), `post` (author-tier denormalization), `social-graph` (audience projection for the access check) |
+| `profile.v1.events` | every profile lifecycle mutation — `ProfileCreated` / `ProfileUpdated` / `HandleChanged` / `ProfileVerified` / `ProfileHidden` / `ProfileRestored` / `ProfileDeleted` / `ProfileTierChanged` / `ProfileVisibilityChanged` (`public`/`private`; `SetVisibility` emits only this) / `ProfileVerificationDecided` (staff decided a verification request: `account_id`, `approved`, `document_asset_ids` = its private documents, `decided_at_ms`; #777) | `profile_id` | `search` (profile indexing), `post` (author-tier denormalization), `social-graph` (audience projection for the access check), `media` (`ProfileVerificationDecided`: the private documents are purged 30 days after the decision) |
 
 > **Wire contract:** one versioned topic, internally tagged on `type` (the moderation-service convention), keyed by `profile_id` for per-profile ordering. Events are **thin** (ids + timestamps, no display content) — a consumer that needs the full profile hydrates it via `GetProfileById`. Each command handler drains the aggregate's pending events and publishes them **after** the durable write (durable-first; a no-op publisher backs broker-free composition).
 
@@ -208,7 +213,7 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
-| `account.v1.events` | `profile-account-events` | account's `DomainEvent` (tagged on `type`, snake_case): `account_suspended` / `account_deactivated` / `account_deleted` → hide **every** profile of the account (`HideAccountProfiles`, the event type is the masking reason); `account_activated` → restore the profiles the suspension or deactivation hid (`RestoreAccountProfiles`; a content-policy hide stays). Idempotent per profile, so a redelivery finishes a partial walk. Other types = no-op commit | DLQ `account.v1.events.dlq` |
+| `account.v1.events` | `profile-account-events` | account's `DomainEvent` (tagged on `type`, snake_case): `account_suspended` / `account_deactivated` / `account_deleted` → hide **every** profile of the account (`HideAccountProfiles`, the event type is the masking reason); `account_activated` → restore the profiles the suspension or deactivation hid (`RestoreAccountProfiles`; a content-policy hide stays). Idempotent per profile, so a redelivery finishes a partial walk. `account_deleted` then erases the account's verification requests (`EraseAccountVerifications`, #777; idempotent). Other types = no-op commit | DLQ `account.v1.events.dlq` |
 | `social-graph.author_tier_changed` | `profile-author-tier` | denormalize the author tier onto the profile (`SetProfileTier`) → re-emit on `profile.v1.events` (`ProfileTierChanged`); idempotent on unchanged tier | DLQ `social-graph.author_tier_changed.dlq` |
 
 > **Runtime contract (mandatory):** the account-event consumer runs under `run_consumer` — manual
@@ -226,6 +231,7 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 | Redis unavailable / cold | latency rises | **Soft** — all reads fall through to Scylla (Fast profile) | verify cache hit ratio; usually self-heals |
 | Handle LWT race | `PRF-1002` to the losing writer | correct serialization at storage layer | none — surface to user to pick another handle |
 | Account-event consumer lag | profiles not masked on suspend/delete | retries within budget; offset uncommitted | check consumer lag; re-dispatch masking if needed |
+| media unreachable (`PROFILE_MEDIA_GRPC_ENDPOINT`) | a verification request with private documents fails | `PRF-5005` (retryable); links-only requests unaffected; unset → private documents refused | check media / the profile → media NetworkPolicy |
 
 **Backpressure & limits.** Writes use the Scylla **Strict** profile (`LocalQuorum`); reads use **Fast**
 (`LocalOne` + speculative retry firing 1 extra request after 20 ms) to bound tail latency.
@@ -276,6 +282,8 @@ async fn main() -> anyhow::Result<()> {
 | `KAFKA_BROKERS` | **Yes** | `127.0.0.1:9092` | Kafka brokers. |
 | `KAFKA_CONSUMER_GROUP` | No | `profile-service` | account-event consumer group. |
 | `PROFILE_GRPC_ADDR` | No | `0.0.0.0:50052` | gRPC bind address. |
+| `PROFILE_MEDIA_GRPC_ENDPOINT` | No | — | media's mesh endpoint: checks a verification request's private documents (#777). Unset: requests take links only. |
+| `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS` | No | `500` / `1000` | deadlines of that call. |
 
 > Full `SCYLLA_*` / `REDIS_*` / `KAFKA_*` tuning is documented in the shared storage/transport crates.
 > The `[cache]` TTL profiles are consumed from `infrastructure.toml`, not env.

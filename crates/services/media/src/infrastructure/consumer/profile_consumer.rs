@@ -97,4 +97,30 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "type": "ProfileUpdated", "profile_id": "x" })).unwrap();
         assert_eq!(outcome(&other), Outcome::Skip);
     }
+
+    /// The decision as profile serializes it (its own types): a shape drift
+    /// fails here.
+    #[test]
+    fn reads_profiles_own_wire() {
+        use profile::domain::event::{DomainEvent, VerificationDecided};
+        use profile::domain::value_object::{AccountId, ProfileId};
+        use profile::infrastructure::publisher::wire::ProfileEventWire;
+
+        let (account, doc) = (uuid::Uuid::now_v7(), AssetId::new());
+        let decided_at = chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap();
+        let event = DomainEvent::VerificationDecided(VerificationDecided {
+            profile_id:        ProfileId::new(),
+            account_id:        AccountId::from(account),
+            approved:          true,
+            private_documents: vec![doc.as_str()],
+            occurred_at:       decided_at,
+            correlation_id:    uuid::Uuid::now_v7(),
+        });
+        let json = serde_json::to_value(ProfileEventWire::from(&event)).unwrap();
+        let read: ProfileEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            outcome(&read),
+            Outcome::Schedule { owner: OwnerId::from_uuid(account), documents: vec![doc], decided_at_ms: 1_700_000_000_000 }
+        );
+    }
 }

@@ -17,6 +17,8 @@ use thiserror::Error;
 /// | PRF-5001 | ProfileAlreadyVerified   | 409  | Low      | No        |
 /// | PRF-5002 | VerificationPending      | 409  | Low      | No        |
 /// | PRF-5003 | NoPendingVerification    | 409  | Low      | No        |
+/// | PRF-5004 | VerificationDocumentInvalid | 422 | Low     | No        |
+/// | PRF-5005 | MediaUnavailable         | 503  | Medium   | **Yes**   |
 /// | PRF-9001 | DomainViolation          | 422  | Medium   | No        |
 /// | PRF-9002 | InvalidProfileId         | 422  | Low      | No        |
 /// | PRF-9003 | InvalidHandle            | 422  | Low      | No        |
@@ -79,6 +81,15 @@ pub enum ProfileError {
     #[error("no verification request is pending for this profile")]
     NoPendingVerification,
 
+    /// A private document named by a verification request is not one of the
+    /// requester's ready private documents (#777).
+    #[error("'{id}' is not one of your private documents")]
+    VerificationDocumentInvalid { id: String },
+
+    /// media could not check a private document (#777).
+    #[error("media is unavailable: {reason}")]
+    MediaUnavailable { reason: String },
+
     // ── Domain invariants & parse errors (PRF-9xxx) ───────────────────────────
 
     #[error("domain invariant violated on '{field}': {message}")]
@@ -131,6 +142,8 @@ impl AppError for ProfileError {
             ProfileError::ProfileAlreadyVerified => "PRF-5001",
             ProfileError::VerificationPending    => "PRF-5002",
             ProfileError::NoPendingVerification  => "PRF-5003",
+            ProfileError::VerificationDocumentInvalid { .. } => "PRF-5004",
+            ProfileError::MediaUnavailable { .. } => "PRF-5005",
 
             ProfileError::DomainViolation { .. }  => "PRF-9001",
             ProfileError::InvalidProfileId(_)     => "PRF-9002",
@@ -160,6 +173,8 @@ impl AppError for ProfileError {
             | ProfileError::VerificationPending
             | ProfileError::NoPendingVerification => StatusCode::CONFLICT,
 
+            ProfileError::MediaUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         }
     }
@@ -185,6 +200,7 @@ impl AppError for ProfileError {
             ProfileError::Storage(e)             => e.is_retryable(),
             ProfileError::Cache(e)               => e.is_retryable(),
             ProfileError::ConcurrentModification => true,
+            ProfileError::MediaUnavailable { .. } => true,
             _                                    => false,
         }
     }
@@ -213,6 +229,8 @@ impl AppError for ProfileError {
             ProfileError::ProfileAlreadyVerified        => "This profile is already verified.",
             ProfileError::VerificationPending           => "A verification request is already under review.",
             ProfileError::NoPendingVerification         => "There is no verification request under review.",
+            ProfileError::VerificationDocumentInvalid { .. } => "A document is not one of your uploaded private documents.",
+            ProfileError::MediaUnavailable { .. }       => "Your documents cannot be checked right now. Please retry.",
             ProfileError::TooManyCustomLinks { .. }     => "You may have at most 5 custom links.",
             _                                           => "A domain constraint was violated.",
         }

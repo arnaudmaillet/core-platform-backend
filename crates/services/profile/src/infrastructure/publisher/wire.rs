@@ -115,6 +115,15 @@ pub enum ProfileEventWire {
         show_places: bool,
         occurred_at_ms: i64,
     },
+    /// A verification request was decided (#668). `document_asset_ids`: the
+    /// requester's private documents (#777) — media purges them 30 days later.
+    ProfileVerificationDecided {
+        profile_id: String,
+        account_id: String,
+        approved: bool,
+        document_asset_ids: Vec<String>,
+        decided_at_ms: i64,
+    },
     /// The feed controls (#662): timeline projects `non_personalized` (stops
     /// learning and erases the interest tags, stops ranking For You).
     /// `sensitive_content` is `less` | `standard`.
@@ -154,6 +163,7 @@ impl ProfileEventWire {
             | ProfileEventWire::ProfileLocationSettingsChanged { profile_id, .. }
             | ProfileEventWire::ProfileDiscoverySettingsChanged { profile_id, .. }
             | ProfileEventWire::ProfileFeedSettingsChanged { profile_id, .. }
+            | ProfileEventWire::ProfileVerificationDecided { profile_id, .. }
             | ProfileEventWire::ProfileCommentFiltersChanged { profile_id, .. }
             | ProfileEventWire::ProfileTabSettingsChanged { profile_id, .. } => profile_id,
         }
@@ -177,6 +187,7 @@ impl ProfileEventWire {
             ProfileEventWire::ProfileLocationSettingsChanged { .. } => "ProfileLocationSettingsChanged",
             ProfileEventWire::ProfileDiscoverySettingsChanged { .. } => "ProfileDiscoverySettingsChanged",
             ProfileEventWire::ProfileFeedSettingsChanged { .. } => "ProfileFeedSettingsChanged",
+            ProfileEventWire::ProfileVerificationDecided { .. } => "ProfileVerificationDecided",
             ProfileEventWire::ProfileCommentFiltersChanged { .. } => "ProfileCommentFiltersChanged",
             ProfileEventWire::ProfileTabSettingsChanged { .. } => "ProfileTabSettingsChanged",
         }
@@ -258,6 +269,13 @@ impl From<&DomainEvent> for ProfileEventWire {
                 hidden_words: e.filters.hidden_words.clone(),
                 filter_offensive: e.filters.filter_offensive,
                 occurred_at_ms: e.occurred_at.timestamp_millis(),
+            },
+            DomainEvent::VerificationDecided(e) => ProfileEventWire::ProfileVerificationDecided {
+                profile_id: e.profile_id.to_string(),
+                account_id: e.account_id.to_string(),
+                approved: e.approved,
+                document_asset_ids: e.private_documents.clone(),
+                decided_at_ms: e.occurred_at.timestamp_millis(),
             },
             DomainEvent::FeedSettingsChanged(e) => ProfileEventWire::ProfileFeedSettingsChanged {
                 profile_id: e.profile_id.to_string(),

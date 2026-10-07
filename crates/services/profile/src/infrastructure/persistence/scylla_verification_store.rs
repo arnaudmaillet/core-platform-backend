@@ -105,6 +105,18 @@ impl VerificationStore for ScyllaVerificationStore {
         }
     }
 
+    async fn remove(&self, profile: &ProfileId) -> Result<(), ProfileError> {
+        if let Some(request) = self.get(profile).await? {
+            let at = CqlTimestamp(request.submitted_at.timestamp_millis());
+            self.exec(
+                "DELETE FROM profile.verification_queue WHERE bucket = ? AND submitted_at = ? AND profile_id = ?",
+                (PENDING, at, profile.as_uuid()),
+            )
+            .await?;
+        }
+        self.exec("DELETE FROM profile.verification_requests WHERE profile_id = ?", (profile.as_uuid(),)).await
+    }
+
     async fn pending(&self, limit: i32, page_token: Option<&str>) -> Result<(Vec<ProfileId>, Option<String>), ProfileError> {
         #[derive(DeserializeRow)]
         struct Row {

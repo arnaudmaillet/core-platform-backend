@@ -234,7 +234,8 @@ async fn account_type_and_a_verification_request_through_review() {
     let ask = || RequestVerificationCommand {
         profile_id: profile.id.clone(),
         category:   VerificationKind::Business,
-        documents:  vec!["media/kbis.pdf".into()],
+        documents:  vec!["https://bakery.fr/kbis".into()],
+        private_documents: Vec::new(),
     };
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), ask())).await.expect("request");
     assert!(h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), ask())).await.is_err(), "already pending");
@@ -265,6 +266,72 @@ async fn account_type_and_a_verification_request_through_review() {
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), decide(true, None))).await.expect("approve");
     assert!(h.get_by_id(&profile.id).await.unwrap().verified, "the outcome reaches the profile");
     assert!(h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), ask())).await.is_err(), "already verified");
+}
+
+/// #777: private documents are checked with media, the decision is announced
+/// with them (media starts their retention), and a deleted account's requests
+/// are erased.
+#[tokio::test]
+async fn verification_evidence_is_checked_announced_and_erased_with_the_account() {
+    use cqrs::QueryBus;
+    use profile::application::command::{
+        DecideVerificationCommand, EraseAccountVerificationsCommand, RequestVerificationCommand,
+    };
+    use profile::application::query::GetVerificationRequestQuery;
+    use profile::domain::entity::VerificationRequest;
+    use profile::domain::value_object::VerificationKind;
+
+    let h = TestHarness::start().await;
+    let (account, handle) = (harness::random_account_id(), harness::random_handle());
+    h.create(&account, &handle, "Alice").await;
+    let profile = h.get_by_handle(&handle).await.expect("created");
+    let ask = |documents: Vec<String>, private_documents: Vec<String>| RequestVerificationCommand {
+        profile_id: profile.id.clone(),
+        category: VerificationKind::Business,
+        documents,
+        private_documents,
+    };
+    let get = || async {
+        let found: Option<VerificationRequest> = h
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), GetVerificationRequestQuery { profile_id: profile.id.clone() }))
+            .await
+            .unwrap();
+        found
+    };
+
+    // Someone else's document, a link without a scheme: refused, nothing stored.
+    let foreign = h.documents.upload(&harness::random_account_id());
+    let refusals = [
+        (vec![], vec![foreign], "is not one of your private documents"),
+        (vec!["alice.example".to_owned()], vec![], "http(s) URL"),
+    ];
+    for (links, docs, why) in refusals {
+        let err = h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), ask(links, docs))).await.unwrap_err();
+        assert!(err.to_string().contains(why), "{err}");
+    }
+    assert!(get().await.is_none());
+
+    // The owner's own document plus a link.
+    let mine = h.documents.upload(&account);
+    let cmd = ask(vec!["https://alice.example/press".into()], vec![mine.clone()]);
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("request");
+    assert_eq!(get().await.expect("pending").private_documents, vec![mine.clone()]);
+
+    let decide = DecideVerificationCommand { profile_id: profile.id.clone(), approve: false, reason: Some("Unreadable".into()) };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), decide)).await.expect("reject");
+    let decided = h.publisher.decided();
+    assert_eq!(decided.len(), 1);
+    assert_eq!(decided[0].account_id.to_string(), account);
+    assert!(!decided[0].approved);
+    assert_eq!(decided[0].private_documents, vec![mine]);
+
+    // `account_deleted`: the request goes with the account (twice: idempotent).
+    for _ in 0..2 {
+        let erase = EraseAccountVerificationsCommand { account_id: account.clone() };
+        h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), erase)).await.expect("erase");
+    }
+    assert!(get().await.is_none(), "erased");
 }
 
 #[tokio::test]

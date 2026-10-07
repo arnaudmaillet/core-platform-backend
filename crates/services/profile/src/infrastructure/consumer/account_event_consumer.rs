@@ -11,7 +11,9 @@ use transport::kafka::consumer::{
 };
 use transport::kafka::producer::KafkaProducerHandle;
 
-use crate::application::command::{HideAccountProfilesCommand, RestoreAccountProfilesCommand};
+use crate::application::command::{
+    EraseAccountVerificationsCommand, HideAccountProfilesCommand, RestoreAccountProfilesCommand,
+};
 
 /// Kafka event payload published by the account service on `account.v1.events`:
 /// account's `DomainEvent`, internally tagged on `type`, snake_case
@@ -79,7 +81,16 @@ async fn process_event<CB: CommandBus>(command_bus: &CB, event: &AccountEvent) -
                 masking_reason:    kind.to_owned(),
                 suspension_reason: event.reason.clone(),
             };
-            command_bus.dispatch(Envelope::new(correlation_id, cmd)).await
+            let hidden = command_bus.dispatch(Envelope::new(correlation_id, cmd)).await;
+            // GDPR erasure (#777): a deleted account's verification requests go
+            // with it (both commands are idempotent, so a retry replays both).
+            match (hidden, kind) {
+                (Ok(()), "account_deleted") => {
+                    let erase = EraseAccountVerificationsCommand { account_id: event.account_id.clone() };
+                    command_bus.dispatch(Envelope::new(correlation_id, erase)).await
+                }
+                (outcome, _) => outcome,
+            }
         }
 
         "account_activated" => {

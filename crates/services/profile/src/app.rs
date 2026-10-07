@@ -33,10 +33,12 @@ use crate::application::command::{
     SetLocationSettingsHandler, SetVisibilityCommand, SetVisibilityHandler, UpdateAvatarCommand, UpdateAvatarHandler,
     UpdateBannerCommand, UpdateBannerHandler, UpdateProfileCommand, UpdateProfileHandler,
     VerifyProfileCommand, VerifyProfileHandler,
-    DecideVerificationCommand, DecideVerificationHandler, RequestVerificationCommand,
-    RequestVerificationHandler, SetAccountTypeCommand, SetAccountTypeHandler,
+    DecideVerificationCommand, DecideVerificationHandler, EraseAccountVerificationsCommand,
+    EraseAccountVerificationsHandler, RequestVerificationCommand, RequestVerificationHandler, SetAccountTypeCommand, SetAccountTypeHandler,
 };
-use crate::application::port::{EventPublisher, ProfileCache, ProfileRepository, VerificationStore};
+use crate::application::port::{
+    EventPublisher, PrivateDocuments, ProfileCache, ProfileRepository, VerificationStore,
+};
 use crate::application::query::{
     CheckHandleAvailabilityHandler, CheckHandleAvailabilityQuery, GetProfileByHandleHandler,
     GetProfileByHandleQuery, GetProfileByIdHandler, GetProfileByIdQuery,
@@ -75,10 +77,14 @@ impl App {
     /// `cache_registry` carries this service's externalized cache-TTL profiles
     /// (resolved from `infrastructure.toml`); the caller owns the registry and its
     /// hot-reload watcher, so a TTL change reaches the live cache with no rebuild.
+    ///
+    /// `documents` checks a verification request's private documents with media
+    /// (#777); `None`: requests carry links only.
     pub async fn build(
         backends: Backends,
         cache_registry: Arc<CacheRegistry>,
         publisher: Arc<dyn EventPublisher>,
+        documents: Option<Arc<dyn PrivateDocuments>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let Backends { scylla, redis } = backends;
 
@@ -119,6 +125,11 @@ impl App {
                     publisher: Arc::clone(&publisher),
                 })?
                 .register::<RequestVerificationCommand, _>(RequestVerificationHandler {
+                    repo:          Arc::clone(&repository),
+                    verifications: Arc::clone(&verifications),
+                    documents,
+                })?
+                .register::<EraseAccountVerificationsCommand, _>(EraseAccountVerificationsHandler {
                     repo:          Arc::clone(&repository),
                     verifications: Arc::clone(&verifications),
                 })?

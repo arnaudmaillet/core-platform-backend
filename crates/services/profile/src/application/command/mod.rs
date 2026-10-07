@@ -39,6 +39,7 @@ pub use update_banner::{UpdateBannerCommand, UpdateBannerHandler};
 pub use update_profile::{UpdateProfileCommand, UpdateProfileHandler};
 pub use verify_profile::{VerifyProfileCommand, VerifyProfileHandler};
 pub use account_type::{
-    DecideVerificationCommand, DecideVerificationHandler, RequestVerificationCommand, RequestVerificationHandler,
+    DecideVerificationCommand, DecideVerificationHandler, EraseAccountVerificationsCommand,
+    EraseAccountVerificationsHandler, RequestVerificationCommand, RequestVerificationHandler,
     SetAccountTypeCommand, SetAccountTypeHandler,
 };

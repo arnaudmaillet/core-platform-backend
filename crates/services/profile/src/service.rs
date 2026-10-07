@@ -114,7 +114,7 @@ impl Service for ProfileService {
             .context("build profile event producer")?;
         let publisher: Arc<dyn EventPublisher> = Arc::new(KafkaProfileEventPublisher::new(producer));
 
-        let app = App::build(backends, cache_registry, publisher)
+        let app = App::build(backends, cache_registry, publisher, private_documents_from_env()?)
             .await
             .map_err(|e| anyhow::anyhow!("profile app build: {e}"))?;
 
@@ -219,3 +219,23 @@ fn build_author_tier_consumer(
         .context("build author tier dead-letter producer")?;
     Ok((consumer, producer))
 }
+/// Verification evidence checks (#777), asked of media at
+/// `PROFILE_MEDIA_GRPC_ENDPOINT` (lazily connected; request / connect deadlines
+/// `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS`, 500 ms /
+/// 1 s). Unset: a verification request carries links only.
+fn private_documents_from_env() -> anyhow::Result<Option<Arc<dyn crate::application::port::PrivateDocuments>>> {
+    let Some(endpoint) = std::env::var("PROFILE_MEDIA_GRPC_ENDPOINT").ok().filter(|v| !v.trim().is_empty()) else {
+        tracing::warn!("PROFILE_MEDIA_GRPC_ENDPOINT unset: verification requests take links only");
+        return Ok(None);
+    };
+    let ms = |key: &str, default: u64| {
+        Duration::from_millis(std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default))
+    };
+    let channel = tonic::transport::Channel::from_shared(endpoint)
+        .map_err(|e| anyhow::anyhow!("invalid PROFILE_MEDIA_GRPC_ENDPOINT: {e}"))?
+        .timeout(ms("PROFILE_MEDIA_RPC_TIMEOUT_MS", 500))
+        .connect_timeout(ms("PROFILE_MEDIA_CONNECT_TIMEOUT_MS", 1_000))
+        .connect_lazy();
+    Ok(Some(Arc::new(crate::infrastructure::client::GrpcPrivateDocuments::new(channel))))
+}
+
