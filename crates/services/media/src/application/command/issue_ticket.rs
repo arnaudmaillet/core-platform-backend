@@ -66,14 +66,23 @@ impl IssueUploadTicketHandler {
         now: DateTime<Utc>,
     ) -> Result<IssueUploadTicketOutcome, MediaError> {
         let cmd = envelope.payload;
+        // Private documents (#777) only where their private home exists.
+        if cmd.kind.is_private() && !self.policy.private_documents_enabled {
+            return Err(MediaError::PrivateDocumentsDisabled);
+        }
         let constraints = UploadConstraints::for_kind(cmd.kind);
 
         // Dedup short-circuit (fork B) — only when enabled and a hash is supplied.
+        // Never for a private document (#777), either way: its bytes are its
+        // owner's alone, and no other upload is handed its asset.
         if self.policy.dedup_enabled
+            && !cmd.kind.is_private()
             && let Some(sha) = cmd.content_sha256.as_deref()
         {
             let hash = ContentHash::new(sha)?;
-            if let Some(existing) = self.assets.find_ready_by_content_hash(&hash).await? {
+            if let Some(existing) =
+                self.assets.find_ready_by_content_hash(&hash).await?.filter(|a| !a.kind().is_private())
+            {
                 return Ok(IssueUploadTicketOutcome {
                     asset_id: existing.id(),
                     upload: None,
@@ -188,5 +197,25 @@ mod tests {
         assert!(out.deduplicated);
         assert!(out.upload.is_none(), "no upload needed on a dedup hit");
         assert_eq!(out.asset_id, existing, "reuses the existing asset");
+    }
+
+    /// #777: off by default, a private document cannot be uploaded at all —
+    /// nothing reaches the bucket before the infra keeps `private/` private.
+    #[tokio::test]
+    async fn private_documents_are_refused_while_not_enabled() {
+        let fx = Fixture::new();
+        let mut c = cmd();
+        c.kind = MediaKind::PrivateDocument;
+        c.declared_mime = MimeType::new("application/pdf").unwrap();
+        let off = IssueUploadTicketHandler::new(
+            Arc::clone(&fx.assets) as _,
+            Arc::clone(&fx.store) as _,
+            crate::application::policy::MediaPolicy::standard(),
+        );
+        let err = off.handle(env(c.clone()), t0()).await.unwrap_err();
+        assert!(matches!(err, MediaError::PrivateDocumentsDisabled), "{err:?}");
+        assert!(fx.store.keys().is_empty() && fx.assets.find_by_content_hash(&ContentHash::new(TEST_HASH).unwrap()).await.unwrap().is_empty());
+        // Enabled (as the fixture is), the same ticket is issued.
+        assert!(fx.issue_ticket_handler().handle(env(c), t0()).await.is_ok());
     }
 }

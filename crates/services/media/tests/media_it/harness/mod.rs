@@ -100,6 +100,9 @@ pub struct Harness {
     by_owner: media::application::query::ListAssetsByOwnerHandler,
     pub store: Arc<S3Client>,
     pub screen: Arc<ConfigurableScreen>,
+    /// Private documents (#777): their retention and the staff link.
+    pub retention: media::application::command::DocumentRetention,
+    pub staff: media::application::query::PrivateDocumentUrlHandler,
     http: reqwest::Client,
     owner: OwnerId,
 }
@@ -146,7 +149,8 @@ impl Harness {
         );
         store.ensure_bucket().await.expect("it: create bucket");
 
-        let policy = MediaPolicy::standard();
+        // Private documents (#777) on: the MinIO bucket here has no CDN.
+        let policy = MediaPolicy { private_documents_enabled: true, ..MediaPolicy::standard() };
         let mut dedup_policy = MediaPolicy::standard();
         dedup_policy.dedup_enabled = true;
 
@@ -158,7 +162,12 @@ impl Harness {
             Arc::clone(&store),
             policy.signed_url_ttl,
         ));
-        let probe = Arc::new(ImageMediaProbe::new(Arc::clone(&store)));
+        // Images and, for private documents (#777), PDF / HEIC by magic bytes.
+        let image_probe: Arc<dyn media::application::port::MediaProbe> = Arc::new(ImageMediaProbe::new(Arc::clone(&store)));
+        let probe = Arc::new(
+            media::infrastructure::probe::DispatchingMediaProbe::new(Arc::clone(&image_probe), image_probe)
+                .with_documents(Arc::new(media::infrastructure::probe::DocumentMediaProbe::new(Arc::clone(&store)))),
+        );
         let processor = Arc::new(ImageRenditionProcessor::new(Arc::clone(&store)));
         let scanner = Arc::new(PassScanner);
         let screen = Arc::new(ConfigurableScreen::new());
@@ -182,6 +191,7 @@ impl Harness {
             scanner,
             Arc::clone(&screen) as Arc<dyn ModerationScreen>,
             processor,
+            object_store.clone(),
             cache.clone(),
             publisher.clone(),
             policy,
@@ -193,6 +203,22 @@ impl Harness {
             cache.clone(),
             publisher.clone(),
         );
+        let retention = media::application::command::DocumentRetention::new(
+            assets.clone(),
+            Arc::new(DeleteAssetHandler::new(
+                assets.clone(),
+                object_store.clone(),
+                cdn.clone(),
+                cache.clone(),
+                publisher.clone(),
+            )),
+            chrono::Duration::days(30),
+        );
+        let staff = media::application::query::PrivateDocumentUrlHandler::new(
+            assets.clone(),
+            cdn.clone(),
+            chrono::Duration::minutes(5),
+        );
         let moderation =
             ApplyModerationHandler::new(assets.clone(), object_store, cdn.clone(), cache.clone(), publisher);
         let get = GetAssetHandler::new(assets.clone());
@@ -200,6 +226,8 @@ impl Harness {
         let resolve = ResolveDeliveryHandler::new(assets, cache, cdn);
 
         Self {
+            retention,
+            staff,
             by_owner,
             issue,
             issue_dedup,
@@ -297,7 +325,7 @@ impl Harness {
     }
 
     pub async fn get(&self, asset_id: AssetId) -> Result<Asset, MediaError> {
-        self.get.handle(Envelope::new(Uuid::now_v7(), GetAssetQuery { asset_id })).await
+        self.get.handle(Envelope::new(Uuid::now_v7(), GetAssetQuery { asset_id, caller: None })).await
     }
 
     pub async fn resolve(
@@ -334,6 +362,52 @@ impl Harness {
             )
             .await
             .expect("apply moderation");
+    }
+
+    /// Uploads `bytes` as a private document and commits it (the probe's verdict).
+    pub async fn upload_document_raw(&self, bytes: Vec<u8>, mime: &str) -> Result<Asset, MediaError> {
+        let cmd = IssueUploadTicketCommand {
+            owner_id: self.owner,
+            kind: MediaKind::PrivateDocument,
+            declared_mime: MimeType::new(mime).unwrap(),
+            declared_size: bytes.len() as u64,
+            content_sha256: None,
+            idempotency_key: None,
+        };
+        let out = self.issue.handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now()).await.expect("ticket");
+        let url = out.upload.expect("a fresh upload").presigned.url;
+        let put = self.http.put(&url).header(reqwest::header::CONTENT_TYPE, mime).body(bytes).send().await.unwrap();
+        assert!(put.status().is_success(), "direct upload to MinIO failed: {}", put.status());
+        self.commit(out.asset_id).await
+    }
+
+    /// `resolve` without the expectation.
+    pub async fn resolve_result(&self, asset_id: AssetId) -> Result<DeliveredMediaView, MediaError> {
+        self.resolve
+            .handle_at(
+                Envelope::new(Uuid::now_v7(), ResolveDeliveryQuery { asset_id, preferred: None, visibility: None }),
+                Utc::now(),
+            )
+            .await
+    }
+
+    /// Uploads `bytes` as a private document (#777) and runs it to READY.
+    pub async fn upload_document(&self, bytes: Vec<u8>, mime: &str) -> AssetId {
+        let cmd = IssueUploadTicketCommand {
+            owner_id: self.owner,
+            kind: MediaKind::PrivateDocument,
+            declared_mime: MimeType::new(mime).unwrap(),
+            declared_size: bytes.len() as u64,
+            content_sha256: None,
+            idempotency_key: None,
+        };
+        let out = self.issue.handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now()).await.expect("ticket");
+        let url = out.upload.expect("a fresh upload").presigned.url;
+        let put = self.http.put(&url).header(reqwest::header::CONTENT_TYPE, mime).body(bytes).send().await.unwrap();
+        assert!(put.status().is_success(), "direct upload to MinIO failed: {}", put.status());
+        self.commit(out.asset_id).await.expect("commit");
+        assert_eq!(self.process(out.asset_id).await.expect("process"), ProcessOutcome::Ready);
+        out.asset_id
     }
 
     /// True if an object exists at `key` in the store.

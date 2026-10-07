@@ -72,6 +72,11 @@ impl DeleteAssetHandler {
             (Vec::new(), Vec::new())
         };
         objects.push(StorageKey::staging(asset.id()));
+        // A private document's object (#777) is keyed by the asset, never
+        // shared with another asset's bytes: it always goes.
+        let private = StorageKey::private_document(asset.id());
+        objects.push(private.quarantined());
+        objects.push(private);
         for key in &objects {
             self.store.delete(key).await?;
         }

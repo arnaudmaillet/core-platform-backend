@@ -138,9 +138,11 @@ impl ResolveDeliveryHandler {
         now: DateTime<Utc>,
     ) -> Result<DeliveredMediaView, MediaError> {
         let q = envelope.payload;
+        // A private document (#777) is never delivered: it reads as missing.
         let asset = self
             .load(&q.asset_id)
             .await?
+            .filter(|a| !a.kind().is_private())
             .ok_or_else(|| MediaError::AssetNotFound { id: q.asset_id.as_str() })?;
         Ok(self.resolve_asset(&asset, q.preferred, q.visibility, now).await)
     }
@@ -156,7 +158,7 @@ impl ResolveDeliveryHandler {
     ) -> Result<Vec<DeliveredMediaView>, MediaError> {
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
-            if let Some(asset) = self.load(id).await? {
+            if let Some(asset) = self.load(id).await?.filter(|a| !a.kind().is_private()) {
                 out.push(self.resolve_asset(&asset, preferred, visibility, now).await);
             }
         }

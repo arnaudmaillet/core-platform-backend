@@ -175,6 +175,24 @@ out.
 (`MED-1005`); resolve of a quarantined asset → `PERMISSION_DENIED` (`MED-7001`,
 451); delete under legal hold → `PERMISSION_DENIED` (`MED-7003`).
 
+**Private documents (#777).** `MEDIA_KIND_PRIVATE_DOCUMENT` holds verification evidence (profile
+`RequestVerification`): JPEG, PNG, HEIC or PDF, ≤ 10 MiB, owned by the account like any asset. **Off by
+default** (`MEDIA_PRIVATE_DOCUMENTS_ENABLED`): until the deployment keeps `private/` out of the CDN's
+origin access (core-platform-infra#37), an upload ticket for one is refused (`MED-1006`, 503). A PDF or
+HEIC is checked by its magic bytes (`DocumentMediaProbe`; never decoded, no dimensions); a JPEG/PNG by the
+image probe. Processing runs the same malware scan, takedown check and CSAM screen, then **moves the bytes
+to `private/documents/{asset_id}`** — a prefix the CDN's origin access is not granted (like
+`quarantine/`), keyed by the asset so identical bytes from two accounts never share an object — and marks
+it READY with **no rendition**. It is **never delivered**: `ResolveDelivery` answers NOT_FOUND and
+`BatchResolveDelivery` omits it; `GetAsset` shows it to its owner only (another account: NOT_FOUND; the
+mesh reads it); dedup never applies to it, either way. Staff review it through the mesh-only
+`GetPrivateDocumentUrl` (a signed GET valid `MEDIA_SIGNED_URL_TTL_SECS`). The GDPR export lists it with a
+signed download. **Retention:** READY sets a backstop purge 90 days out; `ProfileVerificationDecided`
+(`profile.v1.events`, `media-profile-consumer`) moves it to the decision + `MEDIA_DOCUMENT_RETENTION_DAYS`
+(30), only for the requester's own documents; a sweeper (every `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS`)
+deletes what is due, like an owner's delete; a legal hold keeps it. Deleting it always removes its private
+object (never shared).
+
 ### Error contract
 
 Every fault implements `error::AppError` with a stable `MED-XXXX` code, mapped to
@@ -213,7 +231,8 @@ gRPC `Status` / HTTP by the shared `error` crate:
 |---|---|---|---|
 | object-store finalize (bridged) | `media-finalize-consumer` | upload finalize (source of truth over `CommitUpload`) | DLQ |
 | `moderation.v1.events` | `media-moderation-consumer` | quarantine / restore (revoke / re-enable delivery) | DLQ |
-| `account.v1.events` | `media-account-consumer` | `account_deleted` → every asset of the account is deleted like an owner's delete (bytes, renditions, quarantined copies, staging, tombstone, `AssetDeleted`, cache, CDN); legal-held assets are kept and logged (GDPR Art. 17, #777; idempotent) | DLQ |
+| `account.v1.events` | `media-account-consumer` | `account_deleted` → every asset of the account is deleted like an owner's delete (bytes, renditions, quarantined copies, staging, tombstone, `AssetDeleted`, cache, CDN); legal-held assets are kept and logged (GDPR Art. 17, #777; idempotent). Evidence a moderation case still needs (an appeal running at deletion time) must be kept by a legal hold moderation sets, never by this path | DLQ |
+| `profile.v1.events` | `media-profile-consumer` | `ProfileVerificationDecided` → the requester's private documents are purged at the decision + `MEDIA_DOCUMENT_RETENTION_DAYS` (#777) | DLQ |
 | `post.v1.events` / `profile.v1.events` | `media-binding-consumer` | mark assets bound; orphan GC of abandoned uploads | DLQ |
 
 > **Runtime contract (mandatory):** all consumers run under `run_consumer` —
@@ -298,7 +317,10 @@ async fn main() -> anyhow::Result<()> {
 | `MEDIA_CDN_BASE_URL` | No | `…:9000/media` | public, content-addressed delivery origin |
 | `MEDIA_CLOUDFRONT_DISTRIBUTION_ID` | No | — | takedowns (quarantine / delete) purge the asset's renditions from this CloudFront distribution (`CreateInvalidation`, SigV4 with the `MEDIA_S3_*` keys, whose IAM user needs `cloudfront:CreateInvalidation`); a failed purge fails the takedown, which is retried. Unset: takedowns only log (local runs) |
 | `MEDIA_UPLOAD_TICKET_TTL_SECS` | No | `900` | pre-signed upload validity window |
-| `MEDIA_SIGNED_URL_TTL_SECS` | No | `300` | private (signed) delivery URL validity |
+| `MEDIA_SIGNED_URL_TTL_SECS` | No | `300` | private (signed) delivery URL validity; also the staff link to a private document |
+| `MEDIA_PRIVATE_DOCUMENTS_ENABLED` | No | `false` | private documents may be uploaded (#777); turn on only once `private/` is outside the CDN's origin access (core-platform-infra#37) |
+| `MEDIA_DOCUMENT_RETENTION_DAYS` | No | `30` | a private document's life after its verification request's decision (#777) |
+| `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS` | No | `3600` | how often due private documents are purged |
 | `MEDIA_DEDUP_ENABLED` | No | `false` | content-hash dedup (off until refcount-purge is hardened) |
 | `MEDIA_SCREEN_GRPC_ENDPOINT` | No | `http://localhost:50061` | moderation Screen gate endpoint |
 | `MEDIA_SCREEN_TIMEOUT_MS` | No | `200` | fail-closed Screen hard timeout |

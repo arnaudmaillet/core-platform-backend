@@ -23,6 +23,12 @@ pub struct MediaConfig {
     /// gRPC endpoint of `moderation` (the pre-publish Screen gate).
     pub screen_endpoint: String,
     pub policy: MediaPolicy,
+    /// `MEDIA_DOCUMENT_RETENTION_DAYS` (30): how long a private document lives
+    /// after its verification request's decision (#777).
+    pub document_retention: Duration,
+    /// `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS` (3600): how often due documents are
+    /// purged.
+    pub document_sweep_interval: StdDuration,
 }
 
 impl MediaConfig {
@@ -32,6 +38,7 @@ impl MediaConfig {
             signed_url_ttl: Duration::seconds(env_u64("MEDIA_SIGNED_URL_TTL_SECS", 300) as i64),
             dedup_enabled: env_bool("MEDIA_DEDUP_ENABLED", false),
             screen_timeout: StdDuration::from_millis(env_u64("MEDIA_SCREEN_TIMEOUT_MS", 200)),
+            private_documents_enabled: env_bool("MEDIA_PRIVATE_DOCUMENTS_ENABLED", false),
         };
         let endpoint = env_or("MEDIA_OBJECT_STORE_ENDPOINT", "http://localhost:9000");
         let s3 = S3Config {
@@ -56,6 +63,8 @@ impl MediaConfig {
                 .filter(|id| !id.is_empty()),
             screen_endpoint: env_or("MEDIA_SCREEN_GRPC_ENDPOINT", "http://localhost:50061"),
             policy,
+            document_retention: Duration::days(env_u64("MEDIA_DOCUMENT_RETENTION_DAYS", 30).max(1) as i64),
+            document_sweep_interval: StdDuration::from_secs(env_u64("MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS", 3_600).max(60)),
         }
     }
 }

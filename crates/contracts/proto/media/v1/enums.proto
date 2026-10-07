@@ -22,6 +22,12 @@ enum MediaKind {
     // A video attached to a post — adaptive-streaming ladder (manifest + poster).
     // Contract-first: not yet accepted for upload (see the enum note above).
     MEDIA_KIND_VIDEO       = 3;
+    // Evidence for a profile verification request (#777): JPEG, PNG, HEIC or
+    // PDF, ≤ 10 MiB. Private: no renditions, never returned by ResolveDelivery /
+    // BatchResolveDelivery (NOT_FOUND / omitted), metadata to its owner only,
+    // a short-lived signed link to staff over the mesh (GetPrivateDocumentUrl).
+    // Purged 30 days after the request's decision, and with the account.
+    MEDIA_KIND_PRIVATE_DOCUMENT = 4;
 }
 
 // The asset lifecycle state machine. An asset is created PENDING at ticket time,

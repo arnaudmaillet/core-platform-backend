@@ -33,13 +33,14 @@ impl AssetRepository for PgAssetRepository {
         let content_hash = asset.content_hash().map(|h| h.as_str().to_owned());
         sqlx::query(
             r#"
-            INSERT INTO assets (id, owner_id, kind, state, content_hash, created_at, updated_at, doc)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            INSERT INTO assets (id, owner_id, kind, state, content_hash, created_at, updated_at, doc, purge_after)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
             ON CONFLICT (id) DO UPDATE SET
                 state        = EXCLUDED.state,
                 content_hash = EXCLUDED.content_hash,
                 updated_at   = EXCLUDED.updated_at,
-                doc          = EXCLUDED.doc
+                doc          = EXCLUDED.doc,
+                purge_after  = EXCLUDED.purge_after
             "#,
         )
         .bind(asset.id().as_uuid())
@@ -50,6 +51,7 @@ impl AssetRepository for PgAssetRepository {
         .bind(asset.created_at())
         .bind(asset.updated_at())
         .bind(Json(asset))
+        .bind(asset.purge_after())
         .execute(self.tx.pool())
         .await
         .map_err(storage_err)?;
@@ -89,6 +91,19 @@ impl AssetRepository for PgAssetRepository {
         )
         .bind(owner.as_uuid())
         .bind(after.map(AssetId::as_uuid))
+        .bind(limit.clamp(1, 500))
+        .fetch_all(self.tx.pool())
+        .await
+        .map_err(storage_err)?;
+        Ok(rows.into_iter().map(|r| r.doc.0).collect())
+    }
+
+    async fn due_for_purge(&self, now: chrono::DateTime<chrono::Utc>, limit: i64) -> Result<Vec<Asset>, MediaError> {
+        let rows = sqlx::query_as::<_, AssetDocRow>(
+            "SELECT doc FROM assets WHERE purge_after <= $1 AND state <> 'deleted' \
+             AND NOT COALESCE((doc->>'legal_hold')::boolean, false) ORDER BY purge_after LIMIT $2",
+        )
+        .bind(now)
         .bind(limit.clamp(1, 500))
         .fetch_all(self.tx.pool())
         .await

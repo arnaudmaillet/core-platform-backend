@@ -54,6 +54,14 @@ impl StorageKey {
         Self(format!("{}/{}/{}", kind.path_segment(), hash.as_str(), relative.trim_start_matches('/')))
     }
 
+    /// Where a private document lives once checked (#777): under `private/`, a
+    /// prefix the CDN's origin access is not granted (like `quarantine/`), keyed
+    /// by the asset — never content-addressed, so identical bytes uploaded by
+    /// two accounts never share an object.
+    pub fn private_document(asset_id: AssetId) -> Self {
+        Self(format!("{PRIVATE_PREFIX}documents/{asset_id}"))
+    }
+
     /// Wraps a key read back from storage.
     pub fn from_raw(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -86,6 +94,10 @@ impl StorageKey {
 
 /// The prefix quarantined objects are moved under.
 pub const QUARANTINE_PREFIX: &str = "quarantine/";
+
+/// The prefix of objects never served publicly (#777): the CDN's origin access
+/// is not granted it either.
+pub const PRIVATE_PREFIX: &str = "private/";
 
 impl fmt::Debug for StorageKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

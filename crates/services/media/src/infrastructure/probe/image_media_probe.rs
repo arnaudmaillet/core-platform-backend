@@ -58,7 +58,7 @@ impl MediaProbe for ImageMediaProbe {
         Ok(MediaProbeReport {
             mime_type,
             byte_size: bytes.len() as u64,
-            dimensions,
+            dimensions: Some(dimensions),
             content_hash,
         })
     }

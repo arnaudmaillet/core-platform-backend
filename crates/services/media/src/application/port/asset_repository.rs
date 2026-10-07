@@ -29,6 +29,10 @@ pub trait AssetRepository: Send + Sync + 'static {
         after: Option<&AssetId>,
     ) -> Result<Vec<Asset>, MediaError>;
 
+    /// Private documents whose purge time has come (#777), oldest first, not
+    /// deleted and not under a legal hold.
+    async fn due_for_purge(&self, now: chrono::DateTime<chrono::Utc>, limit: i64) -> Result<Vec<Asset>, MediaError>;
+
     /// Dedup lookup: an existing **READY** asset with these exact bytes, if any.
     /// Used only when dedup is enabled (fork B); returns `None` otherwise-unmatched.
     async fn find_ready_by_content_hash(

@@ -6,7 +6,7 @@ use cqrs::Envelope;
 use crate::application::policy::MediaPolicy;
 use crate::application::command::asset_objects;
 use crate::application::port::{
-    AssetRepository, DeliveryCache, EventPublisher, ImageProcessor, MalwareScanner, ModerationScreen,
+    AssetRepository, DeliveryCache, EventPublisher, ImageProcessor, MalwareScanner, ModerationScreen, ObjectStore,
     ScanVerdict,
 };
 use crate::domain::value_object::{AssetId, AssetState, StorageKey};
@@ -40,6 +40,8 @@ pub struct ProcessAssetHandler {
     scanner: Arc<dyn MalwareScanner>,
     screen: Arc<dyn ModerationScreen>,
     processor: Arc<dyn ImageProcessor>,
+    /// Moves a checked private document to its private key (#777).
+    store: Arc<dyn ObjectStore>,
     cache: Arc<dyn DeliveryCache>,
     publisher: Arc<dyn EventPublisher>,
     policy: MediaPolicy,
@@ -52,11 +54,12 @@ impl ProcessAssetHandler {
         scanner: Arc<dyn MalwareScanner>,
         screen: Arc<dyn ModerationScreen>,
         processor: Arc<dyn ImageProcessor>,
+        store: Arc<dyn ObjectStore>,
         cache: Arc<dyn DeliveryCache>,
         publisher: Arc<dyn EventPublisher>,
         policy: MediaPolicy,
     ) -> Self {
-        Self { assets, scanner, screen, processor, cache, publisher, policy }
+        Self { assets, scanner, screen, processor, store, cache, publisher, policy }
     }
 
     pub async fn handle(
@@ -113,6 +116,17 @@ impl ProcessAssetHandler {
             self.cache.invalidate(&asset.id()).await?;
             self.persist_and_publish(&mut asset).await?;
             return Ok(ProcessOutcome::Quarantined);
+        }
+
+        // 3'. A private document (#777): no renditions, never on the CDN. Its
+        //     checked bytes move under `private/` (not granted to the CDN's
+        //     origin access); it is ready as is.
+        if asset.kind().is_private() {
+            asset.begin_processing(now)?;
+            self.store.relocate(&staging, &StorageKey::private_document(asset.id())).await?;
+            asset.mark_ready(now)?;
+            self.persist_and_publish(&mut asset).await?;
+            return Ok(ProcessOutcome::Ready);
         }
 
         // 3. Derive the rendition ladder + BlurHash from the validated master.

@@ -3,9 +3,11 @@
 //! declaration.
 
 pub mod dispatching_media_probe;
+pub mod document_media_probe;
 pub mod image_media_probe;
 pub mod video_media_probe;
 
 pub use dispatching_media_probe::DispatchingMediaProbe;
+pub use document_media_probe::DocumentMediaProbe;
 pub use image_media_probe::ImageMediaProbe;
 pub use video_media_probe::VideoMediaProbe;

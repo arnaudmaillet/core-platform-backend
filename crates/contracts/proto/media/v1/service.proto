@@ -54,6 +54,12 @@ service MediaService {
     // GDPR data export (#653).
     rpc ListAssetsByOwner(ListAssetsByOwnerRequest) returns (ListAssetsByOwnerResponse);
 
+    // MESH ONLY (#777): staff review of verification evidence — a short-lived
+    // signed GET (MEDIA_SIGNED_URL_TTL_SECS) to a READY private document.
+    // Anything else (another kind, not ready, quarantined, deleted) is
+    // NOT_FOUND.
+    rpc GetPrivateDocumentUrl(GetPrivateDocumentUrlRequest) returns (GetPrivateDocumentUrlResponse);
+
     // Owner-initiated hard delete. Refused (PERMISSION_DENIED, MED-7003) while a
     // legal hold is active.
     rpc DeleteAsset(DeleteAssetRequest) returns (DeleteAssetResponse);

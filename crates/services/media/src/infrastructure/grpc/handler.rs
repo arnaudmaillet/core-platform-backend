@@ -19,7 +19,7 @@ use crate::application::command::{
 };
 use crate::application::query::{
     DeliveredMediaView, GetAssetHandler, GetAssetQuery, ListAssetsByOwnerHandler, ListAssetsByOwnerQuery,
-    ResolveDeliveryHandler, ResolveDeliveryQuery,
+    PrivateDocumentUrlHandler, ResolveDeliveryHandler, ResolveDeliveryQuery,
 };
 use crate::domain::aggregate::{Asset, Rendition};
 use crate::domain::value_object::{
@@ -41,6 +41,8 @@ pub struct MediaServiceHandler {
     resolve: Arc<ResolveDeliveryHandler>,
     /// The GDPR export's listing (#653); `None` answers UNIMPLEMENTED.
     by_owner: Option<Arc<ListAssetsByOwnerHandler>>,
+    /// Staff links to private documents (#777); `None` answers UNIMPLEMENTED.
+    private_documents: Option<Arc<PrivateDocumentUrlHandler>>,
 }
 
 impl MediaServiceHandler {
@@ -52,13 +54,35 @@ impl MediaServiceHandler {
         get: Arc<GetAssetHandler>,
         resolve: Arc<ResolveDeliveryHandler>,
     ) -> Self {
-        Self { issue, commit, delete, process, get, resolve, by_owner: None }
+        Self { issue, commit, delete, process, get, resolve, by_owner: None, private_documents: None }
     }
 
     /// Enables `ListAssetsByOwner` (#653).
     pub fn with_list_by_owner(mut self, handler: Arc<ListAssetsByOwnerHandler>) -> Self {
         self.by_owner = Some(handler);
         self
+    }
+
+    pub fn with_private_documents(mut self, handler: Arc<PrivateDocumentUrlHandler>) -> Self {
+        self.private_documents = Some(handler);
+        self
+    }
+
+    /// Mesh only (#777): a staff link to a private document.
+    pub async fn get_private_document_url(
+        &self,
+        request: Request<proto::GetPrivateDocumentUrlRequest>,
+    ) -> Result<Response<proto::GetPrivateDocumentUrlResponse>, Status> {
+        let handler = self
+            .private_documents
+            .as_ref()
+            .ok_or_else(|| Status::unimplemented("private documents are not wired"))?;
+        let asset_id = AssetId::try_from(request.into_inner().asset_id.as_str()).map_err(to_status)?;
+        let resolved = handler.handle_at(asset_id, Utc::now()).await.map_err(to_status)?;
+        Ok(Response::new(proto::GetPrivateDocumentUrlResponse {
+            url:        resolved.url,
+            expires_at: resolved.expires_at.map(to_timestamp),
+        }))
     }
 
     /// Mesh only (#653): an account's assets with signed downloads.
@@ -161,9 +185,16 @@ impl MediaServiceHandler {
         &self,
         request: Request<proto::GetAssetRequest>,
     ) -> Result<Response<proto::GetAssetResponse>, Status> {
+        // A private document (#777) is its owner's only: the edge caller's
+        // account must own it; the mesh reads it.
+        let caller = match edge::principal(&request) {
+            Some(principal) => Some(OwnerId::try_from(principal.account_id()).map_err(to_status)?),
+            None => None,
+        };
         let req = request.into_inner();
         let query = GetAssetQuery {
             asset_id: AssetId::try_from(req.asset_id.as_str()).map_err(to_status)?,
+            caller,
         };
         let asset = self
             .get
@@ -250,7 +281,7 @@ impl MediaServiceHandler {
             .map_err(to_status)?;
         let asset = self
             .get
-            .handle(Envelope::new(Uuid::now_v7(), GetAssetQuery { asset_id }))
+            .handle(Envelope::new(Uuid::now_v7(), GetAssetQuery { asset_id, caller: None }))
             .await
             .map_err(to_status)?;
         Ok(Response::new(proto::ReprocessResponse { asset: Some(asset_to_proto(&asset)) }))
@@ -271,6 +302,7 @@ fn kind_from_proto(value: i32) -> Result<MediaKind, Status> {
         // (real stream, allowed codec) at finalize. Transcode/delivery renditions
         // still land in later phases.
         3 => Ok(MediaKind::Video),
+        4 => Ok(MediaKind::PrivateDocument),
         other => Err(Status::invalid_argument(format!("unsupported media kind: {other}"))),
     }
 }
@@ -305,6 +337,7 @@ fn kind_to_proto(kind: MediaKind) -> i32 {
         MediaKind::Avatar => 1,
         MediaKind::PostImage => 2,
         MediaKind::Video => 3,
+        MediaKind::PrivateDocument => 4,
     }
 }
 

@@ -21,6 +21,7 @@ use thiserror::Error;
 /// | MED-1003 | UploadSizeExceeded       | 413  | Low      | No        |
 /// | MED-1004 | UploadTicketExpired      | 410  | Low      | No        |
 /// | MED-1005 | UploadNotFinalized       | 409  | Low      | No        |
+/// | MED-1006 | PrivateDocumentsDisabled | 503  | Low      | No        |
 /// | MED-2001 | AssetNotFound            | 404  | Low      | No        |
 /// | MED-2002 | InvalidStateTransition   | 409  | Medium   | No        |
 /// | MED-2003 | ConcurrentModification   | 409  | **High** | **Yes**   |
@@ -101,6 +102,12 @@ pub enum MediaError {
     /// object store (no object present at the reserved key).
     #[error("upload has not been finalized: the object is not present in the store")]
     UploadNotFinalized,
+
+    /// Private documents (#777) are not enabled on this deployment
+    /// (`MEDIA_PRIVATE_DOCUMENTS_ENABLED`): their bytes would have no private
+    /// home yet.
+    #[error("private documents are not enabled")]
+    PrivateDocumentsDisabled,
 
     // ── Asset metadata SoR (MED-2xxx) ─────────────────────────────────────────
     #[error("asset not found: {id}")]
@@ -225,6 +232,7 @@ impl AppError for MediaError {
             MediaError::UploadSizeExceeded { .. } => "MED-1003",
             MediaError::UploadTicketExpired => "MED-1004",
             MediaError::UploadNotFinalized => "MED-1005",
+            MediaError::PrivateDocumentsDisabled => "MED-1006",
 
             MediaError::AssetNotFound { .. } => "MED-2001",
             MediaError::InvalidStateTransition { .. } => "MED-2002",
@@ -284,9 +292,9 @@ impl AppError for MediaError {
             MediaError::UploadSizeExceeded { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             MediaError::UnsupportedMimeType { .. } => StatusCode::UNSUPPORTED_MEDIA_TYPE,
 
-            MediaError::ObjectStoreUnavailable | MediaError::ScreenUnavailable => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
+            MediaError::ObjectStoreUnavailable
+            | MediaError::ScreenUnavailable
+            | MediaError::PrivateDocumentsDisabled => StatusCode::SERVICE_UNAVAILABLE,
             MediaError::ObjectStoreTimeout => StatusCode::GATEWAY_TIMEOUT,
 
             MediaError::AssetQuarantined | MediaError::LegalHoldActive => {

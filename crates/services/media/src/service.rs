@@ -26,11 +26,12 @@ use transport::kafka::producer::{KafkaProducerBuilder, KafkaProducerHandle};
 
 use crate::app::{App, Backends};
 use crate::application::command::{
-    ApplyModerationHandler, OwnerErasure, ProcessAssetHandler, TranscodeAssetHandler,
+    ApplyModerationHandler, DocumentRetention, OwnerErasure, ProcessAssetHandler, TranscodeAssetHandler,
 };
 use crate::config::MediaConfig;
 use crate::infrastructure::consumer::{
-    run_account_consumer, run_moderation_consumer, run_process_consumer, run_transcode_consumer,
+    run_account_consumer, run_moderation_consumer, run_process_consumer, run_profile_consumer,
+    run_transcode_consumer,
 };
 use crate::infrastructure::grpc::{FILE_DESCRIPTOR_SET, MediaServiceHandler, MediaServiceServer};
 
@@ -43,6 +44,8 @@ const MODERATION_TOPIC: &str = "moderation.v1.events";
 const MODERATION_GROUP: &str = "media-moderation-consumer";
 const ACCOUNT_TOPIC: &str = "account.v1.events";
 const ACCOUNT_GROUP: &str = "media-account-consumer";
+const PROFILE_TOPIC: &str = "profile.v1.events";
+const PROFILE_GROUP: &str = "media-profile-consumer";
 /// Backoff before respawning a consumer after the runner returns.
 const CONSUMER_RESPAWN_BACKOFF: Duration = Duration::from_secs(5);
 
@@ -88,6 +91,8 @@ impl Service for MediaService {
         spawn_process_consumer(Arc::clone(&app.process));
         spawn_moderation_consumer(Arc::clone(&app.apply_moderation));
         spawn_account_consumer(Arc::clone(&app.erasure));
+        spawn_profile_consumer(Arc::clone(&app.retention));
+        spawn_document_sweeper(Arc::clone(&app.retention), app.document_sweep_interval);
 
         Ok(Self { app })
     }
@@ -222,6 +227,39 @@ fn spawn_account_consumer(erasure: Arc<OwnerErasure>) {
     });
 }
 
+/// Spawns the supervised profile consumer: a decided verification request
+/// schedules its documents' purge (#777).
+fn spawn_profile_consumer(retention: Arc<DocumentRetention>) {
+    tokio::spawn(async move {
+        loop {
+            match build_consumer(PROFILE_TOPIC, PROFILE_GROUP) {
+                Ok((consumer, producer)) => {
+                    run_profile_consumer(consumer, Arc::clone(&retention), producer).await;
+                    tracing::warn!("media profile consumer exited; respawning after backoff");
+                }
+                Err(error) => {
+                    tracing::error!(%error, "failed to build profile consumer; retrying")
+                }
+            }
+            tokio::time::sleep(CONSUMER_RESPAWN_BACKOFF).await;
+        }
+    });
+}
+
+/// Purges the private documents that are due, every `every` (#777). A failed
+/// sweep is retried at the next tick.
+fn spawn_document_sweeper(retention: Arc<DocumentRetention>, every: std::time::Duration) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(every);
+        loop {
+            tick.tick().await;
+            if let Err(error) = retention.sweep(chrono::Utc::now()).await {
+                tracing::warn!(%error, "private-document sweep failed; retrying at the next tick");
+            }
+        }
+    });
+}
+
 /// Spawns the supervised video transcode consumer (the `media-worker` role).
 fn spawn_transcode_consumer(handler: Arc<TranscodeAssetHandler>) {
     tokio::spawn(async move {
@@ -267,5 +305,8 @@ mod tests {
     fn listing_by_owner_is_mesh_only() {
         let method = "/media.v1.MediaService/ListAssetsByOwner";
         assert!(MediaService::EDGE_POLICY.iter().all(|rule| rule.method != method));
+        // #777: the staff link to a private document never reaches a client.
+        let staff = "/media.v1.MediaService/GetPrivateDocumentUrl";
+        assert!(MediaService::EDGE_POLICY.iter().all(|rule| rule.method != staff));
     }
 }

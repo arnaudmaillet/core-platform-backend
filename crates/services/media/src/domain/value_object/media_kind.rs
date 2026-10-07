@@ -21,6 +21,11 @@ pub enum MediaKind {
     PostImage,
     /// A video attached to a post — adaptive-streaming ladder (manifest + poster).
     Video,
+    /// Evidence for a verification request (#777): an identity document, a
+    /// registry extract. **Private**: no renditions, never publicly resolvable;
+    /// only its owner sees its metadata and only staff (over the mesh) get a
+    /// short-lived signed link. Purged after the request's decision.
+    PrivateDocument,
 }
 
 impl MediaKind {
@@ -29,7 +34,13 @@ impl MediaKind {
             Self::Avatar => "avatar",
             Self::PostImage => "post_image",
             Self::Video => "video",
+            Self::PrivateDocument => "private_document",
         }
+    }
+
+    /// Never served publicly: no renditions, no CDN, no `ResolveDelivery`.
+    pub fn is_private(&self) -> bool {
+        matches!(self, Self::PrivateDocument)
     }
 
     /// Leading segment of the content-addressed storage key (`{segment}/{hash}/…`).
@@ -38,6 +49,9 @@ impl MediaKind {
             Self::Avatar => "avatars",
             Self::PostImage => "post-images",
             Self::Video => "post-videos",
+            // Never content-addressed: a private document lives at
+            // `private/documents/{asset_id}` (see `StorageKey::private_document`).
+            Self::PrivateDocument => "private-documents",
         }
     }
 
@@ -51,6 +65,7 @@ impl MediaKind {
                 &["image/jpeg", "image/png", "image/webp", "image/avif"]
             }
             Self::Video => &["video/mp4", "video/quicktime"],
+            Self::PrivateDocument => &["image/jpeg", "image/png", "image/heic", "application/pdf"],
         }
     }
 
@@ -62,6 +77,7 @@ impl MediaKind {
             Self::Avatar => 10 * 1024 * 1024,      // 10 MiB
             Self::PostImage => 25 * 1024 * 1024,   // 25 MiB
             Self::Video => 200 * 1024 * 1024,      // 200 MiB (short-form cap)
+            Self::PrivateDocument => 10 * 1024 * 1024, // 10 MiB
         }
     }
 }
@@ -80,6 +96,7 @@ impl TryFrom<&str> for MediaKind {
             "avatar" => Ok(Self::Avatar),
             "post_image" => Ok(Self::PostImage),
             "video" => Ok(Self::Video),
+            "private_document" => Ok(Self::PrivateDocument),
             other => Err(MediaError::InvalidMediaKind {
                 kind: other.to_owned(),
             }),
@@ -93,7 +110,7 @@ mod tests {
 
     #[test]
     fn string_round_trip() {
-        for k in [MediaKind::Avatar, MediaKind::PostImage, MediaKind::Video] {
+        for k in [MediaKind::Avatar, MediaKind::PostImage, MediaKind::Video, MediaKind::PrivateDocument] {
             assert_eq!(MediaKind::try_from(k.as_str()).unwrap(), k);
         }
     }
