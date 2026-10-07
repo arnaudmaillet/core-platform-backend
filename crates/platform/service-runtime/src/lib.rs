@@ -298,6 +298,31 @@ pub async fn serve<S: Service>(addr: SocketAddr) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The [`edge::StaffGate`] for staff RPCs on the **mesh** (#837): it verifies
+/// the staff member's token against the same `auth` JWKS as the edge
+/// ([`EDGE_JWKS_URL_ENV`], issuer, audience), whether or not this pod runs an
+/// edge listener. Any of the three unset ⇒ every staff call is denied.
+pub fn staff_gate_from_env() -> edge::StaffGate {
+    let var = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
+    let (Some(jwks_url), Some(issuer), Some(audience)) =
+        (var(EDGE_JWKS_URL_ENV), var(EDGE_TOKEN_ISSUER_ENV), var(EDGE_TOKEN_AUDIENCE_ENV))
+    else {
+        tracing::warn!("{EDGE_JWKS_URL_ENV} / issuer / audience unset: staff RPCs deny every call");
+        return edge::StaffGate::deny_all();
+    };
+    let auth = AuthContextConfig {
+        jwks_url,
+        expected_issuer: Some(issuer),
+        expected_audience: Some(audience),
+        refresh_interval: interval_from_env(EDGE_JWKS_REFRESH_ENV, 300),
+        fetch_timeout: Duration::from_millis(
+            std::env::var(EDGE_JWKS_TIMEOUT_ENV).ok().and_then(|v| v.parse().ok()).unwrap_or(10_000),
+        ),
+        ..AuthContextConfig::default()
+    };
+    edge::StaffGate::new(spawn_edge_decoder(&auth))
+}
+
 /// Resolved client-edge settings — `None` when [`GRPC_EDGE_ADDR_ENV`] is unset.
 struct EdgeConfig {
     addr: SocketAddr,

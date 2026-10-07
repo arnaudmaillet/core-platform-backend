@@ -10,10 +10,9 @@
 //! so this lane is JSON even though the synchronous `RecordPrivileged` gRPC lane
 //! carries the same logical shape as `audit.v1` protobuf (see [`super::codec`]).
 //!
-//! Integration reality (honest about upstream readiness): no producer emits
-//! `audit.v1.events` yet — `moderation` / `auth` / `account` adopting this schema
-//! is an upstream prerequisite, exactly like `profile.v1.events` is for `search`.
-//! This layer defines the contract and is fully unit-tested; it is not a gap.
+//! Producers: `media` records each staff view of a private document here
+//! (`data_access`, #837; its wire test decodes through [`map_audit_event`]).
+//! `moderation` / `auth` / `account` feed audit through their own topics.
 
 use std::collections::BTreeMap;
 

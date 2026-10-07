@@ -35,6 +35,7 @@
 use std::sync::Arc;
 
 use auth_context::{edge, CurrentPrincipal, OidcClaims};
+use futures::future::BoxFuture;
 use tonic::Status;
 
 /// What a request to an edge-exposed method must present.
@@ -328,6 +329,67 @@ pub fn require_permission<T>(request: &tonic::Request<T>, permission: &str) -> R
     }
 }
 
+/// The permission staff need to review verification requests and their
+/// evidence (#837): minted by `auth` from the account's role.
+pub const VERIFICATION_REVIEW: &str = "verification:review";
+
+/// Verifies a **staff** token carried on a **mesh** call (#837): staff tooling
+/// in the cluster sends the staff member's edge token as `authorization:
+/// Bearer …`, and the service checks it itself — staff RPCs stay off the
+/// public edge (the mesh is network-scoped, and a token is still required).
+/// No verifier configured ⇒ every call is denied (fail closed).
+#[derive(Clone)]
+pub struct StaffGate {
+    verifier: Option<Arc<dyn StaffVerifier>>,
+}
+
+/// A token check in flight: the verified principal, or `None` (invalid).
+pub type StaffVerification<'a> = BoxFuture<'a, Option<CurrentPrincipal<OidcClaims>>>;
+
+/// Turns a bearer token into the verified principal (`None`: invalid).
+pub trait StaffVerifier: Send + Sync + 'static {
+    fn verify<'a>(&'a self, token: &'a str) -> StaffVerification<'a>;
+}
+
+impl StaffVerifier for auth_context::edge::EdgeDecoder {
+    fn verify<'a>(&'a self, token: &'a str) -> StaffVerification<'a> {
+        // The error kind is not surfaced; the token is never logged.
+        Box::pin(async move { self.decode(token).await.ok() })
+    }
+}
+
+impl StaffGate {
+    pub fn new(verifier: Arc<dyn StaffVerifier>) -> Self {
+        Self { verifier: Some(verifier) }
+    }
+
+    /// No verifier: every staff call is refused.
+    pub fn deny_all() -> Self {
+        Self { verifier: None }
+    }
+
+    /// The verified staff caller of `request`, holding `permission`.
+    /// `UNAUTHENTICATED` without a valid token (or any verifier),
+    /// `PERMISSION_DENIED` without the permission (a guest never has it).
+    pub async fn require<T>(&self, request: &tonic::Request<T>, permission: &str) -> Result<EdgePrincipal, Status> {
+        let verifier = self.verifier.as_ref().ok_or_else(|| Status::unauthenticated("staff calls are not enabled"))?;
+        let token = request
+            .metadata()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split_once(' '))
+            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+            .map(|(_, token)| token.trim())
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| Status::unauthenticated("a staff token is required"))?;
+        let principal = verifier.verify(token).await.ok_or_else(|| Status::unauthenticated("invalid token"))?;
+        if !principal.has_permission(permission) {
+            return Err(Status::permission_denied("missing permission"));
+        }
+        Ok(EdgePrincipal::new(Arc::new(principal)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,5 +612,49 @@ mod tests {
         assert_eq!(p.account_id(), "acct-1");
         assert_eq!(p.session_id(), Some("s-1"));
         assert_eq!(p.profile_ids().collect::<Vec<_>>(), vec!["p-1"]);
+    }
+
+    struct Tokens;
+
+    impl StaffVerifier for Tokens {
+        fn verify<'a>(&'a self, token: &'a str) -> StaffVerification<'a> {
+            let perms: Option<&[&str]> = match token {
+                "reviewer" => Some(&[VERIFICATION_REVIEW]),
+                "member" => Some(&[]),
+                _ => None,
+            };
+            let principal = perms.map(|perms| principal_with(&[], perms).into_inner().as_ref().clone());
+            Box::pin(async move { principal })
+        }
+    }
+
+    fn bearer(token: Option<&str>) -> tonic::Request<()> {
+        let mut req = tonic::Request::new(());
+        if let Some(token) = token {
+            req.metadata_mut().insert("authorization", format!("Bearer {token}").parse().unwrap());
+        }
+        req
+    }
+
+    /// #837: a staff call on the mesh carries a token holding the permission;
+    /// none, an invalid one, a member's, or no verifier at all is refused.
+    #[tokio::test]
+    async fn a_staff_call_needs_a_verified_token_with_the_permission() {
+        let gate = StaffGate::new(Arc::new(Tokens));
+        let staff = gate.require(&bearer(Some("reviewer")), VERIFICATION_REVIEW).await.unwrap();
+        assert_eq!(staff.account_id(), "acct-1");
+
+        for (token, code) in [
+            (None, tonic::Code::Unauthenticated),
+            (Some("forged"), tonic::Code::Unauthenticated),
+            (Some("member"), tonic::Code::PermissionDenied),
+        ] {
+            assert_eq!(gate.require(&bearer(token), VERIFICATION_REVIEW).await.unwrap_err().code(), code, "{token:?}");
+        }
+        let closed = StaffGate::deny_all();
+        assert_eq!(
+            closed.require(&bearer(Some("reviewer")), VERIFICATION_REVIEW).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
     }
 }

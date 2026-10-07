@@ -82,7 +82,7 @@ impl Service for ProfileService {
         authenticated("/profile.v1.ProfileService/SetTabSettings"),
         authenticated("/profile.v1.ProfileService/SetFeedSettings"),
         // #668: the owner's account type and verification request (staff's
-        // ListPending… / Decide… stay mesh-only).
+        // ListPending… / Decide… stay mesh-only and check the staff token, #837).
         authenticated("/profile.v1.ProfileService/SetAccountType"),
         authenticated("/profile.v1.ProfileService/RequestVerification"),
         authenticated("/profile.v1.ProfileService/GetVerificationRequest"),
@@ -138,7 +138,9 @@ impl Service for ProfileService {
         let handler = ProfileServiceHandler::new(
             Arc::clone(&self.app.command_bus),
             Arc::clone(&self.app.query_bus),
-        );
+        )
+        // Staff verification review on the mesh checks the staff token (#837).
+        .with_staff_gate(service_runtime::staff_gate_from_env());
 
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
@@ -239,3 +241,19 @@ fn private_documents_from_env() -> anyhow::Result<Option<Arc<dyn crate::applicat
     Ok(Some(Arc::new(crate::infrastructure::client::GrpcPrivateDocuments::new(channel))))
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #837: the staff verification RPCs stay off the client edge.
+    #[test]
+    fn verification_review_stays_off_the_edge() {
+        for method in [
+            "/profile.v1.ProfileService/ListPendingVerificationRequests",
+            "/profile.v1.ProfileService/DecideVerificationRequest",
+        ] {
+            assert!(ProfileService::EDGE_POLICY.iter().all(|r| r.method != method), "{method}");
+        }
+    }
+}

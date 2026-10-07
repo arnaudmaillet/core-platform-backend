@@ -140,8 +140,8 @@ service ProfileService {
   rpc SetAccountType(SetAccountTypeRequest) returns (CommandResponse); // #668 personal / professional (creator) / brand (business) + a brand's public contact card; bots stay bots; creator and business are 18+ (a 13–17 token gets FAILED_PRECONDITION)
   rpc RequestVerification(RequestVerificationRequest) returns (CommandResponse); // #668 owner: category + 1–5 pieces of evidence (web links and/or private documents, #777) → staff queue
   rpc GetVerificationRequest(GetVerificationRequestRequest) returns (GetVerificationRequestResponse); // #668 owner: pending / approved / rejected (+ reason)
-  rpc ListPendingVerificationRequests(ListPendingVerificationRequestsRequest) returns (ListPendingVerificationRequestsResponse); // staff, mesh-only
-  rpc DecideVerificationRequest(DecideVerificationRequestRequest) returns (CommandResponse); // staff, mesh-only: approve verifies the profile; reject needs a reason
+  rpc ListPendingVerificationRequests(ListPendingVerificationRequestsRequest) returns (ListPendingVerificationRequestsResponse); // staff, mesh-only: the staff token (Bearer, verification:review) is verified (#837)
+  rpc DecideVerificationRequest(DecideVerificationRequestRequest) returns (CommandResponse); // staff, mesh-only (Bearer, verification:review, #837): approve verifies the profile; reject needs a reason
   rpc VerifyProfile(VerifyProfileRequest) returns (CommandResponse);
   rpc HideProfile(HideProfileRequest) returns (CommandResponse);
   rpc RestoreProfile(RestoreProfileRequest) returns (CommandResponse);

@@ -217,6 +217,7 @@ impl Harness {
         let staff = media::application::query::PrivateDocumentUrlHandler::new(
             assets.clone(),
             cdn.clone(),
+            Arc::new(media::infrastructure::event::LogAccessLog),
             chrono::Duration::minutes(5),
         );
         let moderation =

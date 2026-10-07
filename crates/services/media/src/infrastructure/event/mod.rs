@@ -5,9 +5,11 @@
 //! `AssetUploaded` it follows, and `AssetDeleted` is always last. The `event_type`
 //! header carries the dotted routing key.
 
+pub mod audit_access_log;
 pub mod kafka_event_publisher;
 pub mod log_event_publisher;
 
+pub use audit_access_log::{KafkaAccessLog, LogAccessLog};
 pub use kafka_event_publisher::KafkaEventPublisher;
 pub use log_event_publisher::LogEventPublisher;
 

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: ff9406257c22d520eb008826fa288e8014bef84fba697b615987c192d129a657
-  translated_at: 2026-10-07
+  source_sha256: 40f312d5e8da3969b1e8971c09ee5190002aa93bb4e30060bfda7530faf5ed0a
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -211,7 +211,16 @@ la même vérification de retrait et le même filtrage CSAM, puis **déplace les
 jamais d'objet — et le marque READY **sans aucun rendu**. Il n'est **jamais diffusé** : `ResolveDelivery`
 répond NOT_FOUND et `BatchResolveDelivery` l'omet ; `GetAsset` ne le montre qu'à son propriétaire (un autre
 compte : NOT_FOUND ; le mesh le lit) ; la dédup ne s'y applique jamais, dans aucun sens. Le staff les examine
-via `GetPrivateDocumentUrl`, réservé au mesh (un GET signé valide `MEDIA_SIGNED_URL_TTL_SECS`). L'export
+via `GetPrivateDocumentUrl` (un GET signé valide `MEDIA_SIGNED_URL_TTL_SECS`), **mesh uniquement et réservé au staff (#837)** :
+l'outil staff envoie le jeton edge du membre du staff (`authorization: Bearer`), que media vérifie
+lui-même avec le JWKS d'`auth` (`EDGE_JWKS_URL` / `EDGE_TOKEN_ISSUER` / `EDGE_TOKEN_AUDIENCE`, les
+réglages du listener edge) et qui doit porter `verification:review` (modérateurs de contenu, admins). Pas
+de jeton ou un jeton invalide : `UNAUTHENTICATED` ; un autre jeton : `PERMISSION_DENIED` ; sans ces
+réglages, tout appel est refusé. Chaque lien est enregistré sur le
+plan d'audit **avant** d'être rendu : un événement `data_access` sur `audit.v1.events`
+(`media.private_document.viewed` : le compte staff, le document, son propriétaire, l'heure, l'expiration du
+lien) ; un enregistrement en échec retient le lien (`MED-7004`, 503, retentable). Sans broker, la
+consultation est seulement journalisée. L'export
 RGPD le liste avec un téléchargement signé. **Conservation :** READY fixe une purge de secours à 90 jours ;
 `ProfileVerificationDecided` (`profile.v1.events`, `media-profile-consumer`) la déplace à la décision +
 `MEDIA_DOCUMENT_RETENTION_DAYS` (30), uniquement pour les documents du demandeur ; un balayage (toutes les

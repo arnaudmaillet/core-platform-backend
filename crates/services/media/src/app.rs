@@ -24,7 +24,7 @@ use crate::application::command::{
     ProcessAssetHandler, TranscodeAssetHandler,
 };
 use crate::application::port::{
-    AssetRepository, CdnGateway, DeliveryCache, EventPublisher, ImageProcessor, MalwareScanner,
+    AccessLog, AssetRepository, CdnGateway, DeliveryCache, EventPublisher, ImageProcessor, MalwareScanner,
     MediaProbe, ModerationScreen, ObjectStore, VideoTranscoder,
 };
 use crate::application::query::{
@@ -34,7 +34,7 @@ use crate::application::MediaPolicy;
 use crate::config::MediaConfig;
 use crate::infrastructure::cache::RedisDeliveryCache;
 use crate::infrastructure::cdn::{CloudFrontCdnGateway, CloudFrontInvalidator, CloudFrontInvalidatorConfig};
-use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
+use crate::infrastructure::event::{KafkaAccessLog, KafkaEventPublisher, LogAccessLog, LogEventPublisher};
 use crate::infrastructure::grpc::MediaServiceHandler;
 use crate::infrastructure::persistence::PgAssetRepository;
 use crate::infrastructure::probe::{DispatchingMediaProbe, DocumentMediaProbe, ImageMediaProbe, VideoMediaProbe};
@@ -55,6 +55,8 @@ pub struct AppDeps {
     pub scanner: Arc<dyn MalwareScanner>,
     pub screen: Arc<dyn ModerationScreen>,
     pub publisher: Arc<dyn EventPublisher>,
+    /// Staff views of private documents, on the audit plane (#837).
+    pub access_log: Arc<dyn AccessLog>,
     pub policy: MediaPolicy,
 }
 
@@ -114,6 +116,7 @@ impl App {
         let private_documents = Arc::new(PrivateDocumentUrlHandler::new(
             Arc::clone(&deps.assets),
             Arc::clone(&deps.cdn),
+            Arc::clone(&deps.access_log),
             deps.policy.signed_url_ttl,
         ));
         MediaServiceHandler::new(issue, commit, delete, process, get, resolve)
@@ -171,12 +174,12 @@ impl App {
         let cdn_keys = (config.s3.access_key.clone(), config.s3.secret_key.clone());
         let store = Arc::new(S3Client::new(config.s3)?);
 
-        let publisher: Arc<dyn EventPublisher> = match backends.kafka {
+        let (publisher, access_log): (Arc<dyn EventPublisher>, Arc<dyn AccessLog>) = match backends.kafka {
             Some(cfg) => {
                 let producer = KafkaProducerBuilder::new(ProducerConfig::new(cfg)).build()?;
-                Arc::new(KafkaEventPublisher::new(producer))
+                (Arc::new(KafkaEventPublisher::new(producer.clone())), Arc::new(KafkaAccessLog::new(producer)))
             }
-            None => Arc::new(LogEventPublisher),
+            None => (Arc::new(LogEventPublisher), Arc::new(LogAccessLog)),
         };
 
         // Lazy connect: dials `moderation` on first use, so a cold start does not
@@ -214,6 +217,7 @@ impl App {
             scanner: Arc::new(LogMalwareScanner),
             screen: Arc::new(GrpcModerationScreen::new(screen_channel)),
             publisher,
+            access_log,
             policy: config.policy,
         };
 
@@ -264,6 +268,7 @@ mod tests {
             scanner: fx.scanner.clone(),
             screen: fx.screen.clone(),
             publisher: fx.publisher.clone(),
+            access_log: fx.access_log.clone(),
             policy: fx.policy.clone(),
         };
         let (process, _transcode, _apply) = App::build_workers(&deps);
@@ -331,5 +336,66 @@ mod tests {
         });
         let status = handler.get_asset(request).await.unwrap_err();
         assert_eq!(status.code(), Code::NotFound);
+    }
+
+    /// Bearer tokens as staff tooling sends them on the mesh (#837).
+    struct Tokens;
+
+    impl transport::grpc::edge::StaffVerifier for Tokens {
+        fn verify<'a>(&'a self, token: &'a str) -> transport::grpc::edge::StaffVerification<'a> {
+            let permissions: Option<&[&str]> = match token {
+                "reviewer" => Some(&[transport::grpc::edge::VERIFICATION_REVIEW]),
+                "member" => Some(&[]),
+                _ => None,
+            };
+            let principal = permissions.map(|permissions| {
+                let raw: auth_context::OidcClaims =
+                    serde_json::from_value(serde_json::json!({ "sub": "staff-1", "exp": 4_102_444_800_i64 })).unwrap();
+                auth_context::CurrentPrincipal {
+                    user_id: auth_context::PrincipalId::new("staff-1"),
+                    tenant_id: None,
+                    permissions: permissions.iter().map(|p| auth_context::Permission::new(*p)).collect(),
+                    raw_claims: raw,
+                }
+            });
+            Box::pin(async move { principal })
+        }
+    }
+
+    fn with_token<T>(message: T, token: Option<&str>) -> Request<T> {
+        let mut request = Request::new(message);
+        if let Some(token) = token {
+            request.metadata_mut().insert("authorization", format!("Bearer {token}").parse().unwrap());
+        }
+        request
+    }
+
+    /// #837: a private document's link is a mesh call carrying a staff token
+    /// that holds `verification:review`; no token, a member's token or a
+    /// forged one is refused, and the link handed out is on the audit plane.
+    #[tokio::test]
+    async fn a_private_document_link_is_for_reviewers_only_and_recorded() {
+        let fx = Fixture::new();
+        let handler = handler_from_fakes(&fx)
+            .with_staff_gate(transport::grpc::edge::StaffGate::new(Arc::new(Tokens)));
+        let (doc, _) = fx.ready_asset(crate::domain::value_object::MediaKind::PrivateDocument).await;
+        let ask = || proto::GetPrivateDocumentUrlRequest { asset_id: doc.as_str() };
+
+        for (token, code) in
+            [(None, Code::Unauthenticated), (Some("forged"), Code::Unauthenticated), (Some("member"), Code::PermissionDenied)]
+        {
+            let denied = handler.get_private_document_url(with_token(ask(), token)).await.unwrap_err();
+            assert_eq!(denied.code(), code, "{token:?}");
+        }
+        assert!(fx.access_log.views().is_empty(), "nothing handed out, nothing recorded");
+
+        let link = handler.get_private_document_url(with_token(ask(), Some("reviewer"))).await.unwrap().into_inner();
+        assert!(!link.url.is_empty());
+        let views = fx.access_log.views();
+        assert_eq!((views.len(), views[0].viewer.as_str(), views[0].asset_id), (1, "staff-1", doc));
+
+        // The default gate (no verifier configured) denies everyone.
+        let closed = handler_from_fakes(&fx).get_private_document_url(with_token(ask(), Some("reviewer"))).await;
+        assert_eq!(closed.unwrap_err().code(), Code::Unauthenticated);
     }
 }

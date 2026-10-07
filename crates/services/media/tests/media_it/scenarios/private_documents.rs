@@ -38,7 +38,7 @@ async fn a_private_pdf_is_kept_privately_handed_to_staff_and_purged_after_the_de
     assert!(matches!(delivered, Err(MediaError::AssetNotFound { .. })), "{delivered:?}");
 
     // Staff: a signed link that serves the very bytes.
-    let link = h.staff.handle_at(doc, Utc::now()).await.unwrap();
+    let link = h.staff.handle_at(doc, "staff-1", Utc::now()).await.unwrap();
     let served = reqwest::get(&link.url).await.unwrap();
     assert!(served.status().is_success(), "{}", served.status());
     assert_eq!(served.bytes().await.unwrap().to_vec(), bytes);

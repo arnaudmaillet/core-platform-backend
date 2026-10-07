@@ -44,6 +44,7 @@ use thiserror::Error;
 /// | MED-7001 | AssetQuarantined         | 451  | **High** | No        |
 /// | MED-7002 | ScreenUnavailable        | 503  | **High** | **Yes**   |
 /// | MED-7003 | LegalHoldActive          | 451  | **High** | No        |
+/// | MED-7004 | AccessRecordFailed       | 503  | **High** | **Yes**   |
 /// | MED-8001 | EventDecodeFailed        | 422  | Medium   | No        |
 /// | MED-8002 | UnknownEventType         | 422  | Low      | No        |
 /// | MED-8003 | UnmappedSource           | 422  | Medium   | No        |
@@ -194,6 +195,11 @@ pub enum MediaError {
     #[error("a legal hold is active; the asset cannot be deleted")]
     LegalHoldActive,
 
+    /// A private document's view could not be recorded on the audit plane
+    /// (#837): the link is withheld.
+    #[error("the access could not be recorded: {reason}")]
+    AccessRecordFailed { reason: String },
+
     // ── Inbound event decode / source mapping (MED-8xxx) ──────────────────────
     #[error("failed to decode event from topic '{topic}': {reason}")]
     EventDecodeFailed { topic: String, reason: String },
@@ -261,6 +267,7 @@ impl AppError for MediaError {
             MediaError::AssetQuarantined => "MED-7001",
             MediaError::ScreenUnavailable => "MED-7002",
             MediaError::LegalHoldActive => "MED-7003",
+            MediaError::AccessRecordFailed { .. } => "MED-7004",
 
             MediaError::EventDecodeFailed { .. } => "MED-8001",
             MediaError::UnknownEventType { .. } => "MED-8002",
@@ -294,6 +301,7 @@ impl AppError for MediaError {
 
             MediaError::ObjectStoreUnavailable
             | MediaError::ScreenUnavailable
+            | MediaError::AccessRecordFailed { .. }
             | MediaError::PrivateDocumentsDisabled => StatusCode::SERVICE_UNAVAILABLE,
             MediaError::ObjectStoreTimeout => StatusCode::GATEWAY_TIMEOUT,
 
@@ -327,6 +335,7 @@ impl AppError for MediaError {
             | MediaError::MalwareDetected
             | MediaError::AssetQuarantined
             | MediaError::ScreenUnavailable
+            | MediaError::AccessRecordFailed { .. }
             | MediaError::LegalHoldActive => Severity::High,
 
             MediaError::InvalidStateTransition { .. }
@@ -355,6 +364,7 @@ impl AppError for MediaError {
             MediaError::Validation(e) => e.is_retryable(),
 
             MediaError::ConcurrentModification
+            | MediaError::AccessRecordFailed { .. }
             | MediaError::TranscodeFailed { .. }
             | MediaError::ProcessingFailed { .. }
             | MediaError::ObjectStoreUnavailable

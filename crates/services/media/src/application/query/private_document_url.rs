@@ -1,36 +1,54 @@
 //! Staff review of verification evidence (#777): a short-lived signed link to
-//! a private document. Mesh only — the staff tools call it; no client does.
+//! a private document, for a staff member holding `verification:review` (#837)
+//! — and only once the view is recorded on the audit plane.
 
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 
-use crate::application::port::{AssetRepository, CdnGateway, ResolvedUrl};
+use crate::application::port::{AccessLog, AssetRepository, CdnGateway, DocumentView, ResolvedUrl};
 use crate::domain::value_object::{AssetId, StorageKey};
 use crate::error::MediaError;
 
 pub struct PrivateDocumentUrlHandler {
-    assets: Arc<dyn AssetRepository>,
-    cdn:    Arc<dyn CdnGateway>,
-    ttl:    Duration,
+    assets:     Arc<dyn AssetRepository>,
+    cdn:        Arc<dyn CdnGateway>,
+    access_log: Arc<dyn AccessLog>,
+    ttl:        Duration,
 }
 
 impl PrivateDocumentUrlHandler {
-    pub fn new(assets: Arc<dyn AssetRepository>, cdn: Arc<dyn CdnGateway>, ttl: Duration) -> Self {
-        Self { assets, cdn, ttl }
+    pub fn new(
+        assets: Arc<dyn AssetRepository>,
+        cdn: Arc<dyn CdnGateway>,
+        access_log: Arc<dyn AccessLog>,
+        ttl: Duration,
+    ) -> Self {
+        Self { assets, cdn, access_log, ttl }
     }
 
     /// The document, READY and not taken down, as a signed GET valid for the
     /// policy's signed-URL TTL. Anything else (another kind, not ready,
-    /// quarantined, deleted) reads as missing.
-    pub async fn handle_at(&self, asset_id: AssetId, now: DateTime<Utc>) -> Result<ResolvedUrl, MediaError> {
+    /// quarantined, deleted) reads as missing. `viewer` is the staff account
+    /// the link is for: the view is recorded first, and a failed record
+    /// withholds the link (`MED-7004`).
+    pub async fn handle_at(&self, asset_id: AssetId, viewer: &str, now: DateTime<Utc>) -> Result<ResolvedUrl, MediaError> {
         let asset = self
             .assets
             .find_by_id(&asset_id)
             .await?
             .filter(|a| a.kind().is_private() && a.is_deliverable())
             .ok_or_else(|| MediaError::AssetNotFound { id: asset_id.as_str() })?;
-        self.cdn.signed_download(&StorageKey::private_document(asset.id()), self.ttl, now).await
+        let link = self.cdn.signed_download(&StorageKey::private_document(asset.id()), self.ttl, now).await?;
+        let view = DocumentView {
+            asset_id,
+            owner: asset.owner_id(),
+            viewer: viewer.to_owned(),
+            at: now,
+            expires_at: link.expires_at,
+        };
+        self.access_log.document_viewed(&view).await?;
+        Ok(link)
     }
 }
 
@@ -76,11 +94,20 @@ mod tests {
         assert!(matches!(get.handle(as_caller(Some(stranger))).await, Err(MediaError::AssetNotFound { .. })));
 
         // Staff: a signed link to the private key, for 5 minutes; not for a post image.
-        let staff = PrivateDocumentUrlHandler::new(Arc::clone(&fx.assets) as _, Arc::clone(&fx.cdn) as _, Duration::minutes(5));
-        let link = staff.handle_at(doc, t0()).await.unwrap();
+        let staff = fx.private_document_url_handler(Duration::minutes(5));
+        let link = staff.handle_at(doc, "staff-1", t0()).await.unwrap();
         assert!(link.url.contains(key.as_str()) && link.expires_at == Some(t0() + Duration::minutes(5)), "{link:?}");
         let (image, _) = fx.ready_asset(MediaKind::PostImage).await;
-        assert!(matches!(staff.handle_at(image, t0()).await, Err(MediaError::AssetNotFound { .. })));
+        assert!(matches!(staff.handle_at(image, "staff-1", t0()).await, Err(MediaError::AssetNotFound { .. })));
+
+        // #837: the view is on the audit plane — who, whose document, which, when.
+        let views = fx.access_log.views();
+        assert_eq!(views.len(), 1, "the refused one is not recorded");
+        assert_eq!((views[0].asset_id, views[0].owner, views[0].viewer.as_str()), (doc, owner(), "staff-1"));
+        assert_eq!((views[0].at, views[0].expires_at), (t0(), link.expires_at));
+        // No record, no link.
+        fx.access_log.fail();
+        assert!(matches!(staff.handle_at(doc, "staff-1", t0()).await, Err(MediaError::AccessRecordFailed { .. })));
 
         // Deleting it removes the private object too.
         fx.delete_handler()

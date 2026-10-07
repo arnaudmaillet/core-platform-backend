@@ -82,6 +82,10 @@ http      = { workspace = true }
 integration-media = []
 
 [dev-dependencies]
+# A staff edge principal in the GetPrivateDocumentUrl gate tests (#837).
+auth-context = { workspace = true }
+# Wire-contract test: the access record decodes as audit's own ingest lane reads it.
+audit = { workspace = true }
 # Wire-contract test: account_deleted read as account's own type serializes it.
 account = { workspace = true }
 # Wire-contract test: ProfileVerificationDecided read as profile serializes it.

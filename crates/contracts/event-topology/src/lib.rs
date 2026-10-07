@@ -79,6 +79,8 @@ pub const PRODUCERS: &[(&str, &str)] = &[
     ("auth.v1.events", "auth"),
     // media
     ("media.v1.events", "media"),
+    // staff views of private documents, on audit's generic lane (#837)
+    ("audit.v1.events", "media"),
 ];
 
 /// Every Kafka subscription in the fleet, paired with its consuming service.
@@ -164,7 +166,7 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("moderation.v1.events", "notification"),
     // media lifecycle → Plane-B processing pipeline (self-consume)
     ("media.v1.events", "media"),
-    // audit generic ingest lane (see DEFERRED)
+    // audit generic ingest lane (media's private-document views, #837)
     ("audit.v1.events", "audit"),
     // moderation intake lanes (see DEFERRED — external producers)
     ("moderation.reports", "moderation"),
@@ -180,13 +182,6 @@ pub const CONSUMERS: &[(&str, &str)] = &[
 /// in-repo: external systems, or documented roadmap deferrals. Each entry needs
 /// a reason. Keeps the phantom-edge test honest without hiding the gap.
 pub const DEFERRED: &[(&str, &str)] = &[
-    (
-        "audit.v1.events",
-        "Generic privileged-record ingest lane. Domain producers emit their own \
-         topics (account/auth/moderation .v1.events) which audit consumes \
-         directly; this lane is fed by the sync gRPC RecordPrivileged path and \
-         future generic producers.",
-    ),
     (
         "moderation.reports",
         "External user-report intake — produced by the client/edge, not a fleet \

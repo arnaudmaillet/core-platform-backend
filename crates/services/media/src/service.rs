@@ -83,9 +83,11 @@ impl Service for MediaService {
             kafka: Some(KafkaClientConfig::from_env()),
         };
 
-        let app = App::build(config, backends)
+        let mut app = App::build(config, backends)
             .await
             .map_err(|e| anyhow::anyhow!("media app build: {e}"))?;
+        // Staff RPCs on the mesh verify the staff member's token (#837).
+        app.handler = app.handler.with_staff_gate(service_runtime::staff_gate_from_env());
 
         // Plane B pipeline (off media.v1.events) + moderation takedowns.
         spawn_process_consumer(Arc::clone(&app.process));
@@ -305,7 +307,8 @@ mod tests {
     fn listing_by_owner_is_mesh_only() {
         let method = "/media.v1.MediaService/ListAssetsByOwner";
         assert!(MediaService::EDGE_POLICY.iter().all(|rule| rule.method != method));
-        // #777: the staff link to a private document never reaches a client.
+        // #777/#837: the staff link to a private document stays off the
+        // edge; the mesh call carries the staff token, checked in the handler.
         let staff = "/media.v1.MediaService/GetPrivateDocumentUrl";
         assert!(MediaService::EDGE_POLICY.iter().all(|rule| rule.method != staff));
     }

@@ -565,6 +565,7 @@ pub struct Fixture {
     pub scanner: Arc<StubMalwareScanner>,
     pub screen: Arc<StubModerationScreen>,
     pub publisher: Arc<RecordingEventPublisher>,
+    pub access_log: Arc<RecordingAccessLog>,
     pub policy: MediaPolicy,
 }
 
@@ -581,8 +582,18 @@ impl Fixture {
             scanner: Arc::new(StubMalwareScanner::new()),
             screen: Arc::new(StubModerationScreen::new()),
             publisher: Arc::new(RecordingEventPublisher::new()),
+            access_log: Arc::new(RecordingAccessLog::default()),
             policy: MediaPolicy::test_default(),
         }
+    }
+
+    pub fn private_document_url_handler(&self, ttl: chrono::Duration) -> super::query::PrivateDocumentUrlHandler {
+        super::query::PrivateDocumentUrlHandler::new(
+            Arc::clone(&self.assets) as _,
+            Arc::clone(&self.cdn) as _,
+            Arc::clone(&self.access_log) as _,
+            ttl,
+        )
     }
 
     // ─── Handler builders ────────────────────────────────────────────────────
@@ -748,5 +759,33 @@ impl Fixture {
         });
         self.assets.save(&asset).await.unwrap();
         id
+    }
+}
+
+/// Records private-document views (#837); can be made to fail.
+#[derive(Default)]
+pub struct RecordingAccessLog {
+    views:   Mutex<Vec<crate::application::port::DocumentView>>,
+    failing: std::sync::atomic::AtomicBool,
+}
+
+impl RecordingAccessLog {
+    pub fn views(&self) -> Vec<crate::application::port::DocumentView> {
+        self.views.lock().unwrap().clone()
+    }
+
+    pub fn fail(&self) {
+        self.failing.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::application::port::AccessLog for RecordingAccessLog {
+    async fn document_viewed(&self, view: &crate::application::port::DocumentView) -> Result<(), MediaError> {
+        if self.failing.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(MediaError::AccessRecordFailed { reason: "audit unreachable".into() });
+        }
+        self.views.lock().unwrap().push(view.clone());
+        Ok(())
     }
 }
