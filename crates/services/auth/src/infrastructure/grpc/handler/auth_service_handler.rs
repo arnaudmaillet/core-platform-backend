@@ -8,14 +8,14 @@ use uuid::Uuid;
 
 use transport::grpc::edge;
 use crate::application::command::{
-    ChangeContactCommand, ChangeContactHandler, ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, GuestAttestation, CompleteLoginCommand, IssuedSession, LoginCommand, LoginHandler, LoginOutcome, MfaCaller,
+    AppAuthorizations, AppGrant, ChangeContactCommand, ChangeContactHandler, ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, GuestAttestation, CompleteLoginCommand, IssuedSession, LoginCommand, LoginHandler, LoginOutcome, MfaCaller,
     MfaSettingsHandler, PasskeyAssertion, PasskeyHandler, PasskeyRegistration, PasskeySignIn, PasskeyView,
     LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutCommand, LogoutHandler,
     RefreshCommand, RefreshHandler, SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome,
     StartGuestSessionCommand, StartGuestSessionHandler, StartVerificationCommand, VerificationCodes,
     StepUpCredential, VerifyCredentialsCommand, VerifyCredentialsHandler,
 };
-use crate::application::port::{AuthnGrant, SignUpConsent, VerificationChannel};
+use crate::application::port::{AppAuthorization, AuthnGrant, SignUpConsent, VerificationChannel};
 use crate::application::query::{
     IntrospectHandler, IntrospectQuery, ListSessionsHandler, ListSessionsQuery, SessionSummary,
 };
@@ -48,6 +48,8 @@ pub struct AuthServiceHandler {
     change_contact: Option<Arc<ChangeContactHandler>>,
     mfa_settings: Option<Arc<MfaSettingsHandler>>,
     passkeys: Option<Arc<PasskeyHandler>>,
+    /// Third-party app authorisations (#667).
+    apps: Option<Arc<AppAuthorizations>>,
     passkey_sign_in: Option<Arc<PasskeySignIn>>,
     nonces: Option<Arc<FederatedNonces>>,
     attestation: Option<Arc<GuestAttestation>>,
@@ -84,6 +86,7 @@ impl AuthServiceHandler {
             change_contact: None,
             mfa_settings: None,
             passkeys: None,
+            apps: None,
             passkey_sign_in: None,
             nonces: None,
             attestation: None,
@@ -225,6 +228,75 @@ impl AuthServiceHandler {
     }
 
     /// Enables the passkey RPCs (#808): an RP id is configured.
+    pub fn with_app_authorizations(mut self, handler: Arc<AppAuthorizations>) -> Self {
+        self.apps = Some(handler);
+        self
+    }
+
+    fn apps(&self) -> Result<&AppAuthorizations, Status> {
+        self.apps.as_deref().ok_or_else(|| Status::unavailable("app authorisations are not configured"))
+    }
+
+    /// Edge `authenticated` (#667): the caller's authorised apps.
+    pub async fn list_authorized_apps(
+        &self,
+        request: Request<proto::ListAuthorizedAppsRequest>,
+    ) -> Result<Response<proto::ListAuthorizedAppsResponse>, Status> {
+        let handler = self.apps()?;
+        let (account_id, session_id) = caller(&request)?;
+        let apps = handler
+            .list(Envelope::new(Uuid::now_v7(), MfaCaller { account_id, session_id }), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::ListAuthorizedAppsResponse { apps: apps.into_iter().map(app_to_proto).collect() }))
+    }
+
+    /// Edge `authenticated` (#667): withdraws one; no step-up (GDPR Art. 7(3)).
+    pub async fn revoke_app_authorization(
+        &self,
+        request: Request<proto::RevokeAppAuthorizationRequest>,
+    ) -> Result<Response<proto::ListAuthorizedAppsResponse>, Status> {
+        let handler = self.apps()?;
+        let (account_id, session_id) = caller(&request)?;
+        let app_id = request.into_inner().app_id;
+        let left = handler
+            .revoke(Envelope::new(Uuid::now_v7(), (MfaCaller { account_id, session_id }, app_id)), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::ListAuthorizedAppsResponse { apps: left.into_iter().map(app_to_proto).collect() }))
+    }
+
+    /// Mesh only (#667): the OAuth server records a consented grant.
+    pub async fn record_app_authorization(
+        &self,
+        request: Request<proto::RecordAppAuthorizationRequest>,
+    ) -> Result<Response<proto::AuthorizedApp>, Status> {
+        let handler = self.apps()?;
+        let req = request.into_inner();
+        let grant = AppGrant {
+            app_id:       req.app_id,
+            display_name: req.display_name,
+            icon_url:     req.icon_url,
+            scopes:       req.scopes,
+        };
+        let stored = handler
+            .grant(Envelope::new(Uuid::now_v7(), (req.account_id, grant)), Utc::now())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(app_to_proto(stored)))
+    }
+
+    /// Mesh only (#667): an app used its grant.
+    pub async fn note_app_use(
+        &self,
+        request: Request<proto::NoteAppUseRequest>,
+    ) -> Result<Response<proto::NoteAppUseResponse>, Status> {
+        let handler = self.apps()?;
+        let req = request.into_inner();
+        handler.record_use(&req.account_id, &req.app_id, Utc::now()).await.map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::NoteAppUseResponse {}))
+    }
+
     pub fn with_passkeys(mut self, handler: Arc<PasskeyHandler>) -> Self {
         self.passkeys = Some(handler);
         self
@@ -851,6 +923,17 @@ fn assertion_from_proto(a: proto::PasskeyAssertion) -> PasskeyAssertion {
         authenticator_data: a.authenticator_data,
         signature:          a.signature,
         user_handle:        a.user_handle,
+    }
+}
+
+fn app_to_proto(app: AppAuthorization) -> proto::AuthorizedApp {
+    proto::AuthorizedApp {
+        app_id:       app.app_id,
+        display_name: app.display_name,
+        icon_url:     app.icon_url,
+        scopes:       app.scopes,
+        granted_at:   Some(to_timestamp(app.granted_at)),
+        last_used_at: app.last_used_at.map(to_timestamp),
     }
 }
 

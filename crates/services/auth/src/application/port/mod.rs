@@ -5,6 +5,7 @@
 //! as `Arc<dyn …>`.
 
 pub mod account_directory;
+pub mod app_authorization_repository;
 pub mod account_eraser;
 pub mod credential_admin;
 pub mod event_publisher;
@@ -22,6 +23,7 @@ pub mod subject_link_repository;
 pub mod token_minter;
 pub mod verification;
 
+pub use app_authorization_repository::{AppAuthorization, AppAuthorizationRepository};
 pub use account_directory::{
     AccountActivation, AccountDirectory, AccountSnapshot, ContactDetails, EmailHolder, NewAccount, SignUpConsent,
 };

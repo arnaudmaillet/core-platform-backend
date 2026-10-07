@@ -17,14 +17,14 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    AccountErasure, ExportReadyNotifier, AttestMode, GuestAttestation, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
+    AccountErasure, AppAuthorizations, ExportReadyNotifier, AttestMode, GuestAttestation, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
     LogoutAllSessionsHandler, LogoutHandler, MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler,
     MfaPolicy, MfaSettingsHandler, MfaVerifier, PasskeyHandler, PasskeySignIn, StartGuestSessionHandler,
     VerificationCodes,
     VerifyCredentialsHandler,
 };
 use crate::application::port::{
-    AccountDirectory, CredentialAdmin, EventPublisher, FederatedNonceStore, FederatedTokenVerifier, GuestRegistry,
+    AccountDirectory, AppAuthorizationRepository, CredentialAdmin, EventPublisher, FederatedNonceStore, FederatedTokenVerifier, GuestRegistry,
     IdentityProvider, PasskeyRepository,
     ProfileDirectory,
     RefreshTokenRepository,
@@ -52,7 +52,7 @@ use crate::infrastructure::idp::{
     UnconfiguredCredentialAdmin,
 };
 use crate::infrastructure::persistence::{
-    PgAccountEraser, PgGuestRegistry, PgPasskeyRepository, PgRefreshTokenRepository, PgSessionRepository,
+    PgAccountEraser, PgAppAuthorizationRepository, PgGuestRegistry, PgPasskeyRepository, PgRefreshTokenRepository, PgSessionRepository,
     PgSubjectLinkRepository,
 };
 use crate::infrastructure::token::Es256TokenMinter;
@@ -90,6 +90,8 @@ pub struct AppDeps {
     pub mfa_issuer: String,
     /// Passkeys (#808); `None` = no RP id configured (UNAVAILABLE).
     pub passkeys: Option<PasskeyDeps>,
+    /// Third-party app authorisations (#667).
+    pub app_authorizations: Arc<dyn AppAuthorizationRepository>,
     pub policy: SessionPolicy,
 }
 
@@ -287,6 +289,12 @@ impl App {
             Some(sign_in) => handler.with_passkey_sign_in(sign_in),
             None => handler,
         };
+        let handler = handler.with_app_authorizations(Arc::new(AppAuthorizations::new(
+            Arc::clone(&deps.app_authorizations),
+            Arc::clone(&deps.sessions),
+            Arc::clone(&deps.cache),
+            Arc::clone(&deps.publisher),
+        )));
         let handler = match deps.passkeys {
             Some(passkeys) => handler.with_passkeys(Arc::new(
                 PasskeyHandler::new(
@@ -489,6 +497,7 @@ impl App {
                     None
                 }
             },
+            app_authorizations: Arc::new(PgAppAuthorizationRepository::new(tx.clone())),
             policy: config.policy,
         };
 
@@ -542,6 +551,7 @@ mod tests {
             mfa: Arc::clone(&fx.mfa),
             mfa_issuer: "Core Platform".into(),
             passkeys: None,
+            app_authorizations: Arc::new(crate::application::fakes::InMemoryAppAuthorizationRepository::default()),
             policy: fx.policy.clone(),
         })
     }

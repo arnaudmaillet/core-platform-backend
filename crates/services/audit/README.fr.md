@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8ce5443647855324bb8178b5979608bf1a509bc3dcbc078fc6880c09f6feb787
+  source_sha256: 22610f6d6634c62414f6e5a0eae0c3abaa62dc842856f18782c928bf9b912395
   translated_at: 2026-10-08
   status: complete
 ---
@@ -132,7 +132,7 @@ Chaque faute implémente `error::AppError` avec un code `AUD-XXXX` stable, mapp�
 |---|---|---|---|
 | `audit.v1.events` | `audit-ingest` | le firehose d'événements de conformité de toute la flotte → dédup → chaîne → persiste → archive. Produit aujourd'hui par `media` : chaque consultation par le staff d'un document privé (`data_access`, `media.private_document.viewed`, #837) | DLQ `audit.v1.events.dlq` |
 | `moderation.v1.events` ✅ câblé | `audit-moderation` | `decision_recorded` (l'autorité + le motif DSA — scellé dans une enveloppe crypto-effaçable à l'ingestion) et `enforcement_applied` ; les autres variants sont un skip inoffensif | DLQ `moderation.v1.events.dlq` |
-| `auth.v1.events` ✅ câblé | `audit-auth` | `session_issued` / `session_revoked` (le cycle de vie d'authentification — métadonnées structurées, sans PII, sans scellement) ; les autres variants sont un skip inoffensif | DLQ `auth.v1.events.dlq` |
+| `auth.v1.events` ✅ câblé | `audit-auth` | `session_issued` / `session_revoked` (le cycle de vie d'authentification — métadonnées structurées, sans PII, sans scellement) et `app_authorized` / `app_authorization_revoked` (le consentement à une app tierce et son retrait → enregistrements `consent` sous la base `consent`, #667) ; les autres variants sont un skip inoffensif | DLQ `auth.v1.events.dlq` |
 | `account.v1.events` ✅ câblé | `audit-account` | toute la surface account — `account_created` / `email_changed` / `email_verified` / `phone_changed` porteurs de PII (scellée dans une enveloppe crypto-effaçable), sécurité (`password_changed`, `mfa_*` → Authentication), cycle de vie d'identité (`activated`/`deactivated`/`suspended`/`deleted`, `kyc_status_changed` → **Identity**), autorisation (`role_*` → Authorization), les événements GDPR (`gdpr_deletion_requested` / `gdpr_deletion_cancelled` → DataErasure, `gdpr_data_export_requested` → DataExport) et `consents_updated` → **Consent** (preuve art. 7(1)) — et `deleted` (l'effacement lui-même, après le délai de grâce de 30 jours) **crypto-efface aussi le sujet** (Art. 17, boucle bouclée) | DLQ `account.v1.events.dlq` |
 
 > **Contrat runtime (obligatoire) :** tous les consommateurs tournent sous `run_consumer` — commit manuel uniquement après que l'événement est persisté de façon durable *et* chaîné, retry borné avec backoff + jitter, DLQ sur poison/épuisement. **Aucun offset commité n'avance jamais au-delà d'un événement non persisté → zéro perte.** **Idempotence :** les événements portent un id UUIDv5 déterministe ; une redélivrance est dédupliquée (`AUD-1004`, replié dans `Ok`), donc chaque événement logique apparaît exactement une fois dans la chaîne. Un événement sans rien d'enregistrable (`AUD-8002`) est un skip inoffensif replié dans `Ok`. Les chaînes par partition gardent le chemin d'écriture parallèle (pas de sérialisation globale) ; une racine de Merkle globale périodique recoud les têtes de partition.

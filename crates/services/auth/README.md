@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-0** — every authenticated request depends on tokens this service issues |
 > | **Deployable** | `crates/apps/auth-server` (library crate: `crates/services/auth`) |
 > | **Datastores** | PostgreSQL/CockroachDB (db `auth`) · Redis Cluster (sessions/blacklist) |
-> | **Async** | publishes `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked) · consumes `account.v1.events` (`account_deleted` → GDPR erasure) |
+> | **Async** | publishes `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked/AppAuthorized/AppAuthorizationRevoked) · consumes `account.v1.events` (`account_deleted` → GDPR erasure) |
 > | **Upstream callers** | gateway / edge, end-user clients (login & refresh) |
 > | **Downstream deps** | Keycloak (IdP), `account` (gRPC, identity SoR), PostgreSQL, Redis Cluster |
 > | **SLO** | `<TODO: 99.95%>` avail · login p99 `<TODO>` · refresh p99 `<TODO>` |
@@ -249,6 +249,20 @@ the authenticator's response (`AUT-5023` challenge, `AUT-5024` refused — the r
 returned) and stores it in Postgres (`passkeys`, on the account's shard; at most 10 — `AUT-5025`; the
 same authenticator twice — `AUT-5026`). `ListPasskeys` / `RemovePasskey` (step-up; `AUT-5027`). Adding
 and removing are emailed to the account's address. Passkeys are erased with the account.
+
+**Third-party app authorisations (#667).** The apps a holder let sign them in or act for them
+(partners' "Sign in with"; Settings → Apps and Websites). Kept in Postgres (`app_authorizations`,
+migration 0008, on the account's shard; a withdrawn grant keeps its row with `revoked_at`); erased with
+the account. The holder: `ListAuthorizedApps` (edge, most recently granted first; empty while no
+partner integration exists) and `RevokeAppAuthorization(app_id)` (edge, **no step-up**: withdrawing
+consent must be as easy as giving it, GDPR Art. 7(3); idempotent; `AUT-5030` for an app never
+authorised) — every token issued under the grant must then be refused. The future OAuth server, on the
+mesh: `RecordAppAuthorization(account_id, app_id, display_name, icon_url, scopes)` (validated: app id
+and scopes `[a-z0-9._:-]`, https icon, 1–20 scopes; the same scopes again on an active grant change
+nothing; other scopes or a withdrawn app make a new consent) and `NoteAppUse` (`AUT-5030` once
+withdrawn: refuse the token). Every grant and withdrawal is published (`auth.app_authorized` /
+`auth.app_authorization_revoked`, through the outbox) and kept by audit as a `consent` record (the proof
+of consent, Art. 7(1)); a retry repeats its instant, so audit keeps one record.
 
 **Signing in with a passkey.** `StartPasskeySignIn` (public) hands out a challenge (single use, 5
 minutes, `auth:{pkauth:<hash>}`; discoverable, no allow list). The assertion then goes to `Login`

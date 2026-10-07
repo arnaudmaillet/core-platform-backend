@@ -7,7 +7,7 @@ use crate::domain::value_object::AccountId;
 use crate::error::AuthError;
 
 /// Deletes an account's auth data: its own rows on its shard (sessions, refresh
-/// tokens, passkeys, identity links; one transaction), then, on every shard,
+/// tokens, passkeys, app authorisations, identity links; one transaction), then, on every shard,
 /// the guests that became it with their sessions (a guest is sharded on its
 /// own id).
 pub struct PgAccountEraser {
@@ -45,6 +45,13 @@ impl AccountEraser for PgAccountEraser {
                         .map_err(storage)?
                         .rows_affected();
                     sqlx::query("DELETE FROM passkeys WHERE account_id = $1")
+                        .bind(account)
+                        .execute(&mut **tx)
+                        .await
+                        .map_err(storage)?;
+                    // Third-party app authorisations (#667); the consent records stay
+                    // on the audit plane, crypto-shredded with the account.
+                    sqlx::query("DELETE FROM app_authorizations WHERE account_id = $1")
                         .bind(account)
                         .execute(&mut **tx)
                         .await

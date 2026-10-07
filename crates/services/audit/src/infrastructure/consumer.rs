@@ -28,7 +28,9 @@ use crate::infrastructure::account_decode::{
     map_mfa_enrolled, map_mfa_revoked, map_password_changed, map_phone_changed, map_role_assigned,
     map_role_revoked,
 };
-use crate::infrastructure::auth_decode::{AuthEventWire, map_session_issued, map_session_revoked};
+use crate::infrastructure::auth_decode::{
+    AuthEventWire, map_app_authorization_revoked, map_app_authorized, map_session_issued, map_session_revoked,
+};
 use crate::infrastructure::decode::{AuditEventWire, map_audit_event};
 use crate::infrastructure::moderation_decode::{
     ModerationEventWire, map_decision_recorded, map_enforcement_applied,
@@ -211,6 +213,12 @@ pub async fn run_auth_ingest_consumer(
                     }
                     AuthEventWire::SessionRevoked(revoked) => {
                         handler.ingest(map_session_revoked(&revoked)?).await?;
+                    }
+                    AuthEventWire::AppAuthorized(granted) => {
+                        handler.ingest(map_app_authorized(&granted)?).await?;
+                    }
+                    AuthEventWire::AppAuthorizationRevoked(revoked) => {
+                        handler.ingest(map_app_authorization_revoked(&revoked)?).await?;
                     }
                     AuthEventWire::Other => {}
                 }

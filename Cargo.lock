@@ -362,6 +362,7 @@ dependencies = [
  "aes-gcm",
  "anyhow",
  "async-trait",
+ "audit",
  "auth-api",
  "auth-context",
  "axum 0.8.8",

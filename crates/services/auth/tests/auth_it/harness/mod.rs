@@ -349,6 +349,7 @@ impl Harness {
                     "pkauth",
                 )),
             }),
+            app_authorizations: Arc::new(auth::infrastructure::persistence::PgAppAuthorizationRepository::new(tx.clone())),
             policy: SessionPolicy::new(
                 ChronoDuration::minutes(10),
                 ChronoDuration::minutes(30),

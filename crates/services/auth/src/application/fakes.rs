@@ -1482,3 +1482,72 @@ impl super::port::FederatedNonceStore for InMemoryNonceStore {
         Ok(self.issued.lock().unwrap().remove(nonce_hash))
     }
 }
+
+/// (account, grant, revoked_at)
+type AppAuthorizationRow = (AccountId, super::port::AppAuthorization, Option<DateTime<Utc>>);
+
+/// App authorisations (#667), in memory.
+#[derive(Default)]
+pub struct InMemoryAppAuthorizationRepository {
+    rows: Mutex<Vec<AppAuthorizationRow>>,
+}
+
+#[async_trait]
+impl super::port::AppAuthorizationRepository for InMemoryAppAuthorizationRepository {
+    async fn list(&self, account_id: &AccountId) -> Result<Vec<super::port::AppAuthorization>, AuthError> {
+        let mut active: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(a, _, revoked)| a == account_id && revoked.is_none())
+            .map(|(_, g, _)| g.clone())
+            .collect();
+        active.sort_by(|a, b| b.granted_at.cmp(&a.granted_at).then(a.app_id.cmp(&b.app_id)));
+        Ok(active)
+    }
+
+    async fn grant(
+        &self,
+        account_id: &AccountId,
+        authorization: &super::port::AppAuthorization,
+    ) -> Result<super::port::AppAuthorization, AuthError> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.iter_mut().find(|(a, g, _)| a == account_id && g.app_id == authorization.app_id) {
+            Some((_, g, revoked)) if revoked.is_none() && g.scopes == authorization.scopes => {
+                g.display_name = authorization.display_name.clone();
+                g.icon_url = authorization.icon_url.clone();
+                Ok(g.clone())
+            }
+            Some((_, g, revoked)) => {
+                *g = authorization.clone();
+                *revoked = None;
+                Ok(g.clone())
+            }
+            None => {
+                rows.push((*account_id, authorization.clone(), None));
+                Ok(authorization.clone())
+            }
+        }
+    }
+
+    async fn revoke(&self, account_id: &AccountId, app_id: &str, at: DateTime<Utc>) -> Result<Option<DateTime<Utc>>, AuthError> {
+        let mut rows = self.rows.lock().unwrap();
+        Ok(rows.iter_mut().find(|(a, g, _)| a == account_id && g.app_id == app_id).map(|(_, _, revoked)| *revoked.get_or_insert(at)))
+    }
+
+    async fn record_use(&self, account_id: &AccountId, app_id: &str, at: DateTime<Utc>) -> Result<bool, AuthError> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.iter_mut().find(|(a, g, revoked)| a == account_id && g.app_id == app_id && revoked.is_none()) {
+            Some((_, g, _)) => {
+                g.last_used_at = Some(at);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn is_active(&self, account_id: &AccountId, app_id: &str) -> Result<bool, AuthError> {
+        Ok(self.rows.lock().unwrap().iter().any(|(a, g, revoked)| a == account_id && g.app_id == app_id && revoked.is_none()))
+    }
+}

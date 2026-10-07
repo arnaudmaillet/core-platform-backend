@@ -54,6 +54,7 @@ use thiserror::Error;
 /// | AUT-5027 | PasskeyNotFound              | 404  | Low      | No        |
 /// | AUT-5028 | PasskeyAssertionFailed       | 401  | Low      | No        |
 /// | AUT-5029 | PasskeysUnavailable          | 503  | Medium   | No        |
+/// | AUT-5030 | AppAuthorizationNotFound     | 404  | Low      | No        |
 /// | AUT-1005 | GuestSessionsDisabled        | 403  | Low      | No        |
 /// | AUT-1006 | DeviceAttestationRequired    | 403  | Low      | No        |
 /// | AUT-1007 | DeviceAttestationInvalid     | 403  | Medium   | No        |
@@ -253,6 +254,10 @@ pub enum AuthError {
     #[error("passkey not found")]
     PasskeyNotFound,
 
+    /// The account never authorised this app (#667).
+    #[error("this app is not authorised")]
+    AppAuthorizationNotFound,
+
     /// A passkey sign-in that does not verify: unknown credential, another
     /// account's, bad signature, no user verification. The reason is logged.
     #[error("the passkey sign-in was not accepted")]
@@ -375,6 +380,7 @@ impl AppError for AuthError {
             AuthError::PasskeyNotFound => "AUT-5027",
             AuthError::PasskeyAssertionFailed => "AUT-5028",
             AuthError::PasskeysUnavailable => "AUT-5029",
+            AuthError::AppAuthorizationNotFound => "AUT-5030",
 
             AuthError::AccountNotActive { .. } => "AUT-6001",
             AuthError::AccountDirectoryUnavailable => "AUT-6002",
@@ -406,7 +412,8 @@ impl AppError for AuthError {
             AuthError::SessionNotFound { .. }
             | AuthError::SubjectLinkNotFound { .. }
             | AuthError::NoAccountForIdentity
-            | AuthError::PasskeyNotFound => StatusCode::NOT_FOUND,
+            | AuthError::PasskeyNotFound
+            | AuthError::AppAuthorizationNotFound => StatusCode::NOT_FOUND,
 
             AuthError::SessionRevoked
             | AuthError::SessionExpired
