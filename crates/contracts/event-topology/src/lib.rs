@@ -69,6 +69,8 @@ pub const PRODUCERS: &[(&str, &str)] = &[
     ("chat.member.joined", "chat"),
     ("chat.member.left", "chat"),
     ("chat.message.sent", "chat"),
+    // a message's push, for the members it reaches (#654)
+    ("chat.message.push", "chat"),
     // counter
     ("counter.v1.popularity", "counter"),
     // moderation
@@ -125,6 +127,8 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     // follows, follow requests and their approval (#755)
     ("social-graph.followed", "notification"),
     ("social-graph.follow_requested", "notification"),
+    // chat messages' pushes (#654)
+    ("chat.message.push", "notification"),
     ("engagement.reactions", "engagement"),
     // social-graph edges → timeline fan-out, profile tier ownership
     ("social-graph.followed", "timeline"),

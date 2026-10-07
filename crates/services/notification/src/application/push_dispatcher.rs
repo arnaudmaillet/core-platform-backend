@@ -12,6 +12,7 @@ use crate::application::port::{
     SenderNames, UnreadCounter,
 };
 use crate::domain::device::DevicePlatform;
+use crate::domain::preferences::PushCategory;
 use crate::domain::push_message::{PushMessage, PushSubject};
 use crate::domain::value_object::ProfileId;
 use crate::error::NotificationError;
@@ -43,16 +44,8 @@ impl PushDispatcher {
             return Ok(0);
         };
         let target = ProfileId::from_uuid(notification.target_profile_id);
-        // No stored preferences: the adult defaults (a teen's are written at
-        // their first device registration, before any push can reach them).
-        let preferences = self.preferences.get(&target).await?.unwrap_or_default();
-        if !preferences.push_allowed(category, Utc::now()) {
-            return Ok(0);
-        }
-        // APNs only, until an FCM sender exists.
-        let devices: Vec<_> =
-            self.devices.devices(&target).await?.into_iter().filter(|d| d.platform == DevicePlatform::Ios).collect();
-        if devices.is_empty() {
+        // Nothing to read (name, badge) for a push that would not go.
+        if self.targets(&target, category).await?.is_empty() {
             return Ok(0);
         }
 
@@ -74,10 +67,34 @@ impl PushDispatcher {
             sender_name:     name.as_deref(),
             badge,
         });
+        self.send_to(&target, category, &message).await
+    }
 
+    /// The iOS devices a push about `category` goes to now: none when the
+    /// holder's preferences hold it (category off, pause, quiet hours).
+    async fn targets(&self, target: &ProfileId, category: PushCategory) -> Result<Vec<crate::domain::device::Device>, NotificationError> {
+        // No stored preferences: the adult defaults (a teen's are written at
+        // their first device registration, before any push can reach them).
+        let preferences = self.preferences.get(target).await?.unwrap_or_default();
+        if !preferences.push_allowed(category, Utc::now()) {
+            return Ok(Vec::new());
+        }
+        // APNs only, until an FCM sender exists.
+        Ok(self.devices.devices(target).await?.into_iter().filter(|d| d.platform == DevicePlatform::Ios).collect())
+    }
+
+    /// Sends `message` to `target`'s devices, unless their preferences hold
+    /// `category`; returns how many devices took it. A gone token is forgotten.
+    pub async fn send_to(
+        &self,
+        target: &ProfileId,
+        category: PushCategory,
+        message: &PushMessage,
+    ) -> Result<usize, NotificationError> {
+        let devices = self.targets(target, category).await?;
         let mut delivered = 0;
         for device in &devices {
-            match self.sender.send(device, &message).await {
+            match self.sender.send(device, message).await {
                 Ok(PushOutcome::Delivered) => delivered += 1,
                 Ok(PushOutcome::TokenGone) => {
                     // `BadDeviceToken` also answers a token sent to the wrong APNs
@@ -87,7 +104,7 @@ impl PushDispatcher {
                         environment = device.environment.as_str(),
                         "push token gone: device forgotten"
                     );
-                    if let Err(error) = self.devices.unregister(&target, &device.device_id).await {
+                    if let Err(error) = self.devices.unregister(target, &device.device_id).await {
                         tracing::warn!(%error, "could not forget a gone push token");
                     }
                 }
@@ -221,7 +238,7 @@ mod tests {
         assert_eq!(dispatcher.deliver(&like).await.unwrap(), 2, "iOS only");
         let sent = fakes.sent.lock().unwrap();
         let (_, message) = &sent[0];
-        assert_eq!(message.loc_key, "NTF_PUSH_REACTION");
+        assert_eq!(message.loc_key.as_deref(), Some("NTF_PUSH_REACTION"));
         assert_eq!(message.loc_args, vec!["Alice".to_owned()]);
         assert_eq!(message.badge, Some(4));
         assert_eq!((message.subject_kind, message.subject_id.clone()), ("post", like.subject_id.to_string()));

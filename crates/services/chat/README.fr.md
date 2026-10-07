@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 28cb6079e3a2aae93b6ad4682909e81fc12feeb5fd6f66f80fa9099064767c8a
-  translated_at: 2026-10-06
+  source_sha256: c85e4debd73cb3e58aee83ee0f29884fac7b89f01012d41d1a88d9071655ba11
+  translated_at: 2026-10-07
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -171,6 +171,7 @@ service ChatService {
   // Messaging
   rpc SendMessage (SendMessageRequest) returns (SendMessageResponse);
   rpc MarkRead    (MarkReadRequest)    returns (CommandResponse);
+  rpc MuteConversation (MuteConversationRequest) returns (CommandResponse); // #654 : les push du membre
   // Member-Plane signals
   rpc SendTyping (SendTypingRequest) returns (CommandResponse);
   rpc Heartbeat  (HeartbeatRequest)  returns (CommandResponse);
@@ -298,7 +299,8 @@ demandes de messages reçues, sans réponse. Chaque entrée porte :
 - le dernier message remis (expéditeur, aperçu de 100 caractères) ;
 - `unread` : le dernier message est d'un autre et plus récent que la position de lecture de l'appelant.
   Une demande reste non lue jusqu'à sa réponse, puisque son destinataire ne garde aucun accusé ;
-- `request` : la demande de l'appelant lui-même, en attente de réponse.
+- `request` : la demande de l'appelant lui-même, en attente de réponse ;
+- `muted` / `muted_until_ms` : l'appelant a mis les push de la conversation en sourdine (0 : jusqu'à ce qu'il la lève).
 
 Comment les entrées sont tenues :
 - **Stockage.** Les entrées vivent dans `chat.inbox_entries`, plus `chat.inbox_by_activity` pour le
@@ -312,6 +314,22 @@ Comment les entrées sont tenues :
   injoignable ⇒ `CHT-5001`.
 - **Réponses.** Accepter déplace l'entrée dans INBOX ; refuser la retire pour celui qui refuse seulement.
 - **Rejeux.** Une entrée ne recule jamais lors d'un rejeu.
+
+**Push (#654).** Une fois les entrées d'inbox d'un message écrites, l'`InboxWorker` demande son push au
+service notification sur `chat.message.push` : un événement par message, avec l'expéditeur, un aperçu
+du texte de 100 caractères (vide pour un média) et les `recipients`. Un destinataire est un membre
+que le message atteint dans son **inbox** — ni son expéditeur, ni le destinataire d'une demande en
+attente (une demande attend sans push), ni quelqu'un qui bloque l'expéditeur (un message retenu) —
+et qui n'a pas mis la conversation en sourdine. Les messages système ne sont jamais envoyés en push.
+notification l'envoie une fois par message, selon la préférence `messages`, la pause et les heures
+calmes de chaque destinataire. Sans broker, rien n'est envoyé.
+- `MuteConversation(conversation_id, member_id, muted, until_ms)` (edge `authenticated`, lié à
+  `member_id`) : met en sourdine les push de la conversation pour ce membre jusqu'à `until_ms` (dans
+  l'année) ou, avec `0`, jusqu'à ce qu'il la lève ; `muted = false` la lève. Stockée sur la ligne du
+  roster (`members_by_conversation.muted_until`, migration 0014, écrite avec `IF EXISTS` pour qu'un
+  départ concurrent ne laisse jamais de ligne sans rôle), donc quitter la conversation l'efface. Un
+  non-membre reçoit la même réponse que pour `MarkRead` (`NOT_FOUND` sur une conversation privée) ;
+  une fin passée ou au-delà d'un an donne `CHT-9004`.
 - **Demandes masquées (#810).** Une demande dont le message de l'expéditeur contient un des mots masqués
   de l'appelant, ou un terme injurieux quand son filtre injurieux est actif, apparaît dans
   **HIDDEN_REQUESTS** au lieu de REQUESTS (le destinataire peut toujours l'ouvrir ; les demandes ne sont
@@ -382,7 +400,8 @@ de personne ; jamais la réponse à un blocage), `CHT-1012` (aucune demande d'un
 | `chat.conversation.unpublished` | visibility → Private | `conversation_id` | **`chat` itself** (VisibilityWorker) |
 | `chat.member.joined` | member added to roster | `conversation_id` | **`chat` lui-même** (InboxWorker) |
 | `chat.member.left` | member removed from roster | `conversation_id` | **`chat` lui-même** (InboxWorker) |
-| `chat.message.sent` | message durably written (`withheld`, `request` depuis #656 : un consommateur push doit ignorer les deux) | `conversation_id` | **`chat` lui-même** (InboxWorker) |
+| `chat.message.sent` | message durably written (`withheld`, `request` depuis #656) | `conversation_id` | **`chat` lui-même** (InboxWorker) |
+| `chat.message.push` | le push d'un message et ses destinataires (#654), une fois ses entrées d'inbox écrites | `conversation_id` | `notification` (l'envoie) |
 
 **Consomme :**
 

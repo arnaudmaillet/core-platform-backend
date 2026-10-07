@@ -26,13 +26,14 @@ use crate::application::command::{
     CreateConversationCommand, CreateConversationHandler, DirectConversations, DirectMessaging, InboxProjector,
     InviteMemberCommand,
     InviteMemberHandler, JoinAsMemberCommand, JoinAsMemberHandler, LeaveConversationCommand, LeaveConversationHandler,
-    MarkReadCommand, MarkReadHandler, SendMessageHandler, SendMessages, SubscribeCommand,
+    MarkReadCommand, MarkReadHandler, MuteConversationCommand, MuteConversationHandler, SendMessageHandler, SendMessages, SubscribeCommand,
     SubscribeHandler, ToggleVisibilityCommand, ToggleVisibilityHandler, UnsubscribeCommand,
     UnsubscribeHandler,
 };
 use crate::application::port::{
     ConversationRepository, EventPublisher, HotTailCache, InboxStore, InteractionGate, MemberRepository,
-    MessageFilterStore, MessageRepository, PresenceSettingsStore, PresenceStore, ReceiptStore, RoutingRegistry,
+    MessageFilterStore, MessagePushes, MessageRepository, NoMessagePushes, PresenceSettingsStore, PresenceStore,
+    ReceiptStore, RoutingRegistry,
 };
 use crate::application::query::{
     FormerMemberHistoryQuery, GetHistoryHandler, GetHistoryQuery, ListInboxHandler, ListInboxQuery, ListMembersHandler, ListMembersQuery,
@@ -148,10 +149,24 @@ impl App {
         let invitation_repo =
             Arc::new(ScyllaInvitationRepository::new(Arc::clone(&scylla_client)));
         let inbox: Arc<dyn InboxStore> = Arc::new(ScyllaInboxStore::new(Arc::clone(&scylla_client)));
+        // The durable publisher when a broker is configured; it also carries
+        // the messages' pushes (#654), which need one.
+        let kafka_publisher = match &kafka {
+            Some(cfg) => {
+                let producer = KafkaProducerBuilder::new(ProducerConfig::new(cfg.clone())).build()?;
+                Some(Arc::new(KafkaEventPublisher::new(producer)))
+            }
+            None => None,
+        };
+        let pushes: Arc<dyn MessagePushes> = match &kafka_publisher {
+            Some(publisher) => Arc::clone(publisher) as _,
+            None => Arc::new(NoMessagePushes),
+        };
         let inbox_projector = Arc::new(InboxProjector {
             conversation_repo: Arc::clone(&conversation_repo) as Arc<dyn ConversationRepository>,
             member_repo:       Arc::clone(&member_repo) as Arc<dyn MemberRepository>,
             inbox:             Arc::clone(&inbox),
+            pushes,
         });
 
         // ── Cache / routing adapters ─────────────────────────────────────────
@@ -195,11 +210,8 @@ impl App {
             invitation_repo:   &invitation_repo,
             inbox:             &inbox,
         };
-        let commands = match &kafka {
-            Some(cfg) => {
-                let producer = KafkaProducerBuilder::new(ProducerConfig::new(cfg.clone())).build()?;
-                build_commands(Arc::new(KafkaEventPublisher::new(producer)), &repos, interaction_gate.clone())?
-            }
+        let commands = match &kafka_publisher {
+            Some(publisher) => build_commands(Arc::clone(publisher), &repos, interaction_gate.clone())?,
             // No broker: the inbox follows inline.
             None => build_commands(
                 Arc::new(ProjectingPublisher::new(LogEventPublisher, Arc::clone(&inbox_projector))),
@@ -390,6 +402,10 @@ fn build_commands<EP: EventPublisher>(
             subscription_repo: Arc::clone(subscription_repo),
         })?
         .register::<MarkReadCommand, _>(MarkReadHandler {
+            conversation_repo: Arc::clone(conversation_repo),
+            member_repo:       Arc::clone(member_repo),
+        })?
+        .register::<MuteConversationCommand, _>(MuteConversationHandler {
             conversation_repo: Arc::clone(conversation_repo),
             member_repo:       Arc::clone(member_repo),
         })?

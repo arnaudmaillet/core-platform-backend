@@ -8,10 +8,10 @@ use crate::domain::aggregate::Participant;
 use crate::domain::value_object::{ConversationId, MessageId, ProfileId, Role};
 use crate::error::ChatError;
 use crate::infrastructure::persistence::model::MemberRow;
-use crate::infrastructure::persistence::statement::{fast, row_err, scylla_err, strict, strict_batch};
+use crate::infrastructure::persistence::statement::{fast, lwt_applied, row_err, scylla_err, strict, strict_batch};
 use crate::infrastructure::persistence::time::{to_cql, to_utc};
 
-const MEMBER_COLS: &str = "member_id, role, joined_at, last_read";
+const MEMBER_COLS: &str = "member_id, role, joined_at, last_read, muted_until";
 
 /// ScyllaDB adapter for the bounded Member Plane roster
 /// (`chat.members_by_conversation`).
@@ -108,6 +108,28 @@ impl MemberRepository for ScyllaMemberRepository {
             .await
             .map_err(scylla_err)?;
         Ok(())
+    }
+
+    async fn set_muted_until(
+        &self,
+        conversation_id: &ConversationId,
+        member_id:       &ProfileId,
+        muted_until:     Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<bool, ChatError> {
+        // `IF EXISTS`: a plain UPDATE racing a departure would leave a roster
+        // row with no role, which every roster read would then fail on.
+        let stmt = strict(
+            &self.client,
+            "UPDATE chat.members_by_conversation SET muted_until = ? \
+             WHERE conversation_id = ? AND member_id = ? IF EXISTS",
+        );
+        let result = self
+            .client
+            .session
+            .execute_unpaged(stmt, (muted_until.map(to_cql), conversation_id.as_uuid(), member_id.as_uuid()))
+            .await
+            .map_err(scylla_err)?;
+        lwt_applied(result.into_rows_result().map_err(|e| row_err("member.mute:rows", e))?, "member.mute:deser")
     }
 
     async fn list(
@@ -290,5 +312,6 @@ fn participant_from_row(row: MemberRow) -> Result<Participant, ChatError> {
         Role::try_from(row.role)?,
         to_utc(row.joined_at),
         row.last_read.map(MessageId::from_uuid),
-    ))
+    )
+    .with_muted_until(row.muted_until.map(to_utc)))
 }

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 06140b8350e0334b741e2c22907fb2fc7656aa395ebd3b12a17c3b93a0c6fc82
+  source_sha256: de3fd630aea2acd2e5b4afe8a5a5222f384f0b677fdae53ea4a492bfd67df27b
   translated_at: 2026-10-07
   status: complete
 ---
@@ -171,8 +171,16 @@ Sans attente : le push ne retarde ni ne fait échouer l'écriture, et n'est pas 
 que la clé APNs n'est pas configurée.
 - Catégories : réaction → j'aime, commentaire / réponse → commentaires, mention → mentions, abonnement
   → nouveaux abonnés, demande d'abonnement / acceptée → demandes d'abonnement. **Les décisions d'appel
-  ne sont jamais envoyées en push** (fil seulement, tant que leur destinataire n'est pas décidé). Les
-  messages du chat seront envoyés par un changement ultérieur.
+  ne sont jamais envoyées en push** (fil seulement, tant que leur destinataire n'est pas décidé).
+- **Messages du chat** (`chat.message.push`, groupe de consommateurs `notification-chat-push`,
+  seulement quand le push est actif) : chat désigne les destinataires (ses règles d'inbox et les
+  sourdines par conversation) ; chacun le reçoit selon sa préférence `messages`, sa pause et ses
+  heures calmes. Envoyé **au plus une fois** par message (un claim Redis sur son id, gardé
+  `NOTIFICATION_DEDUPE_TTL_SECS`) ; un message de plus d'un jour n'est pas envoyé (un arriéré).
+  Alerte : `title` = le nom de l'expéditeur (sinon `title-loc-key` `NTF_PUSH_MESSAGE_ANON`), `body` =
+  le texte (une pièce jointe : `loc-key` `NTF_PUSH_MESSAGE_MEDIA`) ; pas de badge (le fil d'activité
+  n'est pas touché) ; `kind = message`, `subject_kind = conversation`, `subject_id` = la conversation,
+  `notification_id` = le message.
 - Alerte : traduite par l'app (`loc-key` + `loc-args`) : `NTF_PUSH_<KIND>` (args : le nom de l'auteur),
   `NTF_PUSH_<KIND>_OTHERS` (args : le nom, le nombre d'autres — une notification regroupée),
   `NTF_PUSH_<KIND>_ANON` (sans args : le nom est inconnu). Le nom est le nom affiché de l'auteur (sinon
@@ -225,6 +233,7 @@ identifiers — via le crate partagé `error`.
 | `moderation.v1.events` (`appeal_resolved` only) | `notification-appeal-consumer` | an appeal's outcome → `APPEAL_UPHELD` / `APPEAL_OVERTURNED` to **every profile** moderation names (`profile_ids`: the appellant account's profiles, #744). Subject: the appeal (`SUBJECT_KIND_APPEAL`, the app opens it via `ListMyAppeals`). A platform notice: no sender (nil `sender_profile_id`, `sender_count` 0), not block-gated; one notification per (appeal, profile) (deterministic id). Other moderation events are ignored | DLQ `{topic}.dlq` |
 | `comment.created` | `notification-comment-consumer` | comment notifications (block-gated, self-guarded; none for a `quiet` event: a restricted author, #659) | DLQ `{topic}.dlq` |
 | `post.published` | `notification-mention-consumer` | parse `@mentions`, cache post author | DLQ `{topic}.dlq` |
+| `chat.message.push` | `notification-chat-push` | le push d'un message du chat aux destinataires que chat désigne (#654), une fois par message (claim Redis), selon la préférence `messages` de chacun ; rien n'est écrit dans le fil. Seulement quand le push est actif ; reset `latest` (un nouveau groupe n'envoie jamais le passé) | DLQ `{topic}.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** tous les workers s'exécutent sous `run_consumer` — commit manuel
 > après succès (`enable_auto_commit=false`, reset earliest), retries bornés avec backoff + jitter, DLQ en

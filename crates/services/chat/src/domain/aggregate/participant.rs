@@ -17,6 +17,15 @@ pub struct Participant {
     /// Read-receipt horizon: the newest `MessageId` this member has read. `None`
     /// until the member reads anything.
     last_read:  Option<MessageId>,
+    /// No push from this conversation before this instant (#654);
+    /// [`muted_forever`] until unmuted.
+    muted_until: Option<DateTime<Utc>>,
+}
+
+/// A mute with no end, as stored: 9999-12-31 (millisecond-exact, so it reads
+/// back equal).
+pub fn muted_forever() -> DateTime<Utc> {
+    DateTime::from_timestamp(253_402_214_400, 0).unwrap_or(DateTime::<Utc>::MAX_UTC)
 }
 
 impl Participant {
@@ -33,6 +42,7 @@ impl Participant {
             role,
             joined_at: Utc::now(),
             last_read: None,
+            muted_until: None,
         })
     }
 
@@ -43,7 +53,13 @@ impl Participant {
         joined_at:  DateTime<Utc>,
         last_read:  Option<MessageId>,
     ) -> Self {
-        Self { profile_id, role, joined_at, last_read }
+        Self { profile_id, role, joined_at, last_read, muted_until: None }
+    }
+
+    /// The stored mute (`None`: not muted).
+    pub fn with_muted_until(mut self, muted_until: Option<DateTime<Utc>>) -> Self {
+        self.muted_until = muted_until;
+        self
     }
 
     /// Advances the read-receipt horizon. Monotone: an out-of-order or stale
@@ -60,6 +76,12 @@ impl Participant {
     pub fn role(&self)       -> Role              { self.role }
     pub fn joined_at(&self)  -> DateTime<Utc>     { self.joined_at }
     pub fn last_read(&self)  -> Option<MessageId> { self.last_read }
+    pub fn muted_until(&self) -> Option<DateTime<Utc>> { self.muted_until }
+
+    /// Whether this member's pushes from the conversation are off at `now`.
+    pub fn is_muted(&self, now: DateTime<Utc>) -> bool {
+        self.muted_until.is_some_and(|until| now < until)
+    }
 
     /// Whether this participant may toggle the conversation's visibility.
     pub fn can_administer(&self) -> bool {

@@ -1,4 +1,5 @@
 pub mod appeal_worker;
+pub mod chat_push_worker;
 pub mod collapse;
 pub mod collapse_flush_worker;
 pub mod comment_worker;

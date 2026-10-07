@@ -137,6 +137,15 @@ message MarkReadRequest {
     string message_id      = 3;
 }
 
+message MuteConversationRequest {
+    string conversation_id = 1;
+    string member_id       = 2;
+    // false: unmute (until_ms is ignored).
+    bool   muted           = 3;
+    // When the mute ends (within a year); 0: until unmuted.
+    int64  until_ms        = 4;
+}
+
 message SendTypingRequest {
     string conversation_id = 1;
     string member_id       = 2;
@@ -213,6 +222,10 @@ message InboxEntryView {
     bool             unread           = 6;
     // The caller's own request, awaiting the peer's answer.
     bool             request          = 7;
+    // The caller muted the conversation's pushes (#654) …
+    bool             muted            = 8;
+    // … until then; 0 when until they unmute.
+    int64            muted_until_ms   = 9;
 }
 message ListInboxResponse {
     repeated InboxEntryView entries         = 1;

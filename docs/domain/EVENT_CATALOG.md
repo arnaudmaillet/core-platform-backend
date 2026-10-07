@@ -48,6 +48,7 @@ producer's `DOMAIN.md §8`.
 | `chat.member.joined` | `chat` | `chat` |
 | `chat.member.left` | `chat` | `chat` |
 | `chat.message.sent` | `chat` | `chat` |
+| `chat.message.push` | `chat` | `notification` |
 | `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery`, `timeline` |
 | `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline`, `notification` |
 | `auth.v1.events` | `auth` | `audit` |
@@ -157,7 +158,8 @@ producer's `DOMAIN.md §8`.
 |---|---|---|---|
 | `chat.conversation.created` / `chat.conversation.published` / `chat.conversation.unpublished` | conversation lifecycle facts | create / publish / unpublish | `VisibilityWorker` (audience-plane teardown); `InboxWorker` (created: the owner's inbox entry, #656) |
 | `chat.member.joined` / `chat.member.left` | membership changed | join/leave | `InboxWorker` (the member's inbox entry in / out, #656) |
-| `chat.message.sent` | a message was committed to the log; `withheld` (shown to its sender only) and `request` (a message request's one message) since #656 | send commits | `InboxWorker` (each member's inbox entry up front — a withheld message moves only its sender's); chat's own live plane (**not** consumed by `realtime` — Separate Ways). A future push consumer must skip `withheld` and `request` messages |
+| `chat.message.sent` | a message was committed to the log; `withheld` (shown to its sender only) and `request` (a message request's one message) since #656 | send commits | `InboxWorker` (each member's inbox entry up front — a withheld message moves only its sender's); chat's own live plane (**not** consumed by `realtime` — Separate Ways). Pushes go through `chat.message.push` below, not this topic |
+| `chat.message.push` | a message's push (#654): its sender, a 100-character text preview (empty for media), and the `recipients` — the members it reaches in their inbox (not its sender, not a request's recipient, not someone blocking the sender) who have not muted the conversation. System messages are never pushed | `InboxWorker` once the inbox entries are written (at least once) | `notification` (`ChatPushWorker`: sends it once per message — Redis claim on `message_id` — to each recipient's iOS devices, under their `messages` preference, pause and quiet hours) |
 
 ## Media — `media.v1.events` (producer: `media`)
 

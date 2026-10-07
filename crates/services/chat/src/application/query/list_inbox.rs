@@ -33,6 +33,8 @@ pub struct InboxItem {
     /// The member's own request, unanswered — a declined one, or one to
     /// someone who blocks them, looks the same.
     pub request: bool,
+    /// The member muted the conversation's pushes until then (#654).
+    pub muted_until: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub struct InboxPage {
@@ -118,7 +120,8 @@ impl ListInboxHandler {
             last.sender_id != me && member.last_read().is_none_or(|read| last.message_id > read)
         });
         let own_request = request.is_unanswered() && request.requester() == Some(me);
-        Ok(Some(InboxItem { entry, unread, request: own_request }))
+        let muted_until = member.muted_until().filter(|_| member.is_muted(chrono::Utc::now()));
+        Ok(Some(InboxItem { entry, unread, request: own_request, muted_until }))
     }
 }
 
@@ -246,6 +249,7 @@ mod tests {
             conversation_repo: Arc::clone(&conversations) as Arc<dyn ConversationRepository>,
             member_repo:       Arc::clone(&members) as Arc<dyn MemberRepository>,
             inbox:             Arc::clone(&inbox) as Arc<dyn InboxStore>,
+            pushes:            Arc::new(crate::application::port::NoMessagePushes),
         };
         let handler = ListInboxHandler {
             conversation_repo: Arc::clone(&conversations) as Arc<dyn ConversationRepository>,

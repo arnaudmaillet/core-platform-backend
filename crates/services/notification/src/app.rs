@@ -55,7 +55,8 @@ use crate::infrastructure::persistence::{ScyllaNotificationRepository, ScyllaPus
 use crate::infrastructure::publisher::{KafkaNotificationPublisher, NoopNotificationPublisher};
 use crate::infrastructure::streaming::BroadcastRegistry;
 use crate::infrastructure::worker::{
-    appeal_worker::AppealNotificationWorker, collapse_flush_worker::CollapseFlushWorker, comment_worker::CommentNotificationWorker,
+    appeal_worker::AppealNotificationWorker, chat_push_worker::ChatPushWorker, collapse_flush_worker::CollapseFlushWorker,
+    comment_worker::CommentNotificationWorker,
     follow_worker::FollowNotificationWorker,
     mention_worker::MentionNotificationWorker, reaction_worker::ReactionNotificationWorker,
 };
@@ -128,14 +129,17 @@ impl App {
         let devices: Arc<dyn DeviceRegistry> = Arc::clone(&push_settings) as _;
         let preferences: Arc<dyn PreferenceStore> = push_settings;
         // A notification written for the first time goes out as a push.
-        let push: Arc<dyn PushNotifier> = match push.sender {
-            Some(sender) => Arc::new(PushDispatcher {
+        let dispatcher = push.sender.map(|sender| {
+            Arc::new(PushDispatcher {
                 devices:     Arc::clone(&devices),
                 preferences: Arc::clone(&preferences),
                 counter:     Arc::clone(&counter) as Arc<dyn UnreadCounter>,
                 names:       push.names,
                 sender,
-            }),
+            })
+        });
+        let push: Arc<dyn PushNotifier> = match &dispatcher {
+            Some(dispatcher) => Arc::clone(dispatcher) as _,
             None => Arc::new(NoPush),
         };
 
@@ -206,6 +210,19 @@ impl App {
 
         // ── Background workers (Kafka path) ──────────────────────────────────
         if let Some(kafka_config) = kafka {
+            // Chat messages' pushes (#654): only when push is on.
+            if let Some(dispatcher) = &dispatcher {
+                tokio::spawn(
+                    ChatPushWorker::new(
+                        kafka_config.clone(),
+                        redis_client.clone(),
+                        Arc::clone(dispatcher),
+                        config.dedupe_ttl_secs,
+                        "notification-chat-push",
+                    )
+                    .run(),
+                );
+            }
             tokio::spawn(
                 ReactionNotificationWorker::new(
                     kafka_config.clone(),
