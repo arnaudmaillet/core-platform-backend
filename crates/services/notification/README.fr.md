@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: de3fd630aea2acd2e5b4afe8a5a5222f384f0b677fdae53ea4a492bfd67df27b
-  translated_at: 2026-10-07
+  source_sha256: 1f02bffd5fad46bb346d22b6405778625aaa1332fca53b1b34356320764ab26b
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -231,6 +231,7 @@ identifiers — via le crate partagé `error`.
 | `engagement.reactions` | `notification-reaction-consumer` | reaction notifications (collapsed) | DLQ `{topic}.dlq` |
 | `social-graph.followed` + `social-graph.follow_requested` | `notification-follow-consumer` | follows → `FOLLOW` to the followee; a request to a private profile → `FOLLOW_REQUEST` to its owner (the app opens the requests inbox); an approved request (`via_request`) → `FOLLOW_ACCEPTED` to the requester, not the owner again (#755). A withdrawn request (`withdrawn_at`: cancelled, declined, cut by a block) **retracts** the owner's `FOLLOW_REQUEST`: deleted, and taken off the badge when still unread and newer than a mark-all-read (a replay does nothing). Subject: the other profile (`SUBJECT_KIND_PROFILE`). Block-gated, self-guarded, one notification per event (deterministic id) | DLQ `{topic}.dlq` |
 | `moderation.v1.events` (`appeal_resolved` only) | `notification-appeal-consumer` | an appeal's outcome → `APPEAL_UPHELD` / `APPEAL_OVERTURNED` to **every profile** moderation names (`profile_ids`: the appellant account's profiles, #744). Subject: the appeal (`SUBJECT_KIND_APPEAL`, the app opens it via `ListMyAppeals`). A platform notice: no sender (nil `sender_profile_id`, `sender_count` 0), not block-gated; one notification per (appeal, profile) (deterministic id). Other moderation events are ignored | DLQ `{topic}.dlq` |
+| `account.v1.events` (`supervision_started` / `supervision_ended` seulement) | `notification-supervision-consumer` | supervision familiale (#670) → `SUPERVISION_STARTED` aux deux côtés ; `SUPERVISION_ENDED` à l'autre côté quand l'un y met fin (aux deux quand un compte est effacé) ; `SUPERVISION_CAME_OF_AGE` aux deux à 18 ans. À chaque profil que account nomme sur l'événement ; expéditeur = le premier profil de l'autre côté (sinon la plateforme), sujet = le compte de l'autre côté (`SUBJECT_KIND_ACCOUNT` : l'app ouvre Réglages → Supervision). Sans filtre de blocage (un ado est toujours prévenu) ; fil seulement (pas de catégorie push) ; une notification par (événement, profil) (id déterministe). Les autres événements de compte sont ignorés | DLQ `{topic}.dlq` |
 | `comment.created` | `notification-comment-consumer` | comment notifications (block-gated, self-guarded; none for a `quiet` event: a restricted author, #659) | DLQ `{topic}.dlq` |
 | `post.published` | `notification-mention-consumer` | parse `@mentions`, cache post author | DLQ `{topic}.dlq` |
 | `chat.message.push` | `notification-chat-push` | le push d'un message du chat aux destinataires que chat désigne (#654), une fois par message (claim Redis), selon la préférence `messages` de chacun ; rien n'est écrit dans le fil. Seulement quand le push est actif ; reset `latest` (un nouveau groupe n'envoie jamais le passé) | DLQ `{topic}.dlq` |

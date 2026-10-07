@@ -29,6 +29,14 @@ enum NotificationKind {
     // The recipient's appeal was decided in their favour: a sanction is lifted,
     // or a reporter's case goes back to review (the appeal says which).
     NOTIFICATION_KIND_APPEAL_OVERTURNED = 9;
+    // Family supervision (#670): a parent and a teen paired (sender: the
+    // other side's profile; subject: the other side's account — the app
+    // opens Settings → Supervision).
+    NOTIFICATION_KIND_SUPERVISION_STARTED     = 10;
+    // The other side ended the supervision, or their account was erased.
+    NOTIFICATION_KIND_SUPERVISION_ENDED       = 11;
+    // The supervision ended because the teen turned 18.
+    NOTIFICATION_KIND_SUPERVISION_CAME_OF_AGE = 12;
 }
 
 // Discriminates the entity that was interacted with.
@@ -44,6 +52,9 @@ enum SubjectKind {
     // The subject is a moderation appeal (appeal_id stored in subject_id; the
     // app finds it with moderation's ListMyAppeals).
     SUBJECT_KIND_APPEAL      = 4;
+    // The subject is an account (account_id in subject_id): the other side
+    // of a family supervision (#670).
+    SUBJECT_KIND_ACCOUNT     = 5;
 }
 
 // What a push or an email is about (notification preferences, #654).

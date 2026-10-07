@@ -8,3 +8,4 @@ mod unread_counter;
 mod comment_notifications;
 mod follow_notifications;
 mod appeal_notifications;
+mod supervision_notifications;

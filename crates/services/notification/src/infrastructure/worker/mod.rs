@@ -6,6 +6,7 @@ pub mod comment_worker;
 pub mod follow_worker;
 pub mod mention_worker;
 pub mod reaction_worker;
+pub mod supervision_worker;
 
 use transport::kafka::config::client::KafkaClientConfig;
 use transport::kafka::config::producer::ProducerConfig;

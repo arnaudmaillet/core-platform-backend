@@ -20,6 +20,12 @@ pub enum NotificationKind {
     AppealUpheld,
     /// The recipient's appeal was decided in their favour (#744).
     AppealOverturned,
+    /// Family supervision (#670): the recipient and the sender's account paired.
+    SupervisionStarted,
+    /// The other side ended the supervision, or their account was erased.
+    SupervisionEnded,
+    /// The supervision ended: the teen turned 18.
+    SupervisionCameOfAge,
 }
 
 impl NotificationKind {
@@ -34,6 +40,9 @@ impl NotificationKind {
             Self::FollowAccepted => 7,
             Self::AppealUpheld     => 8,
             Self::AppealOverturned => 9,
+            Self::SupervisionStarted   => 10,
+            Self::SupervisionEnded     => 11,
+            Self::SupervisionCameOfAge => 12,
         }
     }
 
@@ -48,6 +57,9 @@ impl NotificationKind {
             7 => Ok(Self::FollowAccepted),
             8 => Ok(Self::AppealUpheld),
             9 => Ok(Self::AppealOverturned),
+            10 => Ok(Self::SupervisionStarted),
+            11 => Ok(Self::SupervisionEnded),
+            12 => Ok(Self::SupervisionCameOfAge),
             n => Err(NotificationError::UnknownNotificationKind { kind: n.to_string() }),
         }
     }
@@ -67,6 +79,9 @@ impl NotificationKind {
             Self::FollowAccepted => "follow_accepted",
             Self::AppealUpheld     => "appeal_upheld",
             Self::AppealOverturned => "appeal_overturned",
+            Self::SupervisionStarted   => "supervision_started",
+            Self::SupervisionEnded     => "supervision_ended",
+            Self::SupervisionCameOfAge => "supervision_came_of_age",
         }
     }
 }
