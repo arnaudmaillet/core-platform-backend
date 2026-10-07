@@ -82,5 +82,7 @@ http      = { workspace = true }
 integration-media = []
 
 [dev-dependencies]
+# Wire-contract test: account_deleted read as account's own type serializes it.
+account = { workspace = true }
 # Live integration suite (Phase 6): shared MinIO + Postgres + Redis containers.
 test-support = { workspace = true }

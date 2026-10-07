@@ -87,6 +87,8 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("account.v1.events", "audit"),
     ("account.v1.events", "auth"),
     ("account.v1.events", "profile"),
+    // account_deleted → media erases the account's media (GDPR Art. 17, #777)
+    ("account.v1.events", "media"),
     // profile lifecycle → search index, post author-tier denormalization,
     // social-graph audience projection (access check), geo-discovery authors'
     // location sharing (ghost / city level on the map)

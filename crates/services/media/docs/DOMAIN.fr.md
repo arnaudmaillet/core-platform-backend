@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: d705a417c3e25bbd1a83d11640eeb99b2ed028d1a26792cc9903783651bc94a9
-  translated_at: 2026-06-28
+  source_sha256: e929b444419ccd6713e531c0ffc6c28e189b2ecea9efff610531f7c2f2e5d90a
+  translated_at: 2026-10-07
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -159,4 +159,4 @@ takedown `moderation` met en quarantaine/supprime à la demande.
 - **Classification :** Supporting — plomberie média nécessaire ; pipeline sur-mesure.
 - **Volatilité :** moyenne — les nouveaux types média/renditions sont additifs.
 - **Dette de modélisation connue :** images d'abord ; transcodage vidéo différé.
-- **Capacités différées :** transcodage vidéo, sidecar anti-malware réel, consumer orphan-GC, WebP/AVIF, invalidation CloudFront, purge RGPD dédup-refcount.
+- **Capacités différées :** sidecar anti-malware réel, consumer orphan-GC, WebP/AVIF, purge RGPD dédup-refcount. Les médias d'un compte sont effacés avec le compte (`account_deleted`, #777 ; gels légaux conservés).

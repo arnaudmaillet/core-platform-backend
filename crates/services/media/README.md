@@ -9,7 +9,7 @@
 > | **Tier** | TIER-1 (mixed posture: fail-**open** delivery plane · fail-**closed** compliance gate) |
 > | **Deployable** | `crates/apps/media-server` (library crate: `crates/services/media`) |
 > | **Datastores** | Object storage (S3 / MinIO — canonical bytes) · Postgres db `media` (metadata SoR) · Redis Cluster (delivery cache + ticket reservations) |
-> | **Async** | publishes `media.v1.events` · consumes object-store finalize notifications, `moderation.v1.events`, `post.v1.events`, `profile.v1.events` (Kafka) |
+> | **Async** | publishes `media.v1.events` · consumes object-store finalize notifications, `moderation.v1.events`, `account.v1.events`, `post.v1.events`, `profile.v1.events` (Kafka) |
 > | **Upstream callers** | gateway/BFF, `post`, `profile` |
 > | **Downstream deps** | Object storage, CDN, `moderation` (Screen), Postgres, Redis, Kafka |
 > | **SLO** | `<99.9%>` control-plane avail · `<p99 ResolveDelivery < N ms>` · processing lag tracked, not SLA'd |
@@ -213,6 +213,7 @@ gRPC `Status` / HTTP by the shared `error` crate:
 |---|---|---|---|
 | object-store finalize (bridged) | `media-finalize-consumer` | upload finalize (source of truth over `CommitUpload`) | DLQ |
 | `moderation.v1.events` | `media-moderation-consumer` | quarantine / restore (revoke / re-enable delivery) | DLQ |
+| `account.v1.events` | `media-account-consumer` | `account_deleted` → every asset of the account is deleted like an owner's delete (bytes, renditions, quarantined copies, staging, tombstone, `AssetDeleted`, cache, CDN); legal-held assets are kept and logged (GDPR Art. 17, #777; idempotent) | DLQ |
 | `post.v1.events` / `profile.v1.events` | `media-binding-consumer` | mark assets bound; orphan GC of abandoned uploads | DLQ |
 
 > **Runtime contract (mandatory):** all consumers run under `run_consumer` —
@@ -346,7 +347,8 @@ sidecar (the `MalwareScanner` port ships a pass-through stub); the orphan-GC
 consumer (unbound-after-TTL reaping of abandoned uploads); WebP/AVIF rendition
 encoding (v1 emits JPEG); and
 the dedup refcount-aware GDPR purge (dedup ships behind a default-off flag until
-that path has live coverage).
+that path has live coverage; an account's erasure already keeps an object another
+asset still uses).
 
 ---
 
