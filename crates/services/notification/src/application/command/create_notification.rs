@@ -8,6 +8,7 @@ use crate::application::port::{
     StreamRegistry, UnreadCounter,
 };
 use crate::application::port::stream_registry::NotificationPayload;
+use crate::application::port::PushNotifier;
 use crate::domain::aggregate::Notification;
 use crate::domain::value_object::{
     NotificationId, NotificationKind, ProfileId, SubjectId, SubjectKind,
@@ -58,6 +59,8 @@ pub struct CreateNotificationHandler<R, C, U, S> {
     /// Realtime push stream (`notification.v1.events`). A trait object so the
     /// harness injects a no-op without a broker.
     pub publisher:    Arc<dyn NotificationEventPublisher>,
+    /// Sends it as a push (#654).
+    pub push:         Arc<dyn PushNotifier>,
 }
 
 impl<R, C, U, S> CommandHandler<CreateNotificationCommand>
@@ -127,6 +130,7 @@ where
             subject_id:        notification.subject_id().as_uuid(),
             created_at_ms:     notification.created_at().timestamp_millis(),
         });
+        self.push.notify(Arc::clone(&payload));
         self.stream_registry.broadcast(&target_id, payload);
 
         // Best-effort publish to notification.v1.events for out-of-process realtime

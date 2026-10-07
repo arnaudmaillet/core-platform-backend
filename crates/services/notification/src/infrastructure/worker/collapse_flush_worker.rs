@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::application::port::{NotificationRepository, StreamRegistry, UnreadCounter};
 use crate::application::port::stream_registry::NotificationPayload;
+use crate::application::port::{NoPush, PushNotifier};
 use crate::config::NotificationConfig;
 use crate::domain::aggregate::Notification;
 use crate::domain::value_object::{
@@ -68,6 +69,7 @@ pub struct CollapseFlushWorker<R, U, S> {
     repository:     Arc<R>,
     counter:        Arc<U>,
     stream_reg:     Arc<S>,
+    push:           Arc<dyn PushNotifier>,
     _config:        Arc<NotificationConfig>,
     flush_interval: Duration,
 }
@@ -78,6 +80,12 @@ where
     U: UnreadCounter,
     S: StreamRegistry,
 {
+    /// Sends each notification written for the first time as a push (#654).
+    pub fn with_push(mut self, push: Arc<dyn PushNotifier>) -> Self {
+        self.push = push;
+        self
+    }
+
     pub fn new(
         redis:          RedisClient,
         repository:     Arc<R>,
@@ -86,7 +94,7 @@ where
         config:         Arc<NotificationConfig>,
         flush_interval: Duration,
     ) -> Self {
-        Self { redis, repository, counter, stream_reg, _config: config, flush_interval }
+        Self { redis, repository, counter, stream_reg, push: Arc::new(NoPush), _config: config, flush_interval }
     }
 
     pub async fn run(self) {
@@ -230,7 +238,7 @@ where
         );
 
         self.repository.insert(&notification).await?;
-        self.counter.increment_once(&target_id, &business_key).await?;
+        let first = self.counter.increment_once(&target_id, &business_key).await?;
 
         let payload = Arc::new(NotificationPayload {
             notification_id:   notification.id().as_uuid(),
@@ -243,6 +251,9 @@ where
             subject_id:        notification.subject_id().as_uuid(),
             created_at_ms:     notification.created_at().timestamp_millis(),
         });
+        if first {
+            self.push.notify(Arc::clone(&payload));
+        }
         self.stream_reg.broadcast(&target_id, payload);
 
         tracing::debug!(

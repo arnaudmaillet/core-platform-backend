@@ -9,6 +9,7 @@ description = "Notification microservice — semantic event ingestion, ScyllaDB 
 
 [dependencies]
 notification-api = { workspace = true }
+profile-api      = { workspace = true }   # sender names for push alerts (#654)
 error          = { workspace = true }
 validate-core  = { workspace = true }
 validation     = { workspace = true }
@@ -31,6 +32,9 @@ chrono-tz    = { workspace = true }   # quiet hours in the holder's zone
 thiserror    = { workspace = true }
 tracing      = { workspace = true }
 dashmap      = { workspace = true }
+# APNs provider API (#654): HTTP/2 + an ES256 provider token.
+reqwest      = { workspace = true }
+jsonwebtoken = { workspace = true }
 once_cell    = { workspace = true }
 regex        = { workspace = true }
 
@@ -50,6 +54,10 @@ fred   = { workspace = true, features = ["partial-tracing", "i-scripts"] }
 integration-notification = []
 
 [dev-dependencies]
+# Ephemeral P-256 key for the APNs provider-token test (no key material is
+# hardcoded); `rand_core` 0.6 is the OsRng p256's keygen wants.
+p256      = { version = "0.13", features = ["pem", "pkcs8", "ecdsa"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 tokio = { workspace = true }
 # Wire contract test of the follow worker against social-graph's own events.
 social-graph = { workspace = true }

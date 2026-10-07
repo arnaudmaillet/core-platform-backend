@@ -27,6 +27,7 @@ use transport::kafka::consumer::{run_consumer, ProcessOutcome, RetryPolicy};
 use transport::kafka::producer::KafkaProducerHandle;
 
 use crate::application::port::stream_registry::NotificationPayload;
+use crate::application::port::{NoPush, PushNotifier};
 use crate::application::port::{BlockCache, NotificationRepository, StreamRegistry, UnreadCounter};
 use crate::domain::aggregate::Notification;
 use crate::domain::value_object::{NotificationId, NotificationKind, ProfileId, SubjectId, SubjectKind};
@@ -108,6 +109,7 @@ pub struct FollowNotificationWorker<R, B, U, S> {
     block_cache:  Arc<B>,
     counter:      Arc<U>,
     stream_reg:   Arc<S>,
+    push:         Arc<dyn PushNotifier>,
     group_id:     String,
 }
 
@@ -118,6 +120,12 @@ where
     U: UnreadCounter,
     S: StreamRegistry,
 {
+    /// Sends each notification written for the first time as a push (#654).
+    pub fn with_push(mut self, push: Arc<dyn PushNotifier>) -> Self {
+        self.push = push;
+        self
+    }
+
     pub fn new(
         kafka_config: KafkaClientConfig,
         repository:   Arc<R>,
@@ -126,7 +134,7 @@ where
         stream_reg:   Arc<S>,
         group_id:     impl Into<String>,
     ) -> Self {
-        Self { kafka_config, repository, block_cache, counter, stream_reg, group_id: group_id.into() }
+        Self { kafka_config, repository, block_cache, counter, stream_reg, push: Arc::new(NoPush), group_id: group_id.into() }
     }
 
     pub async fn run(self) {
@@ -198,22 +206,23 @@ where
             notice.at,
         );
         self.repository.insert(&notification).await?;
-        self.counter.increment_once(&notice.target, &notice.business_key).await?;
+        let first = self.counter.increment_once(&notice.target, &notice.business_key).await?;
 
-        self.stream_reg.broadcast(
-            &notice.target,
-            Arc::new(NotificationPayload {
-                notification_id:   notification.id().as_uuid(),
-                target_profile_id: notification.target_profile_id().as_uuid(),
-                sender_profile_id: notification.sender_profile_id().as_uuid(),
-                sample_sender_ids: notification.sample_sender_ids().to_vec(),
-                sender_count:      notification.sender_count(),
-                kind:              notification.kind(),
-                subject_kind:      notification.subject_kind(),
-                subject_id:        notification.subject_id().as_uuid(),
-                created_at_ms:     notification.created_at().timestamp_millis(),
-            }),
-        );
+        let payload = Arc::new(NotificationPayload {
+            notification_id:   notification.id().as_uuid(),
+            target_profile_id: notification.target_profile_id().as_uuid(),
+            sender_profile_id: notification.sender_profile_id().as_uuid(),
+            sample_sender_ids: notification.sample_sender_ids().to_vec(),
+            sender_count:      notification.sender_count(),
+            kind:              notification.kind(),
+            subject_kind:      notification.subject_kind(),
+            subject_id:        notification.subject_id().as_uuid(),
+            created_at_ms:     notification.created_at().timestamp_millis(),
+        });
+        if first {
+            self.push.notify(Arc::clone(&payload));
+        }
+        self.stream_reg.broadcast(&notice.target, payload);
         tracing::debug!(kind = notice.kind.as_str(), target = %notice.target, "follow notification written");
         Ok(())
     }

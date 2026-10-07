@@ -11,7 +11,7 @@
 > | **Datastores** | ScyllaDB keyspace `notification` (TWCS feed + counters) · Redis (collapse + unread) |
 > | **Async** | publishes nothing · consumes `engagement.reactions` / `comment.created` / `post.published` / `social-graph.followed` / `social-graph.follow_requested` / `moderation.v1.events` (appeal outcomes) |
 > | **Upstream callers** | `<TODO: mobile / BFF (stream + feed reads)>` |
-> | **Downstream deps** | ScyllaDB, Redis, Kafka |
+> | **Downstream deps** | ScyllaDB, Redis, Kafka; APNs + `profile` (push, #654) |
 > | **SLO** | unread-count read sub-ms (Redis) · feed read O(1) paginated · push best-effort |
 
 ---
@@ -88,6 +88,8 @@ ReactionNotificationWorker  CommentNotificationWorker  MentionNotificationWorker
 | ScyllaDB (`notification`) | durable feed + counters | feed writes/reads fail | **Hard** for feed; at-least-once retries |
 | Redis | collapse windows + unread L1 + block/author caches | collapse + unread degrade | **Soft** — Scylla counter is durability anchor |
 | Kafka | event ingest | new notifications stop | **Soft** — existing feed served; at-least-once on recovery |
+| APNs (#654) | push delivery | pushes not delivered | **Soft** — the feed and badge are unaffected; a push is never retried |
+| `profile` (mesh, #654) | the sender's name in a push | alerts name no one (`…_ANON`) | **Soft** |
 
 **Upstream (blast radius):**
 
@@ -120,9 +122,8 @@ service NotificationService {
 }
 ```
 
-**Push devices and preferences (#654).** The contract and storage for push; **nothing sends a push
-yet** (no APNs credentials). Every RPC but `ResolvePushTargets` is edge `authenticated` and bound to
-`profile_id`.
+**Push devices and preferences (#654).** Every RPC but `ResolvePushTargets` is edge `authenticated`
+and bound to `profile_id`.
 - `RegisterDevice(device_id, token, platform, environment, timezone)` — call it on every launch. A token
   registered for another **account** leaves that account's profiles (a handed-over phone never gets the
   old account's pushes); a device's new token replaces its old one. Tables `push_devices` (by profile)
@@ -142,8 +143,32 @@ yet** (no APNs credentials). Every RPC but `ResolvePushTargets` is edge `authent
   launch) or preferences call. Quiet hours the holder set themselves stay; an unknown age (the mesh, no
   date of birth) changes nothing. Marketing email is the
   account's `marketing` consent (`account.v1.UpdateConsents`), not a second toggle here.
-- `ResolvePushTargets(profile_id, category)` (mesh) is what the push sender will ask: the devices, or
-  `allowed = false` when the category is off, a pause runs or it is quiet hours.
+- `ResolvePushTargets(profile_id, category)` (mesh): the devices, or `allowed = false` when the category
+  is off, a pause runs or it is quiet hours — the rule the push sender below applies, for a sender
+  outside the service.
+
+**Push delivery (#654).** Every notification written **for the first time** (the unread counter's
+idempotency claim: a redelivered event pushes nothing) goes to the recipient's iOS devices over APNs,
+unless their preferences hold its category (category off, pause, quiet hours). Fire-and-forget: the
+push never delays nor fails the write, and is not retried. Off until the APNs key is configured.
+- Categories: reaction → likes, comment / reply → comments, mention → mentions, follow → new
+  followers, follow request / accepted → follow requests. **Appeal outcomes are never pushed** (feed
+  only, until their recipient is decided). Chat messages are pushed by a later change.
+- Alert: localized by the app (`loc-key` + `loc-args`): `NTF_PUSH_<KIND>` (args: the sender's name),
+  `NTF_PUSH_<KIND>_OTHERS` (args: the name, how many others — a collapsed notification),
+  `NTF_PUSH_<KIND>_ANON` (no args: the name is unknown). The name is the sender's display name (else
+  handle), read from `profile`'s `GetProfileById` on the mesh and cached 5 min. `badge` = the unread
+  count; `thread-id` = the subject; `apns-collapse-id` = the notification id; custom keys
+  `notification_id`, `kind`, `subject_kind`, `subject_id` (the app opens the subject from them).
+- APNs: HTTP/2 provider API, token auth (ES256 JWT from the team's `.p8` key, re-signed every
+  50 min), `apns-expiration` one day. A token APNs calls unregistered (410) or malformed
+  (`BadDeviceToken`) is forgotten; any other refusal (e.g. `DeviceTokenNotForTopic`, a configuration
+  fault) only logs (`NTF-3002`), so a misconfiguration never wipes the registrations. Android devices
+  are skipped until an FCM sender exists.
+- **`environment` must match the build:** APNs answers `BadDeviceToken` to a sandbox token sent to
+  production (and the reverse), so a device registered with the wrong `environment` is forgotten at
+  its first push — "push stopped working" on one device. The `push token gone` log line carries the
+  environment; development builds register `SANDBOX`, TestFlight and the App Store `PRODUCTION`.
 
 ### Rust ports (hexagonal contract)
 
@@ -154,11 +179,14 @@ pub trait BlockCache:             Send + Sync + 'static { /* is_blocked(sender, 
 pub trait StreamRegistry:         Send + Sync + 'static { /* subscribe/broadcast (broadcast::Receiver per profile) */ }
 pub trait DeviceRegistry:         Send + Sync + 'static { /* register/unregister/devices — push devices per profile */ }
 pub trait PreferenceStore:        Send + Sync + 'static { /* get/put — notification preferences per profile */ }
+pub trait PushSender:             Send + Sync + 'static { /* send(device, message) → Delivered | TokenGone (APNs) */ }
+pub trait SenderNames:            Send + Sync + 'static { /* display_name(profile) — fail-open (profile, mesh) */ }
+pub trait PushNotifier:           Send + Sync + 'static { /* notify(notification) — fire-and-forget hook of every write */ }
 ```
 
 ### Error contract (`NTF-xxxx`)
 
-`NTF-1xxx` lifecycle … `NTF-6001` author-cache miss (reaction notification dropped) … `NTF-9xxx`
+`NTF-1xxx` lifecycle … `NTF-3002` push not delivered (logged only) … `NTF-6001` author-cache miss (reaction notification dropped) … `NTF-9xxx`
 identifiers — via the shared `error` crate.
 
 ---
@@ -190,6 +218,7 @@ identifiers — via the shared `error` crate.
 | Celebrity fan-out (10k/s) | — | L1 in-batch + L2 Redis 30 s window (heat > 100) + L3 hourly cap (3/subject) | none — designed for it |
 | Redis unavailable | block/heat checks skipped | workers proceed; Scylla writes continue; unread accrues inconsistency until recovery | check Redis; Scylla counter reconciles |
 | ScyllaDB unavailable | feed writes fail | at-least-once: offset not committed → retry → DLQ; pushes best-effort | check Scylla; drain DLQ |
+| APNs unreachable / key refused | pushes not delivered | `NTF-3002` logged per device; feed + badge unaffected; a refused provider token is re-signed | check the APNs key, team id, topic; egress to `api.push.apple.com:443` |
 | Slow stream client | `RecvError::Lagged` | `tokio::broadcast` drops old; stream ends with `Status::DataLoss` | client reconnects + re-polls `ListNotifications` |
 | CollapseFlushWorker crash | window not flushed | Redis TTL (window + 10 s grace) expires the key; schedule member stays so next startup re-drains (no-op if empty) | restart worker; at worst one window lost |
 
@@ -241,6 +270,12 @@ async fn main() -> anyhow::Result<()> {
 | `NOTIFICATION_DEDUPE_TTL_SECS` | `86400` | Idempotency claim TTL — must exceed worst-case redelivery window. |
 | `NOTIFICATION_MAX_PAGE_SIZE` | `50` | Feed page cap. |
 | `NOTIFICATION_STREAM_BUFFER_SIZE` | `256` | `tokio::broadcast` capacity per streaming profile. |
+| `NOTIFICATION_APNS_KEY_FILE` | — | Path of the APNs `.p8` key (a mounted secret). With the next three, turns push on (#654); any unset: push off. |
+| `NOTIFICATION_APNS_KEY_ID` | — | The key's id (JWT `kid`). |
+| `NOTIFICATION_APNS_TEAM_ID` | — | The Apple team id (JWT `iss`). |
+| `NOTIFICATION_APNS_TOPIC` | — | The app's bundle id (`apns-topic`). |
+| `NOTIFICATION_PROFILE_GRPC_ENDPOINT` | — | profile's mesh endpoint, for the sender's name in a push. Unset: alerts name no one. |
+| `NOTIFICATION_PROFILE_RPC_TIMEOUT_MS` / `NOTIFICATION_PROFILE_CONNECT_TIMEOUT_MS` | `300` / `1000` | Deadlines of that call. |
 
 ### Inherited infrastructure variables
 

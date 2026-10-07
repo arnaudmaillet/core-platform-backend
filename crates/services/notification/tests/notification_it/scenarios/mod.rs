@@ -1,6 +1,7 @@
 //! Scenario groups for the notification live suite, mapping to the testing
 //! standard's axes: stream lifetimes and concurrency.
 
+mod push_delivery;
 mod push_settings;
 mod stream_lifetime;
 mod unread_counter;

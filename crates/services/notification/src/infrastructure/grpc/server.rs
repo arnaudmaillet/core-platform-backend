@@ -38,6 +38,7 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         scylla: ScyllaConfig::from_env(),
         redis:  RedisConfig::from_env(),
         kafka:  Some(KafkaClientConfig::from_env()),
+        push:   crate::infrastructure::push::from_env(),
     };
 
     let app = App::build(Arc::clone(&config), backends).await?;
