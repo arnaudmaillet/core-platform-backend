@@ -149,7 +149,8 @@ impl Harness {
         );
         store.ensure_bucket().await.expect("it: create bucket");
 
-        let policy = MediaPolicy::standard();
+        // Private documents (#777) on: the MinIO bucket here has no CDN.
+        let policy = MediaPolicy { private_documents_enabled: true, ..MediaPolicy::standard() };
         let mut dedup_policy = MediaPolicy::standard();
         dedup_policy.dedup_enabled = true;
 

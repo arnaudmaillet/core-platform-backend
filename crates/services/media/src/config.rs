@@ -38,6 +38,7 @@ impl MediaConfig {
             signed_url_ttl: Duration::seconds(env_u64("MEDIA_SIGNED_URL_TTL_SECS", 300) as i64),
             dedup_enabled: env_bool("MEDIA_DEDUP_ENABLED", false),
             screen_timeout: StdDuration::from_millis(env_u64("MEDIA_SCREEN_TIMEOUT_MS", 200)),
+            private_documents_enabled: env_bool("MEDIA_PRIVATE_DOCUMENTS_ENABLED", false),
         };
         let endpoint = env_or("MEDIA_OBJECT_STORE_ENDPOINT", "http://localhost:9000");
         let s3 = S3Config {

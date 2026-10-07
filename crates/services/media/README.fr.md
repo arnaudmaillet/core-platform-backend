@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 30a2b8500febe433122efd2df2dfef55568f26de5e863bda0d864d9212ff4cf0
+  source_sha256: ff9406257c22d520eb008826fa288e8014bef84fba697b615987c192d129a657
   translated_at: 2026-10-07
   status: complete
 ---
@@ -201,7 +201,9 @@ quarantaine n'est jamais remis.
 
 **Documents privés (#777).** `MEDIA_KIND_PRIVATE_DOCUMENT` contient les pièces d'une demande de
 vérification (`RequestVerification` de profile) : JPEG, PNG, HEIC ou PDF, ≤ 10 Mio, possédés par le compte
-comme tout asset. Un PDF ou un HEIC est vérifié par ses octets magiques (`DocumentMediaProbe` ; jamais
+comme tout asset. **Désactivé par défaut** (`MEDIA_PRIVATE_DOCUMENTS_ENABLED`) : tant que le déploiement ne
+tient pas `private/` hors de l'accès d'origine du CDN (core-platform-infra#37), un ticket d'upload pour un
+document privé est refusé (`MED-1006`, 503). Un PDF ou un HEIC est vérifié par ses octets magiques (`DocumentMediaProbe` ; jamais
 décodé, sans dimensions) ; un JPEG/PNG par la sonde d'images. Le traitement passe le même scan anti-malware,
 la même vérification de retrait et le même filtrage CSAM, puis **déplace les octets vers
 `private/documents/{asset_id}`** — un préfixe auquel l'accès d'origine du CDN n'est pas accordé (comme
@@ -347,6 +349,7 @@ async fn main() -> anyhow::Result<()> {
 | `MEDIA_CLOUDFRONT_DISTRIBUTION_ID` | Non | — | les retraits (quarantaine / suppression) purgent les rendus de l'asset de cette distribution CloudFront (`CreateInvalidation`, SigV4 avec les clés `MEDIA_S3_*`, dont l'utilisateur IAM doit avoir `cloudfront:CreateInvalidation`) ; une purge en échec fait échouer le retrait, qui est rejoué. Non défini : les retraits sont seulement journalisés (exécutions locales) |
 | `MEDIA_UPLOAD_TICKET_TTL_SECS` | Non | `900` | fenêtre de validité de l'upload pré-signé |
 | `MEDIA_SIGNED_URL_TTL_SECS` | Non | `300` | validité de l'URL de diffusion privée (signée) |
+| `MEDIA_PRIVATE_DOCUMENTS_ENABLED` | Non | `false` | autorise l'upload de documents privés (#777) ; à activer seulement une fois `private/` hors de l'accès d'origine du CDN (core-platform-infra#37) |
 | `MEDIA_DOCUMENT_RETENTION_DAYS` | Non | `30` | durée de vie d'un document privé après la décision de sa demande de vérification (#777) |
 | `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS` | Non | `3600` | fréquence de purge des documents privés échus |
 | `MEDIA_DEDUP_ENABLED` | Non | `false` | dédup par hash de contenu (off tant que le purge-refcount n'est pas durci) |

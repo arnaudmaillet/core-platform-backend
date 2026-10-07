@@ -176,7 +176,9 @@ out.
 451); delete under legal hold → `PERMISSION_DENIED` (`MED-7003`).
 
 **Private documents (#777).** `MEDIA_KIND_PRIVATE_DOCUMENT` holds verification evidence (profile
-`RequestVerification`): JPEG, PNG, HEIC or PDF, ≤ 10 MiB, owned by the account like any asset. A PDF or
+`RequestVerification`): JPEG, PNG, HEIC or PDF, ≤ 10 MiB, owned by the account like any asset. **Off by
+default** (`MEDIA_PRIVATE_DOCUMENTS_ENABLED`): until the deployment keeps `private/` out of the CDN's
+origin access (core-platform-infra#37), an upload ticket for one is refused (`MED-1006`, 503). A PDF or
 HEIC is checked by its magic bytes (`DocumentMediaProbe`; never decoded, no dimensions); a JPEG/PNG by the
 image probe. Processing runs the same malware scan, takedown check and CSAM screen, then **moves the bytes
 to `private/documents/{asset_id}`** — a prefix the CDN's origin access is not granted (like
@@ -316,6 +318,7 @@ async fn main() -> anyhow::Result<()> {
 | `MEDIA_CLOUDFRONT_DISTRIBUTION_ID` | No | — | takedowns (quarantine / delete) purge the asset's renditions from this CloudFront distribution (`CreateInvalidation`, SigV4 with the `MEDIA_S3_*` keys, whose IAM user needs `cloudfront:CreateInvalidation`); a failed purge fails the takedown, which is retried. Unset: takedowns only log (local runs) |
 | `MEDIA_UPLOAD_TICKET_TTL_SECS` | No | `900` | pre-signed upload validity window |
 | `MEDIA_SIGNED_URL_TTL_SECS` | No | `300` | private (signed) delivery URL validity; also the staff link to a private document |
+| `MEDIA_PRIVATE_DOCUMENTS_ENABLED` | No | `false` | private documents may be uploaded (#777); turn on only once `private/` is outside the CDN's origin access (core-platform-infra#37) |
 | `MEDIA_DOCUMENT_RETENTION_DAYS` | No | `30` | a private document's life after its verification request's decision (#777) |
 | `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS` | No | `3600` | how often due private documents are purged |
 | `MEDIA_DEDUP_ENABLED` | No | `false` | content-hash dedup (off until refcount-purge is hardened) |

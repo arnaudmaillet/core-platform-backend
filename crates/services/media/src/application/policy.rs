@@ -19,6 +19,11 @@ pub struct MediaPolicy {
     /// Hard timeout for the pre-publish moderation Screen call — a slow gate must
     /// not wedge the pipeline (fail-closed on elapse for CSAM-class).
     pub screen_timeout: StdDuration,
+    /// `MEDIA_PRIVATE_DOCUMENTS_ENABLED` (default **false**, #777): whether
+    /// private documents may be uploaded. Off until the infra keeps `private/`
+    /// out of the CDN's origin access (core-platform-infra#37); off, a
+    /// `PRIVATE_DOCUMENT` upload ticket is refused (`MED-1006`).
+    pub private_documents_enabled: bool,
 }
 
 impl MediaPolicy {
@@ -30,12 +35,15 @@ impl MediaPolicy {
             signed_url_ttl: Duration::minutes(5),
             dedup_enabled: false,
             screen_timeout: StdDuration::from_millis(200),
+            private_documents_enabled: false,
         }
     }
 
-    /// Deterministic defaults for unit tests.
+    /// Deterministic defaults for unit tests: the production defaults, with
+    /// private documents on (the tests exercise them; the off state has its own
+    /// test).
     #[cfg(test)]
     pub fn test_default() -> Self {
-        Self::standard()
+        Self { private_documents_enabled: true, ..Self::standard() }
     }
 }
