@@ -131,6 +131,15 @@ message GetAssetResponse {
     Asset  asset = 1;
 }
 
+message GetPrivateDocumentUrlRequest {
+    string asset_id = 1;
+}
+
+message GetPrivateDocumentUrlResponse {
+    string                    url        = 1;
+    google.protobuf.Timestamp expires_at = 2;
+}
+
 message ListAssetsByOwnerRequest {
     string  owner_id      = 1;
     int32   limit         = 2;

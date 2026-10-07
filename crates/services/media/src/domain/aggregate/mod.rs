@@ -6,4 +6,4 @@
 
 pub mod asset;
 
-pub use asset::{Asset, AssetSnapshot, FinalizeParams, Rendition, ReserveParams};
+pub use asset::{Asset, AssetSnapshot, FinalizeParams, Rendition, ReserveParams, PRIVATE_DOCUMENT_BACKSTOP};

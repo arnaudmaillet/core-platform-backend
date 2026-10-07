@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: c6d770abb4b5e5bf213af95f5598071f3ad719c1c7a9bd3e01076360301869fb
+  source_sha256: 30a2b8500febe433122efd2df2dfef55568f26de5e863bda0d864d9212ff4cf0
   translated_at: 2026-10-07
   status: complete
 ---
@@ -199,6 +199,23 @@ quarantaine n'est jamais remis.
 `PERMISSION_DENIED` (`MED-7001`, 451) ; suppression sous blocage légal →
 `PERMISSION_DENIED` (`MED-7003`).
 
+**Documents privés (#777).** `MEDIA_KIND_PRIVATE_DOCUMENT` contient les pièces d'une demande de
+vérification (`RequestVerification` de profile) : JPEG, PNG, HEIC ou PDF, ≤ 10 Mio, possédés par le compte
+comme tout asset. Un PDF ou un HEIC est vérifié par ses octets magiques (`DocumentMediaProbe` ; jamais
+décodé, sans dimensions) ; un JPEG/PNG par la sonde d'images. Le traitement passe le même scan anti-malware,
+la même vérification de retrait et le même filtrage CSAM, puis **déplace les octets vers
+`private/documents/{asset_id}`** — un préfixe auquel l'accès d'origine du CDN n'est pas accordé (comme
+`quarantine/`), indexé par l'asset si bien que des octets identiques venant de deux comptes ne partagent
+jamais d'objet — et le marque READY **sans aucun rendu**. Il n'est **jamais diffusé** : `ResolveDelivery`
+répond NOT_FOUND et `BatchResolveDelivery` l'omet ; `GetAsset` ne le montre qu'à son propriétaire (un autre
+compte : NOT_FOUND ; le mesh le lit) ; la dédup ne s'y applique jamais, dans aucun sens. Le staff les examine
+via `GetPrivateDocumentUrl`, réservé au mesh (un GET signé valide `MEDIA_SIGNED_URL_TTL_SECS`). L'export
+RGPD le liste avec un téléchargement signé. **Conservation :** READY fixe une purge de secours à 90 jours ;
+`ProfileVerificationDecided` (`profile.v1.events`, `media-profile-consumer`) la déplace à la décision +
+`MEDIA_DOCUMENT_RETENTION_DAYS` (30), uniquement pour les documents du demandeur ; un balayage (toutes les
+`MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS`) supprime ce qui est échu, comme une suppression par le propriétaire ;
+un gel légal le conserve. Supprimer le document retire toujours son objet privé (jamais partagé).
+
 ### Contrat d'erreur
 
 Chaque faute implémente `error::AppError` avec un code `MED-XXXX` stable, mappé vers
@@ -237,7 +254,8 @@ Chaque faute implémente `error::AppError` avec un code `MED-XXXX` stable, mapp�
 |---|---|---|---|
 | finalize du stockage objet (bridgé) | `media-finalize-consumer` | finalisation d'upload (source de vérité au-dessus de `CommitUpload`) | DLQ |
 | `moderation.v1.events` | `media-moderation-consumer` | quarantaine / restauration (révoquer / réactiver la diffusion) | DLQ |
-| `account.v1.events` | `media-account-consumer` | `account_deleted` → chaque asset du compte est supprimé comme par son propriétaire (octets, rendus, copies en quarantaine, staging, tombstone, `AssetDeleted`, cache, CDN) ; les assets sous gel légal sont gardés et journalisés (RGPD art. 17, #777 ; idempotent) | DLQ |
+| `account.v1.events` | `media-account-consumer` | `account_deleted` → chaque asset du compte est supprimé comme par son propriétaire (octets, rendus, copies en quarantaine, staging, tombstone, `AssetDeleted`, cache, CDN) ; les assets sous gel légal sont gardés et journalisés (RGPD art. 17, #777 ; idempotent). Une preuve dont un dossier de modération a encore besoin (un appel en cours au moment de la suppression) doit être conservée par un gel légal posé par moderation, jamais par ce chemin | DLQ |
+| `profile.v1.events` | `media-profile-consumer` | `ProfileVerificationDecided` → les documents privés du demandeur sont purgés à la décision + `MEDIA_DOCUMENT_RETENTION_DAYS` (#777) | DLQ |
 | `post.v1.events` / `profile.v1.events` | `media-binding-consumer` | marquer les assets liés ; GC des uploads abandonnés | DLQ |
 
 > **Contrat d'exécution (obligatoire) :** tous les consommateurs tournent sous
@@ -329,6 +347,8 @@ async fn main() -> anyhow::Result<()> {
 | `MEDIA_CLOUDFRONT_DISTRIBUTION_ID` | Non | — | les retraits (quarantaine / suppression) purgent les rendus de l'asset de cette distribution CloudFront (`CreateInvalidation`, SigV4 avec les clés `MEDIA_S3_*`, dont l'utilisateur IAM doit avoir `cloudfront:CreateInvalidation`) ; une purge en échec fait échouer le retrait, qui est rejoué. Non défini : les retraits sont seulement journalisés (exécutions locales) |
 | `MEDIA_UPLOAD_TICKET_TTL_SECS` | Non | `900` | fenêtre de validité de l'upload pré-signé |
 | `MEDIA_SIGNED_URL_TTL_SECS` | Non | `300` | validité de l'URL de diffusion privée (signée) |
+| `MEDIA_DOCUMENT_RETENTION_DAYS` | Non | `30` | durée de vie d'un document privé après la décision de sa demande de vérification (#777) |
+| `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS` | Non | `3600` | fréquence de purge des documents privés échus |
 | `MEDIA_DEDUP_ENABLED` | Non | `false` | dédup par hash de contenu (off tant que le purge-refcount n'est pas durci) |
 | `MEDIA_SCREEN_GRPC_ENDPOINT` | Non | `http://localhost:50061` | endpoint de la porte Screen de moderation |
 | `MEDIA_SCREEN_TIMEOUT_MS` | Non | `200` | hard timeout fail-closed du Screen |

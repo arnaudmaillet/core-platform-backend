@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: e929b444419ccd6713e531c0ffc6c28e189b2ecea9efff610531f7c2f2e5d90a
+  source_sha256: d16c60054f97f1111cd21fb0d269df652bc27a6b0d793d71a119e6f797b744c1
   translated_at: 2026-10-07
   status: complete
 ---
@@ -159,4 +159,4 @@ takedown `moderation` met en quarantaine/supprime à la demande.
 - **Classification :** Supporting — plomberie média nécessaire ; pipeline sur-mesure.
 - **Volatilité :** moyenne — les nouveaux types média/renditions sont additifs.
 - **Dette de modélisation connue :** images d'abord ; transcodage vidéo différé.
-- **Capacités différées :** sidecar anti-malware réel, consumer orphan-GC, WebP/AVIF, purge RGPD dédup-refcount. Les médias d'un compte sont effacés avec le compte (`account_deleted`, #777 ; gels légaux conservés).
+- **Capacités différées :** sidecar anti-malware réel, consumer orphan-GC, WebP/AVIF, purge RGPD dédup-refcount. Les médias d'un compte sont effacés avec le compte (`account_deleted`, #777 ; gels légaux conservés). Les documents privés (`PRIVATE_DOCUMENT`, #777) ne sont jamais diffusés, vivent sous `private/` et sont purgés 30 jours après la décision de leur demande de vérification.

@@ -5,7 +5,7 @@ use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::application::port::{AssetRepository, CdnGateway, ResolvedUrl};
 use crate::domain::aggregate::Asset;
-use crate::domain::value_object::{AssetId, OwnerId, RenditionKind};
+use crate::domain::value_object::{AssetId, OwnerId, RenditionKind, StorageKey};
 use crate::error::MediaError;
 
 /// The longest a download URL handed out for an export lives (S3's cap).
@@ -49,12 +49,20 @@ impl ListAssetsByOwnerHandler {
         let assets = self.assets.list_by_owner(&query.owner_id, query.limit, query.after.as_ref()).await?;
         let mut owned = Vec::with_capacity(assets.len());
         for asset in assets {
-            let original = asset
-                .is_deliverable()
-                .then(|| asset.renditions().iter().find(|r| r.kind() == RenditionKind::Original))
-                .flatten();
+            // A private document (#777) is the holder's too: its own key.
+            let original = if !asset.is_deliverable() {
+                None
+            } else if asset.kind().is_private() {
+                Some(StorageKey::private_document(asset.id()))
+            } else {
+                asset
+                    .renditions()
+                    .iter()
+                    .find(|r| r.kind() == RenditionKind::Original)
+                    .map(|r| r.storage_key().clone())
+            };
             let download = match original {
-                Some(rendition) => Some(self.cdn.signed_download(rendition.storage_key(), ttl, now).await?),
+                Some(key) => Some(self.cdn.signed_download(&key, ttl, now).await?),
                 None => None,
             };
             owned.push(OwnedAsset { asset, download });

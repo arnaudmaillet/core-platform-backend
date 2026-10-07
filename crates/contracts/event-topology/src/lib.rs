@@ -98,6 +98,9 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("profile.v1.events", "geo-discovery"),
     // a deleted profile's interest tags (#662) → timeline erases them
     ("profile.v1.events", "timeline"),
+    // a decided verification request → media purges its private documents
+    // 30 days later (#777)
+    ("profile.v1.events", "media"),
     // post (legacy)
     ("post.published", "notification"),
     ("post.published", "geo-discovery"),

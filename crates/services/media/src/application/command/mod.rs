@@ -7,6 +7,7 @@ pub mod apply_moderation;
 mod asset_objects;
 pub mod commit_upload;
 pub mod delete_asset;
+pub mod document_retention;
 pub mod erase_owner;
 pub mod issue_ticket;
 pub mod process_asset;
@@ -17,6 +18,7 @@ pub use apply_moderation::{
 };
 pub use commit_upload::{CommitUploadCommand, CommitUploadHandler};
 pub use delete_asset::{DeleteAssetCommand, DeleteAssetHandler, DeleteOutcome};
+pub use document_retention::DocumentRetention;
 pub use erase_owner::{ErasedMedia, OwnerErasure};
 pub use issue_ticket::{
     IssueUploadTicketCommand, IssueUploadTicketHandler, IssueUploadTicketOutcome, PreparedUpload,

@@ -73,9 +73,14 @@ pub struct ReserveParams {
 pub struct FinalizeParams {
     pub mime_type: MimeType,
     pub byte_size: u64,
-    pub dimensions: Dimensions,
+    /// `None` for a document (a PDF has none).
+    pub dimensions: Option<Dimensions>,
     pub content_hash: ContentHash,
 }
+
+/// How long a READY private document lives when no decision moves its purge
+/// (#777): an upload never attached to a request, or a request never decided.
+pub const PRIVATE_DOCUMENT_BACKSTOP: chrono::Duration = chrono::Duration::days(90);
 
 /// A full snapshot for reconstructing an asset from storage (no events emitted).
 #[derive(Debug, Clone)]
@@ -95,6 +100,8 @@ pub struct AssetSnapshot {
     pub legal_hold: bool,
     pub prior_state: Option<AssetState>,
     pub enforcements: BTreeSet<String>,
+    /// When a private document is purged (#777); `None` for other kinds.
+    pub purge_after: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -133,6 +140,10 @@ pub struct Asset {
     /// empty for a screen block. A reversal lifts only its own.
     #[serde(default)]
     enforcements: BTreeSet<String>,
+    /// A private document's purge time (#777): a backstop from READY, moved to
+    /// the decision + retention once its verification request is decided.
+    #[serde(default)]
+    purge_after: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 
@@ -166,6 +177,7 @@ impl Asset {
             legal_hold: false,
             prior_state: None,
             enforcements: BTreeSet::new(),
+            purge_after: None,
             created_at: now,
             updated_at: now,
             pending_events: Vec::new(),
@@ -190,6 +202,7 @@ impl Asset {
             legal_hold: s.legal_hold,
             prior_state: s.prior_state,
             enforcements: s.enforcements,
+            purge_after: s.purge_after,
             created_at: s.created_at,
             updated_at: s.updated_at,
             pending_events: Vec::new(),
@@ -248,7 +261,26 @@ impl Asset {
         self.updated_at
     }
 
+    /// A private document's purge time (#777).
+    pub fn purge_after(&self) -> Option<DateTime<Utc>> {
+        self.purge_after
+    }
+
     // ─── Commands ────────────────────────────────────────────────────────────
+
+    /// A private document's verification request was decided (#777): it is
+    /// purged at `at` (the decision + the retention). Other kinds refuse.
+    pub fn schedule_purge(&mut self, at: DateTime<Utc>, now: DateTime<Utc>) -> Result<(), MediaError> {
+        if !self.kind.is_private() {
+            return Err(MediaError::DomainViolation {
+                field:   "purge_after".into(),
+                message: "only a private document is purged on schedule".into(),
+            });
+        }
+        self.purge_after = Some(at);
+        self.updated_at = now;
+        Ok(())
+    }
 
     /// Invariant 2: finalizes a pending upload with the server-verified facts,
     /// re-checking the *actual* MIME/size against the constraints, then transitions
@@ -264,7 +296,7 @@ impl Asset {
 
         self.mime_type = Some(params.mime_type);
         self.byte_size = Some(params.byte_size);
-        self.dimensions = Some(params.dimensions);
+        self.dimensions = params.dimensions;
         self.content_hash = Some(params.content_hash.clone());
         self.transition(AssetState::Uploaded, now);
 
@@ -338,18 +370,26 @@ impl Asset {
             });
         }
         // The master rendition a READY asset must carry: images keep the validated
-        // Original; video carries the playback Manifest (its HLS entry point).
+        // Original; video carries the playback Manifest (its HLS entry point); a
+        // private document has none (its bytes live at its private key).
         let master = match self.kind {
-            MediaKind::Video => RenditionKind::Manifest,
-            _ => RenditionKind::Original,
+            MediaKind::Video => Some(RenditionKind::Manifest),
+            MediaKind::PrivateDocument => None,
+            _ => Some(RenditionKind::Original),
         };
-        if self.rendition(master).is_none() {
+        if let Some(master) = master
+            && self.rendition(master).is_none()
+        {
             return Err(MediaError::DomainViolation {
                 field: "renditions".into(),
                 message: format!("cannot mark ready without the {master} rendition"),
             });
         }
         self.transition(AssetState::Ready, now);
+        if self.kind.is_private() {
+            // An orphan (never attached, or never decided) still goes.
+            self.purge_after = Some(now + PRIVATE_DOCUMENT_BACKSTOP);
+        }
         self.emit(DomainEvent::AssetReady(AssetReady {
             asset_id: self.id,
             owner_id: self.owner_id,
@@ -538,7 +578,7 @@ mod tests {
         FinalizeParams {
             mime_type: MimeType::new("image/jpeg").unwrap(),
             byte_size: 2_000_000,
-            dimensions: Dimensions::new(1920, 1080).unwrap(),
+            dimensions: Some(Dimensions::new(1920, 1080).unwrap()),
             content_hash: hash(),
         }
     }
@@ -756,6 +796,7 @@ mod tests {
             legal_hold: a.legal_hold(),
             prior_state: None,
             enforcements: Default::default(),
+            purge_after: None,
             created_at: a.created_at(),
             updated_at: a.updated_at(),
         };

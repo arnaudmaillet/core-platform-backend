@@ -44,6 +44,13 @@ impl MediaService for MediaServiceHandler {
         self.list_assets_by_owner(request).await
     }
 
+    async fn get_private_document_url(
+        &self,
+        request: Request<proto::GetPrivateDocumentUrlRequest>,
+    ) -> Result<Response<proto::GetPrivateDocumentUrlResponse>, Status> {
+        self.get_private_document_url(request).await
+    }
+
     async fn delete_asset(
         &self,
         request: Request<proto::DeleteAssetRequest>,

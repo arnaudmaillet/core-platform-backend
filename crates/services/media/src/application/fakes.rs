@@ -128,6 +128,21 @@ impl AssetRepository for InMemoryAssetRepository {
         mine.truncate(limit.clamp(1, 500) as usize);
         Ok(mine)
     }
+
+    async fn due_for_purge(&self, now: chrono::DateTime<chrono::Utc>, limit: i64) -> Result<Vec<Asset>, MediaError> {
+        let mut due: Vec<Asset> = self
+            .assets
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|a| a.state() != AssetState::Deleted && !a.legal_hold())
+            .filter(|a| a.purge_after().is_some_and(|at| at <= now))
+            .cloned()
+            .collect();
+        due.sort_by_key(|a| a.purge_after());
+        due.truncate(limit.clamp(1, 500) as usize);
+        Ok(due)
+    }
 }
 
 // ─── DeliveryCache ───────────────────────────────────────────────────────────────
@@ -309,7 +324,7 @@ impl StubMediaProbe {
             report: Mutex::new(MediaProbeReport {
                 mime_type: jpeg(),
                 byte_size: 2_000_000,
-                dimensions: Dimensions::new(1920, 1080).unwrap(),
+                dimensions: Some(Dimensions::new(1920, 1080).unwrap()),
                 content_hash: ContentHash::new(TEST_HASH).unwrap(),
             }),
         }
@@ -595,6 +610,7 @@ impl Fixture {
             Arc::clone(&self.scanner) as _,
             Arc::clone(&self.screen) as _,
             Arc::clone(&self.processor) as _,
+            Arc::clone(&self.store) as _,
             Arc::clone(&self.cache) as _,
             Arc::clone(&self.publisher) as _,
             self.policy.clone(),
@@ -726,6 +742,7 @@ impl Fixture {
             legal_hold: false,
             prior_state: None,
             enforcements: Default::default(),
+            purge_after: None,
             created_at: t0(),
             updated_at: t0(),
         });

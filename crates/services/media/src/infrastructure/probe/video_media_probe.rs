@@ -69,7 +69,7 @@ impl MediaProbe for VideoMediaProbe {
             // type — already validated against the kind's allowlist at ticket time.
             mime_type: declared_mime.clone(),
             byte_size,
-            dimensions,
+            dimensions: Some(dimensions),
             content_hash,
         })
     }

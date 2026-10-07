@@ -6,19 +6,28 @@ use crate::application::port::{MediaProbe, MediaProbeReport};
 use crate::domain::value_object::{MimeType, StorageKey};
 use crate::error::MediaError;
 
-/// Routes a probe to the image or video backend by the object's declared type.
+/// Routes a probe to the image, video or document backend by the object's
+/// declared type (a PDF or a HEIC — private documents only, #777 — goes to the
+/// document probe).
 /// `declared_mime` is safe to route on: the upload ticket already validated it
 /// against the kind's allowlist, so a `video/*` declaration means a video asset
 /// (and the chosen backend then does the real "never trust the client" check on
 /// the bytes). Anything non-video falls through to the image probe.
 pub struct DispatchingMediaProbe {
-    image: Arc<dyn MediaProbe>,
-    video: Arc<dyn MediaProbe>,
+    image:    Arc<dyn MediaProbe>,
+    video:    Arc<dyn MediaProbe>,
+    document: Option<Arc<dyn MediaProbe>>,
 }
 
 impl DispatchingMediaProbe {
     pub fn new(image: Arc<dyn MediaProbe>, video: Arc<dyn MediaProbe>) -> Self {
-        Self { image, video }
+        Self { image, video, document: None }
+    }
+
+    /// Routes PDF and HEIC declarations to `document`.
+    pub fn with_documents(mut self, document: Arc<dyn MediaProbe>) -> Self {
+        self.document = Some(document);
+        self
     }
 }
 
@@ -31,6 +40,10 @@ impl MediaProbe for DispatchingMediaProbe {
     ) -> Result<MediaProbeReport, MediaError> {
         if declared_mime.is_video() {
             self.video.probe(key, declared_mime).await
+        } else if let Some(document) = self.document.as_ref().filter(|_| {
+            matches!(declared_mime.as_str(), "application/pdf" | "image/heic")
+        }) {
+            document.probe(key, declared_mime).await
         } else {
             self.image.probe(key, declared_mime).await
         }
@@ -63,7 +76,7 @@ mod tests {
             Ok(MediaProbeReport {
                 mime_type: MimeType::new(format!("routed/{}", self.tag)).unwrap(),
                 byte_size: 1,
-                dimensions: Dimensions::new(1, 1).unwrap(),
+                dimensions: Some(Dimensions::new(1, 1).unwrap()),
                 content_hash: ContentHash::new("a".repeat(64)).unwrap(),
             })
         }

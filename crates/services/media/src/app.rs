@@ -19,14 +19,17 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    ApplyModerationHandler, CommitUploadHandler, DeleteAssetHandler, IssueUploadTicketHandler, OwnerErasure,
+    ApplyModerationHandler, CommitUploadHandler, DeleteAssetHandler, DocumentRetention, IssueUploadTicketHandler,
+    OwnerErasure,
     ProcessAssetHandler, TranscodeAssetHandler,
 };
 use crate::application::port::{
     AssetRepository, CdnGateway, DeliveryCache, EventPublisher, ImageProcessor, MalwareScanner,
     MediaProbe, ModerationScreen, ObjectStore, VideoTranscoder,
 };
-use crate::application::query::{GetAssetHandler, ListAssetsByOwnerHandler, ResolveDeliveryHandler};
+use crate::application::query::{
+    GetAssetHandler, ListAssetsByOwnerHandler, PrivateDocumentUrlHandler, ResolveDeliveryHandler,
+};
 use crate::application::MediaPolicy;
 use crate::config::MediaConfig;
 use crate::infrastructure::cache::RedisDeliveryCache;
@@ -34,7 +37,7 @@ use crate::infrastructure::cdn::{CloudFrontCdnGateway, CloudFrontInvalidator, Cl
 use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 use crate::infrastructure::grpc::MediaServiceHandler;
 use crate::infrastructure::persistence::PgAssetRepository;
-use crate::infrastructure::probe::{DispatchingMediaProbe, ImageMediaProbe, VideoMediaProbe};
+use crate::infrastructure::probe::{DispatchingMediaProbe, DocumentMediaProbe, ImageMediaProbe, VideoMediaProbe};
 use crate::infrastructure::processor::{FfmpegVideoTranscoder, ImageRenditionProcessor};
 use crate::infrastructure::scanner::LogMalwareScanner;
 use crate::infrastructure::screen::GrpcModerationScreen;
@@ -71,6 +74,9 @@ pub struct App {
     pub apply_moderation: Arc<ApplyModerationHandler>,
     /// Erases a deleted account's media (#777), fed by the account consumer.
     pub erasure: Arc<OwnerErasure>,
+    /// Private-document retention (#777): the decision consumer + the sweeper.
+    pub retention: Arc<DocumentRetention>,
+    pub document_sweep_interval: std::time::Duration,
     pub pool: PgPool,
     pub redis: RedisClient,
     pub store: Arc<S3Client>,
@@ -105,7 +111,14 @@ impl App {
             Arc::clone(&deps.cdn),
         ));
         let by_owner = Arc::new(ListAssetsByOwnerHandler::new(Arc::clone(&deps.assets), Arc::clone(&deps.cdn)));
-        MediaServiceHandler::new(issue, commit, delete, process, get, resolve).with_list_by_owner(by_owner)
+        let private_documents = Arc::new(PrivateDocumentUrlHandler::new(
+            Arc::clone(&deps.assets),
+            Arc::clone(&deps.cdn),
+            deps.policy.signed_url_ttl,
+        ));
+        MediaServiceHandler::new(issue, commit, delete, process, get, resolve)
+            .with_list_by_owner(by_owner)
+            .with_private_documents(private_documents)
     }
 
     /// Builds the process + moderation handlers shared between the gRPC handler and
@@ -119,6 +132,7 @@ impl App {
             Arc::clone(&deps.scanner),
             Arc::clone(&deps.screen),
             Arc::clone(&deps.processor),
+            Arc::clone(&deps.store),
             Arc::clone(&deps.cache),
             Arc::clone(&deps.publisher),
             deps.policy.clone(),
@@ -147,6 +161,7 @@ impl App {
         config: MediaConfig,
         backends: Backends,
     ) -> Result<App, Box<dyn std::error::Error>> {
+        let (document_retention, document_sweep_interval) = (config.document_retention, config.document_sweep_interval);
         let pool = PgPoolBuilder::build(backends.postgres).await?;
         let tx = TransactionManager::new(pool.clone());
         let redis = RedisClientBuilder::new(backends.redis).build().await?;
@@ -192,7 +207,8 @@ impl App {
             probe: Arc::new(DispatchingMediaProbe::new(
                 Arc::new(ImageMediaProbe::new(Arc::clone(&store))),
                 Arc::new(VideoMediaProbe::new(Arc::clone(&store))),
-            )),
+            )
+            .with_documents(Arc::new(DocumentMediaProbe::new(Arc::clone(&store))))),
             processor: Arc::new(ImageRenditionProcessor::new(Arc::clone(&store))),
             transcoder: Arc::new(FfmpegVideoTranscoder::new(Arc::clone(&store))),
             scanner: Arc::new(LogMalwareScanner),
@@ -202,18 +218,28 @@ impl App {
         };
 
         let (process, transcode, apply_moderation) = App::build_workers(&deps);
-        let erasure = Arc::new(OwnerErasure::new(
+        let delete = Arc::new(DeleteAssetHandler::new(
             Arc::clone(&deps.assets),
-            Arc::new(DeleteAssetHandler::new(
-                Arc::clone(&deps.assets),
-                Arc::clone(&deps.store),
-                Arc::clone(&deps.cdn),
-                Arc::clone(&deps.cache),
-                Arc::clone(&deps.publisher),
-            )),
+            Arc::clone(&deps.store),
+            Arc::clone(&deps.cdn),
+            Arc::clone(&deps.cache),
+            Arc::clone(&deps.publisher),
         ));
+        let erasure = Arc::new(OwnerErasure::new(Arc::clone(&deps.assets), Arc::clone(&delete)));
+        let retention = Arc::new(DocumentRetention::new(Arc::clone(&deps.assets), delete, document_retention));
         let handler = App::compose(deps, Arc::clone(&process));
-        Ok(App { handler, process, transcode, apply_moderation, erasure, pool, redis, store })
+        Ok(App {
+            handler,
+            process,
+            transcode,
+            apply_moderation,
+            erasure,
+            retention,
+            document_sweep_interval,
+            pool,
+            redis,
+            store,
+        })
     }
 }
 

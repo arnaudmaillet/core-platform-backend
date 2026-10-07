@@ -14,7 +14,8 @@ use crate::error::MediaError;
 pub struct MediaProbeReport {
     pub mime_type: MimeType,
     pub byte_size: u64,
-    pub dimensions: Dimensions,
+    /// `None` for a document (a PDF has none).
+    pub dimensions: Option<Dimensions>,
     pub content_hash: ContentHash,
 }
 

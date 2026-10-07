@@ -146,4 +146,4 @@ blurhash, and transitions the asset to `ready` (or `quarantined`).
 - **Classification:** Supporting — necessary media plumbing; bespoke pipeline.
 - **Volatility:** medium — new media kinds/renditions are additive.
 - **Known modeling debt:** images-first; video transcoding deferred.
-- **Deferred capabilities:** real malware sidecar, orphan-GC consumer, WebP/AVIF, dedup-refcount GDPR purge. An account's media are erased with the account (`account_deleted`, #777; legal holds kept).
+- **Deferred capabilities:** real malware sidecar, orphan-GC consumer, WebP/AVIF, dedup-refcount GDPR purge. An account's media are erased with the account (`account_deleted`, #777; legal holds kept). Private documents (`PRIVATE_DOCUMENT`, #777) are never delivered, live under `private/`, and are purged 30 days after their verification request's decision.

@@ -69,11 +69,16 @@ impl IssueUploadTicketHandler {
         let constraints = UploadConstraints::for_kind(cmd.kind);
 
         // Dedup short-circuit (fork B) — only when enabled and a hash is supplied.
+        // Never for a private document (#777), either way: its bytes are its
+        // owner's alone, and no other upload is handed its asset.
         if self.policy.dedup_enabled
+            && !cmd.kind.is_private()
             && let Some(sha) = cmd.content_sha256.as_deref()
         {
             let hash = ContentHash::new(sha)?;
-            if let Some(existing) = self.assets.find_ready_by_content_hash(&hash).await? {
+            if let Some(existing) =
+                self.assets.find_ready_by_content_hash(&hash).await?.filter(|a| !a.kind().is_private())
+            {
                 return Ok(IssueUploadTicketOutcome {
                     asset_id: existing.id(),
                     upload: None,
