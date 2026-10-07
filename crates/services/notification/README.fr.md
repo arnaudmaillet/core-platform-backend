@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: f09149be0092a724f5cffdb53c4576a43a2826b50164ab8df63fee5ebf977822
-  translated_at: 2026-10-05
+  source_sha256: 970cfe435644298d691759f1d4ce2f66a4669803245359c2d261a6ec9f6dba5d
+  translated_at: 2026-10-07
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -22,7 +22,7 @@ i18n:
 > | **Bases de données** | ScyllaDB keyspace `notification` (fil TWCS + compteurs) · Redis (collapse + non-lus) |
 > | **Asynchrone** | ne publie rien · consomme `engagement.reactions` / `comment.created` / `post.published` / `social-graph.followed` / `social-graph.follow_requested` / `moderation.v1.events` (appeal outcomes) |
 > | **Appelants amont** | `<TODO: mobile / BFF (stream + lectures de fil)>` |
-> | **Dépendances aval** | ScyllaDB, Redis, Kafka |
+> | **Dépendances aval** | ScyllaDB, Redis, Kafka ; APNs + `profile` (push, #654) |
 > | **SLO** | lecture du compte de non-lus sub-ms (Redis) · lecture de fil paginée O(1) · push best-effort |
 
 ---
@@ -103,6 +103,8 @@ ReactionNotificationWorker  CommentNotificationWorker  MentionNotificationWorker
 | ScyllaDB (`notification`) | fil + compteurs durables | les écritures/lectures de fil échouent | **Dur** pour le fil ; retries at-least-once |
 | Redis | fenêtres de collapse + non-lus L1 + caches block/author | collapse + non-lus se dégradent | **Souple** — le compteur Scylla est l'ancre de durabilité |
 | Kafka | ingestion d'événements | les nouvelles notifications s'arrêtent | **Souple** — fil existant servi ; at-least-once à la reprise |
+| APNs (#654) | envoi des push | push non délivrés | **Souple** — le fil et le badge ne sont pas touchés ; un push n'est jamais retenté |
+| `profile` (mesh, #654) | le nom de l'auteur dans un push | l'alerte ne nomme personne (`…_ANON`) | **Souple** |
 
 **Amont (rayon d'impact) :**
 
@@ -135,9 +137,8 @@ service NotificationService {
 }
 ```
 
-**Appareils push et préférences (#654).** Le contrat et le stockage du push ; **rien n'envoie encore de
-push** (pas d'identifiants APNs). Toutes les RPC sauf `ResolvePushTargets` sont `authenticated` sur l'edge
-et liées à `profile_id`.
+**Appareils push et préférences (#654).** Toutes les RPC sauf `ResolvePushTargets` sont `authenticated`
+sur l'edge et liées à `profile_id`.
 - `RegisterDevice(device_id, token, platform, environment, timezone)` — à appeler à chaque lancement. Un
   jeton enregistré pour un autre **compte** quitte les profils de ce compte (un téléphone transmis ne
   reçoit jamais les push de l'ancien compte) ; le nouveau jeton d'un appareil remplace l'ancien. Tables
@@ -159,9 +160,31 @@ et liées à `profile_id`.
   à un appel de préférences. Les heures calmes choisies par le titulaire restent ; un âge inconnu (le mesh,
   pas de date de naissance) ne change rien. L'e-mail marketing est le consentement `marketing` du compte
   (`account.v1.UpdateConsents`), pas un second interrupteur ici.
-- `ResolvePushTargets(profile_id, category)` (mesh) est ce que l'émetteur de push interrogera : les
-  appareils, ou `allowed = false` quand la catégorie est désactivée, qu'une pause court ou que ce sont les
-  heures calmes.
+- `ResolvePushTargets(profile_id, category)` (mesh) : les appareils, ou `allowed = false` quand la
+  catégorie est désactivée, qu'une pause court ou que ce sont les heures calmes — la règle qu'applique
+  l'envoi des push ci-dessous, pour un émetteur hors du service.
+
+**Envoi des push (#654).** Chaque notification écrite **pour la première fois** (le claim d'idempotence
+du compteur de non-lus : un événement relivré n'envoie rien) part vers les appareils iOS du destinataire
+via APNs, sauf si ses préférences retiennent sa catégorie (catégorie désactivée, pause, heures calmes).
+Sans attente : le push ne retarde ni ne fait échouer l'écriture, et n'est pas retenté. Désactivé tant
+que la clé APNs n'est pas configurée.
+- Catégories : réaction → j'aime, commentaire / réponse → commentaires, mention → mentions, abonnement
+  → nouveaux abonnés, demande d'abonnement / acceptée → demandes d'abonnement. **Les décisions d'appel
+  ne sont jamais envoyées en push** (fil seulement, tant que leur destinataire n'est pas décidé). Les
+  messages du chat seront envoyés par un changement ultérieur.
+- Alerte : traduite par l'app (`loc-key` + `loc-args`) : `NTF_PUSH_<KIND>` (args : le nom de l'auteur),
+  `NTF_PUSH_<KIND>_OTHERS` (args : le nom, le nombre d'autres — une notification regroupée),
+  `NTF_PUSH_<KIND>_ANON` (sans args : le nom est inconnu). Le nom est le nom affiché de l'auteur (sinon
+  son handle), lu via `GetProfileById` de `profile` sur le mesh et mis en cache 5 min. `badge` = le
+  nombre de non-lues ; `thread-id` = le sujet ; `apns-collapse-id` = l'id de la notification ; clés
+  personnalisées `notification_id`, `kind`, `subject_kind`, `subject_id` (l'app ouvre le sujet avec).
+- APNs : API provider HTTP/2, authentification par jeton (JWT ES256 signé avec la clé `.p8` de l'équipe,
+  re-signé toutes les 50 min), `apns-expiration` à un jour. Un jeton qu'APNs dit désinscrit (410) ou
+  malformé (`BadDeviceToken`) est oublié ; tout autre refus (par ex. `DeviceTokenNotForTopic`, une
+  erreur de configuration) est seulement journalisé (`NTF-3002`), pour qu'une mauvaise configuration
+  n'efface jamais les inscriptions. Les appareils Android sont ignorés tant qu'il n'existe pas
+  d'émetteur FCM.
 
 ### Ports Rust (contrat hexagonal)
 
@@ -172,11 +195,14 @@ pub trait BlockCache:             Send + Sync + 'static { /* is_blocked(sender, 
 pub trait StreamRegistry:         Send + Sync + 'static { /* subscribe/broadcast (broadcast::Receiver per profile) */ }
 pub trait DeviceRegistry:         Send + Sync + 'static { /* register/unregister/devices — push devices per profile */ }
 pub trait PreferenceStore:        Send + Sync + 'static { /* get/put — notification preferences per profile */ }
+pub trait PushSender:             Send + Sync + 'static { /* send(device, message) → Delivered | TokenGone (APNs) */ }
+pub trait SenderNames:            Send + Sync + 'static { /* display_name(profile) — fail-open (profile, mesh) */ }
+pub trait PushNotifier:           Send + Sync + 'static { /* notify(notification) — fire-and-forget hook of every write */ }
 ```
 
 ### Contrat d'erreur (`NTF-xxxx`)
 
-`NTF-1xxx` lifecycle … `NTF-6001` author-cache miss (reaction notification dropped) … `NTF-9xxx`
+`NTF-1xxx` lifecycle … `NTF-3002` push not delivered (logged only) … `NTF-6001` author-cache miss (reaction notification dropped) … `NTF-9xxx`
 identifiers — via le crate partagé `error`.
 
 ---
@@ -209,6 +235,7 @@ identifiers — via le crate partagé `error`.
 | Fan-out de célébrité (10k/s) | — | L1 intra-batch + L2 fenêtre Redis 30 s (heat > 100) + L3 cap horaire (3/sujet) | aucune — conçu pour ça |
 | Redis indisponible | vérifs block/heat ignorées | les workers poursuivent ; écritures Scylla continuent ; les non-lus accumulent une incohérence jusqu'à la reprise | vérifier Redis ; le compteur Scylla réconcilie |
 | ScyllaDB indisponible | les écritures de fil échouent | at-least-once : offset non committé → retry → DLQ ; pushs best-effort | vérifier Scylla ; drainer la DLQ |
+| APNs injoignable / clé refusée | push non délivrés | `NTF-3002` journalisé par appareil ; fil + badge non touchés ; un jeton provider refusé est re-signé | vérifier la clé APNs, le team id, le topic ; la sortie vers `api.push.apple.com:443` |
 | Client de stream lent | `RecvError::Lagged` | `tokio::broadcast` abandonne les anciens ; le stream se termine en `Status::DataLoss` | le client se reconnecte + re-`ListNotifications` |
 | Crash de CollapseFlushWorker | fenêtre non flushée | le TTL Redis (fenêtre + 10 s de grâce) expire la clé ; le membre de schedule reste pour que le prochain démarrage re-draine (no-op si vide) | redémarrer le worker ; au pire une fenêtre perdue |
 
@@ -261,6 +288,12 @@ async fn main() -> anyhow::Result<()> {
 | `NOTIFICATION_DEDUPE_TTL_SECS` | `86400` | Idempotency claim TTL — must exceed worst-case redelivery window. |
 | `NOTIFICATION_MAX_PAGE_SIZE` | `50` | Feed page cap. |
 | `NOTIFICATION_STREAM_BUFFER_SIZE` | `256` | `tokio::broadcast` capacity per streaming profile. |
+| `NOTIFICATION_APNS_KEY_FILE` | — | Chemin de la clé APNs `.p8` (un secret monté). Avec les trois suivantes, active le push (#654) ; une seule absente : push désactivé. |
+| `NOTIFICATION_APNS_KEY_ID` | — | L'id de la clé (`kid` du JWT). |
+| `NOTIFICATION_APNS_TEAM_ID` | — | Le team id Apple (`iss` du JWT). |
+| `NOTIFICATION_APNS_TOPIC` | — | Le bundle id de l'app (`apns-topic`). |
+| `NOTIFICATION_PROFILE_GRPC_ENDPOINT` | — | Endpoint mesh de profile, pour le nom de l'auteur dans un push. Non définie : l'alerte ne nomme personne. |
+| `NOTIFICATION_PROFILE_RPC_TIMEOUT_MS` / `NOTIFICATION_PROFILE_CONNECT_TIMEOUT_MS` | `300` / `1000` | Délais de cet appel. |
 
 ### Variables d'infrastructure héritées
 

@@ -9,7 +9,7 @@
 #![allow(dead_code)]
 
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::Stream;
@@ -22,9 +22,12 @@ use redis_storage::{RedisClient, RedisConfig};
 use scylla_storage::{ScyllaClient, ScyllaConfig};
 use tonic::{Request, Status};
 
-use notification::app::{App, Backends};
+use notification::app::{App, Backends, PushBackends};
 use notification::application::command::create_notification::CreateNotificationCommand;
-use notification::application::port::{NotificationRepository, UnreadCounter};
+use notification::application::port::{NotificationRepository, PushOutcome, PushSender, SenderNames, UnreadCounter};
+use notification::domain::device::Device;
+use notification::domain::push_message::PushMessage;
+use notification::error::NotificationError;
 use notification::config::NotificationConfig;
 use notification::infrastructure::streaming::BroadcastRegistry;
 
@@ -54,8 +57,40 @@ pub type ResponseStream =
     Pin<Box<dyn Stream<Item = Result<proto::StreamNotificationsResponse, Status>> + Send + 'static>>;
 
 /// A fully-wired notification service bound to ephemeral infra, plus handles.
+/// APNs, as far as the suite goes (#654): every push sent, by device token.
+#[derive(Default)]
+pub struct CapturingPush {
+    sent: Mutex<Vec<(String, PushMessage)>>,
+}
+
+impl CapturingPush {
+    pub fn sent_to(&self, token: &str) -> Vec<PushMessage> {
+        self.sent.lock().unwrap().iter().filter(|(t, _)| t == token).map(|(_, m)| m.clone()).collect()
+    }
+}
+
+#[async_trait::async_trait]
+impl PushSender for CapturingPush {
+    async fn send(&self, device: &Device, message: &PushMessage) -> Result<PushOutcome, NotificationError> {
+        self.sent.lock().unwrap().push((device.token.clone(), message.clone()));
+        Ok(PushOutcome::Delivered)
+    }
+}
+
+/// Every sender is called Alice.
+pub struct AliceNames;
+
+#[async_trait::async_trait]
+impl SenderNames for AliceNames {
+    async fn display_name(&self, _profile: &ProfileId) -> Option<String> {
+        Some("Alice".into())
+    }
+}
+
 pub struct TestHarness {
     pub handler:         Handler,
+    /// The pushes the service sent.
+    pub pushes:          Arc<CapturingPush>,
     pub command_bus:     Arc<InMemoryCommandBus>,
     pub stream_registry: Arc<BroadcastRegistry>,
     pub counter:         Arc<dyn UnreadCounter>,
@@ -73,6 +108,7 @@ impl TestHarness {
         let scylla_cp = test_support::containers::scylla_ready(KEYSPACE, MIGRATIONS_DIR).await;
         let redis_endpoint = test_support::containers::redis_endpoint().await;
 
+        let pushes = Arc::new(CapturingPush::default());
         let backends = Backends {
             scylla: ScyllaConfig {
                 contact_points: vec![scylla_cp],
@@ -81,6 +117,7 @@ impl TestHarness {
             },
             redis: RedisConfig { hosts: vec![redis_endpoint], ..RedisConfig::default() },
             kafka: None,
+            push:  PushBackends { sender: Some(Arc::clone(&pushes) as _), names: Arc::new(AliceNames) },
         };
 
         let config = Arc::new(NotificationConfig::from_env());
@@ -96,6 +133,7 @@ impl TestHarness {
 
         Self {
             handler,
+            pushes,
             command_bus:     app.command_bus,
             stream_registry: app.stream_registry,
             counter:         app.counter,

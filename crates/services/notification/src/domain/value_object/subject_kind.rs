@@ -21,6 +21,16 @@ impl SubjectKind {
         }
     }
 
+    /// The wire name, as a push's payload carries it (#654).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Post    => "post",
+            Self::Comment => "comment",
+            Self::Profile => "profile",
+            Self::Appeal  => "appeal",
+        }
+    }
+
     pub fn from_tinyint(v: i8) -> Result<Self, NotificationError> {
         match v {
             1 => Ok(Self::Post),

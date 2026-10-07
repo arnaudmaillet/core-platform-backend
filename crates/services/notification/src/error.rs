@@ -46,6 +46,10 @@ pub enum NotificationError {
     #[error("failed to publish notification event to Kafka: {message}")]
     EventPublishFailed { message: String },
 
+    /// A push did not reach the push network (#654); logged, never surfaced.
+    #[error("push delivery failed: {reason}")]
+    PushDeliveryFailed { reason: String },
+
     // ── NTF-4xxx: gRPC streaming errors ──────────────────────────────────────
     #[error("stream registry send failed for profile {profile_id}: channel closed")]
     StreamSendFailed { profile_id: String },
@@ -96,6 +100,7 @@ impl AppError for NotificationError {
             Self::PushTokenOnAnotherDevice       => "NTF-2004",
 
             Self::EventPublishFailed { .. }   => "NTF-3001",
+            Self::PushDeliveryFailed { .. }   => "NTF-3002",
 
             Self::StreamSendFailed { .. }     => "NTF-4001",
 
@@ -134,6 +139,7 @@ impl AppError for NotificationError {
             | Self::DomainViolation { .. } => StatusCode::UNPROCESSABLE_ENTITY,
 
             Self::EventPublishFailed { .. }
+            | Self::PushDeliveryFailed { .. }
             | Self::StreamSendFailed { .. }
             | Self::CollapseFlushFailed { .. }
             | Self::ScriptReturnInvalid { .. }
@@ -151,7 +157,7 @@ impl AppError for NotificationError {
             | Self::CollapseFlushFailed { .. }
             | Self::ScriptReturnInvalid { .. } => Severity::High,
 
-            Self::StreamSendFailed { .. } => Severity::Medium,
+            Self::StreamSendFailed { .. } | Self::PushDeliveryFailed { .. } => Severity::Medium,
 
             Self::PostAuthorCacheMiss { .. }
             | Self::CommentAuthorCacheMiss { .. } => Severity::Medium,
@@ -197,6 +203,7 @@ impl AppError for NotificationError {
             Self::Scylla(_)
             | Self::Redis(_)
             | Self::EventPublishFailed { .. }
+            | Self::PushDeliveryFailed { .. }
             | Self::StreamSendFailed { .. }
             | Self::CollapseFlushFailed { .. }
             | Self::ScriptReturnInvalid { .. }

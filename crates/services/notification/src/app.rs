@@ -38,9 +38,10 @@ use crate::application::command::push_settings::{
     UpdatePreferencesCommand, UpdatePreferencesHandler,
 };
 use crate::application::port::{
-    BlockCache, DeviceRegistry, NotificationEventPublisher, NotificationRepository, PreferenceStore,
-    UnreadCounter,
+    BlockCache, DeviceRegistry, NoPush, NoSenderNames, NotificationEventPublisher, NotificationRepository,
+    PreferenceStore, PushNotifier, PushSender, SenderNames, UnreadCounter,
 };
+use crate::application::push_dispatcher::PushDispatcher;
 use crate::application::query::push_settings::{
     GetPreferencesHandler, GetPreferencesQuery, ResolvePushTargetsHandler, ResolvePushTargetsQuery,
 };
@@ -67,6 +68,21 @@ pub struct Backends {
     pub scylla: ScyllaConfig,
     pub redis:  RedisConfig,
     pub kafka:  Option<KafkaClientConfig>,
+    pub push:   PushBackends,
+}
+
+/// Push delivery (#654). The default sends nothing: no APNs key yet.
+pub struct PushBackends {
+    /// APNs; `None`: push off.
+    pub sender: Option<Arc<dyn PushSender>>,
+    /// Sender names for the alerts.
+    pub names:  Arc<dyn SenderNames>,
+}
+
+impl Default for PushBackends {
+    fn default() -> Self {
+        Self { sender: None, names: Arc::new(NoSenderNames) }
+    }
 }
 
 /// A fully-wired notification service bound to its backends, plus the shared
@@ -93,7 +109,7 @@ impl App {
         config:   Arc<NotificationConfig>,
         backends: Backends,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let Backends { scylla, redis, kafka } = backends;
+        let Backends { scylla, redis, kafka, push } = backends;
 
         // ── Storage clients ──────────────────────────────────────────────────
         let scylla_client = Arc::new(ScyllaSessionBuilder::new(scylla).build().await?);
@@ -111,6 +127,17 @@ impl App {
         let push_settings = Arc::new(ScyllaPushSettings::new(Arc::clone(&scylla_client)));
         let devices: Arc<dyn DeviceRegistry> = Arc::clone(&push_settings) as _;
         let preferences: Arc<dyn PreferenceStore> = push_settings;
+        // A notification written for the first time goes out as a push.
+        let push: Arc<dyn PushNotifier> = match push.sender {
+            Some(sender) => Arc::new(PushDispatcher {
+                devices:     Arc::clone(&devices),
+                preferences: Arc::clone(&preferences),
+                counter:     Arc::clone(&counter) as Arc<dyn UnreadCounter>,
+                names:       push.names,
+                sender,
+            }),
+            None => Arc::new(NoPush),
+        };
 
         // ── Realtime push publisher (notification.v1.events) ─────────────────
         // Kafka-backed when a broker is configured; a no-op otherwise so the
@@ -134,6 +161,7 @@ impl App {
                     counter:         Arc::clone(&counter),
                     stream_registry: Arc::clone(&stream_registry),
                     publisher:       Arc::clone(&publisher),
+                    push:            Arc::clone(&push),
                 })?
                 .register::<MarkReadCommand, _>(MarkReadHandler {
                     repository: Arc::clone(&repository),
@@ -189,6 +217,7 @@ impl App {
                     Arc::clone(&config),
                     "notification-reaction-consumer",
                 )
+                .with_push(Arc::clone(&push))
                 .run(),
             );
             tokio::spawn(
@@ -202,6 +231,7 @@ impl App {
                     Arc::clone(&config),
                     "notification-comment-consumer",
                 )
+                .with_push(Arc::clone(&push))
                 .run(),
             );
             tokio::spawn(
@@ -213,6 +243,7 @@ impl App {
                     Arc::clone(&stream_registry),
                     "notification-follow-consumer",
                 )
+                .with_push(Arc::clone(&push))
                 .run(),
             );
             tokio::spawn(
@@ -236,6 +267,7 @@ impl App {
                     Arc::clone(&config),
                     "notification-mention-consumer",
                 )
+                .with_push(Arc::clone(&push))
                 .run(),
             );
             tokio::spawn(
@@ -247,6 +279,7 @@ impl App {
                     Arc::clone(&config),
                     Duration::from_secs(config.collapse_flush_interval_secs),
                 )
+                .with_push(Arc::clone(&push))
                 .run(),
             );
         }

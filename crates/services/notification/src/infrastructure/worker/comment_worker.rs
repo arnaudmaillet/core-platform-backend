@@ -11,6 +11,7 @@ use transport::kafka::producer::KafkaProducerHandle;
 
 use crate::application::port::{BlockCache, NotificationRepository, StreamRegistry, UnreadCounter};
 use crate::application::port::stream_registry::NotificationPayload;
+use crate::application::port::{NoPush, PushNotifier};
 use crate::config::NotificationConfig;
 use crate::domain::aggregate::Notification;
 use crate::domain::value_object::{
@@ -66,6 +67,7 @@ pub struct CommentNotificationWorker<R, B, U, S> {
     block_cache:  Arc<B>,
     counter:      Arc<U>,
     stream_reg:   Arc<S>,
+    push:         Arc<dyn PushNotifier>,
     config:       Arc<NotificationConfig>,
     group_id:     String,
 }
@@ -77,6 +79,12 @@ where
     U: UnreadCounter,
     S: StreamRegistry,
 {
+    /// Sends each notification written for the first time as a push (#654).
+    pub fn with_push(mut self, push: Arc<dyn PushNotifier>) -> Self {
+        self.push = push;
+        self
+    }
+
     #[allow(clippy::too_many_arguments)] // aggregate/worker constructor — same precedent as chat
     pub fn new(
         kafka_config: KafkaClientConfig,
@@ -95,6 +103,7 @@ where
             block_cache,
             counter,
             stream_reg,
+            push: Arc::new(NoPush),
             config,
             group_id: group_id.into(),
         }
@@ -240,7 +249,7 @@ where
         );
 
         self.repository.insert(&notification).await?;
-        self.counter.increment_once(&target_id, &business_key).await?;
+        let first = self.counter.increment_once(&target_id, &business_key).await?;
 
         let payload = Arc::new(NotificationPayload {
             notification_id:   notification.id().as_uuid(),
@@ -253,6 +262,9 @@ where
             subject_id:        notification.subject_id().as_uuid(),
             created_at_ms:     notification.created_at().timestamp_millis(),
         });
+        if first {
+            self.push.notify(Arc::clone(&payload));
+        }
         self.stream_reg.broadcast(&target_id, payload);
 
         tracing::debug!(
