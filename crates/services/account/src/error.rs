@@ -80,6 +80,32 @@ pub enum AccountError {
 
     // ── Optimistic concurrency (ACC-4xxx) ─────────────────────────────────────
 
+    // ── Family supervision (ACC-3xxx, #670) ───────────────────────────────────
+    /// No live invite with this code (unknown, used or expired).
+    #[error("this invite is not valid")]
+    SupervisionInviteInvalid,
+
+    /// The account's age does not fit this side: a supervisor is a known
+    /// adult, a teen 13–17.
+    #[error("this account cannot be the {role} of a supervision")]
+    SupervisionRoleNotAllowed { role: String },
+
+    /// The teen already has the most supervisors.
+    #[error("this teen already has the most supervisors")]
+    SupervisorLimitReached,
+
+    /// These two accounts are already paired.
+    #[error("these accounts are already paired")]
+    AlreadySupervised,
+
+    /// No such supervision for this account.
+    #[error("supervision not found")]
+    SupervisionNotFound,
+
+    /// An account cannot supervise itself.
+    #[error("an account cannot supervise itself")]
+    SelfSupervision,
+
     #[error("concurrent modification detected; reload the account and retry")]
     ConcurrentModification,
 
@@ -196,6 +222,13 @@ impl AppError for AccountError {
             AccountError::AgeBelowMinimum { .. }           => "ACC-2004",
             AccountError::DateOfBirthAlreadySet            => "ACC-2005",
 
+            AccountError::SupervisionInviteInvalid         => "ACC-3001",
+            AccountError::SupervisionRoleNotAllowed { .. } => "ACC-3002",
+            AccountError::SupervisorLimitReached           => "ACC-3003",
+            AccountError::AlreadySupervised                => "ACC-3004",
+            AccountError::SupervisionNotFound              => "ACC-3005",
+            AccountError::SelfSupervision                  => "ACC-3006",
+
             AccountError::ConcurrentModification           => "ACC-4001",
 
             AccountError::MfaAlreadyEnrolled               => "ACC-5001",
@@ -233,7 +266,9 @@ impl AppError for AccountError {
             AccountError::Storage(e)    => e.http_status(),
             AccountError::Validation(e) => e.http_status(),
 
-            AccountError::AccountNotFound { .. } => StatusCode::NOT_FOUND,
+            AccountError::AccountNotFound { .. }
+            | AccountError::SupervisionInviteInvalid
+            | AccountError::SupervisionNotFound => StatusCode::NOT_FOUND,
 
             AccountError::IdentityAlreadyRegistered { .. }
             | AccountError::EmailAlreadyRegistered { .. }
@@ -243,7 +278,9 @@ impl AppError for AccountError {
             | AccountError::MfaAlreadyEnrolled
             | AccountError::GdprDeletionAlreadyRequested
             | AccountError::DateOfBirthAlreadySet
-            | AccountError::RoleAlreadyAssigned(_) => StatusCode::CONFLICT,
+            | AccountError::RoleAlreadyAssigned(_)
+            | AccountError::SupervisorLimitReached
+            | AccountError::AlreadySupervised => StatusCode::CONFLICT,
 
             AccountError::EventPublishFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
 
@@ -314,6 +351,12 @@ impl AppError for AccountError {
             AccountError::DataExportUnavailable { .. }     => "Your data export is being prepared; please check again later.",
             AccountError::DirectoryUnavailable { .. }      => "Finding your contacts is unavailable right now; please try again later.",
             AccountError::ContactLookupQuotaExceeded { .. } => "You have looked up many contacts today; please try again tomorrow.",
+            AccountError::SupervisionInviteInvalid => "This code is not valid or has expired.",
+            AccountError::SupervisionRoleNotAllowed { .. } => "Supervision pairs an adult with a teen aged 13 to 17.",
+            AccountError::SupervisorLimitReached => "This teen already has two supervisors.",
+            AccountError::AlreadySupervised => "These accounts are already paired.",
+            AccountError::SupervisionNotFound => "This supervision was not found.",
+            AccountError::SelfSupervision => "You cannot supervise your own account.",
             AccountError::RoleAlreadyAssigned(_)           => "This role is already assigned to the account.",
             AccountError::RoleNotAssigned(_)               => "This role is not assigned to the account.",
             _                                              => "A domain constraint was violated.",

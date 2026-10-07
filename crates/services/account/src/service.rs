@@ -21,6 +21,7 @@ use crate::infrastructure::directory::MeshProfileDirectory;
 use crate::infrastructure::export::{ExportStoreConfig, MeshEndpoints, MeshExportPeers, S3ExportStore};
 use crate::infrastructure::worker::export_pass::run_export_pass;
 use crate::infrastructure::worker::gdpr_janitor::run_gdpr_janitor;
+use crate::infrastructure::worker::supervision_sweep::run_supervision_sweep;
 use crate::application::port::{EventPublisher, ExportStore};
 use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 use crate::infrastructure::grpc::handler::account_service_handler::AccountServiceServer;
@@ -67,6 +68,11 @@ impl Service for AccountService {
         authenticated("/account.v1.AccountService/GetAccountStatus"),
         // The holder's own date of birth, once (accounts created without one).
         authenticated("/account.v1.AccountService/SetDateOfBirth"),
+        // #670: family supervision, the caller's own account.
+        authenticated("/account.v1.AccountService/CreateSupervisionInvite"),
+        authenticated("/account.v1.AccountService/AcceptSupervisionInvite"),
+        authenticated("/account.v1.AccountService/ListSupervisions"),
+        authenticated("/account.v1.AccountService/EndSupervision"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -129,8 +135,24 @@ impl Service for AccountService {
             .and_then(|v| v.trim().parse::<u64>().ok())
             .unwrap_or(3_600);
         if interval_secs > 0 {
-            let janitor = Arc::new(AnonymizeDueAccounts::new(Arc::clone(&app.repository)));
+            let janitor = AnonymizeDueAccounts::new(Arc::clone(&app.repository));
+            // An erased account's supervisions end first (#670).
+            let janitor = Arc::new(match &app.supervisions {
+                Some(supervisions) => janitor.with_supervisions(Arc::clone(supervisions)),
+                None => janitor,
+            });
             tokio::spawn(run_gdpr_janitor(janitor, std::time::Duration::from_secs(interval_secs)));
+        }
+
+        // Family supervision's daily pass (#670): supervisions whose teen
+        // turned 18 end, expired invites go
+        // (ACCOUNT_SUPERVISION_SWEEP_INTERVAL_SECS, default hourly; 0 = off).
+        let sweep_secs = std::env::var("ACCOUNT_SUPERVISION_SWEEP_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(3_600);
+        if let (Some(supervisions), true) = (&app.supervisions, sweep_secs > 0) {
+            tokio::spawn(run_supervision_sweep(Arc::clone(supervisions), std::time::Duration::from_secs(sweep_secs)));
         }
 
         Ok(Self { app, pool })
@@ -149,7 +171,8 @@ impl Service for AccountService {
             Arc::clone(&self.app.command_bus),
             Arc::clone(&self.app.query_bus),
         )
-        .with_step_up(require_step_up);
+        .with_step_up(require_step_up)
+        .with_supervisions(self.app.supervisions.clone());
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
             .build_v1()?;

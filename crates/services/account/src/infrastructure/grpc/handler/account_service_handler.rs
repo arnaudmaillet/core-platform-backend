@@ -64,6 +64,8 @@ where
     /// proof on the edge (`auth.v1.VerifyCredentials`). Off by default until
     /// clients step up.
     require_step_up: bool,
+    /// Family supervision (#670); `None` answers UNAVAILABLE.
+    supervisions: Option<std::sync::Arc<crate::application::command::Supervisions>>,
 }
 
 impl<CB, QB> AccountServiceHandler<CB, QB>
@@ -72,7 +74,81 @@ where
     QB: QueryBus + Send + Sync + 'static,
 {
     pub fn new(command_bus: CB, query_bus: QB) -> Self {
-        Self { command_bus, query_bus, require_step_up: false }
+        Self { command_bus, query_bus, require_step_up: false, supervisions: None }
+    }
+
+    /// Enables family supervision (#670).
+    pub fn with_supervisions(mut self, supervisions: Option<std::sync::Arc<crate::application::command::Supervisions>>) -> Self {
+        self.supervisions = supervisions;
+        self
+    }
+
+    fn supervisions(&self) -> Result<&crate::application::command::Supervisions, Status> {
+        self.supervisions.as_deref().ok_or_else(|| Status::unavailable("family supervision is not configured"))
+    }
+
+    /// An invite code for the other side (#670). Edge: the caller's account.
+    pub async fn create_supervision_invite(
+        &self,
+        request: Request<proto::CreateSupervisionInviteRequest>,
+    ) -> Result<Response<proto::SupervisionInviteView>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let role = match proto::SupervisionRole::try_from(req.role) {
+            Ok(proto::SupervisionRole::Supervisor) => crate::domain::supervision::SupervisionRole::Supervisor,
+            Ok(proto::SupervisionRole::Teen) => crate::domain::supervision::SupervisionRole::Teen,
+            _ => return Err(Status::invalid_argument("role must be SUPERVISOR or TEEN")),
+        };
+        let invite = self
+            .supervisions()?
+            .create_invite(&req.account_id, role, Utc::now())
+            .await
+            .map_err(account_error_to_status)?;
+        Ok(Response::new(proto::SupervisionInviteView {
+            code:       invite.code.as_str().to_owned(),
+            expires_at: Some(dt_to_ts(invite.expires_at)),
+        }))
+    }
+
+    /// Accepts an invite (#670). Edge: the caller's account.
+    pub async fn accept_supervision_invite(
+        &self,
+        request: Request<proto::AcceptSupervisionInviteRequest>,
+    ) -> Result<Response<proto::SupervisionView>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let view = self
+            .supervisions()?
+            .accept(&req.account_id, &req.code, Utc::now())
+            .await
+            .map_err(account_error_to_status)?;
+        Ok(Response::new(supervision_to_proto(view)))
+    }
+
+    /// The caller's supervisions, both sides (#670). Edge: the caller's account.
+    pub async fn list_supervisions(
+        &self,
+        request: Request<proto::ListSupervisionsRequest>,
+    ) -> Result<Response<proto::ListSupervisionsResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let views = self.supervisions()?.list(&req.account_id).await.map_err(account_error_to_status)?;
+        Ok(Response::new(proto::ListSupervisionsResponse { supervisions: views.into_iter().map(supervision_to_proto).collect() }))
+    }
+
+    /// Ends one of the caller's supervisions (#670). Edge: the caller's account.
+    pub async fn end_supervision(
+        &self,
+        request: Request<proto::EndSupervisionRequest>,
+    ) -> Result<Response<proto::ListSupervisionsResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let left = self
+            .supervisions()?
+            .end(&req.account_id, &req.other_account_id, Utc::now())
+            .await
+            .map_err(account_error_to_status)?;
+        Ok(Response::new(proto::ListSupervisionsResponse { supervisions: left.into_iter().map(supervision_to_proto).collect() }))
     }
 
     /// Requires a recent credential proof on the destructive self-service RPCs.
@@ -827,6 +903,33 @@ fn account_role_i32_to_str(v: i32) -> Option<&'static str> {
 
 /// Status metadata key carrying the account error code (`ACC-xxxx`).
 pub const ERROR_CODE_METADATA: &str = "x-error-code";
+
+/// A handler's own error, mapped like a bus error (status + `ACC-xxxx`).
+pub fn account_error_to_status(err: crate::error::AccountError) -> Status {
+    cqrs_error_to_status(cqrs::error::CqrsError::from_handler(err))
+}
+
+fn supervision_to_proto(view: crate::application::command::SupervisionView) -> proto::SupervisionView {
+    use crate::domain::supervision::SupervisionRole;
+    proto::SupervisionView {
+        other_role: match view.role {
+            SupervisionRole::Supervisor => proto::SupervisionRole::Supervisor,
+            SupervisionRole::Teen => proto::SupervisionRole::Teen,
+        } as i32,
+        other_account_id: view.account.to_string(),
+        since: Some(dt_to_ts(view.since)),
+        profiles: view
+            .profiles
+            .into_iter()
+            .map(|p| proto::SupervisionProfile {
+                profile_id:   p.profile_id,
+                handle:       p.handle,
+                display_name: p.display_name,
+                avatar_url:   p.avatar_url.unwrap_or_default(),
+            })
+            .collect(),
+    }
+}
 
 pub fn cqrs_error_to_status(err: cqrs::error::CqrsError) -> Status {
     use cqrs::error::CqrsError;

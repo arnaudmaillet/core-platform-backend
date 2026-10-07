@@ -297,3 +297,54 @@ message ContactProfile {
 message FindProfilesByContactsResponse {
     repeated ContactProfile profiles = 1;
 }
+
+// ── Family supervision (#670) ────────────────────────────────────────────────
+
+message CreateSupervisionInviteRequest {
+    string          account_id = 1;
+    // The caller's side.
+    SupervisionRole role       = 2;
+}
+
+message SupervisionInviteView {
+    // 10 characters (Crockford base32); typing is case-insensitive and
+    // ignores spaces and dashes.
+    string                    code       = 1;
+    google.protobuf.Timestamp expires_at = 2;
+}
+
+message AcceptSupervisionInviteRequest {
+    string account_id = 1;
+    string code       = 2;
+}
+
+// A profile of the other side, to show who it is.
+message SupervisionProfile {
+    string profile_id   = 1;
+    string handle       = 2;
+    string display_name = 3;
+    string avatar_url   = 4;
+}
+
+// A supervision as the caller sees it: the other side.
+message SupervisionView {
+    // The other side's role: TEEN in a supervisor's list.
+    SupervisionRole             other_role       = 1;
+    string                      other_account_id = 2;
+    google.protobuf.Timestamp   since            = 3;
+    repeated SupervisionProfile profiles         = 4;
+}
+
+message ListSupervisionsRequest {
+    string account_id = 1;
+}
+
+message ListSupervisionsResponse {
+    // Most recent first.
+    repeated SupervisionView supervisions = 1;
+}
+
+message EndSupervisionRequest {
+    string account_id       = 1;
+    string other_account_id = 2;
+}

@@ -69,3 +69,12 @@ enum ContactChannel {
     CONTACT_CHANNEL_EMAIL       = 1;
     CONTACT_CHANNEL_PHONE       = 2;
 }
+
+// A side of a family supervision (#670).
+enum SupervisionRole {
+    SUPERVISION_ROLE_UNSPECIFIED = 0;
+    // A parent: a known adult (18+ by date of birth).
+    SUPERVISION_ROLE_SUPERVISOR  = 1;
+    // A teen aged 13 to 17.
+    SUPERVISION_ROLE_TEEN        = 2;
+}

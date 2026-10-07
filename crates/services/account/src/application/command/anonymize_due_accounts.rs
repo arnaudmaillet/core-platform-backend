@@ -22,11 +22,18 @@ pub struct JanitorPass {
 /// cancel) fails the optimistic CAS and is skipped.
 pub struct AnonymizeDueAccounts {
     repo: Arc<dyn AccountRepository>,
+    /// Ends the account's supervisions first (#670); `None`: none are kept.
+    supervisions: Option<Arc<super::Supervisions>>,
 }
 
 impl AnonymizeDueAccounts {
     pub fn new(repo: Arc<dyn AccountRepository>) -> Self {
-        Self { repo }
+        Self { repo, supervisions: None }
+    }
+
+    pub fn with_supervisions(mut self, supervisions: Arc<super::Supervisions>) -> Self {
+        self.supervisions = Some(supervisions);
+        self
     }
 
     pub async fn run(&self, now: DateTime<Utc>, batch: i64) -> Result<JanitorPass, AccountError> {
@@ -36,6 +43,15 @@ impl AnonymizeDueAccounts {
                 continue;
             };
             if !account.is_due_for_anonymization(now) {
+                pass.skipped += 1;
+                continue;
+            }
+            // Its supervisions end first (announced to the other side); a
+            // failure leaves the account for the next pass.
+            if let Some(supervisions) = &self.supervisions
+                && let Err(error) = supervisions.end_all(&id, now).await
+            {
+                tracing::warn!(%error, account.id = %id, "supervisions not ended; anonymization retried next pass");
                 pass.skipped += 1;
                 continue;
             }

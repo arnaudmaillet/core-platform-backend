@@ -272,4 +272,32 @@ where
     ) -> Result<Response<proto::FindProfilesByContactsResponse>, Status> {
         self.find_profiles_by_contacts(request).await
     }
+
+    async fn create_supervision_invite(
+        &self,
+        request: Request<proto::CreateSupervisionInviteRequest>,
+    ) -> Result<Response<proto::SupervisionInviteView>, Status> {
+        self.create_supervision_invite(request).await
+    }
+
+    async fn accept_supervision_invite(
+        &self,
+        request: Request<proto::AcceptSupervisionInviteRequest>,
+    ) -> Result<Response<proto::SupervisionView>, Status> {
+        self.accept_supervision_invite(request).await
+    }
+
+    async fn list_supervisions(
+        &self,
+        request: Request<proto::ListSupervisionsRequest>,
+    ) -> Result<Response<proto::ListSupervisionsResponse>, Status> {
+        self.list_supervisions(request).await
+    }
+
+    async fn end_supervision(
+        &self,
+        request: Request<proto::EndSupervisionRequest>,
+    ) -> Result<Response<proto::ListSupervisionsResponse>, Status> {
+        self.end_supervision(request).await
+    }
 }
