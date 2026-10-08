@@ -2,6 +2,9 @@
 //! counted for the country of the post it lands on (from the post's map card
 //! and the shared borders), on the reaction's UTC day. A post off the map, at
 //! sea, or whose card has expired counts nowhere. Other kinds are skipped.
+//!
+//! Idempotent: each reaction is counted once, keyed by what makes it that
+//! reaction (post, reactor, time, direction) — a redelivery counts nothing.
 
 use std::sync::Arc;
 
@@ -30,6 +33,8 @@ pub struct ReactionEvent {
     #[serde(default)]
     post_id:     String,
     #[serde(default)]
+    profile_id:  String,
+    #[serde(default)]
     new_kind:    Option<String>,
     #[serde(default)]
     old_kind:    Option<String>,
@@ -44,7 +49,7 @@ pub struct ReactionEvent {
 #[derive(Debug, PartialEq, Eq)]
 enum Outcome {
     Skip,
-    Count { post: Uuid, delta: i64, day: NaiveDate },
+    Count { post: Uuid, delta: i64, day: NaiveDate, event: String },
     Poison(String),
 }
 
@@ -62,7 +67,9 @@ fn outcome(event: &ReactionEvent) -> Outcome {
     let Some(at) = DateTime::from_timestamp_millis(event.event_at_ms) else {
         return Outcome::Poison(format!("bad event_at_ms {}", event.event_at_ms));
     };
-    Outcome::Count { post, delta, day: at.date_naive() }
+    // What makes it this reaction: a redelivery carries the same key.
+    let event = format!("l:{post}:{}:{}:{delta}", event.profile_id, event.event_at_ms);
+    Outcome::Count { post, delta, day: at.date_naive(), event }
 }
 
 pub struct CountryLikesWorker<TR> {
@@ -123,15 +130,17 @@ impl<TR: TileRepository + 'static> CountryLikesWorker<TR> {
         match outcome(event) {
             Outcome::Skip => ProcessOutcome::Done,
             Outcome::Poison(reason) => ProcessOutcome::Reject(reason),
-            Outcome::Count { post, delta, day } => ProcessOutcome::from_result(self.count(post, delta, day).await),
+            Outcome::Count { post, delta, day, event } => {
+                ProcessOutcome::from_result(self.count(post, delta, day, &event).await)
+            }
         }
     }
 
-    async fn count(&self, post: Uuid, delta: i64, day: NaiveDate) -> Result<(), GeoDiscoveryError> {
+    async fn count(&self, post: Uuid, delta: i64, day: NaiveDate, event: &str) -> Result<(), GeoDiscoveryError> {
         let Some(card) = self.tile_repository.get_card(&PostId::from(post)).await? else { return Ok(()) };
         let (Some(lat), Some(lng)) = (card.lat, card.lng) else { return Ok(()) };
         match self.atlas.country_at(lat, lng) {
-            Some(country) => self.activity.add(country, day, delta, 0).await,
+            Some(country) => self.activity.add(country, day, delta, 0, event).await,
             None => Ok(()),
         }
     }
@@ -153,7 +162,7 @@ mod tests {
     fn upserted(new: ReactionKind, old: Option<ReactionKind>) -> ReactionEvent {
         wire(ReactionKafkaEvent::Upserted(ReactionUpsertedEvent {
             post_id: Uuid::nil().to_string(),
-            profile_id: Uuid::now_v7().to_string(),
+            profile_id: Uuid::nil().to_string(),
             new_kind: new,
             new_weight: 1,
             old_kind: old,
@@ -165,14 +174,19 @@ mod tests {
     #[test]
     fn hearts_count_up_and_down_other_kinds_skip() {
         let day = DateTime::from_timestamp_millis(1_791_000_000_000).unwrap().date_naive();
-        let count = |delta| Outcome::Count { post: Uuid::nil(), delta, day };
+        let count = |delta: i64| Outcome::Count {
+            post: Uuid::nil(),
+            delta,
+            day,
+            event: format!("l:{}:{}:1791000000000:{delta}", Uuid::nil(), Uuid::nil()),
+        };
         assert_eq!(outcome(&upserted(ReactionKind::Heart, None)), count(1));
         assert_eq!(outcome(&upserted(ReactionKind::Fire, Some(ReactionKind::Heart))), count(-1));
         assert_eq!(outcome(&upserted(ReactionKind::Heart, Some(ReactionKind::Heart))), Outcome::Skip);
         assert_eq!(outcome(&upserted(ReactionKind::Fire, None)), Outcome::Skip);
         let removed = wire(ReactionKafkaEvent::Removed(ReactionRemovedEvent {
             post_id: Uuid::nil().to_string(),
-            profile_id: Uuid::now_v7().to_string(),
+            profile_id: Uuid::nil().to_string(),
             kind: ReactionKind::Heart,
             weight: 1,
             event_at_ms: 1_791_000_000_000,

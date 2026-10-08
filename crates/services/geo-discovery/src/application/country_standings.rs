@@ -70,11 +70,21 @@ mod tests {
     use crate::domain::value_object::CountryCode;
 
     #[derive(Default)]
-    pub struct MemActivity(pub Mutex<HashMap<(CountryCode, NaiveDate), CountryActivity>>);
+    pub struct MemActivity(pub Mutex<HashMap<(CountryCode, NaiveDate), CountryActivity>>, Mutex<std::collections::HashSet<(NaiveDate, String)>>);
 
     #[async_trait]
     impl CountryActivityStore for MemActivity {
-        async fn add(&self, country: CountryCode, day: NaiveDate, likes: i64, posts: i64) -> Result<(), GeoDiscoveryError> {
+        async fn add(
+            &self,
+            country: CountryCode,
+            day: NaiveDate,
+            likes: i64,
+            posts: i64,
+            event: &str,
+        ) -> Result<(), GeoDiscoveryError> {
+            if !self.1.lock().unwrap().insert((day, event.to_owned())) {
+                return Ok(());
+            }
             let mut map = self.0.lock().unwrap();
             let entry = map.entry((country, day)).or_default();
             entry.likes += likes;
@@ -103,14 +113,15 @@ mod tests {
         let activity = Arc::new(MemActivity::default());
         let now = Utc::now();
         let today = now.date_naive();
-        activity.add(cc("JP"), today, 5, 1).await.unwrap();
-        activity.add(cc("FR"), today - TimeDelta::days(29), 3, 1).await.unwrap();
+        activity.add(cc("JP"), today, 5, 1, "a").await.unwrap();
+        activity.add(cc("JP"), today, 5, 1, "a").await.unwrap();
+        activity.add(cc("FR"), today - TimeDelta::days(29), 3, 1, "b").await.unwrap();
         // Outside a 30-day window.
-        activity.add(cc("US"), today - TimeDelta::days(30), 100, 1).await.unwrap();
+        activity.add(cc("US"), today - TimeDelta::days(30), 100, 1, "c").await.unwrap();
         let standings = CountryStandings::new(activity, CountryAtlas::embedded(), UnlockPricing::default(), 30, Duration::ZERO);
         let ladder = standings.ladder(now).await.unwrap();
         assert_eq!(ladder.standings.len(), CountryAtlas::embedded().codes().count());
-        assert_eq!((ladder.standings[0].country, ladder.standings[0].likes), (cc("JP"), 5));
+        assert_eq!((ladder.standings[0].country, ladder.standings[0].likes), (cc("JP"), 5), "an event counts once");
         assert_eq!(ladder.standings[1].country, cc("FR"));
         let us = ladder.standings.iter().find(|s| s.country == cc("US")).unwrap();
         assert_eq!(us.likes, 0, "older than the window");
@@ -122,7 +133,7 @@ mod tests {
         let standings =
             CountryStandings::new(Arc::clone(&activity) as _, CountryAtlas::embedded(), UnlockPricing::default(), 30, Duration::from_secs(60));
         let first = standings.ladder(Utc::now()).await.unwrap();
-        activity.add(cc("JP"), Utc::now().date_naive(), 5, 1).await.unwrap();
+        activity.add(cc("JP"), Utc::now().date_naive(), 5, 1, "a").await.unwrap();
         assert!(Arc::ptr_eq(&first, &standings.ladder(Utc::now()).await.unwrap()));
     }
 }

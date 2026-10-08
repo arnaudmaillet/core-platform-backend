@@ -18,19 +18,23 @@ fn cc(code: &str) -> CountryCode {
 }
 
 #[tokio::test]
-async fn likes_and_posts_add_up_per_country_over_the_window() {
+async fn likes_and_posts_add_up_once_per_event_per_country_over_the_window() {
     let h = TestHarness::start().await;
     let activity = Arc::clone(&h.standings.activity);
     // Far-past days, so other runs' "today" never mixes in: the window is
     // counted back from `now`.
     let now = Utc::now() - TimeDelta::days(400 + i64::from(rand_day()));
     let today = now.date_naive();
-    activity.add(cc("NZ"), today, 7, 2).await.unwrap();
-    activity.add(cc("NZ"), today - TimeDelta::days(3), 1, 0).await.unwrap();
-    activity.add(cc("IS"), today, 5, 1).await.unwrap();
-    activity.add(cc("IS"), today, -1, 0).await.unwrap();
+    let id = |name: &str| format!("{name}-{}", uuid::Uuid::now_v7());
+    let nz = id("nz");
+    activity.add(cc("NZ"), today, 7, 2, &nz).await.unwrap();
+    // A redelivery of the same event counts nothing more.
+    activity.add(cc("NZ"), today, 7, 2, &nz).await.unwrap();
+    activity.add(cc("NZ"), today - TimeDelta::days(3), 1, 0, &id("nz-old")).await.unwrap();
+    activity.add(cc("IS"), today, 5, 1, &id("is")).await.unwrap();
+    activity.add(cc("IS"), today, -1, 0, &id("is-removed")).await.unwrap();
     // Outside a 30-day window.
-    activity.add(cc("CL"), today - TimeDelta::days(30), 99, 1).await.unwrap();
+    activity.add(cc("CL"), today - TimeDelta::days(30), 99, 1, &id("cl")).await.unwrap();
 
     let standings = CountryStandings::new(activity, CountryAtlas::embedded(), UnlockPricing::default(), 30, Duration::ZERO);
     let ladder = standings.ladder(now).await.unwrap();

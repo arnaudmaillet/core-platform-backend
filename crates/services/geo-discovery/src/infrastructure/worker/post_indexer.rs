@@ -209,11 +209,12 @@ where
         handler.handle(Envelope::new(Uuid::now_v7(), cmd)).await?;
 
         // The country ladder (#665): one more post where it was published (at
-        // sea or off every border: nowhere).
+        // sea or off every border: nowhere) — once per post, whatever the
+        // redeliveries or re-announcements.
         if let Some((activity, atlas)) = &self.country_activity {
             let day = chrono::DateTime::from_timestamp_millis(event.published_at_ms).map(|at| at.date_naive());
             if let (Some(country), Some(day)) = (atlas.country_at(lat, lng), day) {
-                activity.add(country, day, 0, 1).await?;
+                activity.add(country, day, 0, 1, &format!("p:{}", event.post_id)).await?;
             }
         }
         Ok(())

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a83b14300b2661e47648375e8ee5c616ad705a39bbe3aa3bb9174e6ed6a4d78a
+  source_sha256: 0d89877d45fe47bbb0c31cfa0635c952214e80394cf23e6c6fc14cc3b80e0628
   translated_at: 2026-10-08
   status: complete
 ---
@@ -241,7 +241,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 |---|---|---|---|
 | `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
 | `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | suppression de la carte : suppression → définitive ; `remove_content` / `visibility_limit` / `age_gate` sur un post → masqué ; une réversion plus récente → restauré (gardé par version ; événements au niveau de l'acteur et autres ignorés) | DLQ `{topic}.dlq` |
-| `engagement.reactions` | `geo-discovery-country-likes` | le classement des pays (#665) : chaque cœur (+1, −1 quand il est retiré ou changé) compté pour le pays du post où il tombe (la position de sa carte, `data/countries.json`), au jour UTC de la réaction → Redis `sg:geo:cact:{YYYYMMDD}` (`l:{CC}`) ; un post hors carte, en mer ou au-delà de la rétention de sa carte ne compte nulle part ; autres types ignorés. L'indexation d'un `post.published` ajoute `p:{CC}` de même. Un signal de classement : une relivraison peut compter deux fois | DLQ `{topic}.dlq` |
+| `engagement.reactions` | `geo-discovery-country-likes` | le classement des pays (#665) : chaque cœur (+1, −1 quand il est retiré ou changé) compté pour le pays du post où il tombe (la position de sa carte, `data/countries.json`), au jour UTC de la réaction → Redis `sg:geo:cact:{YYYYMMDD}` (`l:{CC}`) ; un post hors carte, en mer ou au-delà de la rétention de sa carte ne compte nulle part ; autres types ignorés. L'indexation d'un `post.published` ajoute `p:{CC}` de même. **Idempotent** (le classement fixe le prix des déblocages) : chaque comptage est un script Lua avec un marqueur `SET NX` dans le slot du hash du jour — une réaction identifiée par post, auteur, heure et sens (gardée 48 h, au-delà de toute relivraison), un post par son id (gardé avec son jour, donc un `post.published` réannoncé ne compte pas non plus) | DLQ `{topic}.dlq` |
 | `profile.v1.events` | `geo-discovery-location-settings` | partage de localisation des auteurs (#657) depuis `ProfileLocationSettingsChanged` → `geo_discovery.location_settings` ; chaque requête de carte l'applique pour tout lecteur sauf l'auteur (mesh compris) : les pins et cartes d'un **fantôme** quittent la carte ; ceux d'un auteur au **niveau ville** n'apparaissent qu'à la bande R5, au centre de la cellule R5, et ses cartes indiquent la cellule R7 de la ville ; un auteur dont l'**audience** est abonnés / mutuels ne reste que sur la carte d'un lecteur qui le suit / lui est mutuel (`follows` / `mutual` de `CheckAccess`, dans le même appel groupé) — jamais celle du mesh (NEARBY ne lit pour personne) ni d'un lecteur anonyme. Autres événements profile ignorés | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |
