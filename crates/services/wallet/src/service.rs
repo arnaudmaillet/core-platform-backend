@@ -18,10 +18,10 @@ use transport::kafka::consumer::{KafkaConsumerBuilder, KafkaConsumerHandle};
 use transport::kafka::producer::{KafkaProducerBuilder, KafkaProducerHandle};
 
 use crate::application::port::EventPublisher;
-use crate::infrastructure::client::GrpcTargetDirectory;
+use crate::infrastructure::client::{GrpcAudienceCheck, GrpcTargetDirectory};
 use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 
-use crate::app::App;
+use crate::app::{App, StakeDeps};
 use crate::application::Wallets;
 use crate::config::WalletConfig;
 use crate::infrastructure::consumer::run_account_consumer;
@@ -61,21 +61,17 @@ impl Service for WalletService {
         let pool = PgPoolBuilder::build(PostgresConfig::from_env())
             .await
             .map_err(|e| anyhow::anyhow!("wallet postgres pool: {e}"))?;
-        // Likes (#665): post and comment over the mesh; stakes announced on
-        // wallet.v1.events.
+        // Likes (#665): post and comment over the mesh, the reader's access
+        // from social-graph; stakes announced on wallet.v1.events through
+        // the outbox.
         let targets = GrpcTargetDirectory::new(
             mesh_channel("WALLET_POST_GRPC_ENDPOINT", "http://localhost:50056")?,
             mesh_channel("WALLET_COMMENT_GRPC_ENDPOINT", "http://localhost:50057")?,
         );
-        let publisher: Arc<dyn EventPublisher> = if std::env::var("KAFKA_BROKERS").is_ok() {
-            let producer = KafkaProducerBuilder::new(ProducerConfig::new(KafkaClientConfig::from_env()))
-                .build()
-                .map_err(|e| anyhow::anyhow!("wallet kafka producer: {e}"))?;
-            Arc::new(KafkaEventPublisher::new(producer))
-        } else {
-            Arc::new(LogEventPublisher)
-        };
-        let app = App::build(pool.clone(), WalletConfig::from_env(), Some((Arc::new(targets), publisher)));
+        let audience = GrpcAudienceCheck::new(mesh_channel("WALLET_SOCIAL_GRAPH_GRPC_ENDPOINT", "http://localhost:50053")?);
+        let deps = StakeDeps { targets: Arc::new(targets), audience: Arc::new(audience), publisher: build_publisher()? };
+        let app = App::build(pool.clone(), WalletConfig::from_env(), Some(deps));
+        spawn_outbox_drainer(Arc::clone(&app.wallets));
         // A deleted account's wallet goes with it.
         spawn_account_consumer(Arc::clone(&app.wallets));
         Ok(Self { app, pool })
@@ -93,6 +89,37 @@ impl Service for WalletService {
         routes.add_service(WalletServiceServer::new(self.app.handler));
         Ok(())
     }
+}
+
+/// The outbox's publisher: Kafka, fail-closed — without `KAFKA_BROKERS` the
+/// service does not start, unless `WALLET_ALLOW_LOG_PUBLISHER=true` (local
+/// runs: events are logged, never lost silently in a deployed env).
+fn build_publisher() -> anyhow::Result<Arc<dyn EventPublisher>> {
+    if std::env::var("KAFKA_BROKERS").is_ok_and(|v| !v.trim().is_empty()) {
+        let producer = KafkaProducerBuilder::new(ProducerConfig::new(KafkaClientConfig::from_env()))
+            .build()
+            .map_err(|e| anyhow::anyhow!("wallet kafka producer: {e}"))?;
+        return Ok(Arc::new(KafkaEventPublisher::new(producer)));
+    }
+    if std::env::var("WALLET_ALLOW_LOG_PUBLISHER").is_ok_and(|v| v.trim() == "true") {
+        tracing::warn!("KAFKA_BROKERS unset: wallet events are logged, not published (local only)");
+        return Ok(Arc::new(LogEventPublisher));
+    }
+    anyhow::bail!("KAFKA_BROKERS is required (wallet.v1.events); set WALLET_ALLOW_LOG_PUBLISHER=true for local runs")
+}
+
+/// Publishes what the outbox holds, every `WALLET_OUTBOX_DRAIN_SECS` (5).
+fn spawn_outbox_drainer(wallets: Arc<Wallets>) {
+    let every = std::env::var("WALLET_OUTBOX_DRAIN_SECS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(5);
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(every.max(1)));
+        loop {
+            tick.tick().await;
+            if let Err(error) = wallets.drain_outbox(500, chrono::Utc::now()).await {
+                tracing::warn!(%error, "wallet outbox drain failed; retrying at the next tick");
+            }
+        }
+    });
 }
 
 /// A lazily-connected mesh channel to `env_key` (default `default`), 1 s

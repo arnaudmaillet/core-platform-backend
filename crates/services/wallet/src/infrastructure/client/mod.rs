@@ -1,5 +1,6 @@
-//! What likes land on, over the mesh: post (`GetPost`) and comment
-//! (`GetComment`). Any failure but NOT_FOUND is `WAL-6001` (fail closed).
+//! What likes land on, over the mesh: post (`GetPost`), comment
+//! (`GetComment`), and whether the one who likes may see it (social-graph
+//! `CheckAccess`). Any failure but NOT_FOUND is `WAL-6001` (fail closed).
 
 use async_trait::async_trait;
 use tonic::transport::Channel;
@@ -7,8 +8,9 @@ use tonic::Code;
 
 use comment_api::comment_service_client::CommentServiceClient;
 use post_api::post_service_client::PostServiceClient;
+use social_graph_api::social_graph_service_client::SocialGraphServiceClient;
 
-use crate::application::port::{TargetDirectory, TargetInfo};
+use crate::application::port::{AudienceCheck, TargetDirectory, TargetInfo};
 use crate::domain::StakeTarget;
 use crate::error::WalletError;
 
@@ -58,5 +60,40 @@ impl TargetDirectory for GrpcTargetDirectory {
                 }
             }
         }
+    }
+}
+
+/// social-graph `CheckAccess` caps the reader's profiles per call.
+const MAX_VIEWERS: usize = 20;
+
+pub struct GrpcAudienceCheck {
+    social: SocialGraphServiceClient<Channel>,
+}
+
+impl GrpcAudienceCheck {
+    /// `channel` must carry request and connect timeouts.
+    pub fn new(channel: Channel) -> Self {
+        Self { social: SocialGraphServiceClient::new(channel) }
+    }
+}
+
+#[async_trait]
+impl AudienceCheck for GrpcAudienceCheck {
+    async fn visible(&self, viewers: &[String], author_profile_id: &str) -> Result<bool, WalletError> {
+        let viewers: Vec<String> = viewers.iter().take(MAX_VIEWERS).cloned().collect();
+        let answer = self
+            .social
+            .clone()
+            .check_access(social_graph_api::CheckAccessRequest {
+                viewer_profile_ids: viewers,
+                target_profile_ids: vec![author_profile_id.to_owned()],
+            })
+            .await
+            .map_err(unavailable("social-graph"))?
+            .into_inner();
+        // An author missing from the answer is not visible (fail closed).
+        Ok(answer.targets.iter().any(|t| {
+            t.target_profile_id == author_profile_id && t.access == social_graph_api::ContentAccess::Visible as i32
+        }))
     }
 }

@@ -394,11 +394,11 @@ mod tests {
     /// #665: a like names one of the caller's profiles, never their own post.
     #[tokio::test]
     async fn a_stake_is_the_callers_and_never_on_their_own_content() {
-        use crate::application::wallets::fakes::{MemPublisher, MemTargets};
+        use crate::application::wallets::fakes::{MemAudience, MemPublisher, MemTargets};
         let targets = Arc::new(MemTargets::default());
         targets.0.lock().unwrap().insert("mine".into(), ("my-profile".into(), true));
         let wallets = Wallets::new(Arc::new(MemoryStore::default()), WalletConfig::default())
-            .with_stakes(targets as _, Arc::new(MemPublisher::default()) as _);
+            .with_stakes(targets as _, Arc::new(MemAudience::default()) as _, Arc::new(MemPublisher::default()) as _);
         let h = WalletServiceHandler::new(Arc::new(wallets));
         let me = Uuid::now_v7().to_string();
         let stake = |profile: &str| proto::StakeRequest {
