@@ -3,4 +3,5 @@ pub mod export;
 pub mod directory;
 pub mod grpc;
 pub mod persistence;
+pub mod supervision;
 pub mod worker;

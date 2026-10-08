@@ -40,6 +40,8 @@ pub struct MeshEndpoints {
     pub chat: String,
     pub media: String,
     pub search: String,
+    /// Family supervision's view of a teen's reports (#670).
+    pub moderation: String,
 }
 
 impl MeshEndpoints {
@@ -56,6 +58,7 @@ impl MeshEndpoints {
             chat: var("ACCOUNT_CHAT_GRPC_ENDPOINT", "http://localhost:50051"),
             media: var("ACCOUNT_MEDIA_GRPC_ENDPOINT", "http://localhost:50063"),
             search: var("ACCOUNT_SEARCH_GRPC_ENDPOINT", "http://localhost:50062"),
+            moderation: var("ACCOUNT_MODERATION_GRPC_ENDPOINT", "http://localhost:50061"),
         }
     }
 }

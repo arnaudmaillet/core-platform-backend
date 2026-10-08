@@ -25,6 +25,13 @@ impl ModerationService for ModerationServiceHandler {
         self.list_my_reports(request).await
     }
 
+    async fn list_reports_by_reporter(
+        &self,
+        request: Request<proto::ListReportsByReporterRequest>,
+    ) -> Result<Response<proto::ListMyReportsResponse>, Status> {
+        self.list_reports_by_reporter(request).await
+    }
+
     async fn list_my_appeals(
         &self,
         request: Request<proto::ListMyAppealsRequest>,

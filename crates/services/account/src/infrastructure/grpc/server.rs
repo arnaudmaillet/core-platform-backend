@@ -321,4 +321,25 @@ where
     ) -> Result<Response<proto::ScreenTimeView>, Status> {
         self.report_screen_time(request).await
     }
+
+    async fn get_supervision_overview(
+        &self,
+        request: Request<proto::GetSupervisionOverviewRequest>,
+    ) -> Result<Response<proto::SupervisionOverview>, Status> {
+        self.get_supervision_overview(request).await
+    }
+
+    async fn list_supervised_connections(
+        &self,
+        request: Request<proto::ListSupervisedConnectionsRequest>,
+    ) -> Result<Response<proto::ListSupervisedConnectionsResponse>, Status> {
+        self.list_supervised_connections(request).await
+    }
+
+    async fn list_supervised_reports(
+        &self,
+        request: Request<proto::ListSupervisedReportsRequest>,
+    ) -> Result<Response<proto::ListSupervisedReportsResponse>, Status> {
+        self.list_supervised_reports(request).await
+    }
 }

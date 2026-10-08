@@ -34,7 +34,7 @@ use crate::application::command::{
     ChangePhoneCommand, ChangePhoneHandler, Supervisions,
 };
 use crate::application::port::{
-    AccountRepository, ContactIndex, ContactLookupQuota, EventPublisher, ExportStore, ProfileDirectory,
+    AccountRepository, ContactIndex, ContactLookupQuota, EventPublisher, ExportStore, ProfileDirectory, SupervisedActivity,
 };
 use crate::application::query::{
     FindProfilesByContactsHandler, FindProfilesByContactsQuery,
@@ -69,17 +69,20 @@ impl App {
         pool: PgPool,
         publisher: Arc<dyn EventPublisher>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::build_with_exports(pool, publisher, None, None).await
+        Self::build_with_exports(pool, publisher, None, None, None).await
     }
 
     /// [`Self::build`], with the GDPR export store (#653) that signs a
     /// delivered export's link when the record is read, and the profile
-    /// directory contact matching reads (#661; without it, `ACC-7006`).
+    /// directory contact matching reads (#661; without it, `ACC-7006`), and
+    /// where a supervised teen's connections and reports are read (#670;
+    /// without it, `ACC-3008`).
     pub async fn build_with_exports(
         pool: PgPool,
         publisher: Arc<dyn EventPublisher>,
         exports: Option<Arc<dyn ExportStore>>,
         directory: Option<Arc<dyn ProfileDirectory>>,
+        activity: Option<Arc<dyn SupervisedActivity>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let tx = TransactionManager::new(pool);
         let pg = Arc::new(PgAccountRepository::new(tx.clone(), Arc::clone(&publisher)));
@@ -88,12 +91,16 @@ impl App {
         let quota: Arc<dyn ContactLookupQuota> = pg;
         let budget = Arc::clone(&quota);
         let supervisions = directory.as_ref().map(|profiles| {
-            Arc::new(Supervisions::new(
+            let supervisions = Supervisions::new(
                 Arc::new(PgSupervisionStore::new(tx.clone())),
                 Arc::new(RepoAccountAges(Arc::clone(&repository))),
                 Arc::clone(profiles),
                 Arc::clone(&publisher),
-            ))
+            );
+            Arc::new(match activity {
+                Some(activity) => supervisions.with_activity(activity),
+                None => supervisions,
+            })
         });
 
         let command_bus = Arc::new(

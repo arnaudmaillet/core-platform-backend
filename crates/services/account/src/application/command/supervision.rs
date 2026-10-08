@@ -3,14 +3,19 @@
 //! ends it; it ends when the teen turns 18 or either account is erased.
 //! Every start and end is published (`account.v1.events`) with both sides'
 //! profiles, so each side can be told.
+//!
+//! Part 2 adds the limits and screen time; part 3 the supervisor's view —
+//! the same one the teen sees of themselves: limits, recent screen time,
+//! connections and reports.
 
 use std::sync::Arc;
 
-use chrono::{DateTime, DurationRound, Utc};
+use chrono::{DateTime, DurationRound, NaiveDate, Utc};
 use uuid::Uuid;
 
 use crate::application::port::{
-    AccountAges, DirectoryProfile, EventPublisher, Linked, ProfileDirectory, SupervisionStore,
+    AccountAges, ActivityPage, Connection, ConnectionKind, DirectoryProfile, EventPublisher, Linked, ProfileDirectory,
+    ReportSummary, SupervisedActivity, SupervisionStore,
 };
 use crate::domain::event::{
     DomainEvent, SupervisionEnded, SupervisionLimitsCleared, SupervisionLimitsSet, SupervisionStarted,
@@ -24,6 +29,13 @@ use crate::error::AccountError;
 
 /// Supervisions the sweep ends per pass.
 const SWEEP_BATCH: i64 = 200;
+
+/// Days of screen time the overview shows.
+const OVERVIEW_DAYS: i64 = 7;
+
+/// Default and maximum page sizes of the connections and reports listings.
+const DEFAULT_PAGE: u32 = 50;
+const MAX_PAGE: u32 = 100;
 
 /// A supervision as one side sees it: the other side, and since when.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,11 +58,24 @@ pub struct ScreenTime {
     pub reached:       bool,
 }
 
+/// What a supervisor (or the teen) sees of the teen (#670 part 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisionOverview {
+    pub limits:      Option<LimitsRecord>,
+    /// The last days with time counted (only under a daily limit), most
+    /// recent first; each day local to the teen's device.
+    pub screen_time: Vec<(NaiveDate, i32)>,
+    /// The teen's active profiles, whose connections can be listed.
+    pub profiles:    Vec<DirectoryProfile>,
+}
+
 pub struct Supervisions {
     store:     Arc<dyn SupervisionStore>,
     ages:      Arc<dyn AccountAges>,
     profiles:  Arc<dyn ProfileDirectory>,
     publisher: Arc<dyn EventPublisher>,
+    /// The teen's connections and reports (part 3); `None`: `ACC-3008`.
+    activity:  Option<Arc<dyn SupervisedActivity>>,
 }
 
 impl Supervisions {
@@ -60,7 +85,13 @@ impl Supervisions {
         profiles: Arc<dyn ProfileDirectory>,
         publisher: Arc<dyn EventPublisher>,
     ) -> Self {
-        Self { store, ages, profiles, publisher }
+        Self { store, ages, profiles, publisher, activity: None }
+    }
+
+    /// Where the teen's connections and reports are read (part 3).
+    pub fn with_activity(mut self, activity: Arc<dyn SupervisedActivity>) -> Self {
+        self.activity = Some(activity);
+        self
     }
 
     /// `account` invites the other side: the code to share (24 h, single use).
@@ -223,12 +254,60 @@ impl Supervisions {
     /// A teen's limits, read by the teen themselves or one of their
     /// supervisors (`teen` empty: the caller's own). `None`: no limits.
     pub async fn limits(&self, account: &str, teen: &str) -> Result<Option<LimitsRecord>, AccountError> {
+        let teen = self.viewable_teen(account, teen).await?;
+        self.store.limits(&teen).await
+    }
+
+    /// What `account` sees of `teen` (empty: itself): the same view for the
+    /// teen and each of their supervisors.
+    pub async fn overview(&self, account: &str, teen: &str) -> Result<SupervisionOverview, AccountError> {
+        let teen = self.viewable_teen(account, teen).await?;
+        Ok(SupervisionOverview {
+            limits:      self.store.limits(&teen).await?,
+            screen_time: self.store.recent_usage(&teen, OVERVIEW_DAYS).await?,
+            profiles:    active(self.profiles.profiles_of(&teen).await?),
+        })
+    }
+
+    /// One page of a teen's profile's connections. `ACC-3005` when the
+    /// profile is not the teen's.
+    pub async fn connections(
+        &self,
+        account: &str,
+        teen: &str,
+        profile_id: &str,
+        kind: ConnectionKind,
+        limit: u32,
+        page_token: &str,
+    ) -> Result<ActivityPage<Connection>, AccountError> {
+        let teen = self.viewable_teen(account, teen).await?;
+        let activity = self.activity()?;
+        if !self.profiles.profiles_of(&teen).await?.iter().any(|p| p.profile_id == profile_id) {
+            return Err(AccountError::SupervisionNotFound);
+        }
+        activity.connections(profile_id, kind, page_size(limit), page_token).await
+    }
+
+    /// One page of the reports the teen made, newest first: who or what,
+    /// when and the decision — never the teen's own words.
+    pub async fn reports(&self, account: &str, teen: &str, limit: u32, page_token: &str) -> Result<ActivityPage<ReportSummary>, AccountError> {
+        let teen = self.viewable_teen(account, teen).await?;
+        self.activity()?.reports(&teen, page_size(limit), page_token).await
+    }
+
+    /// `teen` (empty: `account` itself), when `account` is that teen or one
+    /// of their supervisors; `ACC-3005` otherwise.
+    async fn viewable_teen(&self, account: &str, teen: &str) -> Result<AccountId, AccountError> {
         let account = AccountId::try_from(account)?;
         let teen = if teen.is_empty() { account } else { AccountId::try_from(teen).map_err(|_| AccountError::SupervisionNotFound)? };
         if teen != account && self.find(&teen, &account).await?.is_none() {
             return Err(AccountError::SupervisionNotFound);
         }
-        self.store.limits(&teen).await
+        Ok(teen)
+    }
+
+    fn activity(&self) -> Result<&Arc<dyn SupervisedActivity>, AccountError> {
+        self.activity.as_ref().ok_or_else(|| AccountError::SupervisionActivityUnavailable { reason: "not configured".into() })
     }
 
     /// The app reports `minutes` more of use (at most 15 at a time) and learns
@@ -287,6 +366,13 @@ impl Supervisions {
 
     async fn both_profiles(&self, link: &Supervision) -> Result<(Vec<DirectoryProfile>, Vec<DirectoryProfile>), AccountError> {
         Ok((self.profiles.profiles_of(&link.teen).await?, self.profiles.profiles_of(&link.supervisor).await?))
+    }
+}
+
+fn page_size(limit: u32) -> u32 {
+    match limit {
+        0 => DEFAULT_PAGE,
+        n => n.min(MAX_PAGE),
     }
 }
 
@@ -356,6 +442,13 @@ mod tests {
             let total = usage.entry((*account, day)).or_insert(0);
             *total += minutes;
             Ok(*total)
+        }
+        async fn recent_usage(&self, account: &AccountId, days: i64) -> Result<Vec<(NaiveDate, i32)>, AccountError> {
+            let mut rows: Vec<_> =
+                self.usage.lock().unwrap().iter().filter(|((a, _), _)| a == account).map(|((_, d), m)| (*d, *m)).collect();
+            rows.sort_by_key(|(day, _)| std::cmp::Reverse(*day));
+            rows.truncate(usize::try_from(days).unwrap_or(0));
+            Ok(rows)
         }
         async fn failed_accepts(&self, account: &AccountId, hour: DateTime<Utc>) -> Result<i64, AccountError> {
             Ok(self.failures.lock().unwrap().get(&(*account, hour)).copied().unwrap_or(0))
@@ -668,5 +761,85 @@ mod tests {
         let kinds: Vec<_> = w.published.0.lock().unwrap().iter().map(|e| e.event_type()).collect();
         assert_eq!(kinds.iter().filter(|k| **k == "account.supervision_limits_set").count(), 1);
         assert_eq!(kinds.last(), Some(&"account.supervision_limits_cleared"));
+    }
+
+    /// The teen's connections and reports, as the mesh would page them.
+    #[derive(Default)]
+    struct Activity(Mutex<Vec<(String, ConnectionKind, u32)>>);
+
+    #[async_trait]
+    impl SupervisedActivity for Activity {
+        async fn connections(
+            &self,
+            profile_id: &str,
+            kind: ConnectionKind,
+            limit: u32,
+            _page_token: &str,
+        ) -> Result<ActivityPage<Connection>, AccountError> {
+            self.0.lock().unwrap().push((profile_id.to_owned(), kind, limit));
+            Ok(ActivityPage { items: vec![Connection { profile_id: "friend".into(), since: None }], next_page_token: None })
+        }
+        async fn reports(&self, reporter: &AccountId, _limit: u32, _page_token: &str) -> Result<ActivityPage<ReportSummary>, AccountError> {
+            Ok(ActivityPage {
+                items: vec![ReportSummary {
+                    entity_type: "post".into(),
+                    entity_id:   format!("reported-by-{reporter}"),
+                    category:    "spam".into(),
+                    outcome:     crate::application::port::ReportOutcome::ActionTaken,
+                    reported_at: None,
+                }],
+                next_page_token: None,
+            })
+        }
+    }
+
+    /// Part 3: each supervisor and the teen see the same view; nobody else.
+    #[tokio::test]
+    async fn the_supervisor_and_the_teen_see_the_same_overview() {
+        let mut w = world();
+        let activity = Arc::new(Activity::default());
+        w.handler = Supervisions::new(Arc::clone(&w.store) as _, Arc::clone(&w.ages) as _, Arc::new(Profiles), Arc::clone(&w.published) as _)
+            .with_activity(Arc::clone(&activity) as _);
+        let (mum, teen, stranger) = (w.account(AgeBracket::Adult), w.account(AgeBracket::Teen13To15), w.account(AgeBracket::Adult));
+        w.pair(mum, teen).await.unwrap();
+        let limits = SupervisionLimits { daily_minutes: Some(60), ..Default::default() };
+        w.handler.set_limits(&mum.to_string(), &teen.to_string(), limits, Utc::now()).await.unwrap();
+        w.handler.report_time(&teen.to_string(), 10, "UTC", Utc::now()).await.unwrap();
+        w.handler.report_time(&teen.to_string(), 10, "UTC", Utc::now() - Duration::days(1)).await.unwrap();
+
+        let (mum_s, teen_s) = (mum.to_string(), teen.to_string());
+        let parent_view = w.handler.overview(&mum_s, &teen_s).await.unwrap();
+        assert_eq!(parent_view, w.handler.overview(&teen_s, "").await.unwrap(), "the teen sees what the parent sees");
+        assert_eq!(parent_view.screen_time.len(), 2);
+        assert!(parent_view.screen_time[0].0 > parent_view.screen_time[1].0, "most recent first");
+        assert_eq!(parent_view.limits.unwrap().limits.daily_minutes, Some(60));
+        assert_eq!(parent_view.profiles[0].profile_id, format!("p-{teen}"));
+        assert!(matches!(w.handler.overview(&stranger.to_string(), &teen_s).await, Err(AccountError::SupervisionNotFound)));
+
+        // Connections of the teen's own profiles only; pages capped.
+        let page = w.handler.connections(&mum_s, &teen_s, &format!("p-{teen}"), ConnectionKind::Blocked, 500, "").await.unwrap();
+        assert_eq!(page.items[0].profile_id, "friend");
+        assert_eq!(activity.0.lock().unwrap()[0], (format!("p-{teen}"), ConnectionKind::Blocked, MAX_PAGE));
+        assert!(matches!(
+            w.handler.connections(&mum_s, &teen_s, &format!("p-{mum}"), ConnectionKind::Following, 0, "").await,
+            Err(AccountError::SupervisionNotFound)
+        ));
+        assert!(w.handler.connections(&stranger.to_string(), &teen_s, &format!("p-{teen}"), ConnectionKind::Following, 0, "").await.is_err());
+
+        // The teen's reports, read for the teen's account.
+        let reports = w.handler.reports(&mum_s, &teen_s, 0, "").await.unwrap();
+        assert_eq!(reports.items[0].entity_id, format!("reported-by-{teen}"));
+        assert_eq!(reports, w.handler.reports(&teen_s, "", 0, "").await.unwrap());
+        assert!(w.handler.reports(&stranger.to_string(), &teen_s, 0, "").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn activity_without_a_source_is_unavailable() {
+        let w = world();
+        let teen = w.account(AgeBracket::Teen13To15);
+        assert!(matches!(
+            w.handler.reports(&teen.to_string(), "", 0, "").await,
+            Err(AccountError::SupervisionActivityUnavailable { .. })
+        ));
     }
 }

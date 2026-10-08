@@ -19,6 +19,7 @@ use crate::app::App;
 use crate::application::command::{AnonymizeDueAccounts, ExportDueData, PeerExportSources};
 use crate::infrastructure::directory::MeshProfileDirectory;
 use crate::infrastructure::export::{ExportStoreConfig, MeshEndpoints, MeshExportPeers, S3ExportStore};
+use crate::infrastructure::supervision::MeshSupervisedActivity;
 use crate::infrastructure::worker::export_pass::run_export_pass;
 use crate::infrastructure::worker::gdpr_janitor::run_gdpr_janitor;
 use crate::infrastructure::worker::supervision_sweep::run_supervision_sweep;
@@ -76,6 +77,11 @@ impl Service for AccountService {
         authenticated("/account.v1.AccountService/SetSupervisionLimits"),
         authenticated("/account.v1.AccountService/GetSupervisionLimits"),
         authenticated("/account.v1.AccountService/ReportScreenTime"),
+        // #670 part 3: the supervisor's view (and the teen's own) — bound to
+        // the caller's account; the handler checks the supervision.
+        authenticated("/account.v1.AccountService/GetSupervisionOverview"),
+        authenticated("/account.v1.AccountService/ListSupervisedConnections"),
+        authenticated("/account.v1.AccountService/ListSupervisedReports"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -105,11 +111,16 @@ impl Service for AccountService {
         let endpoints = MeshEndpoints::from_env();
         let directory = MeshProfileDirectory::new(&endpoints.profile, &endpoints.social_graph)
             .map_err(|e| anyhow::anyhow!("account profile directory: {e}"))?;
+        // A supervised teen's connections and reports (#670), for the teen and
+        // their supervisors.
+        let activity = MeshSupervisedActivity::new(&endpoints.social_graph, &endpoints.moderation)
+            .map_err(|e| anyhow::anyhow!("account supervised activity: {e}"))?;
         let app = App::build_with_exports(
             pool.clone(),
             publisher,
             exports.clone().map(|store| store as Arc<dyn ExportStore>),
             Some(Arc::new(directory)),
+            Some(Arc::new(activity)),
         )
         .await
         .map_err(|e| anyhow::anyhow!("account app build: {e}"))?;

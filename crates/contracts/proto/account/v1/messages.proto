@@ -400,3 +400,80 @@ message ScreenTimeView {
     // Show the pause screen.
     bool   reached       = 3;
 }
+
+message GetSupervisionOverviewRequest {
+    string account_id      = 1;
+    // Empty: the caller's own (a teen).
+    string teen_account_id = 2;
+}
+
+// One day of time on the app.
+message ScreenTimeDay {
+    // The teen's local day, "YYYY-MM-DD".
+    string day     = 1;
+    uint32 minutes = 2;
+}
+
+message SupervisionOverview {
+    SupervisionLimitsView       limits      = 1;
+    // The last 7 days with time counted, most recent first (time is counted
+    // only under a daily limit; a day without use is absent).
+    repeated ScreenTimeDay      screen_time = 2;
+    // The teen's active profiles, whose connections can be listed.
+    repeated SupervisionProfile profiles    = 3;
+}
+
+message ListSupervisedConnectionsRequest {
+    string                   account_id      = 1;
+    // Empty: the caller's own (a teen).
+    string                   teen_account_id = 2;
+    // One of the teen's profiles.
+    string                   profile_id      = 3;
+    SupervisedConnectionKind kind            = 4;
+    // Default 50, capped at 100.
+    int32                    limit           = 5;
+    // Opaque cursor from a previous response; empty for the first page.
+    string                   page_token      = 6;
+}
+
+// A profile on the other end of a connection (the app shows it from its id).
+message SupervisedConnection {
+    string                    profile_id = 1;
+    // Followed or blocked at.
+    google.protobuf.Timestamp since      = 2;
+}
+
+message ListSupervisedConnectionsResponse {
+    repeated SupervisedConnection connections     = 1;
+    // Empty on the last page.
+    string                        next_page_token = 2;
+}
+
+message ListSupervisedReportsRequest {
+    string account_id      = 1;
+    // Empty: the caller's own (a teen).
+    string teen_account_id = 2;
+    // Default 50, capped at 100.
+    int32  limit           = 3;
+    // Opaque cursor from a previous response; empty for the first page.
+    string page_token      = 4;
+}
+
+// A report the teen made: who or what, when and the decision.
+message SupervisedReport {
+    // post, comment, chat_message, media, account or profile.
+    string                    entity_type = 1;
+    string                    entity_id   = 2;
+    // The policy category chosen: spam, harassment, hate, violent_extremism,
+    // csam, ncii, self_harm, misinformation or other.
+    string                    category    = 3;
+    SupervisedReportOutcome   outcome     = 4;
+    google.protobuf.Timestamp reported_at = 5;
+}
+
+message ListSupervisedReportsResponse {
+    // Newest first.
+    repeated SupervisedReport reports         = 1;
+    // Empty on the last page.
+    string                    next_page_token = 2;
+}

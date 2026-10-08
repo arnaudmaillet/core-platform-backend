@@ -215,4 +215,20 @@ service AccountService {
     // and learns whether today's limit is reached — all devices together,
     // the day in the given IANA zone. Counted only under a daily limit.
     rpc ReportScreenTime(ReportScreenTimeRequest) returns (ScreenTimeView);
+
+    // Part 3: the supervisor's view. The teen sees exactly the same view of
+    // themselves (`teen_account_id` empty); anyone else gets ACC-3005.
+    // Connections and reports are read from social-graph and moderation:
+    // ACC-3008 when they cannot be.
+
+    // Limits, the last days of screen time and the teen's profiles.
+    rpc GetSupervisionOverview(GetSupervisionOverviewRequest) returns (SupervisionOverview);
+
+    // One page of a teen's profile's following, followers or blocked
+    // profiles. ACC-3005 when `profile_id` is not the teen's.
+    rpc ListSupervisedConnections(ListSupervisedConnectionsRequest) returns (ListSupervisedConnectionsResponse);
+
+    // One page of the reports the teen made, newest first: who or what,
+    // when and the decision — never the teen's own words.
+    rpc ListSupervisedReports(ListSupervisedReportsRequest) returns (ListSupervisedReportsResponse);
 }

@@ -188,6 +188,104 @@ where
         }))
     }
 
+    /// What a supervisor sees of its teen — and the teen of themselves
+    /// (#670 part 3). Edge: the caller's account.
+    pub async fn get_supervision_overview(
+        &self,
+        request: Request<proto::GetSupervisionOverviewRequest>,
+    ) -> Result<Response<proto::SupervisionOverview>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let overview = self
+            .supervisions()?
+            .overview(&req.account_id, &req.teen_account_id)
+            .await
+            .map_err(account_error_to_status)?;
+        Ok(Response::new(proto::SupervisionOverview {
+            limits:      Some(limits_view(overview.limits)),
+            screen_time: overview
+                .screen_time
+                .into_iter()
+                .map(|(day, minutes)| proto::ScreenTimeDay {
+                    day:     day.format("%Y-%m-%d").to_string(),
+                    minutes: u32::try_from(minutes).unwrap_or_default(),
+                })
+                .collect(),
+            profiles:    overview.profiles.into_iter().map(supervision_profile).collect(),
+        }))
+    }
+
+    /// One page of a supervised teen's profile's connections (#670 part 3).
+    /// Edge: the caller's account.
+    pub async fn list_supervised_connections(
+        &self,
+        request: Request<proto::ListSupervisedConnectionsRequest>,
+    ) -> Result<Response<proto::ListSupervisedConnectionsResponse>, Status> {
+        use crate::application::port::ConnectionKind;
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let kind = match proto::SupervisedConnectionKind::try_from(req.kind) {
+            Ok(proto::SupervisedConnectionKind::Following) => ConnectionKind::Following,
+            Ok(proto::SupervisedConnectionKind::Followers) => ConnectionKind::Followers,
+            Ok(proto::SupervisedConnectionKind::Blocked) => ConnectionKind::Blocked,
+            _ => return Err(Status::invalid_argument("kind must be FOLLOWING, FOLLOWERS or BLOCKED")),
+        };
+        let page = self
+            .supervisions()?
+            .connections(
+                &req.account_id,
+                &req.teen_account_id,
+                &req.profile_id,
+                kind,
+                u32::try_from(req.limit).unwrap_or(0),
+                &req.page_token,
+            )
+            .await
+            .map_err(account_error_to_status)?;
+        Ok(Response::new(proto::ListSupervisedConnectionsResponse {
+            connections: page
+                .items
+                .into_iter()
+                .map(|c| proto::SupervisedConnection { profile_id: c.profile_id, since: c.since.map(dt_to_ts) })
+                .collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+        }))
+    }
+
+    /// One page of the reports a supervised teen made, without their words
+    /// (#670 part 3). Edge: the caller's account.
+    pub async fn list_supervised_reports(
+        &self,
+        request: Request<proto::ListSupervisedReportsRequest>,
+    ) -> Result<Response<proto::ListSupervisedReportsResponse>, Status> {
+        use crate::application::port::ReportOutcome;
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let page = self
+            .supervisions()?
+            .reports(&req.account_id, &req.teen_account_id, u32::try_from(req.limit).unwrap_or(0), &req.page_token)
+            .await
+            .map_err(account_error_to_status)?;
+        Ok(Response::new(proto::ListSupervisedReportsResponse {
+            reports: page
+                .items
+                .into_iter()
+                .map(|r| proto::SupervisedReport {
+                    entity_type: r.entity_type,
+                    entity_id:   r.entity_id,
+                    category:    r.category,
+                    outcome:     match r.outcome {
+                        ReportOutcome::UnderReview => proto::SupervisedReportOutcome::UnderReview,
+                        ReportOutcome::ActionTaken => proto::SupervisedReportOutcome::ActionTaken,
+                        ReportOutcome::NoViolation => proto::SupervisedReportOutcome::NoViolation,
+                    } as i32,
+                    reported_at: r.reported_at.map(dt_to_ts),
+                })
+                .collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+        }))
+    }
+
     /// Ends one of the caller's supervisions (#670). Edge: the caller's account.
     pub async fn end_supervision(
         &self,
@@ -1022,16 +1120,16 @@ fn supervision_to_proto(view: crate::application::command::SupervisionView) -> p
         } as i32,
         other_account_id: view.account.to_string(),
         since: Some(dt_to_ts(view.since)),
-        profiles: view
-            .profiles
-            .into_iter()
-            .map(|p| proto::SupervisionProfile {
-                profile_id:   p.profile_id,
-                handle:       p.handle,
-                display_name: p.display_name,
-                avatar_url:   p.avatar_url.unwrap_or_default(),
-            })
-            .collect(),
+        profiles: view.profiles.into_iter().map(supervision_profile).collect(),
+    }
+}
+
+fn supervision_profile(p: crate::application::port::DirectoryProfile) -> proto::SupervisionProfile {
+    proto::SupervisionProfile {
+        profile_id:   p.profile_id,
+        handle:       p.handle,
+        display_name: p.display_name,
+        avatar_url:   p.avatar_url.unwrap_or_default(),
     }
 }
 

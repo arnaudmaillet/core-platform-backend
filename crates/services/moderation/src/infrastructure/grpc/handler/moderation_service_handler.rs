@@ -163,6 +163,31 @@ impl ModerationServiceHandler {
         }))
     }
 
+    /// A member's reports for their supervisor (#670): mesh only (not on the
+    /// edge policy), and never the free text.
+    pub async fn list_reports_by_reporter(
+        &self,
+        request: Request<proto::ListReportsByReporterRequest>,
+    ) -> Result<Response<proto::ListMyReportsResponse>, Status> {
+        let req = request.into_inner();
+        let reporter = ActorId::try_from(req.reporter_id.as_str())
+            .map_err(|_| Status::invalid_argument("reporter_id must be an account id"))?;
+        let query = ListMyReportsQuery {
+            reporter: Reporter::Member(reporter),
+            page_token: (!req.page_token.is_empty()).then_some(req.page_token),
+            page_size: usize::try_from(req.page_size).unwrap_or(0),
+        };
+        let page = self.list_my_reports.handle(Self::envelope(query)).await.map_err(status)?;
+        Ok(Response::new(proto::ListMyReportsResponse {
+            reports: page
+                .reports
+                .iter()
+                .map(|r| proto::ReportView { reason: String::new(), ..report_view(r) })
+                .collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+        }))
+    }
+
     pub async fn open_case(
         &self,
         request: Request<proto::OpenCaseRequest>,

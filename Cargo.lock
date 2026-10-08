@@ -19,6 +19,7 @@ dependencies = [
  "error",
  "http",
  "media-api",
+ "moderation-api",
  "post-api",
  "postgres",
  "profile-api",

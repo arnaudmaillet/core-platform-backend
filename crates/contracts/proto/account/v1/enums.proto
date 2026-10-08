@@ -88,3 +88,23 @@ enum AudienceFloor {
     AUDIENCE_FLOOR_MUTUALS     = 2;
     AUDIENCE_FLOOR_NO_ONE      = 3;
 }
+
+// Which of a supervised teen's profile connections to list (#670).
+enum SupervisedConnectionKind {
+    SUPERVISED_CONNECTION_KIND_UNSPECIFIED = 0;
+    // The profiles it follows.
+    SUPERVISED_CONNECTION_KIND_FOLLOWING   = 1;
+    // The profiles following it.
+    SUPERVISED_CONNECTION_KIND_FOLLOWERS   = 2;
+    // The profiles it blocked.
+    SUPERVISED_CONNECTION_KIND_BLOCKED     = 3;
+}
+
+// What became of a report a supervised teen made (#670).
+enum SupervisedReportOutcome {
+    SUPERVISED_REPORT_OUTCOME_UNSPECIFIED  = 0;
+    SUPERVISED_REPORT_OUTCOME_UNDER_REVIEW = 1;
+    // The content or account was acted on.
+    SUPERVISED_REPORT_OUTCOME_ACTION_TAKEN = 2;
+    SUPERVISED_REPORT_OUTCOME_NO_VIOLATION = 3;
+}
