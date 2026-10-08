@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: c3a6f05972f81abda4eec79aebd5b7bf10ef456803138a1227b5c2b6562c00c0
-  translated_at: 2026-06-28
+  source_sha256: 8634a87656500533247290b9b5caf427e06c6030fb7c8b1bfce9bef205ffaaa2
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -11,134 +11,143 @@ i18n:
 
 # `engagement` — Contrat de Domaine & Fonctionnel
 
-> **Domain Card**
+> **Fiche de domaine**
 >
 > | | |
 > |---|---|
-> | **Bounded Context** | Engagement — réactions et leur état d'arête / scoring |
-> | **Classe de sous-domaine** | **Core** — interaction directe de l'utilisateur avec le contenu ; l'arête de réaction est du tissu produit |
-> | **System of …** | **Record** pour l'état d'arête de réaction (« qui a réagi, comment ») ; les magnitudes sont superseded par `counter` |
-> | **Racine(s) d'agrégat** | `Reaction` (`domain`) |
+> | **Bounded Context** | Engagement — likes (points) et compteurs d'interaction |
+> | **Classe de sous-domaine** | **Core** — interaction directe de l'utilisateur avec le contenu ; les likes sont le tissu du produit |
+> | **System of …** | **Reference** pour les likes (les mises du wallet font foi, #665) ; **Record** pour les compteurs de vues/partages jusqu'à ce que `counter` les remplace |
+> | **Racine(s) d'agrégat** | aucune — les likes sont des totaux appliqués (VO `LikeTarget`), les compteurs des incréments |
 > | **Tier** | **TIER-1** |
-> | **Posture de défaillance** | **Fail-open-ish** — Redis-primary avec atomicité Lua, Kafka write-behind |
-> | **Contextes amont** | clients utilisateur ; `comment` (comptes) |
-> | **Contextes aval** | `counter` (magnitudes), `notification`, `geo-discovery` (score) — via **Published Language** |
+> | **Posture en cas de panne** | **Plutôt fail-open** — Redis-primary avec atomicité Lua, alimenté par Kafka |
+> | **Contextes amont** | `wallet` (mises) ; clients finaux (vues/partages) ; `comment` (comptes) ; `post` (compteurs de likes masqués) |
+> | **Contextes aval** | `account` (export RGPD, `ListLikesByAccount`) — via **Open Host Service** (gRPC mesh) |
 > | **Journal de décisions** | [`ADR-0009`](../../../../docs/adr/0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md) |
 
 ---
 
-## 1. Capacité Métier & Non-Objectifs
+## 1. Capacité métier & non-objectifs
 
-**Capacité.** `engagement` est l'autorité pour **les réactions** : il répond à
-**« qui a réagi à ce contenu, avec quelle réaction, et quel est le score d'engagement pondéré ? »**
+**Capacité.** `engagement` répond à **« combien de likes a ce post ou ce commentaire, combien sont les
+miens, et combien de fois a-t-il été vu, partagé et commenté ? »**
 
-**Le problème difficile.** Appliquer atomiquement des bascules de réaction idempotentes à haute
-fréquence sur le hot path — **Redis-primary avec atomicité Lua** — tout en enregistrant durablement
-l'arête via **Kafka write-behind**, sans aller-retour base par bascule.
+**Le problème difficile.** Transformer les événements de mise du wallet — livrés au moins une fois et
+sans ordre garanti — en compteurs de likes exacts à l'échelle d'un post viral : chaque événement porte le
+**total** du compte, appliqué par un script Lua qui ne fait qu'avancer, sans aller-retour base de données
+sur le chemin de lecture.
 
 **Non-objectifs — ce que ce contexte ne fait délibérément PAS :**
-- ❌ Servir des *comptes* d'affichage → `counter` possède les magnitudes ; engagement émet les événements d'arête.
-- ❌ Posséder le contenu réagi → `post` / `comment`.
-- ❌ Posséder les compteurs bruts de vues/partages → superseded par `counter`.
+- ❌ Décider si un like est permis (points, plafonds, visibilité, auto-like) → `wallet` possède les mises.
+- ❌ Diffuser les likes (notifications, centres d'intérêt, classement des pays) → ils lisent directement `wallet.v1.events`.
+- ❌ Posséder le contenu liké → `post` / `comment`.
+- ❌ Les réactions pondérées (cœur, feu, fusée, applaudissements, triste) — retirées avec #665 : un like est un point.
 
 ---
 
-## 2. Langage Omniprésent
+## 2. Langage omniprésent
 
 | Terme | Sens dans ce contexte | Symbole de code |
 |---|---|---|
-| Reaction | L'arête de réaction d'un utilisateur sur un item de contenu | `Reaction`, `ReactionKind` |
-| Reaction weight | Le poids de score d'un type de réaction | `ReactionWeight` |
-| Upsert / remove | Pose/effacement idempotent d'une réaction | `ReactionUpsertedEvent`, `ReactionRemovedEvent` |
+| Like | Un point qu'un compte a misé sur un post ou un commentaire (pas de retrait) | `LikeStore`, `LikeLedger` |
+| Cible de like | Le post ou le commentaire sur lequel tombe un like | `LikeTarget` |
+| Total | Les points d'un compte sur une cible ; ne fait que croître | `apply_total`, `AccountLike::total` |
+| Compteur de likes | La somme des totaux sur une cible | `LikeSummary::count` |
+| Likes masqués | L'auteur masque ses compteurs de likes (#809) : compteur retenu pour les non-auteurs | `LikeVisibility` |
 
 ---
 
-## 3. Modèle de Domaine
+## 3. Modèle de domaine
 
-| Élément | Type | Frontière d'invariant gardée |
+| Élément | Nature | Frontière d'invariant qu'il garde |
 |---|---|---|
-| `Reaction` | racine d'agrégat | Une arête de réaction par (utilisateur, contenu) ; bascule idempotente |
-| `ReactionKind` | enum | Vocabulaire de réaction fermé |
-| `ReactionWeight` | VO | Contribution au scoring par type |
-| `PostId` / `ProfileId` | VO | Le contenu réagi + le réacteur |
+| `LikeTarget` | VO | Seulement un post ou un commentaire, avec un id borné |
+| `PostId` | VO | Le post auquel appartient un compteur |
+| `AccountLike` | modèle de lecture | Ce qu'un compte a liké (export RGPD) |
+| `PostEngagementSnapshot` | modèle de lecture | Les compteurs de vues/partages/commentaires d'un post |
 
-**Cycle de vie :**
+**Cycle de vie des likes d'un compte sur une cible :**
 
 ```
-(none) --(react)--> upserted --(react again, same kind)--> idempotent --(unreact)--> removed
+(none) --(stake, total n)--> n --(stake, total m > n)--> m      (a total ≤ the one held: no change)
 ```
 
-> **Transitions légales uniquement.** Réappliquer la même réaction est idempotent (Lua-atomique dans
-> Redis) ; l'arête est la vérité, le score est dérivé.
+> **Transitions légales uniquement.** Les totaux ne font que croître ; le compteur de la cible bouge de
+> la différence, atomiquement.
 
 ---
 
-## 4. Propriété des Données & Frontières
+## 4. Propriété des données & frontières
 
 **Ce contexte est la source de vérité pour :**
-- L'état d'arête de réaction — **Redis** (primary, Lua-atomique) avec **ScyllaDB** write-behind durable.
+- Les compteurs de vues/partages/commentaires — **Redis** (primaire) avec une copie **ScyllaDB** approximative.
 
-**La liste « ne-pas-écrire » :** engagement n'écrit pas les comptes d'affichage (émet des événements ;
-`counter` agrège), et ne possède pas le contenu.
+**Il détient une copie de référence de :** les likes — les mises du wallet, en totaux par (compte,
+cible) : Redis (chemin de lecture) et ScyllaDB `likes_by_target` / `likes_by_account` (récupération,
+export RGPD).
+
+**La liste « ne pas écrire » :** engagement ne décide jamais d'un like ; il ne possède pas le contenu.
 
 ---
 
-## 5. Invariants & Règles Métier
+## 5. Invariants & règles métier
 
 | # | Invariant | Imposé à | En cas de violation |
 |---|---|---|---|
-| I1 | Une arête de réaction par (utilisateur, contenu) ; les bascules sont idempotentes | domaine + Lua-atomique dans Redis | `ENG-2xxx` |
-| I2 | L'arête fait autorité ; le score est dérivé des poids | domaine | `ENG-3xxx` |
-| I3 | Enregistrement durable via Kafka write-behind (pas d'aller-retour base par bascule) | application | `ENG-5xxx` |
+| I1 | Le compteur de likes d'une cible est la somme des totaux de ses comptes | script Lua (un hash tag par cible) | — (atomique) |
+| I2 | Le total d'un compte sur une cible ne fait que croître ; re-livraisons et événements tardifs ne changent rien | script Lua ; horodatage d'écriture Scylla = heure de la mise | — (ignoré) |
+| I3 | Les compteurs masqués n'atteignent que l'auteur et le mesh ; quand post ne peut pas répondre, ils sont retenus | application | `ENG-6001` (mode fermé) |
+| I4 | Seuls les posts et les commentaires peuvent être likés | `LikeTarget::parse` | `ENG-9004` |
 
 ---
 
-## 6. Workflows & Orchestration
+## 6. Workflows & orchestration
 
-> En ligne jusqu'à ce qu'un C4 corrigé soit régénéré depuis `docs/domain/`.
+**Like.** Le wallet valide une mise et publie `StakeCommitted` (outbox) ; le `StakeConsumer`
+d'engagement applique le total du compte dans Redis, puis écrit la copie durable.
 
-**React / unreact.** Un script Lua pose/efface atomiquement l'arête de réaction et met à jour le score
-in-Redis ; un `ReactionUpsertedEvent` / `ReactionRemovedEvent` est émis (Kafka write-behind) pour
-l'enregistrement durable et la consommation aval.
+**Lecture.** `GetPostEngagement` / `BatchGetLikes` lisent compteurs et likes dans Redis, en retenant les
+compteurs masqués selon la réponse de post (`BatchGetLikeVisibility`, en cache 60 s).
 
-**Propagation du score.** `engagement.score_updated` porte le score pondéré vers les consommateurs
-(`geo-discovery` viralité, `counter`).
+**Export.** L'export RGPD d'account parcourt `ListLikesByAccount` (mesh uniquement) vers `likes.json`.
 
 ---
 
-## 7. Relations de Contexte (extrait de Context-Map)
+## 7. Relations de contexte (tranche de la Context Map)
 
-| Contexte voisin | Direction | Pattern | Mécanisme | Ce qui casse s'il change |
+| Contexte voisin | Direction | Patron | Mécanisme | Ce qui casse s'ils changent |
 |---|---|---|---|---|
-| `comment` | amont | ACL | `comment.created` / `comment.deleted` | les comptes pilotés par commentaire cassent |
-| `counter` | aval | Published Language | événements de réaction | les magnitudes like/réaction cassent |
-| `notification` | aval | Published Language | `engagement.reactions` | les notifications de réaction cassent |
-| `geo-discovery` | aval | Published Language | `engagement.score_updated` | le scoring de viralité casse |
+| `wallet` | amont | Conformist | `wallet.v1.events` (`stake_committed`) | les compteurs de likes cassent |
+| `comment` | amont | ACL | `comment.created` / `comment.deleted` | les compteurs de commentaires cassent |
+| `post` | amont | Customer/Supplier | gRPC `BatchGetLikeVisibility` | compteurs masqués retenus pour tous sauf le mesh |
+| `account` | aval | Open Host Service | gRPC `ListLikesByAccount` | l'export RGPD échoue (réessayé) |
 
 ---
 
-## 8. Événements de Domaine (sémantique, pas wire)
+## 8. Événements de domaine (sémantique, pas le format filaire)
 
-| Événement | Signifie | Émis quand | Qui réagit |
-|---|---|---|---|
-| `engagement.reactions` (`ReactionUpserted`/`Removed`) | une arête de réaction a été posée/effacée | react/unreact commite | `notification`, `counter` |
-| `engagement.score_updated` | le score d'engagement pondéré a changé | recalcul du score | `geo-discovery`, `counter` |
-| `engagement.post_reactions` / `post_interaction_counters` | agrégats de réactions/interactions par post | agrégation | consommateurs aval |
+engagement ne publie aucun événement. Il consomme :
+
+| Événement | Signifie | Effet ici |
+|---|---|---|
+| `wallet.v1.events` `stake_committed` | les points d'un compte sur une cible ont atteint un nouveau total | le compteur de likes et ceux du compte bougent |
+| `comment.created` / `comment.deleted` | un commentaire a été publié / retiré | compteur de commentaires ±1 |
 
 ---
 
-## 9. Décisions & Justification
+## 9. Décisions & justification
 
 | Décision | ADR | Statut |
 |---|---|---|
-| Réactions Redis-primary Lua-atomiques + durabilité Kafka write-behind | [`ADR-0009`](../../../../docs/adr/0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md) | Accepté |
-| Engagement garde l'*arête* de réaction ; `counter` supersède les magnitudes brutes | _voir counter §4_ | Accepté |
+| Chemin chaud Redis-primary atomique en Lua, copies durables alimentées par Kafka | [`ADR-0009`](../../../../docs/adr/0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md) | Accepted (amendée par #665) |
+| Les likes sont des points misés dans le wallet ; réactions retirées | #665 | Accepted |
 
 ---
 
-## 10. Classification de Sous-domaine & Évolution
+## 10. Classification du sous-domaine & évolution
 
 - **Classification :** Core — interaction directe avec le contenu.
-- **Volatilité :** faible-à-moyenne — les nouveaux types de réaction sont additifs.
-- **Dette de modélisation connue :** un RPC de compte de réactions pour la réconciliation `counter` n'est pas encore exposé.
-- **Capacités différées :** analytics de réactions plus riches ; réglage du scoring par type.
+- **Volatilité :** faible — les likes suivent le contrat de mise du wallet.
+- **Dette de modélisation connue :** effacer les likes d'un compte sur `account_deleted` ; le hash des
+  likers n'a pas de TTL (un plancher de réhydratation depuis Scylla est prévu).
+- **Capacités différées :** règlement des likes (gems gagnées grâce aux likes, #665).

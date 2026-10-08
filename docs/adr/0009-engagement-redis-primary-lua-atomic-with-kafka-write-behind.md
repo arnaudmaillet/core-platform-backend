@@ -35,3 +35,15 @@ the truth; the score is derived from `ReactionWeight`s.
 | Database-primary reactions | Per-toggle round-trip can't sustain reaction volume |
 | Non-atomic Redis read-modify-write | Races under concurrency (double/lost reactions) |
 | Keep magnitudes here too | Counting belongs in `counter` (ADR-0008) |
+
+## Amendment 2026-10-08 — likes are points (#665)
+
+The reactions are gone: a like is a point an account stakes in the `wallet` (the record), with no
+unlike. Engagement keeps the Redis-primary, Lua-atomic hot path, but what it applies changed:
+`wallet.v1.events` `StakeCommitted` carries the account's **total** on a post or comment, and one Lua
+script moves the account's total and the target's sum forward (a total no larger than the one held
+changes nothing). That makes the at-least-once, unordered stream idempotent without markers. The
+durable copy is ScyllaDB `likes_by_target` / `likes_by_account`, written with the stake's time as the
+write timestamp. Engagement no longer publishes: `engagement.reactions` and its write-behind worker are
+removed, and `engagement.score_updated` never existed; consumers read the wallet's stream directly.
+The rest of this record (Redis-primary, counters in Redis, `counter` owning magnitudes) stands.

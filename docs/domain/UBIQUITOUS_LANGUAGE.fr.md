@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./UBIQUITOUS_LANGUAGE.md
-  source_sha256: 72c3cda3c3efed20a6e51e0fa7a695686d41fdd9c58c390f262b5e34668ca64e
-  translated_at: 2026-06-28
+  source_sha256: 13bc9b0832935f6ead969976437bb241367eb7a55042a78f370c9d444ec69624
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`UBIQUITOUS_LANGUAGE.md`](./UBIQUITOUS_LANGUAGE.md) fait foi.
@@ -59,7 +59,7 @@ ou un RPC consommé au-delà d'une frontière ne soit pas silencieusement mal in
 | **Visibility** | `profile` | Bi-axiale : choix du propriétaire **et** masquage par modération | `ProfileVisibility` |
 | **Visibility** | `search` | L'autorité (propriétaire / modération) honorée au moment de la requête | `VisibilityAuthority` |
 | **Visibility** | `media` | Si / comment un asset peut être servi | `DeliveryVisibility` |
-| **Score** | `engagement` | Score d'engagement dérivé du poids des réactions | `ReactionWeight` |
+| **Like** | `wallet` / `engagement` | Un point qu'un compte mise sur un post ou un commentaire (#665) ; le compteur de likes en est la somme | `Stake`, `LikeTarget` |
 | **Score** | `geo-discovery` | Pondération de classement par viralité pour une map card | `ViralityScore` |
 | **Score** | `counter` | Magnitude de popularité publiée | `PopularityScore` |
 | **Event** | `audit` | Un **fait de conformité enregistré** immuable (la chose stockée) | `AuditEvent` / `AuditRecord` |

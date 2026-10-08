@@ -242,7 +242,7 @@ most. social-graph or moderation unreachable ⇒ `ACC-3008` (`UNAVAILABLE`, retr
 **GDPR data export (#653, Art. 15/20).** `RequestDataExport` marks the export pending; the **export
 pass** (`ExportDueData`) then builds, per pending account, a ZIP of JSON files — the holder's own
 account record (contact details, consents, sign-in settings; **no** password hash, MFA material or
-internal fields), the other services' files (`ExportSources`: profiles, posts, comments, reactions, recent
+internal fields), the other services' files (`ExportSources`: profiles, posts, comments, likes, recent
 searches, the social graph, conversations, media links), a `README.txt` — stores it privately
 (`exports/<account>/<id>.zip`, `S3ExportStore`: static keys, `ACCOUNT_EXPORT_*`) and records its **object
 key** on the GDPR record — never a signed link, which is a bearer credential: `GetGdprRecord` signs the
@@ -253,13 +253,14 @@ archive) and the pass retries it (`ACC-7005`); the save is version-checked, so a
 export was being built is built anew. Pending accounts come from a partial index (migration 0005). The
 sources are the other services' **mesh-only** RPCs (`MeshExportPeers`, every page, each message
 transcoded to JSON through the service's own descriptor set): per profile its profile, posts, comments
-(`ListCommentsByAuthor`), reactions (`ListReactionsByProfile`), recent searches (search's
+(`ListCommentsByAuthor`), recent searches (search's
 `ListRecentSearches`, over the mesh, #816), social graph, and conversations
 (`ListConversationsByMember`, then: a `DIRECT` conversation in full through `GetHistory`; a group or
 channel through chat's mesh-only `GetFormerMemberHistory`, the holder's own messages with the others' as
 `{"from": "another member"}` placeholders — direct is the conversation's kind, never its roster size;
 groups the holder left (#656, `left_at_ms`) are included, up to the departure, without their roster); for the account its
-media (`ListAssetsByOwner`, links valid 7 days). The server runs the pass every
+likes (engagement's `ListLikesByAccount`, #665: a like is a point, the account's) and its media
+(`ListAssetsByOwner`, links valid 7 days). The server runs the pass every
 `ACCOUNT_EXPORT_INTERVAL_SECS` when the store is configured (`ACCOUNT_EXPORT_BUCKET`, core-platform-infra#28).
 
 **MFA is auth's (#649); account only keeps it.** Every MFA RPC is **mesh only**: the holder enrolls and

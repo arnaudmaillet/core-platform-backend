@@ -8,14 +8,13 @@
 //! cargo test -p engagement --features integration-engagement -- --nocapture
 //! ```
 //!
-//! Engagement is Redis-primary: the reaction/view/share hot path is a single
-//! atomic Redis round-trip, with ScyllaDB durability handled by background
-//! write-behind workers. The suite therefore boots only an ephemeral **Redis**
-//! container (no ScyllaDB, no Kafka) and drives the hot path through the
-//! production composition root ([`engagement::app::App`]) with a no-op publisher:
+//! Engagement is Redis-primary: the likes (#665) and the view/share/comment
+//! counters are single atomic Redis round-trips, with ScyllaDB durability
+//! handled by background workers. The suite therefore boots only an ephemeral
+//! **Redis** container (no ScyllaDB, no Kafka) and drives the hot path through
+//! the production composition root ([`engagement::app::App`]):
 //!
-//! - **atomic reaction toggle** — an upsert is idempotent (a repeated reaction by
-//!   the same profile does not double-count) and a remove zeroes it.
+//! - **likes** — a stake's total is applied once, monotonically.
 //! - **concurrent view counter** — concurrent view records sum exactly, proving
 //!   the atomic Redis increment.
 //!

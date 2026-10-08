@@ -1,10 +1,9 @@
 //! Adapts the engagement composition root to the fleet
 //! [`service_runtime::Service`] contract.
 //!
-//! Engagement is Redis-primary (the always-on hot path) with a ScyllaDB
-//! write-behind ledger driven by Kafka workers spawned inside [`App::build`].
-//! Readiness therefore gates on Redis only. Reaction weights are loaded from the
-//! externalized weights config.
+//! Engagement is Redis-primary (the always-on hot path) with ScyllaDB durable
+//! copies written by Kafka workers spawned inside [`App::build`].
+//! Readiness therefore gates on Redis only.
 
 use std::sync::Arc;
 
@@ -14,19 +13,16 @@ use cqrs::query::InMemoryQueryBus;
 use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 use service_runtime::{HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::{authenticated, public_read};
+use service_runtime::edge::public_read;
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
-use transport::kafka::config::{KafkaClientConfig, ProducerConfig};
-use transport::kafka::producer::KafkaProducerBuilder;
+use transport::kafka::config::KafkaClientConfig;
 
 use crate::app::{App, Backends};
-use crate::config::ReactionWeightsConfig;
 use crate::infrastructure::grpc::handler::engagement_handler::EngagementServiceServer;
 use crate::infrastructure::grpc::handler::EngagementServiceHandler;
 use crate::infrastructure::grpc::server::FILE_DESCRIPTOR_SET;
-use crate::infrastructure::publisher::KafkaEngagementEventPublisher;
 
 type EngagementServer =
     EngagementServiceServer<EngagementServiceHandler<Arc<InMemoryCommandBus>, Arc<InMemoryQueryBus>>>;
@@ -48,8 +44,6 @@ impl Service for EngagementService {
     // RecordView/RecordShare carry no actor by design (fire-and-forget counters);
     // requiring a token still keeps them off the anonymous internet.
     const EDGE_POLICY: EdgePolicy = &[
-        authenticated("/engagement.v1.EngagementService/UpsertReaction"),
-        authenticated("/engagement.v1.EngagementService/RemoveReaction"),
         public_read("/engagement.v1.EngagementService/RecordView"),
         public_read("/engagement.v1.EngagementService/RecordShare"),
         public_read("/engagement.v1.EngagementService/GetPostEngagement"),
@@ -64,32 +58,9 @@ impl Service for EngagementService {
             kafka:  Some(KafkaClientConfig::from_env()),
         };
 
-        let weights = Arc::new(
-            ReactionWeightsConfig::from_env()
-                .map_err(|e| anyhow::anyhow!("engagement reaction weights: {e}"))?,
-        );
-
-        let producer = KafkaProducerBuilder::new(ProducerConfig::new(KafkaClientConfig::from_env()))
-            .build()?;
-        let publisher = Arc::new(KafkaEngagementEventPublisher::new(producer));
-
-        let app = App::build(backends, weights, publisher, like_visibility_from_env()?)
+        let app = App::build(backends, like_visibility_from_env()?)
             .await
             .map_err(|e| anyhow::anyhow!("engagement app build: {e}"))?;
-
-        // Reactions from before `reactions_by_profile` existed (#653): opt-in,
-        // once, idempotent (`ENGAGEMENT_BACKFILL_REACTIONS_BY_PROFILE=true`).
-        if std::env::var("ENGAGEMENT_BACKFILL_REACTIONS_BY_PROFILE").is_ok_and(|v| matches!(v.trim(), "1" | "true" | "yes"))
-            && let Some(ledger) = app.ledger.clone()
-        {
-            tokio::spawn(async move {
-                use crate::application::port::ReactionLedger;
-                match ledger.backfill_profile_index().await {
-                    Ok(written) => tracing::info!(written, "reactions_by_profile backfill done"),
-                    Err(error) => tracing::error!(%error, "reactions_by_profile backfill failed"),
-                }
-            });
-        }
 
         Ok(Self { app })
     }
@@ -137,10 +108,10 @@ pub(crate) fn like_visibility_from_env() -> anyhow::Result<Option<Arc<dyn crate:
 mod tests {
     use super::*;
 
-    /// A profile's reactions are the GDPR export's (#653): never on the edge.
+    /// An account's likes are the GDPR export's (#653, #665): never on the edge.
     #[test]
-    fn listing_by_profile_is_mesh_only() {
-        let method = "/engagement.v1.EngagementService/ListReactionsByProfile";
+    fn listing_by_account_is_mesh_only() {
+        let method = "/engagement.v1.EngagementService/ListLikesByAccount";
         assert!(EngagementService::EDGE_POLICY.iter().all(|rule| rule.method != method));
     }
 }

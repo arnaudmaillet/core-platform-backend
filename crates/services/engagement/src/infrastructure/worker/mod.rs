@@ -1,6 +1,5 @@
 pub mod comment_consumer;
 pub mod counter_flush;
-pub mod reaction_write_behind;
 pub mod stake_consumer;
 
 use transport::kafka::config::client::KafkaClientConfig;

@@ -5,20 +5,14 @@ package engagement.v1;
 import "engagement/v1/messages.proto";
 
 service EngagementService {
-    // Adds or replaces the calling profile's reaction on a post.
-    // Atomic in Redis via Lua; asynchronously durable via Kafka → ScyllaDB.
-    rpc UpsertReaction    (UpsertReactionRequest)    returns (CommandResponse);
-
-    // Removes the calling profile's reaction from a post.
-    rpc RemoveReaction    (RemoveReactionRequest)    returns (CommandResponse);
-
     // Increments the view counter for a post. Fire-and-forget on the hot path.
     rpc RecordView        (RecordViewRequest)        returns (CommandResponse);
 
     // Increments the share counter for a post. Fire-and-forget on the hot path.
     rpc RecordShare       (RecordShareRequest)       returns (CommandResponse);
 
-    // Returns the full engagement snapshot (scores + counters) from Redis.
+    // A post's likes (#665: a like is a point, staked in the wallet:
+    // wallet.Stake) and its view, share and comment counters.
     rpc GetPostEngagement (GetPostEngagementRequest) returns (PostEngagementView);
 
     // The likes of up to 100 posts and comments (#665: a like is a point
@@ -27,7 +21,7 @@ service EngagementService {
     // the reader's own likes (a member: its account's; 0 otherwise).
     rpc BatchGetLikes (BatchGetLikesRequest) returns (BatchGetLikesResponse);
 
-    // A profile's reactions (which posts, which reaction, when), paged by post
-    // id. Mesh only (never on the edge): the GDPR data export (#653).
-    rpc ListReactionsByProfile (ListReactionsByProfileRequest) returns (ListReactionsByProfileResponse);
+    // What an account liked (each post or comment, its points, when), paged
+    // by target. Mesh only (never on the edge): the GDPR data export (#653).
+    rpc ListLikesByAccount (ListLikesByAccountRequest) returns (ListLikesByAccountResponse);
 }

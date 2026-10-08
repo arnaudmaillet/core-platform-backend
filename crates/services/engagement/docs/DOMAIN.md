@@ -4,31 +4,32 @@
 >
 > | | |
 > |---|---|
-> | **Bounded Context** | Engagement — reactions and their edge state / scoring |
-> | **Subdomain class** | **Core** — direct user interaction with content; the reaction edge is product fabric |
-> | **System of …** | **Record** for reaction edge state ("who reacted, how"); magnitudes are superseded by `counter` |
-> | **Aggregate root(s)** | `Reaction` (`domain`) |
+> | **Bounded Context** | Engagement — likes (points) and interaction counters |
+> | **Subdomain class** | **Core** — direct user interaction with content; likes are product fabric |
+> | **System of …** | **Reference** for likes (the wallet's stakes are the record, #665); **Record** for view/share counters until `counter` supersedes them |
+> | **Aggregate root(s)** | none — likes are applied totals (`LikeTarget` VO), counters are increments |
 > | **Tier** | **TIER-1** |
-> | **Failure posture** | **Fail-open-ish** — Redis-primary with Lua atomicity, Kafka write-behind |
-> | **Upstream contexts** | end-user clients; `comment` (counts) |
-> | **Downstream contexts** | `counter` (magnitudes), `notification`, `geo-discovery` (score) — via **Published Language** |
-> | **Decision log** | _none yet — see [`docs/adr/`](../../../../docs/adr/README.md)_ |
+> | **Failure posture** | **Fail-open-ish** — Redis-primary with Lua atomicity, Kafka-fed |
+> | **Upstream contexts** | `wallet` (stakes); end-user clients (views/shares); `comment` (counts); `post` (hidden like counts) |
+> | **Downstream contexts** | `account` (GDPR export, `ListLikesByAccount`) — via **Open Host Service** (mesh gRPC) |
+> | **Decision log** | [`ADR-0009`](../../../../docs/adr/0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md) |
 
 ---
 
 ## 1. Business Capability & Non-Goals
 
-**Capability.** `engagement` is the authority for **reactions**: it answers
-**"who reacted to this content, with what reaction, and what is the weighted engagement score?"**
+**Capability.** `engagement` answers **"how many likes does this post or comment have, how many are
+mine, and how often was it viewed, shared and commented?"**
 
-**The hard problem.** Applying high-frequency, idempotent reaction toggles atomically at the hot
-path — **Redis-primary with Lua atomicity** — while durably recording the edge via **Kafka
-write-behind**, without a per-toggle database round-trip.
+**The hard problem.** Turning the wallet's at-least-once, unordered stake events into exact like counts
+at hot-post scale — each event carries the account's **total**, applied by a Lua script that only moves
+forward — without a database round-trip on the read path.
 
 **Non-goals — what this context deliberately does NOT do:**
-- ❌ Serve display *counts* → `counter` owns magnitudes; engagement emits the edge events.
-- ❌ Own the content reacted to → `post` / `comment`.
-- ❌ Own raw view/share counters → superseded by `counter`.
+- ❌ Decide whether a like is allowed (points, caps, visibility, self-like) → `wallet` owns stakes.
+- ❌ Fan likes out (notifications, interests, country ladder) → they read `wallet.v1.events` directly.
+- ❌ Own the content liked → `post` / `comment`.
+- ❌ Weighted reactions (heart, fire, rocket, clap, sad) — removed with #665: a like is a point.
 
 ---
 
@@ -36,9 +37,11 @@ write-behind**, without a per-toggle database round-trip.
 
 | Term | Meaning in this context | Code symbol |
 |---|---|---|
-| Reaction | A user's reaction edge on a content item | `Reaction`, `ReactionKind` |
-| Reaction weight | The score weight of a reaction kind | `ReactionWeight` |
-| Upsert / remove | Idempotent set/clear of a reaction | `ReactionUpsertedEvent`, `ReactionRemovedEvent` |
+| Like | One point an account staked on a post or comment (no unlike) | `LikeStore`, `LikeLedger` |
+| Like target | The post or comment a like lands on | `LikeTarget` |
+| Total | An account's points on one target; only grows | `apply_total`, `AccountLike::total` |
+| Like count | The sum of the totals on a target | `LikeSummary::count` |
+| Hidden likes | The author hides like counts (#809): count withheld from non-authors | `LikeVisibility` |
 
 ---
 
@@ -46,29 +49,30 @@ write-behind**, without a per-toggle database round-trip.
 
 | Element | Kind | Invariant boundary it guards |
 |---|---|---|
-| `Reaction` | aggregate root | One reaction edge per (user, content); idempotent toggle |
-| `ReactionKind` | enum | Closed reaction vocabulary |
-| `ReactionWeight` | VO | Scoring contribution per kind |
-| `PostId` / `ProfileId` | VO | The reacted-on content + reactor |
+| `LikeTarget` | VO | Only a post or a comment, with a bounded id |
+| `PostId` | VO | The post a counter belongs to |
+| `AccountLike` | read model | What an account liked (GDPR export) |
+| `PostEngagementSnapshot` | read model | A post's view/share/comment counters |
 
-**Lifecycle:**
+**Lifecycle of an account's likes on a target:**
 
 ```
-(none) --(react)--> upserted --(react again, same kind)--> idempotent --(unreact)--> removed
+(none) --(stake, total n)--> n --(stake, total m > n)--> m      (a total ≤ the one held: no change)
 ```
 
-> **Legal transitions only.** Re-applying the same reaction is idempotent (Lua-atomic in Redis); the
-> edge is the truth, the score is derived.
+> **Legal transitions only.** Totals only grow; the target's count moves by the difference, atomically.
 
 ---
 
 ## 4. Data Ownership & Boundaries
 
 **This context is the source of truth for:**
-- Reaction edge state — **Redis** (primary, Lua-atomic) with **ScyllaDB** durable write-behind.
+- View/share/comment counters — **Redis** (primary) with an approximate **ScyllaDB** copy.
 
-**The "do-not-write" list:** engagement does not write display counts (emits events; `counter`
-aggregates), and does not own the content.
+**It holds a reference copy of:** likes — the wallet's stakes, as totals per (account, target): Redis
+(read path) and ScyllaDB `likes_by_target` / `likes_by_account` (recovery, GDPR export).
+
+**The "do-not-write" list:** engagement never decides a like; it does not own the content.
 
 ---
 
@@ -76,22 +80,22 @@ aggregates), and does not own the content.
 
 | # | Invariant | Enforced at | On violation |
 |---|---|---|---|
-| I1 | One reaction edge per (user, content); toggles are idempotent | domain + Lua-atomic in Redis | `ENG-2xxx` |
-| I2 | The edge is authoritative; the score is derived from weights | domain | `ENG-3xxx` |
-| I3 | Durable record via Kafka write-behind (no per-toggle DB round-trip) | application | `ENG-5xxx` |
+| I1 | A target's like count is the sum of its accounts' totals | Lua script (one hash tag per target) | — (atomic) |
+| I2 | An account's total on a target only grows; redeliveries and late events change nothing | Lua script; Scylla write timestamp = stake time | — (ignored) |
+| I3 | Hidden like counts reach only the author and the mesh; when post cannot say, they are withheld | application | `ENG-6001` (fail closed) |
+| I4 | Only posts and comments can be liked | `LikeTarget::parse` | `ENG-9004` |
 
 ---
 
 ## 6. Workflows & Orchestration
 
-> Inline until a corrected C4 is regenerated from `docs/domain/`.
+**Like.** The wallet commits a stake and publishes `StakeCommitted` (outbox); engagement's
+`StakeConsumer` applies the account's total in Redis, then writes the durable copy.
 
-**React / unreact.** A Lua script atomically sets/clears the reaction edge and updates the
-in-Redis score; a `ReactionUpsertedEvent` / `ReactionRemovedEvent` is emitted (Kafka write-behind)
-for durable recording and downstream consumption.
+**Read.** `GetPostEngagement` / `BatchGetLikes` read counters and likes from Redis, withholding hidden
+counts per post's answer (`BatchGetLikeVisibility`, cached 60 s).
 
-**Score propagation.** `engagement.score_updated` carries the weighted score to consumers
-(`geo-discovery` virality, `counter`).
+**Export.** account's GDPR export pages `ListLikesByAccount` (mesh only) into `likes.json`.
 
 ---
 
@@ -99,20 +103,21 @@ for durable recording and downstream consumption.
 
 | Neighbour context | Direction | Pattern | Mechanism | What breaks if they change |
 |---|---|---|---|---|
-| `comment` | upstream | ACL | `comment.created` / `comment.deleted` | comment-driven counts break |
-| `counter` | downstream | Published Language | reaction events | like/reaction magnitudes break |
-| `notification` | downstream | Published Language | `engagement.reactions` | reaction notifications break |
-| `geo-discovery` | downstream | Published Language | `engagement.score_updated` | virality scoring breaks |
+| `wallet` | upstream | Conformist | `wallet.v1.events` (`stake_committed`) | like counts break |
+| `comment` | upstream | ACL | `comment.created` / `comment.deleted` | comment counts break |
+| `post` | upstream | Customer/Supplier | gRPC `BatchGetLikeVisibility` | hidden like counts withheld from everyone but the mesh |
+| `account` | downstream | Open Host Service | gRPC `ListLikesByAccount` | the GDPR export fails (retried) |
 
 ---
 
 ## 8. Domain Events (semantics, not wire)
 
-| Event | Means | Emitted when | Who reacts |
-|---|---|---|---|
-| `engagement.reactions` (`ReactionUpserted`/`Removed`) | a reaction edge was set/cleared | react/unreact commits | `notification`, `counter` |
-| `engagement.score_updated` | the weighted engagement score changed | score recompute | `geo-discovery`, `counter` |
-| `engagement.post_reactions` / `post_interaction_counters` | per-post reaction/interaction rollups | aggregation | downstream consumers |
+engagement publishes no events. It consumes:
+
+| Event | Means | Effect here |
+|---|---|---|
+| `wallet.v1.events` `stake_committed` | an account's points on a target reached a new total | like count and the account's own move |
+| `comment.created` / `comment.deleted` | a comment was posted / removed | comment counter ±1 |
 
 ---
 
@@ -120,14 +125,15 @@ for durable recording and downstream consumption.
 
 | Decision | ADR | Status |
 |---|---|---|
-| Redis-primary Lua-atomic reactions + Kafka write-behind durability | [`ADR-0009`](../../../../docs/adr/0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md) | Accepted |
-| Engagement keeps the reaction *edge*; `counter` supersedes raw magnitudes | _see counter §4_ | Accepted |
+| Redis-primary Lua-atomic hot path, Kafka-fed durable copies | [`ADR-0009`](../../../../docs/adr/0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md) | Accepted (amended by #665) |
+| Likes are points staked in the wallet; reactions removed | #665 | Accepted |
 
 ---
 
 ## 10. Subdomain Classification & Evolution
 
 - **Classification:** Core — direct content interaction.
-- **Volatility:** low-to-medium — new reaction kinds are additive.
-- **Known modeling debt:** a reaction-count RPC for `counter` reconciliation is not yet exposed.
-- **Deferred capabilities:** richer reaction analytics; per-kind scoring tuning.
+- **Volatility:** low — likes follow the wallet's stake contract.
+- **Known modeling debt:** erasing an account's likes on `account_deleted`; the likers hash has no TTL
+  (a rehydration floor from Scylla is planned).
+- **Deferred capabilities:** like settlement (gems earned from likes, #665).

@@ -56,8 +56,6 @@ pub const PRODUCERS: &[(&str, &str)] = &[
     // comment
     ("comment.created", "comment"),
     ("comment.deleted", "comment"),
-    // engagement
-    ("engagement.reactions", "engagement"),
     // social-graph
     ("social-graph.followed", "social-graph"),
     ("social-graph.unfollowed", "social-graph"),
@@ -139,7 +137,6 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("account.v1.events", "notification"),
     // chat messages' pushes (#654)
     ("chat.message.push", "notification"),
-    ("engagement.reactions", "engagement"),
     // likes are points (#665): the wallet's stakes become the like counts
     ("wallet.v1.events", "engagement"),
     // social-graph edges → timeline fan-out, profile tier ownership

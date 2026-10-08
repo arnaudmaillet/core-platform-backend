@@ -1,6 +1,6 @@
 //! The archive's files from the other services (#653): per profile, its
-//! profile, posts, comments, reactions, social graph and conversations; for
-//! the account, its media. Conversations follow the holder's choice: a
+//! profile, posts, comments, social graph and conversations; for the account,
+//! its likes (#665) and media. Conversations follow the holder's choice: a
 //! direct (one-to-one) conversation is exported in full (it is between the
 //! two of them); in a group or channel, only the holder's own messages — the
 //! others' are placeholders (what they wrote is another member's data). Being
@@ -38,7 +38,6 @@ impl ExportSources for PeerExportSources {
             files.push(ExportFile::json(format!("{dir}/profile.json"), &profile));
             files.push(ExportFile::json(format!("{dir}/posts.json"), &json!(self.peers.posts(&profile_id).await?)));
             files.push(ExportFile::json(format!("{dir}/comments.json"), &json!(self.peers.comments(&profile_id).await?)));
-            files.push(ExportFile::json(format!("{dir}/reactions.json"), &json!(self.peers.reactions(&profile_id).await?)));
             files.push(ExportFile::json(
                 format!("{dir}/recent_searches.json"),
                 &json!(self.peers.recent_searches(&profile_id).await?),
@@ -65,6 +64,7 @@ impl ExportSources for PeerExportSources {
                 ));
             }
         }
+        files.push(ExportFile::json("likes.json", &json!(self.peers.likes(account_id).await?)));
         let media = self.peers.media(account_id, Duration::days(EXPORT_LINK_TTL_DAYS)).await?;
         files.push(ExportFile::json("media.json", &json!(media)));
         Ok(files)
@@ -110,9 +110,6 @@ mod tests {
         async fn comments(&self, _: &str) -> Result<Vec<serde_json::Value>, AccountError> {
             Ok(vec![])
         }
-        async fn reactions(&self, _: &str) -> Result<Vec<serde_json::Value>, AccountError> {
-            Ok(vec![json!({ "kind": "HEART" })])
-        }
         async fn recent_searches(&self, _: &str) -> Result<Vec<serde_json::Value>, AccountError> {
             Ok(vec![json!({ "query": "paris food" })])
         }
@@ -143,6 +140,9 @@ mod tests {
             }
             Ok(vec![message("me", 1, "hi"), message("friend", 2, "their secret"), message("gone", 3, "departed")])
         }
+        async fn likes(&self, _: &AccountId) -> Result<Vec<serde_json::Value>, AccountError> {
+            Ok(vec![json!({ "target": { "post_id": "p1" }, "total": 12 })])
+        }
         async fn media(&self, _: &AccountId, ttl: Duration) -> Result<Vec<serde_json::Value>, AccountError> {
             Ok(vec![json!({ "ttl_days": ttl.num_days() })])
         }
@@ -160,7 +160,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(file(&files, "profiles/me/posts.json")[0]["caption"], "hello");
-        assert_eq!(file(&files, "profiles/me/reactions.json")[0]["kind"], "HEART");
+        assert_eq!(file(&files, "likes.json")[0]["total"], 12, "the account's likes, once");
+        assert!(files.iter().all(|f| !f.path.ends_with("reactions.json")));
         assert_eq!(file(&files, "profiles/me/recent_searches.json")[0]["query"], "paris food");
         assert!(file(&files, "profiles/me/social.json")["blocks"].is_array());
         assert_eq!(file(&files, "media.json")[0]["ttl_days"], 7, "links valid 7 days");

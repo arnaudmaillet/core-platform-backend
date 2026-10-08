@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: 7d7422a3f3e4efa04b1e32c3f1fa0b0eac92f29b163c39cf64c2652269e1a830
-  translated_at: 2026-06-28
+  source_sha256: 6f7342254ed096b27a9e4722be94c0905836b7e502d9b6fcdced176aba3a1d92
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -21,7 +21,7 @@ i18n:
 > | **Racine(s) d'agrégat** | `Metric` + `WindowAggregator` (`domain`) |
 > | **Tier** | **TIER-1** |
 > | **Posture de défaillance** | **Fail-open** — une lecture dégrade vers une magnitude périmée/approximative, jamais une erreur sur le hot path |
-> | **Contextes amont** | producteurs view/impression/click, `engagement` (réactions) — via **ACL** sur Kafka |
+> | **Contextes amont** | producteurs view/impression/click, `wallet` (mises : likes, #665) — via **ACL** sur Kafka |
 > | **Contextes aval** | `search` (PopularityScore), `realtime` (broadcast) — via **Published Language** (`counter.v1.popularity`) |
 > | **Journal de décisions** | [`ADR-0008`](../../../../docs/adr/0008-counter-magnitudes-are-a-reconcilable-soref.md) |
 
@@ -84,7 +84,7 @@ pour les vues uniques et CMS pour les tendances, exact-mais-réconciliable pour 
 | Donnée copiée | Possédée par | Maintenue fraîche via | Tolérance d'obsolescence |
 |---|---|---|---|
 | Vérité follower/following | `social-graph` | source de réconciliation (gRPC) | réconcilié périodiquement (dérive → `CTR-5002`) |
-| État d'arête de réaction | `engagement` | événements `engagement.*` | cohérence à terme |
+| Likes (mises) | `wallet` | `wallet.v1.events` | cohérence à terme |
 
 **La liste « ne-pas-écrire » :** counter ne possède jamais le *qui* — il dérive les magnitudes et
 réconcilie face aux SoR d'arête ; il supersède seulement les comptes *bruts* de vues/partages
@@ -125,7 +125,7 @@ miss/timeout, retourner une valeur périmée/approximative plutôt qu'une erreur
 | Contexte voisin | Direction | Pattern | Mécanisme | Ce qui casse s'il change |
 |---|---|---|---|---|
 | producteurs view/impression/click | amont | ACL | `*.v1.events` | les comptes cessent d'avancer |
-| `engagement` | amont | ACL | événements de réaction | les magnitudes like/share cassent |
+| `wallet` | amont | ACL | `wallet.v1.events` (`stake_committed`) | les magnitudes de likes cassent |
 | `social-graph` | source de réconciliation | Customer/Supplier | gRPC follower/following | la réconciliation du compte de followers casse |
 | `search` | aval | Published Language | `counter.v1.popularity` | le PopularityScore de search devient périmé |
 | `realtime` | aval | Published Language | `counter.v1.popularity` (broadcast) | les compteurs live s'arrêtent |
@@ -156,5 +156,5 @@ miss/timeout, retourner une valeur périmée/approximative plutôt qu'une erreur
 
 - **Classification :** Supporting — un plan de mesure/référence dérivé des SoR d'arête.
 - **Volatilité :** moyenne — les nouveaux types de métrique et producteurs sont additifs.
-- **Dette de modélisation connue :** la réconciliation like/share/comment attend un RPC de compte de réactions d'engagement.
+- **Dette de modélisation connue :** la réconciliation like/share/comment attend un RPC de compte de likes (engagement).
 - **Capacités différées :** producteurs amont view/impression/click ; le stream `social-graph.follows` ; producteur de shard-fan-out.

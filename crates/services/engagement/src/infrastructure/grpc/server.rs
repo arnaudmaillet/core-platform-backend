@@ -10,15 +10,11 @@ use tonic_reflection::server::Builder as ReflectionBuilder;
 use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 use transport::kafka::config::client::KafkaClientConfig;
-use transport::kafka::config::producer::ProducerConfig;
-use transport::kafka::producer::builder::KafkaProducerBuilder;
 
 use crate::app::{App, Backends};
-use crate::config::ReactionWeightsConfig;
 use crate::infrastructure::grpc::handler::engagement_handler::{
     EngagementServiceHandler, EngagementServiceServer,
 };
-use crate::infrastructure::publisher::KafkaEngagementEventPublisher;
 
 /// Proto file descriptor blob embedded at build time for server reflection.
 pub const FILE_DESCRIPTOR_SET: &[u8] =
@@ -33,23 +29,15 @@ type ServingHandler =
 ///
 /// Reads configuration from the environment, builds the full service graph via
 /// the shared composition root ([`App::build`]) — which also spawns the
-/// write-behind workers — then binds the socket and serves until shutdown.
+/// workers — then binds the socket and serves until shutdown.
 pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-    let weights = Arc::new(ReactionWeightsConfig::from_env()?);
-
-    // The Kafka producer backs the durable write-behind publisher; the broker
-    // config is also threaded into the workers via `Backends::kafka`.
-    let kafka_client = KafkaClientConfig::from_env();
-    let producer = KafkaProducerBuilder::new(ProducerConfig::new(kafka_client.clone())).build()?;
-    let publisher = Arc::new(KafkaEngagementEventPublisher::new(producer));
-
     let backends = Backends {
         scylla: ScyllaConfig::from_env(),
         redis:  RedisConfig::from_env(),
-        kafka:  Some(kafka_client),
+        kafka:  Some(KafkaClientConfig::from_env()),
     };
 
-    let app = App::build(backends, weights, publisher, crate::service::like_visibility_from_env()?).await?;
+    let app = App::build(backends, crate::service::like_visibility_from_env()?).await?;
 
     // ── gRPC server ───────────────────────────────────────────────────────────
 

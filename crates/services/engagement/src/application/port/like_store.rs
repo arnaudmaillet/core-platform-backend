@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 
 use crate::domain::value_object::LikeTarget;
 use crate::error::EngagementError;
@@ -19,6 +20,17 @@ pub trait LikeStore: Send + Sync + 'static {
     async fn mine(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<i64>, EngagementError>;
 }
 
+/// One target an account liked, for its GDPR export.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountLike {
+    pub target:     LikeTarget,
+    /// The account's points on it.
+    pub total:      i64,
+    /// The profile that liked last.
+    pub profile_id: String,
+    pub liked_at:   DateTime<Utc>,
+}
+
 /// The durable copy of the likes (Scylla), written by the stake consumer.
 #[async_trait]
 pub trait LikeLedger: Send + Sync + 'static {
@@ -32,4 +44,13 @@ pub trait LikeLedger: Send + Sync + 'static {
         total: i64,
         at_micros: i64,
     ) -> Result<(), EngagementError>;
+
+    /// What `account` liked, in target order, up to `limit` after `after`
+    /// (`kind:id`; the GDPR export).
+    async fn list_by_account(
+        &self,
+        account: &str,
+        limit: i32,
+        after: Option<&LikeTarget>,
+    ) -> Result<Vec<AccountLike>, EngagementError>;
 }

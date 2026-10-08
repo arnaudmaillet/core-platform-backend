@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md
-  source_sha256: 083a3f2195e869e8236d265b3162ee0e7001505530984f383c59114136ca3ba0
-  translated_at: 2026-06-28
+  source_sha256: 598067c698f6eb1dfda9273e684311dad52447d7d9d384fcf3eb12f0e4e97046
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md`](./0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md) fait foi.
@@ -45,3 +45,16 @@ dérivées (voir ADR-0008). L'arête est la vérité ; le score est dérivé des
 | Réactions base-primary | L'aller-retour par bascule ne peut soutenir le volume de réactions |
 | Read-modify-write Redis non-atomique | Court sous concurrence (réactions doubles/perdues) |
 | Garder les magnitudes ici aussi | Le comptage appartient à `counter` (ADR-0008) |
+
+## Amendement 2026-10-08 — les likes sont des points (#665)
+
+Les réactions ont disparu : un like est un point qu'un compte mise dans le `wallet` (qui fait foi), sans
+retrait. Engagement garde le chemin chaud Redis-primary atomique en Lua, mais ce qu'il applique a
+changé : `wallet.v1.events` `StakeCommitted` porte le **total** du compte sur un post ou un commentaire,
+et un script Lua fait avancer le total du compte et la somme de la cible (un total non supérieur à celui
+détenu ne change rien). Le flux at-least-once et sans ordre garanti devient ainsi idempotent sans
+marqueur. La copie durable est ScyllaDB `likes_by_target` / `likes_by_account`, écrite avec l'heure de
+la mise comme horodatage d'écriture. Engagement ne publie plus : `engagement.reactions` et son worker
+write-behind sont retirés, et `engagement.score_updated` n'a jamais existé ; les consommateurs lisent
+directement le flux du wallet. Le reste de cette décision (Redis-primary, compteurs dans Redis,
+`counter` possédant les magnitudes) demeure.

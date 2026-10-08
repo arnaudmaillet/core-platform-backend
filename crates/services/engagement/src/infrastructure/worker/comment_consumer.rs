@@ -7,7 +7,7 @@ use transport::kafka::config::client::KafkaClientConfig;
 use transport::kafka::config::consumer::{AutoOffsetReset, ConsumerConfig};
 use transport::kafka::producer::KafkaProducerHandle;
 
-use crate::application::port::{ReactionLedger, ScoreStore};
+use crate::application::port::{CounterLedger, ScoreStore};
 use crate::domain::value_object::PostId;
 use crate::infrastructure::worker::build_dlq_producer;
 
@@ -35,7 +35,7 @@ pub struct CommentEventConsumer<S, L> {
     group_id:     String,
 }
 
-impl<S: ScoreStore, L: ReactionLedger> CommentEventConsumer<S, L> {
+impl<S: ScoreStore, L: CounterLedger> CommentEventConsumer<S, L> {
     pub fn new(
         kafka_config: KafkaClientConfig,
         score_store:  Arc<S>,

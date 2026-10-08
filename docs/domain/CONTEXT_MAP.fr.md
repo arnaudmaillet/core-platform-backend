@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./CONTEXT_MAP.md
-  source_sha256: 9c21ab27072ff88be3d0a45a3290950878d25f353d3a1c1efe2893d4f91e22ae
+  source_sha256: 33c6346158c856abb82ad91b568f32838a80063a2a08daddf67f8520fd93f694
   translated_at: 2026-10-08
   status: complete
 ---
@@ -74,7 +74,6 @@ Oriente l'investissement. Consolidé depuis la ligne de classe de chaque Domain 
 | `wallet` | `wallet.v1.events` | `counter` | ACL | magnitudes de likes |
 | `wallet` | `wallet.v1.events` | `timeline` | ACL | centres d'intérêt (un premier like) |
 | `wallet` | `wallet.v1.events` | `geo-discovery` | ACL | les likes de chaque pays (le classement des déblocages) |
-| `engagement` | `engagement.score_updated` | `geo-discovery` | ACL | classement de viralité |
 | `counter` | `counter.v1.popularity` | `search` | ACL | signal de classement par popularité |
 | `counter` | `counter.v1.popularity` | `realtime` | ACL (broadcast) | compteurs d'engagement live |
 | `moderation` | `moderation.v1.events` (`decision_recorded`) | `audit` | ACL | preuve de conformité (justification DSA) |
