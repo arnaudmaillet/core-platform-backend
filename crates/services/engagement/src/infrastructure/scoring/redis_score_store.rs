@@ -2,74 +2,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dashmap::DashSet;
-use fred::interfaces::{HashesInterface, KeysInterface, LuaInterface};
+use fred::interfaces::{KeysInterface, LuaInterface};
 use fred::types::Value as FredValue;
 use redis_storage::RedisClient;
 use uuid::Uuid;
 
 use crate::application::port::{PostEngagementSnapshot, ScoreStore};
-use crate::domain::value_object::{PostId, ProfileId, ReactionKind};
+use crate::domain::value_object::PostId;
 use crate::error::EngagementError;
 
 // ── Lua scripts ───────────────────────────────────────────────────────────────
-
-/// Atomically swaps a profile's reaction on a post.
-///
-/// KEYS[1] = engagement:{post_id}:r:{profile_id}  (per-profile reaction HASH)
-/// KEYS[2] = engagement:{post_id}:scores           (aggregate scores HASH)
-/// (The `{post_id}` brace is a Redis Cluster hash tag — both keys share a slot.)
-/// ARGV[1] = new_kind  (string, e.g. "heart")
-/// ARGV[2] = new_weight (string, e.g. "2")
-///
-/// Returns: empty array if no previous reaction, or [old_kind, old_weight] if
-/// a previous reaction was replaced.
-const UPSERT_SCRIPT: &str = r#"
-local profile_key = KEYS[1]
-local scores_key  = KEYS[2]
-local new_kind    = ARGV[1]
-local new_weight  = tonumber(ARGV[2])
-
-local old_kind        = redis.call('HGET', profile_key, 'kind')
-local old_weight_str  = redis.call('HGET', profile_key, 'weight')
-local old_weight      = old_weight_str and tonumber(old_weight_str) or 0
-
-if old_kind then
-    redis.call('HINCRBY', scores_key, old_kind, -old_weight)
-end
-
-redis.call('HSET',    profile_key, 'kind', new_kind, 'weight', tostring(new_weight))
-redis.call('HINCRBY', scores_key,  new_kind, new_weight)
-
-if old_kind then
-    return {old_kind, tostring(old_weight)}
-else
-    return {}
-end
-"#;
-
-/// Atomically removes a profile's reaction from a post.
-///
-/// KEYS[1] = engagement:{post_id}:r:{profile_id}
-/// KEYS[2] = engagement:{post_id}:scores
-///
-/// Returns: empty array if no reaction existed, or [old_kind, old_weight].
-const REMOVE_SCRIPT: &str = r#"
-local profile_key = KEYS[1]
-local scores_key  = KEYS[2]
-
-local old_kind       = redis.call('HGET', profile_key, 'kind')
-local old_weight_str = redis.call('HGET', profile_key, 'weight')
-local old_weight     = old_weight_str and tonumber(old_weight_str) or 0
-
-if not old_kind then
-    return {}
-end
-
-redis.call('HINCRBY', scores_key, old_kind, -old_weight)
-redis.call('DEL', profile_key)
-
-return {old_kind, tostring(old_weight)}
-"#;
 
 /// Atomically snapshots and resets a counter key to 0.
 ///
@@ -89,18 +31,8 @@ end
 // ── Key builders ──────────────────────────────────────────────────────────────
 //
 // Every per-post key embeds `{post_id}` as a Redis Cluster hash tag so that all
-// keys for one post hash to the same slot. This is required for the multi-key
-// `UPSERT`/`REMOVE` Lua scripts (which touch both `profile_key` and `scores_key`)
-// to be cluster-safe — otherwise the server rejects the script with CROSSSLOT.
-// Different posts still distribute across slots, preserving sharding.
-
-fn profile_key(post_id: &PostId, profile_id: &ProfileId) -> String {
-    format!("engagement:{{{post_id}}}:r:{profile_id}")
-}
-
-fn scores_key(post_id: &PostId) -> String {
-    format!("engagement:{{{post_id}}}:scores")
-}
+// keys for one post hash to the same slot. Different posts still distribute
+// across slots, preserving sharding.
 
 /// Per-post view counter. `pub(crate)` so `CounterFlushWorker` builds the exact
 /// same key instead of re-formatting it (which would silently drift).
@@ -158,31 +90,6 @@ impl RedisScoreStore {
         Self { client, tracker }
     }
 
-    /// Executes a Lua script and parses the `[kind, weight]` array return.
-    async fn run_swap_script(
-        &self,
-        script: &str,
-        post_id:    &PostId,
-        profile_id: &ProfileId,
-        args: Vec<String>,
-    ) -> Result<Option<(ReactionKind, i64)>, EngagementError> {
-        let keys = vec![profile_key(post_id, profile_id), scores_key(post_id)];
-
-        let result: Vec<String> = self.client
-            .inner
-            .eval(script, keys, args)
-            .await
-            .map_err(|e| EngagementError::Redis(redis_storage::RedisStorageError::from(e)))?;
-
-        if result.len() == 2 {
-            let kind   = ReactionKind::from_redis_key(&result[0])?;
-            let weight = result[1].parse::<i64>().map_err(|_| EngagementError::ScriptReturnInvalid)?;
-            Ok(Some((kind, weight)))
-        } else {
-            Ok(None)
-        }
-    }
-
     /// Atomically gets and resets a counter key. Returns the previous value.
     pub async fn getset_zero(&self, key: &str) -> Result<i64, EngagementError> {
         let result: String = self.client
@@ -201,30 +108,6 @@ fn fred_err(e: fred::error::Error) -> EngagementError {
 
 #[async_trait]
 impl ScoreStore for RedisScoreStore {
-    async fn atomic_upsert_reaction(
-        &self,
-        post_id:    &PostId,
-        profile_id: &ProfileId,
-        new_kind:   ReactionKind,
-        new_weight: i64,
-    ) -> Result<Option<(ReactionKind, i64)>, EngagementError> {
-        self.run_swap_script(
-            UPSERT_SCRIPT,
-            post_id,
-            profile_id,
-            vec![new_kind.as_redis_key().to_owned(), new_weight.to_string()],
-        )
-        .await
-    }
-
-    async fn atomic_remove_reaction(
-        &self,
-        post_id:    &PostId,
-        profile_id: &ProfileId,
-    ) -> Result<Option<(ReactionKind, i64)>, EngagementError> {
-        self.run_swap_script(REMOVE_SCRIPT, post_id, profile_id, Vec::new()).await
-    }
-
     async fn incr_view(&self, post_id: &PostId) -> Result<(), EngagementError> {
         let _: i64 = self.client.inner.incr(views_key(post_id)).await.map_err(fred_err)?;
         self.tracker.mark(post_id);
@@ -248,14 +131,7 @@ impl ScoreStore for RedisScoreStore {
     }
 
     async fn get_snapshot(&self, post_id: &PostId) -> Result<PostEngagementSnapshot, EngagementError> {
-        let (reaction_scores, views_raw, shares_raw, comments_raw) = tokio::try_join!(
-            async {
-                self.client
-                    .inner
-                    .hgetall::<std::collections::HashMap<String, i64>, _>(scores_key(post_id))
-                    .await
-                    .map_err(fred_err)
-            },
+        let (views_raw, shares_raw, comments_raw) = tokio::try_join!(
             async {
                 self.client
                     .inner
@@ -280,7 +156,6 @@ impl ScoreStore for RedisScoreStore {
         )?;
 
         Ok(PostEngagementSnapshot {
-            reaction_scores,
             view_count:    views_raw.unwrap_or(0),
             share_count:   shares_raw.unwrap_or(0),
             comment_count: comments_raw.unwrap_or(0),

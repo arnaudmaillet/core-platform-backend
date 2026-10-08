@@ -62,7 +62,6 @@ Drives investment. Rolled up from each Domain Card's class line.
 | `wallet` | `wallet.v1.events` | `counter` | ACL | like magnitudes |
 | `wallet` | `wallet.v1.events` | `timeline` | ACL | interest tags (a first like) |
 | `wallet` | `wallet.v1.events` | `geo-discovery` | ACL | each country's likes (the unlock ladder) |
-| `engagement` | `engagement.score_updated` | `geo-discovery` | ACL | virality ranking |
 | `counter` | `counter.v1.popularity` | `search` | ACL | popularity ranking signal |
 | `counter` | `counter.v1.popularity` | `realtime` | ACL (broadcast) | live engagement counters |
 | `moderation` | `moderation.v1.events` (`decision_recorded`) | `audit` | ACL | DSA-rationale compliance evidence |

@@ -1,6 +1,6 @@
 //! Scenario — concurrent view counter (atomic Redis increment).
 //!
-//! Unlike reactions, views are a pure counter: every record is an unconditional
+//! Unlike likes, views are a pure counter: every record is an unconditional
 //! increment. Under a concurrent burst the total must be exact — no lost updates —
 //! which the atomic Redis `INCR` guarantees. This is the concurrency axis on the
 //! counter path.

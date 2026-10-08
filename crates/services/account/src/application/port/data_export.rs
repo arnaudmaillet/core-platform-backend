@@ -23,7 +23,7 @@ impl ExportFile {
 }
 
 /// Everything the other services hold about an account and its profiles:
-/// profiles, posts, comments, reactions, the social graph, conversations and
+/// profiles, posts, comments, likes, the social graph, conversations and
 /// messages, media (signed links). A section a service cannot answer for now
 /// fails the whole export, which the next pass retries — a partial archive is
 /// never delivered.
@@ -73,7 +73,6 @@ pub trait ExportPeers: Send + Sync + 'static {
     async fn profiles(&self, account_id: &AccountId) -> Result<Vec<(String, serde_json::Value)>, AccountError>;
     async fn posts(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError>;
     async fn comments(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError>;
-    async fn reactions(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError>;
     /// The profile's recent searches, newest first (#816; search keeps 50 for 90 days).
     async fn recent_searches(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError>;
     /// `{following, followers, blocks}`.
@@ -85,6 +84,9 @@ pub trait ExportPeers: Send + Sync + 'static {
     /// conversation whole; elsewhere `as_member`'s own messages, the others'
     /// reduced to their time by chat — up to the departure, if it left.
     async fn messages(&self, conversation: &ConversationExport, as_member: &str) -> Result<Vec<MessageExport>, AccountError>;
+    /// What the account liked (#665: likes are points, the account's): each
+    /// post or comment, its points, the profile that liked and when.
+    async fn likes(&self, account_id: &AccountId) -> Result<Vec<serde_json::Value>, AccountError>;
     /// The account's media, each with a download link valid `ttl`.
     async fn media(&self, account_id: &AccountId, ttl: Duration) -> Result<Vec<serde_json::Value>, AccountError>;
 }

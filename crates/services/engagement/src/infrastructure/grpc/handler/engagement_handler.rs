@@ -4,20 +4,14 @@ use uuid::Uuid;
 use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
-use crate::application::command::{
-    record_share::RecordShareCommand,
-    record_view::RecordViewCommand,
-    remove_reaction::RemoveReactionCommand,
-    upsert_reaction::UpsertReactionCommand,
-};
-use crate::application::port::{PostEngagementSnapshot, ProfileReaction};
+use crate::application::command::{record_share::RecordShareCommand, record_view::RecordViewCommand};
+use crate::application::port::{AccountLike, PostEngagementSnapshot};
 use crate::application::query::batch_get_likes::BatchGetLikesQuery;
 use crate::application::query::get_post_engagement::{
     EngagementReader, GetPostEngagementQuery, LikeSummary, PostEngagement,
 };
+use crate::application::query::list_likes_by_account::ListLikesByAccountQuery;
 use crate::domain::value_object::LikeTarget;
-use crate::application::query::list_reactions_by_profile::ListReactionsByProfileQuery;
-use crate::domain::value_object::ReactionKind;
 
 // ── Proto inclusion ───────────────────────────────────────────────────────────
 
@@ -51,41 +45,6 @@ where
     CB: CommandBus + Send + Sync + 'static,
     QB: QueryBus + Send + Sync + 'static,
 {
-    pub async fn upsert_reaction(
-        &self,
-        request: Request<proto::UpsertReactionRequest>,
-    ) -> Result<Response<proto::CommandResponse>, Status> {
-        edge::require_profile(&request, &request.get_ref().profile_id)?;
-        let req = request.into_inner();
-        let cmd = UpsertReactionCommand {
-            post_id:    req.post_id,
-            profile_id: req.profile_id,
-            kind:       req.kind,
-        };
-        self.command_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
-            .await
-            .map(|_| ok_response())
-            .map_err(cqrs_to_status)
-    }
-
-    pub async fn remove_reaction(
-        &self,
-        request: Request<proto::RemoveReactionRequest>,
-    ) -> Result<Response<proto::CommandResponse>, Status> {
-        edge::require_profile(&request, &request.get_ref().profile_id)?;
-        let req = request.into_inner();
-        let cmd = RemoveReactionCommand {
-            post_id:    req.post_id,
-            profile_id: req.profile_id,
-        };
-        self.command_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
-            .await
-            .map(|_| ok_response())
-            .map_err(cqrs_to_status)
-    }
-
     pub async fn record_view(
         &self,
         request: Request<proto::RecordViewRequest>,
@@ -144,11 +103,7 @@ where
         let targets = req
             .targets
             .iter()
-            .map(|t| match &t.target {
-                Some(proto::like_target::Target::PostId(id)) => LikeTarget::parse("post", id),
-                Some(proto::like_target::Target::CommentId(id)) => LikeTarget::parse("comment", id),
-                None => LikeTarget::parse("", ""),
-            })
+            .map(target_from_proto)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let query = BatchGetLikesQuery { targets, reader, account };
@@ -167,34 +122,42 @@ where
         }))
     }
 
-    /// Mesh only (#653): a profile's reactions for the GDPR export.
-    pub async fn list_reactions_by_profile(
+    /// Mesh only (#653, #665): what an account liked, for the GDPR export.
+    pub async fn list_likes_by_account(
         &self,
-        request: Request<proto::ListReactionsByProfileRequest>,
-    ) -> Result<Response<proto::ListReactionsByProfileResponse>, Status> {
+        request: Request<proto::ListLikesByAccountRequest>,
+    ) -> Result<Response<proto::ListLikesByAccountResponse>, Status> {
         let req = request.into_inner();
-        let limit = req.limit.clamp(1, 500);
-        let query = ListReactionsByProfileQuery {
-            profile_id: req.profile_id,
-            limit,
-            after:      Some(req.page_token).filter(|t| !t.is_empty()),
+        let after = match req.page_token.split_once(':') {
+            _ if req.page_token.is_empty() => None,
+            Some((kind, id)) => Some(LikeTarget::parse(kind, id).map_err(|e| Status::invalid_argument(e.to_string()))?),
+            None => return Err(Status::invalid_argument("malformed page_token")),
         };
-        let reactions: Vec<ProfileReaction> = self
+        let query = ListLikesByAccountQuery { account_id: req.account_id, limit: req.limit, after };
+        let likes: Vec<AccountLike> = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
-        let next_page_token = match reactions.last() {
-            Some(last) if reactions.len() == limit as usize => last.post_id.as_str(),
+        let limit = match req.limit {
+            l if l <= 0 => crate::application::query::list_likes_by_account::DEFAULT_LIMIT,
+            l => l.min(crate::application::query::list_likes_by_account::MAX_LIMIT),
+        };
+        let next_page_token = match likes.last() {
+            Some(last) if likes.len() == limit as usize => format!("{}:{}", last.target.kind(), last.target.id()),
             _ => String::new(),
         };
-        Ok(Response::new(proto::ListReactionsByProfileResponse {
-            reactions: reactions
+        Ok(Response::new(proto::ListLikesByAccountResponse {
+            likes: likes
                 .into_iter()
-                .map(|r| proto::ProfileReactionView {
-                    post_id:       r.post_id.as_str(),
-                    kind:          kind_to_proto(r.kind),
-                    reacted_at_ms: r.reacted_at_ms,
+                .map(|l| proto::AccountLikeView {
+                    target:     Some(target_to_proto(&l.target)),
+                    total:      l.total,
+                    profile_id: l.profile_id,
+                    liked_at:   Some(prost_types::Timestamp {
+                        seconds: l.liked_at.timestamp(),
+                        nanos:   l.liked_at.timestamp_subsec_nanos() as i32,
+                    }),
                 })
                 .collect(),
             next_page_token,
@@ -210,25 +173,11 @@ where
     CB: CommandBus + Send + Sync + 'static,
     QB: QueryBus + Send + Sync + 'static,
 {
-    async fn list_reactions_by_profile(
+    async fn list_likes_by_account(
         &self,
-        request: Request<proto::ListReactionsByProfileRequest>,
-    ) -> Result<Response<proto::ListReactionsByProfileResponse>, Status> {
-        self.list_reactions_by_profile(request).await
-    }
-
-    async fn upsert_reaction(
-        &self,
-        request: Request<proto::UpsertReactionRequest>,
-    ) -> Result<Response<proto::CommandResponse>, Status> {
-        self.upsert_reaction(request).await
-    }
-
-    async fn remove_reaction(
-        &self,
-        request: Request<proto::RemoveReactionRequest>,
-    ) -> Result<Response<proto::CommandResponse>, Status> {
-        self.remove_reaction(request).await
+        request: Request<proto::ListLikesByAccountRequest>,
+    ) -> Result<Response<proto::ListLikesByAccountResponse>, Status> {
+        self.list_likes_by_account(request).await
     }
 
     async fn record_view(
@@ -280,24 +229,8 @@ fn ok_response() -> Response<proto::CommandResponse> {
 }
 
 fn snapshot_to_proto(post_id: String, s: PostEngagementSnapshot) -> proto::PostEngagementView {
-    let total = s.total_weighted_score();
-
-    let reaction_scores = ReactionKind::all()
-        .iter()
-        .filter_map(|kind| {
-            let score = s.reaction_scores.get(kind.as_redis_key()).copied().unwrap_or(0);
-            if score == 0 { return None; }
-            Some(proto::ReactionScoreEntry {
-                kind:  kind_to_proto(*kind),
-                score,
-            })
-        })
-        .collect();
-
     proto::PostEngagementView {
         post_id,
-        reaction_scores,
-        total_weighted_score: total,
         view_count:    s.view_count,
         share_count:   s.share_count,
         comment_count: s.comment_count,
@@ -308,13 +241,20 @@ fn snapshot_to_proto(post_id: String, s: PostEngagementSnapshot) -> proto::PostE
     }
 }
 
-fn kind_to_proto(kind: ReactionKind) -> i32 {
-    match kind {
-        ReactionKind::Heart  => 1,
-        ReactionKind::Fire   => 2,
-        ReactionKind::Rocket => 3,
-        ReactionKind::Clap   => 4,
-        ReactionKind::Sad    => 5,
+fn target_from_proto(t: &proto::LikeTarget) -> Result<LikeTarget, crate::error::EngagementError> {
+    match &t.target {
+        Some(proto::like_target::Target::PostId(id)) => LikeTarget::parse("post", id),
+        Some(proto::like_target::Target::CommentId(id)) => LikeTarget::parse("comment", id),
+        None => LikeTarget::parse("", ""),
+    }
+}
+
+fn target_to_proto(t: &LikeTarget) -> proto::LikeTarget {
+    proto::LikeTarget {
+        target: Some(match t {
+            LikeTarget::Post(id) => proto::like_target::Target::PostId(id.clone()),
+            LikeTarget::Comment(id) => proto::like_target::Target::CommentId(id.clone()),
+        }),
     }
 }
 

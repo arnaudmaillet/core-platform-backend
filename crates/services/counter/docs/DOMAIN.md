@@ -10,7 +10,7 @@
 > | **Aggregate root(s)** | `Metric` + `WindowAggregator` (`domain`) |
 > | **Tier** | **TIER-1** |
 > | **Failure posture** | **Fail-open** — a read degrades to a stale/approximate magnitude, never an error on the hot path |
-> | **Upstream contexts** | view/impression/click producers, `engagement` (reactions) — via **ACL** over Kafka |
+> | **Upstream contexts** | view/impression/click producers, `wallet` (stakes: likes, #665) — via **ACL** over Kafka |
 > | **Downstream contexts** | `search` (PopularityScore), `realtime` (broadcast) — via **Published Language** (`counter.v1.popularity`) |
 > | **Decision log** | _none yet — see [`docs/adr/`](../../../../docs/adr/README.md)_ |
 
@@ -73,7 +73,7 @@ views and CMS for trending, exact-but-reconcilable for likes/follows.
 | Copied data | Owned by | Kept fresh via | Staleness tolerance |
 |---|---|---|---|
 | Follower/following truth | `social-graph` | reconciliation source (gRPC) | reconciled periodically (drift → `CTR-5002`) |
-| Reaction edge state | `engagement` | `engagement.*` events | eventually consistent |
+| Likes (stakes) | `wallet` | `wallet.v1.events` | eventually consistent |
 
 **The "do-not-write" list:** counter never owns *who* — it derives magnitudes and reconciles to the
 edge SoRs; it supersedes engagement's *raw* view/share counts only.
@@ -113,7 +113,7 @@ stale/approximate value rather than erroring.
 | Neighbour context | Direction | Pattern | Mechanism | What breaks if they change |
 |---|---|---|---|---|
 | view/impression/click producers | upstream | ACL | `*.v1.events` | counts stop advancing |
-| `engagement` | upstream | ACL | reaction events | like/share magnitudes break |
+| `wallet` | upstream | ACL | `wallet.v1.events` (`stake_committed`) | like magnitudes break |
 | `social-graph` | reconcile source | Customer/Supplier | gRPC follower/following | follower-count reconciliation breaks |
 | `search` | downstream | Published Language | `counter.v1.popularity` | search's PopularityScore goes stale |
 | `realtime` | downstream | Published Language | `counter.v1.popularity` (broadcast) | live counters stop |
@@ -144,5 +144,5 @@ stale/approximate value rather than erroring.
 
 - **Classification:** Supporting — a measurement/reference plane derived from the edge SoRs.
 - **Volatility:** medium — new metric kinds and producers are additive.
-- **Known modeling debt:** like/share/comment reconcile awaits an engagement reaction-count RPC.
+- **Known modeling debt:** like/share/comment reconcile awaits a like-count RPC (engagement).
 - **Deferred capabilities:** upstream view/impression/click producers; the `social-graph.follows` stream; shard-fan-out producer.

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 581a58cac08db875ae6869feef9f1fcdf21b199f7efd156a00454d1ca3f408ae
+  source_sha256: bde3c1373176b60d8e49f91a6a953eab76cb877ebf4cf46fab5e0fa2e6557959
   translated_at: 2026-10-08
   status: complete
 ---
@@ -267,7 +267,7 @@ dans son propre `ListMyReports`). Pages : 50 par défaut,
 **passe d'export** (`ExportDueData`) construit alors, pour chaque compte en attente, un ZIP de fichiers
 JSON — le dossier de compte du titulaire (coordonnées, consentements, réglages de connexion ; **ni**
 empreinte de mot de passe, ni matériel MFA, ni champ interne), les fichiers des autres services
-(`ExportSources` : profils, posts, commentaires, réactions, recherches récentes, graphe social, conversations, liens vers les
+(`ExportSources` : profils, posts, commentaires, likes, recherches récentes, graphe social, conversations, liens vers les
 médias), un `README.txt` — le stocke en privé (`exports/<compte>/<id>.zip`, `S3ExportStore` : clés
 statiques, `ACCOUNT_EXPORT_*`) et inscrit sa **clé d'objet** dans le dossier RGPD — jamais un lien signé,
 qui est un secret au porteur : `GetGdprRecord` signe le lien à la lecture pour ce qu'il reste des 7 jours
@@ -278,13 +278,14 @@ passe le réessaie (`ACC-7005`) ; l'écriture est versionnée, donc une demande 
 construction d'un export est reconstruite. Les comptes en attente viennent d'un index partiel (migration
 0005). Les sources sont les RPC **mesh uniquement** des autres services (`MeshExportPeers`, chaque page,
 chaque message converti en JSON via le jeu de descripteurs du service) : par profil son profil, ses posts,
-commentaires (`ListCommentsByAuthor`), réactions (`ListReactionsByProfile`), recherches récentes
+commentaires (`ListCommentsByAuthor`), recherches récentes
 (`ListRecentSearches` de search, via le mesh, #816), graphe social et conversations
 (`ListConversationsByMember`, puis : une conversation `DIRECT` en entier via `GetHistory` ; un groupe ou un
 canal via le `GetFormerMemberHistory` mesh de chat, ses propres messages et ceux des autres en placeholders
 `{"from": "another member"}` — « directe » est le type de la conversation, jamais la taille de ses membres ;
 les groupes quittés (#656, `left_at_ms`) sont inclus, jusqu'au départ, sans leurs membres) ; pour le compte, ses
-médias (`ListAssetsByOwner`, liens valables 7 jours). Le serveur lance la passe toutes les
+likes (`ListLikesByAccount` d'engagement, #665 : un like est un point, celui du compte) et ses médias
+(`ListAssetsByOwner`, liens valables 7 jours). Le serveur lance la passe toutes les
 `ACCOUNT_EXPORT_INTERVAL_SECS` quand le stockage est configuré (`ACCOUNT_EXPORT_BUCKET`,
 core-platform-infra#28).
 

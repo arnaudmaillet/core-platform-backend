@@ -51,7 +51,7 @@ CORE plus collapsed one-line DEEP sections.
 | `chat` | Conversations & messaging | [`crates/services/chat/docs/DOMAIN.md`](../../crates/services/chat/docs/DOMAIN.md) | ✅ |
 | `comment` | Comment threads | [`crates/services/comment/docs/DOMAIN.md`](../../crates/services/comment/docs/DOMAIN.md) | ✅ |
 | `counter` | Counter / analytics SoReference | [`crates/services/counter/docs/DOMAIN.md`](../../crates/services/counter/docs/DOMAIN.md) | ✅ |
-| `engagement` | Reactions & edge state | [`crates/services/engagement/docs/DOMAIN.md`](../../crates/services/engagement/docs/DOMAIN.md) | ✅ |
+| `engagement` | Likes (points) & interaction counters | [`crates/services/engagement/docs/DOMAIN.md`](../../crates/services/engagement/docs/DOMAIN.md) | ✅ |
 | `geo-discovery` | Geo-spatial discovery | [`crates/services/geo-discovery/docs/DOMAIN.md`](../../crates/services/geo-discovery/docs/DOMAIN.md) | ✅ |
 | `media` | Media control plane | [`crates/services/media/docs/DOMAIN.md`](../../crates/services/media/docs/DOMAIN.md) | ✅ |
 | `moderation` | Trust, safety & integrity | [`crates/services/moderation/docs/DOMAIN.md`](../../crates/services/moderation/docs/DOMAIN.md) | ✅ |

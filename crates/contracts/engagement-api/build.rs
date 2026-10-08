@@ -10,7 +10,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .file_descriptor_set_path(&descriptor_path)
         .compile_protos(
             &[
-                "../proto/engagement/v1/enums.proto",
                 "../proto/engagement/v1/messages.proto",
                 "../proto/engagement/v1/service.proto",
             ],

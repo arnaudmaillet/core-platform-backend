@@ -46,7 +46,7 @@ boundary is not silently misread.
 | **Visibility** | `profile` | Dual-axis: owner choice **and** moderation masking | `ProfileVisibility` |
 | **Visibility** | `search` | The authority (owner / moderation) honoured at query time | `VisibilityAuthority` |
 | **Visibility** | `media` | Whether / how an asset may be served | `DeliveryVisibility` |
-| **Score** | `engagement` | Reaction-weight-derived engagement score | `ReactionWeight` |
+| **Like** | `wallet` / `engagement` | One point an account stakes on a post or comment (#665); the like count is the sum | `Stake`, `LikeTarget` |
 | **Score** | `geo-discovery` | Virality ranking weight for a map card | `ViralityScore` |
 | **Score** | `counter` | Published popularity magnitude | `PopularityScore` |
 | **Event** | `audit` | An immutable **recorded compliance fact** (the thing stored) | `AuditEvent` / `AuditRecord` |

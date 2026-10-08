@@ -29,7 +29,7 @@ is a clean prefix scan.
 
 **Core objectives:** sub-5 ms P99 paginated reads (Scylla local quorum, TWCS locality); zero
 `ALLOW FILTERING`; at-least-once `comment.created`/`comment.deleted` delivery. **Out of scope:**
-likes/reactions on comments (owned by `engagement`), post/profile data.
+likes on comments (staked in `wallet`, counted by `engagement`), post/profile data.
 
 ---
 

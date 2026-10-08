@@ -5,7 +5,7 @@ edition.workspace   = true
 license.workspace   = true
 authors.workspace   = true
 repository.workspace = true
-description = "Engagement microservice — weighted reaction scoring engine with Redis-primary Lua atomicity and Kafka-backed ScyllaDB durability."
+description = "Engagement microservice — likes (the wallet's stakes, #665) and view/share/comment counters, Redis-primary with ScyllaDB durable copies."
 
 [dependencies]
 engagement-api = { workspace = true }
@@ -34,6 +34,7 @@ tonic            = { workspace = true }
 tonic-health     = { workspace = true }
 tonic-reflection = { workspace = true }
 http             = { workspace = true }
+prost-types      = { workspace = true }   # AccountLikeView.liked_at (#665)
 
 scylla = { workspace = true }
 fred   = { workspace = true, features = ["partial-tracing", "i-scripts"] }

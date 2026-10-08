@@ -37,7 +37,6 @@ producer's `DOMAIN.md §8`.
 | `post.v1.events` | `post` | `timeline`, `search`, `realtime` |
 | `comment.created` | `comment` | `notification`, `engagement` |
 | `comment.deleted` | `comment` | `engagement` |
-| `engagement.reactions` | `engagement` | `engagement` |
 | `social-graph.followed` | `social-graph` | `notification`, `timeline` |
 | `social-graph.unfollowed` | `social-graph` | `timeline` |
 | `social-graph.blocked` | `social-graph` | — *(orphan — see below)* |
@@ -129,13 +128,11 @@ producer's `DOMAIN.md §8`.
 | `comment.created` | a comment was posted on a post | create commits | `notification` (notify author), `counter`/`engagement` (count++) |
 | `comment.deleted` | a comment was tombstoned or purged | delete commits | `counter`/`engagement` (count--), feeds |
 
-## Engagement — `engagement.*` (producer: `engagement`)
+## Engagement — no events
 
-| Event | Means | Emitted when | Consumers & why |
-|---|---|---|---|
-| `engagement.reactions` (`ReactionUpserted`/`Removed`) | a reaction edge was set/cleared | react/unreact commits | `notification`, `counter` |
-| `engagement.score_updated` | the weighted engagement score changed | score recompute | `geo-discovery` (virality), `counter` |
-| `engagement.post_reactions` / `engagement.post_interaction_counters` | per-post reaction/interaction rollups | aggregation | downstream consumers |
+`engagement` publishes nothing since likes became points (#665): `engagement.reactions` is gone with the
+reactions, and `engagement.score_updated` never existed. Like-driven fan-out reads the wallet's
+`wallet.v1.events` `stake_committed` directly; engagement consumes it too, for the like counts.
 
 ## Magnitudes — `counter.v1.popularity` (producer: `counter`)
 

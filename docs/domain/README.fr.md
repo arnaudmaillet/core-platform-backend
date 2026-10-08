@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 45671c0f3716c4c40b31a9ac33be15594fbc64c5b9968d1e880295765b0a70d1
-  translated_at: 2026-06-28
+  source_sha256: 03bb53776b15296935ab5bcfbd8055e097aaf44791d06ba2a303604676fc2478
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -61,7 +61,7 @@ TIER-2 conserve CORE plus des sections DEEP réduites à une ligne.
 | `chat` | Conversations & messagerie | [`crates/services/chat/docs/DOMAIN.md`](../../crates/services/chat/docs/DOMAIN.md) | ✅ |
 | `comment` | Fils de commentaires | [`crates/services/comment/docs/DOMAIN.md`](../../crates/services/comment/docs/DOMAIN.md) | ✅ |
 | `counter` | Compteurs / SoReference analytique | [`crates/services/counter/docs/DOMAIN.md`](../../crates/services/counter/docs/DOMAIN.md) | ✅ |
-| `engagement` | Réactions & état d'arête | [`crates/services/engagement/docs/DOMAIN.md`](../../crates/services/engagement/docs/DOMAIN.md) | ✅ |
+| `engagement` | Likes (points) & compteurs d'interaction | [`crates/services/engagement/docs/DOMAIN.md`](../../crates/services/engagement/docs/DOMAIN.md) | ✅ |
 | `geo-discovery` | Découverte géo-spatiale | [`crates/services/geo-discovery/docs/DOMAIN.md`](../../crates/services/geo-discovery/docs/DOMAIN.md) | ✅ |
 | `media` | Plan de contrôle média | [`crates/services/media/docs/DOMAIN.md`](../../crates/services/media/docs/DOMAIN.md) | ✅ |
 | `moderation` | Confiance, sécurité & intégrité | [`crates/services/moderation/docs/DOMAIN.md`](../../crates/services/moderation/docs/DOMAIN.md) | ✅ |

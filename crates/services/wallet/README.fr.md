@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8e904533b79ca7ca67d647858ad21107a0bbe8a965bd2cc19226d76fac1f427a
+  source_sha256: e02189bfaad81a0c49d31f715b5c97164ae38f0ce80befba1b42540e8ac5a889
   translated_at: 2026-10-08
   status: complete
 ---
@@ -314,5 +314,5 @@ cargo test -p wallet --features integration-wallet     # Postgres : concurrence,
    partie) ; déblocage de pays, classement et filtre de la carte dans geo-discovery.
 3. Les likes sont des points : `Stake` (cette partie) ; puis les compteurs de likes, les
    notifications, le classement des pays et les centres d'intérêt passent à `StakeCommitted` ; les
-   autres types de réaction disparaissent.
+   réactions ont disparu, et l'export RGPD lit les likes d'un compte.
 4. Règlement des mises (gems gagnés).

@@ -83,3 +83,35 @@ async fn the_durable_copy_keeps_the_newest_total() {
     let (total,): (i64,) = rows.single_row().unwrap();
     assert_eq!(total, 40);
 }
+
+/// The GDPR export's read (#653, #665): what an account liked, paged by target.
+#[tokio::test]
+async fn an_account_lists_what_it_liked_page_by_page() {
+    let contact = test_support::containers::scylla_ready("engagement", concat!(env!("CARGO_MANIFEST_DIR"), "/migrations")).await;
+    let client = Arc::new(
+        ScyllaSessionBuilder::new(ScyllaConfig { contact_points: vec![contact], keyspace: None, ..ScyllaConfig::default() })
+            .build()
+            .await
+            .expect("scylla"),
+    );
+    let ledger = ScyllaLikeLedger::new(client);
+    let account = Uuid::now_v7().to_string();
+    let mut targets: Vec<LikeTarget> = (0..3)
+        .map(|i| if i % 2 == 0 { LikeTarget::Post(Uuid::now_v7().to_string()) } else { LikeTarget::Comment(Uuid::now_v7().to_string()) })
+        .collect();
+    for (i, target) in targets.iter().enumerate() {
+        ledger.record(target, &account, "liker", 10 * (i as i64 + 1), 1_000_000).await.unwrap();
+    }
+    ledger.record(&LikeTarget::Post(Uuid::now_v7().to_string()), &Uuid::now_v7().to_string(), "other", 5, 1_000_000).await.unwrap();
+
+    let first = ledger.list_by_account(&account, 2, None).await.unwrap();
+    let rest = ledger.list_by_account(&account, 2, Some(&first[1].target)).await.unwrap();
+    assert_eq!((first.len(), rest.len()), (2, 1));
+    let mut listed: Vec<_> = first.iter().chain(&rest).map(|l| (l.target.clone(), l.total, l.profile_id.clone())).collect();
+    let key = |t: &LikeTarget| (t.kind().to_owned(), t.id().to_owned());
+    listed.sort_by_key(|(t, _, _)| key(t));
+    let mut expected: Vec<_> = targets.drain(..).enumerate().map(|(i, t)| (t, 10 * (i as i64 + 1), "liker".to_owned())).collect();
+    expected.sort_by_key(|(t, _, _)| key(t));
+    assert_eq!(listed, expected, "every like once, none of another account's");
+    assert_eq!(first[0].liked_at.timestamp_micros(), 1_000_000);
+}

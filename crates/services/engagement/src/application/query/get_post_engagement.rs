@@ -100,22 +100,18 @@ impl<S: ScoreStore> QueryHandler<GetPostEngagementQuery> for GetPostEngagementHa
     ) -> Result<PostEngagement, EngagementError> {
         let query = &envelope.payload;
         let post_id = PostId::try_from(query.post_id.as_str())?;
-        let mut snapshot = self.score_store.get_snapshot(&post_id).await?;
+        let snapshot = self.score_store.get_snapshot(&post_id).await?;
         let target = [LikeTarget::Post(query.post_id.clone())];
         let likes = read_likes(self.like_store.as_ref(), self.likes.as_ref(), &query.reader, query.account.as_deref(), &target)
             .await?
             .pop()
             .unwrap_or_default();
-        if likes.hidden {
-            snapshot.reaction_scores.clear();
-        }
         Ok(PostEngagement { snapshot, likes })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Mutex;
 
     use async_trait::async_trait;
@@ -123,31 +119,17 @@ mod tests {
 
     use super::*;
     use crate::application::port::PostLikeVisibility;
-    use crate::domain::value_object::{ProfileId, ReactionKind};
 
     struct Snapshots;
 
     #[async_trait]
     impl ScoreStore for Snapshots {
-        async fn atomic_upsert_reaction(
-            &self,
-            _: &PostId,
-            _: &ProfileId,
-            _: ReactionKind,
-            _: i64,
-        ) -> Result<Option<(ReactionKind, i64)>, EngagementError> {
-            unimplemented!()
-        }
-        async fn atomic_remove_reaction(&self, _: &PostId, _: &ProfileId) -> Result<Option<(ReactionKind, i64)>, EngagementError> {
-            unimplemented!()
-        }
         async fn incr_view(&self, _: &PostId) -> Result<(), EngagementError> { unimplemented!() }
         async fn incr_share(&self, _: &PostId) -> Result<(), EngagementError> { unimplemented!() }
         async fn incr_comment(&self, _: &PostId) -> Result<(), EngagementError> { unimplemented!() }
         async fn decr_comment(&self, _: &PostId) -> Result<(), EngagementError> { unimplemented!() }
         async fn get_snapshot(&self, _: &PostId) -> Result<PostEngagementSnapshot, EngagementError> {
             Ok(PostEngagementSnapshot {
-                reaction_scores: HashMap::from([("heart".to_owned(), 7)]),
                 view_count:      40,
                 share_count:     2,
                 comment_count:   3,
@@ -211,12 +193,10 @@ mod tests {
         let author = EngagementReader::Profiles(vec!["other".into(), "author".into()]);
 
         let shown = read(Some(post(false, false)), stranger.clone()).await;
-        assert_eq!(shown.snapshot.total_weighted_score(), 7);
         assert_eq!(shown.likes, LikeSummary { count: 9, mine: 2, hidden: false });
 
         for reader in [stranger.clone(), guest] {
             let withheld = read(Some(post(true, false)), reader).await;
-            assert!(withheld.snapshot.reaction_scores.is_empty());
             assert_eq!(withheld.likes, LikeSummary { count: 0, mine: 2, hidden: true }, "one's own likes stay shown");
             let s = &withheld.snapshot;
             assert_eq!((s.view_count, s.share_count, s.comment_count), (40, 2, 3), "only likes");

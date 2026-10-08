@@ -1676,6 +1676,7 @@ dependencies = [
  "futures",
  "http",
  "post-api",
+ "prost-types",
  "redis-storage",
  "scylla",
  "scylla-storage",

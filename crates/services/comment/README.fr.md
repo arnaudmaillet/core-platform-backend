@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: f2f9a15e6d9b03b8bf48fd6165cd58385a5ad2d1f153ed936c4637a99a5a5e81
-  translated_at: 2026-10-05
+  source_sha256: 64ee2c23c289893e254843bee654f058ee5c38abd5b2c314aba99b1b1175a775
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -41,7 +41,7 @@ de premier niveau, de sorte que `WHERE post_id = ? AND parent_id = <nil>` soit u
 
 **Objectifs fondamentaux :** lectures paginées sub-5 ms P99 (quorum local Scylla, localité TWCS) ; zéro
 `ALLOW FILTERING` ; livraison at-least-once de `comment.created`/`comment.deleted`. **Hors périmètre :**
-les likes/réactions sur commentaires (appartiennent à `engagement`), les données post/profil.
+les likes sur commentaires (misés dans `wallet`, comptés par `engagement`), les données post/profil.
 
 ---
 

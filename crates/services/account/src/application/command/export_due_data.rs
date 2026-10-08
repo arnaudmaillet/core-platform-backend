@@ -116,11 +116,11 @@ fn readme(now: DateTime<Utc>) -> String {
          profiles/           each of your profiles, and per profile:\n\
            posts.json        what you posted\n\
            comments.json     what you commented\n\
-           reactions.json    the posts you reacted to\n\
            recent_searches.json  what you searched for lately\n\
            social.json       who you follow, who follows you, who you blocked\n\
            conversations/    your conversations (one-to-one in full; in groups and\n\
                              channels your own messages, the others' as placeholders)\n\
+         likes.json          the posts and comments you liked, and how many points\n\
          media.json          your photos and videos, each with a download link\n\n\
          Links in this archive work for {EXPORT_LINK_TTL_DAYS} days.\n"
     )

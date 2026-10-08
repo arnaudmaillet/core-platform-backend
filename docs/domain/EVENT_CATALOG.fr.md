@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: fb436c22671a3dc956c88a3f896cfee5385d6e35b9f0ba8982e930c4db2e6253
+  source_sha256: 9a9b968c3eb6210259585ce2a2205435320cb8d7615f0f1f5e72c15f222bd5db
   translated_at: 2026-10-08
   status: complete
 ---
@@ -50,7 +50,6 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `post.v1.events` | `post` | `timeline`, `search`, `realtime` |
 | `comment.created` | `comment` | `notification`, `engagement` |
 | `comment.deleted` | `comment` | `engagement` |
-| `engagement.reactions` | `engagement` | `engagement` |
 | `social-graph.followed` | `social-graph` | `notification`, `timeline` |
 | `social-graph.unfollowed` | `social-graph` | `timeline` |
 | `social-graph.blocked` | `social-graph` | — *(orphan — see below)* |
@@ -142,13 +141,11 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `comment.created` | un commentaire a été posté sur un post | la création commite | `notification` (notifier l'auteur), `counter`/`engagement` (compte++) |
 | `comment.deleted` | un commentaire a été tombstoné ou purgé | la suppression commite | `counter`/`engagement` (compte--), fils |
 
-## Engagement — `engagement.*` (producteur : `engagement`)
+## Engagement — aucun événement
 
-| Événement | Signifie | Émis quand | Consommateurs & pourquoi |
-|---|---|---|---|
-| `engagement.reactions` (`ReactionUpserted`/`Removed`) | une arête de réaction a été posée/retirée | react/unreact commite | `notification`, `counter` |
-| `engagement.score_updated` | le score d'engagement pondéré a changé | recalcul du score | `geo-discovery` (viralité), `counter` |
-| `engagement.post_reactions` / `engagement.post_interaction_counters` | agrégats de réactions/interactions par post | agrégation | consommateurs aval |
+`engagement` ne publie rien depuis que les likes sont des points (#665) : `engagement.reactions` a disparu
+avec les réactions, et `engagement.score_updated` n'a jamais existé. Le fan-out des likes lit directement
+`wallet.v1.events` `stake_committed` du wallet ; engagement le consomme aussi, pour les compteurs de likes.
 
 ## Magnitudes — `counter.v1.popularity` (producteur : `counter`)
 

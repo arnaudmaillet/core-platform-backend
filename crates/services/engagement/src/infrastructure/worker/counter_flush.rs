@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::application::port::ReactionLedger;
+use crate::application::port::CounterLedger;
 use crate::domain::value_object::PostId;
 use crate::infrastructure::scoring::redis_score_store::{
     shares_key, views_key, DirtyPostTracker, RedisScoreStore,
@@ -28,7 +28,7 @@ pub struct CounterFlushWorker<L> {
     flush_interval: Duration,
 }
 
-impl<L: ReactionLedger> CounterFlushWorker<L> {
+impl<L: CounterLedger> CounterFlushWorker<L> {
     pub fn new(
         store:          Arc<RedisScoreStore>,
         ledger:         Arc<L>,

@@ -294,5 +294,6 @@ cargo test -p wallet --features integration-wallet     # Postgres: concurrency, 
 2. Gem spends: the ×100 stake pack and `SpendGems`, no gem spend under 18 (this part);
    country unlocks, standings and the map filter in geo-discovery.
 3. Likes are points: `Stake` (this part); then the like counts, notifications, the country ladder and
-   the interest tags move to `StakeCommitted`; the other reaction kinds go.
+   the interest tags move to `StakeCommitted`; the reactions are gone, and the GDPR export reads
+   an account's likes.
 4. Stake settlement (gems earned).

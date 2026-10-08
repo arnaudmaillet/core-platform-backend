@@ -244,28 +244,6 @@ impl ExportPeers for MeshExportPeers {
         }
     }
 
-    async fn reactions(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError> {
-        let (mut reactions, mut token) = (Vec::new(), String::new());
-        loop {
-            let page = self
-                .engagement
-                .clone()
-                .list_reactions_by_profile(engagement_api::ListReactionsByProfileRequest {
-                    profile_id: profile_id.to_owned(),
-                    limit: PAGE,
-                    page_token: token,
-                })
-                .await
-                .map_err(rpc("engagement"))?
-                .into_inner();
-            reactions.extend(page.reactions.iter().map(|r| self.engagement_d.json("engagement.v1.ProfileReactionView", r)));
-            match page_token(page.next_page_token) {
-                Some(next) => token = next,
-                None => return Ok(reactions),
-            }
-        }
-    }
-
     /// search's `ListRecentSearches` over the mesh (#816): `require_profile`
     /// accepts a mesh caller, so no separate RPC is needed.
     async fn recent_searches(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, AccountError> {
@@ -422,6 +400,29 @@ impl ExportPeers for MeshExportPeers {
             match page_token(page.next_page_token) {
                 Some(next) => token = next,
                 None => return Ok(messages),
+            }
+        }
+    }
+
+    /// engagement's `ListLikesByAccount` (#665): mesh only.
+    async fn likes(&self, account_id: &AccountId) -> Result<Vec<serde_json::Value>, AccountError> {
+        let (mut likes, mut token) = (Vec::new(), String::new());
+        loop {
+            let page = self
+                .engagement
+                .clone()
+                .list_likes_by_account(engagement_api::ListLikesByAccountRequest {
+                    account_id: account_id.as_uuid().to_string(),
+                    limit: PAGE,
+                    page_token: token,
+                })
+                .await
+                .map_err(rpc("engagement"))?
+                .into_inner();
+            likes.extend(page.likes.iter().map(|l| self.engagement_d.json("engagement.v1.AccountLikeView", l)));
+            match page_token(page.next_page_token) {
+                Some(next) => token = next,
+                None => return Ok(likes),
             }
         }
     }
