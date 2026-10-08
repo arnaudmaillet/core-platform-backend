@@ -24,4 +24,9 @@ service EngagementService {
     // What an account liked (each post or comment, its points, when), paged
     // by target. Mesh only (never on the edge): the GDPR data export (#653).
     rpc ListLikesByAccount (ListLikesByAccountRequest) returns (ListLikesByAccountResponse);
+
+    // An account's position on posts and comments: its points, the target's
+    // like count just before its first like, and the count now. Mesh only:
+    // the wallet's stake settlement (#665).
+    rpc GetLikePositions (GetLikePositionsRequest) returns (GetLikePositionsResponse);
 }

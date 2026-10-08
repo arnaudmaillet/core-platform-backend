@@ -121,7 +121,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::application::port::PostLikeVisibility;
+    use crate::application::port::{Applied, Position, PostLikeVisibility};
 
     struct Snapshots;
 
@@ -164,16 +164,17 @@ mod tests {
 
     #[async_trait]
     impl LikeStore for Likes {
-        async fn apply_total(&self, _: &LikeTarget, _: &str, _: i64) -> Result<Option<i64>, EngagementError> {
+        async fn apply_total(&self, _: &LikeTarget, _: &str, _: i64) -> Result<Option<Applied>, EngagementError> {
             unimplemented!()
         }
         async fn counts(&self, targets: &[LikeTarget]) -> Result<Vec<i64>, EngagementError> {
             Ok(vec![9; targets.len()])
         }
-        async fn mine(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<Option<i64>>, EngagementError> {
-            Ok(vec![Some(if account == "me" { 2 } else { 0 }); targets.len()])
+        async fn positions(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<Option<Position>>, EngagementError> {
+            let total = if account == "me" { 2 } else { 0 };
+            Ok(vec![Some(Position { total, arrival: None }); targets.len()])
         }
-        async fn rehydrate(&self, _: &LikeTarget, _: &[(String, i64)], _: bool) -> Result<(), EngagementError> {
+        async fn rehydrate(&self, _: &LikeTarget, _: &[(String, Position)], _: bool) -> Result<(), EngagementError> {
             unimplemented!()
         }
         async fn claim_rehydration(&self, _: &LikeTarget) -> Result<bool, EngagementError> {

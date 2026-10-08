@@ -96,3 +96,26 @@ message ListLikesByAccountResponse {
     // Empty on the last page.
     string                   next_page_token = 2;
 }
+
+message GetLikePositionsRequest {
+    string              account_id = 1;
+    // At most 100.
+    repeated LikeTarget targets    = 2;
+}
+
+// One account's position on a post or comment (#665).
+message LikePosition {
+    LikeTarget     target           = 1;
+    // The account's points on it (0: none).
+    int64          total            = 2;
+    // The target's like count just before the account's first like. Absent
+    // when it has none, or for a like recorded before arrivals were kept.
+    optional int64 count_on_arrival = 3;
+    // The target's like count now.
+    int64          count_now        = 4;
+}
+
+message GetLikePositionsResponse {
+    // In the request's order.
+    repeated LikePosition positions = 1;
+}

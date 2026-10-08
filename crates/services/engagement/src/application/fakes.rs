@@ -6,17 +6,19 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use chrono::Utc;
 
-use crate::application::port::{ForgottenLike, LikeLedger, LikeStore};
+use crate::application::port::{AccountLike, Applied, ForgottenLike, LikeLedger, LikeStore, Position};
 use crate::error::EngagementError;
-use crate::application::port::AccountLike;
 use crate::domain::value_object::LikeTarget;
 
 /// Redis and Scylla in one: per target, each account's total and the sum
 /// (the likers expire as Redis's do: [`Likes::expire`]); the durable copy by
-/// account and by target.
+/// account and by target. Arrivals are kept beside the totals, in Redis and
+/// in Scylla.
 #[derive(Default)]
 pub struct Likes {
     pub likers:    Mutex<HashMap<LikeTarget, HashMap<String, i64>>>,
+    pub arrivals:  Mutex<HashMap<(LikeTarget, String), i64>>,
+    pub first_counts: Mutex<HashMap<(LikeTarget, String), i64>>,
     /// Targets whose likers are whole (Redis's `_complete`).
     pub complete:  Mutex<HashSet<LikeTarget>>,
     pub counts:    Mutex<HashMap<LikeTarget, i64>>,
@@ -29,14 +31,20 @@ impl Likes {
     /// The target's likers expire from Redis (its count stays).
     pub fn expire(&self, target: &LikeTarget) {
         self.likers.lock().unwrap().remove(target);
+        self.arrivals.lock().unwrap().retain(|(t, _), _| t != target);
         self.complete.lock().unwrap().remove(target);
     }
 
-    /// As the scripts' `known`.
-    fn known(&self, target: &LikeTarget, account: &str) -> Option<i64> {
+    /// As the scripts' `known`: the account's position, whether it is held,
+    /// or `None` when unknown.
+    fn known(&self, target: &LikeTarget, account: &str) -> Option<(Position, bool)> {
         let held = self.likers.lock().unwrap().get(target).and_then(|l| l.get(account)).copied();
+        if let Some(total) = held {
+            let arrival = self.arrivals.lock().unwrap().get(&(target.clone(), account.to_owned())).copied();
+            return Some((Position { total, arrival }, true));
+        }
         let count = self.counts.lock().unwrap().get(target).copied().unwrap_or(0);
-        held.or_else(|| (self.complete.lock().unwrap().contains(target) || count == 0).then_some(0))
+        (self.complete.lock().unwrap().contains(target) || count == 0).then_some((Position::default(), false))
     }
 }
 
@@ -46,25 +54,30 @@ fn key(t: &LikeTarget) -> (String, String) {
 
 #[async_trait]
 impl LikeStore for Likes {
-    async fn apply_total(&self, target: &LikeTarget, account: &str, total: i64) -> Result<Option<i64>, EngagementError> {
-        let Some(old) = self.known(target, account) else { return Ok(None) };
+    async fn apply_total(&self, target: &LikeTarget, account: &str, total: i64) -> Result<Option<Applied>, EngagementError> {
+        let Some((old, present)) = self.known(target, account) else { return Ok(None) };
+        let count = self.counts.lock().unwrap().get(target).copied().unwrap_or(0);
         let fresh = !self.likers.lock().unwrap().contains_key(target);
-        if fresh && self.counts.lock().unwrap().get(target).copied().unwrap_or(0) == 0 {
+        if fresh && count == 0 {
             self.complete.lock().unwrap().insert(target.clone());
         }
-        let added = (total - old).max(0);
+        let arrival = if present { old.arrival } else { Some(count) };
+        let added = (total - old.total).max(0);
         if added > 0 {
             self.likers.lock().unwrap().entry(target.clone()).or_default().insert(account.to_owned(), total);
+            if let Some(arrival) = arrival {
+                self.arrivals.lock().unwrap().insert((target.clone(), account.to_owned()), arrival);
+            }
             *self.counts.lock().unwrap().entry(target.clone()).or_insert(0) += added;
         }
-        Ok(Some(added))
+        Ok(Some(Applied { added, arrival }))
     }
     async fn counts(&self, targets: &[LikeTarget]) -> Result<Vec<i64>, EngagementError> {
         let counts = self.counts.lock().unwrap();
         Ok(targets.iter().map(|t| counts.get(t).copied().unwrap_or(0)).collect())
     }
-    async fn mine(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<Option<i64>>, EngagementError> {
-        Ok(targets.iter().map(|t| self.known(t, account)).collect())
+    async fn positions(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<Option<Position>>, EngagementError> {
+        Ok(targets.iter().map(|t| self.known(t, account).map(|(p, _)| p)).collect())
     }
     async fn forget(&self, account: &str, targets: &[LikeTarget]) -> Result<(), EngagementError> {
         let mut likers = self.likers.lock().unwrap();
@@ -75,11 +88,17 @@ impl LikeStore for Likes {
         }
         Ok(())
     }
-    async fn rehydrate(&self, target: &LikeTarget, likers: &[(String, i64)], complete: bool) -> Result<(), EngagementError> {
+    async fn rehydrate(&self, target: &LikeTarget, likers: &[(String, Position)], complete: bool) -> Result<(), EngagementError> {
         let mut held = self.likers.lock().unwrap();
         let held = held.entry(target.clone()).or_default();
-        for (account, total) in likers {
-            held.entry(account.clone()).or_insert(*total);
+        let mut arrivals = self.arrivals.lock().unwrap();
+        for (account, position) in likers {
+            if !held.contains_key(account) {
+                held.insert(account.clone(), position.total);
+                if let Some(arrival) = position.arrival {
+                    arrivals.insert((target.clone(), account.clone()), arrival);
+                }
+            }
         }
         if complete {
             self.complete.lock().unwrap().insert(target.clone());
@@ -97,19 +116,33 @@ impl LikeLedger for Likes {
         let erased = self.erased.lock().unwrap();
         Ok(accounts.iter().filter(|a| erased.contains_key(a.as_str())).cloned().collect())
     }
-    async fn total_of(&self, target: &LikeTarget, account: &str) -> Result<Option<i64>, EngagementError> {
-        Ok(self.by_target.lock().unwrap().get(target).and_then(|l| l.get(account)).copied())
+    async fn position_of(&self, target: &LikeTarget, account: &str) -> Result<Option<Position>, EngagementError> {
+        let total = self.by_target.lock().unwrap().get(target).and_then(|l| l.get(account)).copied();
+        let arrival = self.first_counts.lock().unwrap().get(&(target.clone(), account.to_owned())).copied();
+        Ok(total.map(|total| Position { total, arrival }))
     }
-    async fn likers_of(&self, target: &LikeTarget, limit: i32, after: Option<&str>) -> Result<Vec<(String, i64)>, EngagementError> {
+    async fn likers_of(&self, target: &LikeTarget, limit: i32, after: Option<&str>) -> Result<Vec<(String, Position)>, EngagementError> {
         let mut likers: Vec<_> =
             self.by_target.lock().unwrap().get(target).map(|l| l.clone().into_iter().collect()).unwrap_or_default();
         likers.sort();
-        Ok(likers.into_iter().filter(|(a, _)| after.is_none_or(|after| a.as_str() > after)).take(limit as usize).collect())
+        let first_counts = self.first_counts.lock().unwrap();
+        Ok(likers
+            .into_iter()
+            .filter(|(a, _)| after.is_none_or(|after| a.as_str() > after))
+            .take(limit as usize)
+            .map(|(a, total)| {
+                let arrival = first_counts.get(&(target.clone(), a.clone())).copied();
+                (a, Position { total, arrival })
+            })
+            .collect())
     }
-    async fn record(&self, target: &LikeTarget, account: &str, _: &str, total: i64, _: i64) -> Result<(), EngagementError> {
+    async fn record(&self, target: &LikeTarget, account: &str, _: &str, position: Position, _: i64) -> Result<(), EngagementError> {
         let (kind, id) = key(target);
-        self.rows.lock().unwrap().insert((account.to_owned(), kind, id), total);
-        self.by_target.lock().unwrap().entry(target.clone()).or_default().insert(account.to_owned(), total);
+        self.rows.lock().unwrap().insert((account.to_owned(), kind, id), position.total);
+        self.by_target.lock().unwrap().entry(target.clone()).or_default().insert(account.to_owned(), position.total);
+        if let Some(arrival) = position.arrival {
+            self.first_counts.lock().unwrap().insert((target.clone(), account.to_owned()), arrival);
+        }
         Ok(())
     }
     async fn list_by_account(

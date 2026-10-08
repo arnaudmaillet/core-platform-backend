@@ -61,6 +61,14 @@ account liked, PK `((account_id), target_kind, target_id)`), `engagement.post_in
 (approximate counter table). Migration 0006 drops the reactions' `post_reactions` and
 `reactions_by_profile`.
 
+**Positions (#665, the stake settlement).** Each liker's value in `:likers` is `total|arrival`: its
+points, and the target's count just before its first like (a value without `|` predates it). The apply
+script keeps the arrival on the account's first like and returns it on every application; the stake
+consumer records it in `likes_by_target.first_count` (migration 0008; never overwritten with a null).
+`GetLikePositions(account_id, targets)` (**mesh only**, ≤ 100 targets) gives each target's position —
+`total`, `count_on_arrival`, `count_now` — from Redis, or from Scylla when the likers expired. The
+wallet's settlement scores how early an account came from it.
+
 **Expired likers.** A likers hash that holds every liker carries `_complete` (set on the target's first
 like, or when a rehydration finished). Once it expired, an account missing from a new one is
 **unknown**, not zero: the stake consumer then rehydrates the whole hash from `likes_by_target`
@@ -124,6 +132,7 @@ erasure may have listed the targets before it).
 |---|---|---|
 | clients (edge) | view/share + `GetPostEngagement` / `BatchGetLikes` | no like or engagement counts on posts |
 | `account` | `ListLikesByAccount` (GDPR export) | exports retried next pass |
+| `wallet` | `GetLikePositions` (stake settlement, #665) | settlements wait for the next pass |
 
 > **Critical path?** **Yes** for the read path (Redis-backed); likes and persistence are async.
 
@@ -140,6 +149,7 @@ service EngagementService {
   rpc GetPostEngagement (GetPostEngagementRequest) returns (PostEngagementView);
   rpc BatchGetLikes     (BatchGetLikesRequest)     returns (BatchGetLikesResponse); // likes (#665)
   rpc ListLikesByAccount (ListLikesByAccountRequest) returns (ListLikesByAccountResponse); // mesh only
+  rpc GetLikePositions  (GetLikePositionsRequest)  returns (GetLikePositionsResponse);  // mesh only
 }
 ```
 
@@ -286,7 +296,7 @@ async fn main() -> anyhow::Result<()> {
 - **Migrations:** `0001_create_keyspace.cql` → `0002_create_post_reactions_table.cql` →
   `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` →
   `0005_create_likes_tables.cql` → `0006_drop_reaction_tables.cql` →
-  `0007_create_erased_accounts_table.cql` against
+  `0007_create_erased_accounts_table.cql` → `0008_likes_by_target_first_count.cql` against
   `engagement`, applied **before** first start. (0002's table comment held a `;`; the integration
   suites' runner split on it until it became quote-aware like `apps/migrator` — prod never was affected.
   It is a comma now — same schema.)

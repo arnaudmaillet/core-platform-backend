@@ -17,7 +17,7 @@ use transport::kafka::consumer::{run_consumer, ProcessOutcome, RetryPolicy};
 use transport::kafka::producer::KafkaProducerHandle;
 
 use crate::application::erasure::anonymous_liker;
-use crate::application::port::{ForgottenLike, LikeLedger, LikeStore};
+use crate::application::port::{ForgottenLike, LikeLedger, LikeStore, Position};
 use crate::domain::value_object::LikeTarget;
 use crate::error::EngagementError;
 use crate::infrastructure::worker::build_dlq_producer;
@@ -155,8 +155,8 @@ async fn apply_stake(
         tracing::info!(target = %target, "stake of a deleted account dropped");
         return Ok(());
     }
-    crate::application::likes::apply_total(likes, ledger, target, account, total).await?;
-    ledger.record(target, account, profile, total, at_micros).await?;
+    let applied = crate::application::likes::apply_total(likes, ledger, target, account, total).await?;
+    ledger.record(target, account, profile, Position { total, arrival: applied.arrival }, at_micros).await?;
     if let Some(erased_at) = ledger.erased_at(account).await? {
         likes.forget(account, std::slice::from_ref(target)).await?;
         let like = ForgottenLike { target: target.clone(), total, anonymous_id: anonymous_liker(account, target, erased_at) };

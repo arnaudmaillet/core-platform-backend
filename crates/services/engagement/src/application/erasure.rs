@@ -76,6 +76,7 @@ impl LikeEraser {
 #[cfg(test)]
 mod tests {
     use crate::application::fakes::Likes;
+    use crate::application::port::Position;
     use super::*;
     use crate::domain::value_object::LikeTarget;
 
@@ -85,9 +86,9 @@ mod tests {
         let targets: Vec<_> = (0..1_201).map(|i| LikeTarget::Post(format!("p{i:04}"))).collect();
         for t in &targets {
             likes.apply_total(t, "gone", 3).await.unwrap().unwrap();
-            likes.record(t, "gone", "p", 3, 1).await.unwrap();
+            likes.record(t, "gone", "p", Position { total: 3, arrival: None }, 1).await.unwrap();
             likes.apply_total(t, "stays", 2).await.unwrap().unwrap();
-            likes.record(t, "stays", "p", 2, 1).await.unwrap();
+            likes.record(t, "stays", "p", Position { total: 2, arrival: None }, 1).await.unwrap();
         }
         let eraser = LikeEraser { store: likes.clone(), ledger: likes.clone() };
 
