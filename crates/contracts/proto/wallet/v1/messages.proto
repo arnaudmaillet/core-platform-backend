@@ -37,6 +37,14 @@ message Wallet {
 
     // Shots left in the ×100 stake pack; 0 = none.
     int32                     stake_shots     = 15;
+
+    // The caller may not spend gems (under 18, or age unknown): hide the
+    // stake pack and the country unlocks. Set on the edge only.
+    bool                      gem_spending_restricted = 16;
+    // The ×100 stake pack's terms (server policy).
+    int64                     stake_pack_price        = 17;
+    int32                     stake_pack_shots        = 18;
+    int32                     points_per_shot         = 19;
 }
 
 message GetWalletRequest {
@@ -68,6 +76,8 @@ message WalletTransaction {
     int64                     balance_after  = 4;
     TransactionKind           kind           = 5;
     google.protobuf.Timestamp created_at     = 6;
+    // What it was for, when it names something (COUNTRY_UNLOCK: the country).
+    string                    ref_id         = 7;
 }
 
 message ListWalletTransactionsRequest {
@@ -78,6 +88,37 @@ message ListWalletTransactionsRequest {
     int32    page_size  = 3;
     // Opaque cursor from a previous response; empty for the first page.
     string   page_token = 4;
+}
+
+message BuyStakePackRequest {
+    string account_id      = 1;
+    // As for ClaimReward: a retry with the same key charges at most once.
+    string idempotency_key = 2;
+}
+
+message BuyStakePackResponse {
+    StakePackOutcome outcome = 1;
+    // The wallet after the call.
+    Wallet           wallet  = 2;
+}
+
+message SpendGemsRequest {
+    string          account_id      = 1;
+    // Gems to spend, > 0.
+    int64           amount          = 2;
+    // What for: COUNTRY_UNLOCK only for now.
+    TransactionKind kind            = 3;
+    // What it names (the country code), at most 64 characters.
+    string          ref_id          = 4;
+    // The calling service's key (8–64 characters: letters, digits, `-`,
+    // `_`): a retry with the same key charges at most once.
+    string          idempotency_key = 5;
+}
+
+message SpendGemsResponse {
+    SpendGemsOutcome outcome = 1;
+    // Gems left.
+    int64            gems    = 2;
 }
 
 message ListWalletTransactionsResponse {

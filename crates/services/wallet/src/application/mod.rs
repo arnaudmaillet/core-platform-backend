@@ -3,4 +3,4 @@
 pub mod port;
 pub mod wallets;
 
-pub use wallets::{ClaimReply, HistoryPage, Wallets, WalletView};
+pub use wallets::{ClaimReply, HistoryPage, PackReply, Wallets, WalletView};

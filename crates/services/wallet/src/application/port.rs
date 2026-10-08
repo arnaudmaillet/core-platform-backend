@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::domain::{AccountId, ClaimPolicy, Currency, IdempotencyKey, Transaction, Wallet};
+use crate::domain::{AccountId, ClaimPolicy, Currency, IdempotencyKey, StakePackPolicy, Transaction, TransactionKind, Wallet};
 use crate::error::WalletError;
 
 /// How a claim ended.
@@ -23,6 +23,29 @@ pub struct ClaimResult {
     /// Points credited (the first award, on a replayed key); 0 unless claimed.
     pub awarded: i32,
     pub wallet:  Wallet,
+}
+
+/// How buying a stake pack ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackOutcome {
+    Bought,
+    StillActive,
+    InsufficientGems,
+}
+
+/// How a gem spend ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpendOutcome {
+    Spent,
+    InsufficientGems,
+}
+
+/// A gem spend asked by another service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GemSpend {
+    pub amount: i64,
+    pub kind:   TransactionKind,
+    pub ref_id: Option<String>,
 }
 
 /// Where a history page starts (exclusive): the last row of the previous one.
@@ -49,6 +72,30 @@ pub trait WalletStore: Send + Sync + 'static {
         starter_gems: i64,
         now: DateTime<Utc>,
     ) -> Result<ClaimResult, WalletError>;
+
+    /// Buys the stake pack (the wallet opened if needed, then locked): a key
+    /// already used answers `Bought`; otherwise the policy decides, and a
+    /// purchase is charged with its ledger row.
+    async fn buy_stake_pack(
+        &self,
+        account: &AccountId,
+        key: &IdempotencyKey,
+        policy: &StakePackPolicy,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<(PackOutcome, Wallet), WalletError>;
+
+    /// Spends gems (the wallet opened if needed, then locked): a key already
+    /// used answers `Spent`; otherwise charged with its ledger row when the
+    /// balance allows.
+    async fn spend_gems(
+        &self,
+        account: &AccountId,
+        key: &IdempotencyKey,
+        spend: &GemSpend,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<(SpendOutcome, Wallet), WalletError>;
 
     /// The account's transactions, newest first, after `after`.
     async fn history(

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: dc0dae9f067a00ed61d9b2443e1a355b19ace9d54ab25bd09d339f430c4ff37f
+  source_sha256: d94f58b8f040e4f4106f99e45dd8bb13b94faaa10b3ff22f3f59774e187ede13
   translated_at: 2026-10-08
   status: complete
 ---
@@ -20,7 +20,7 @@ i18n:
 > | **Déployable** | `crates/apps/wallet-server` (crate bibliothèque : `crates/services/wallet`) |
 > | **Stockage** | Postgres (cluster CNPG dédié, tables `wallets`, `wallet_transactions`) |
 > | **Asynchrone** | consomme `account.v1.events` (groupe `wallet-account-events`) · ne publie rien pour l'instant |
-> | **Appelants** | l'app (edge client `:9443`) |
+> | **Appelants** | l'app (edge client `:9443`) · geo-discovery (mesh `SpendGems`, déblocage de pays) |
 > | **Dépendances** | Postgres, Kafka |
 > | **SLO** | 99,9 % de dispo · p99 lecture < 50 ms · p99 réclamation < 100 ms |
 
@@ -34,7 +34,7 @@ compte et chacun de leurs mouvements.
 | Monnaie | Affichée comme | Gagnée par | Dépensée pour |
 |---|---|---|---|
 | **Points** | likes (le cœur) | la réclamation horaire | les mises sur posts et commentaires (PR suivante) |
-| **Gems** | le diamant | le don de départ ; les mises réglées (plus tard) | déblocage de pays, le pack de mises ×100 (PR suivante) |
+| **Gems** | le diamant | le don de départ ; les mises réglées (plus tard) | le pack de mises ×100 ; le déblocage de pays (geo-discovery) |
 
 Rien n'est vendu contre de l'argent réel : ni StoreKit, ni reçus, ni restauration. Aucune monnaie
 ne se convertit en l'autre, en argent ou vers un autre utilisateur. Un portefeuille par **compte**
@@ -68,9 +68,11 @@ account.v1.events ──► consommateur account (run_consumer) ──► Wallet
 
 **Le registre.** `wallet_transactions` est en ajout seul : `currency`, `delta` signé, le
 `balance_after` produit, `kind`, `idempotency_key`, `created_at`. `UNIQUE (account_id,
-idempotency_key)` est le mécanisme d'idempotence : une clé de réclamation rejouée renvoie son
-premier crédit. Les clés client font 8 à 64 caractères `[A-Za-z0-9_-]` ; celles du service
-commencent par `sys:` (ex. `sys:starter-gems`), ce qu'aucune clé client ne peut faire.
+idempotency_key)` est le mécanisme d'idempotence : une clé rejouée renvoie son premier résultat.
+La clé d'un appelant fait 8 à 64 caractères `[A-Za-z0-9_-]` et est stockée **rattachée à son
+opération** (`claim:<clé>`, `pack:<clé>`, `spend:<clé>`) : une clé de réclamation ne peut jamais
+passer pour un pack payé ; celles du service commencent par `sys:` (ex. `sys:starter-gems`).
+Aucune clé d'appelant ne contient de `:`.
 
 **La réclamation horaire** (mêmes règles que la maquette de l'app) :
 
@@ -86,10 +88,21 @@ commencent par `sys:` (ex. `sys:starter-gems`), ce qu'aucune clé client ne peut
 **Le don de départ.** Un portefeuille s'ouvre au premier usage avec 100 gems (`STARTER_GIFT`), une
 seule fois.
 
+**Dépenser des gems** (adultes seulement : un jeton de moins de 18 ans, ou sans âge, reçoit
+`WAL-3001`) :
+
+| Dépense | Règle |
+|---|---|
+| Pack de mises ×100 (`BuyStakePack`, edge) | 3 tirs de 100 points **de l'acheteur**, 50 gems ; un pack à la fois (`PACK_STILL_ACTIVE` tant qu'il reste des tirs, rien n'est débité) ; les tirs n'expirent jamais |
+| Déblocage de pays (`SpendGems`, mesh) | geo-discovery fixe le prix, vérifie que l'acheteur est adulte et demande les gems avec sa propre clé ; `ref_id` = le code du pays |
+
+Les gems n'achètent jamais de points, d'argent, ni rien pour un autre utilisateur.
+
 > **Invariants** (et où ils sont tenus) : soldes ≥ 0 (`CHECK`) ; chaque solde = Σ des deltas de son
-> registre (même transaction, verrou de ligne ; vérifié en test d'intégration) ; un crédit par clé
-> (`UNIQUE`) ; une réclamation par intervalle (verrou + règle du domaine) ; seulement le
-> portefeuille de l'appelant (`edge::require_account`).
+> registre (même transaction, verrou de ligne ; vérifié en test d'intégration) ; un mouvement par
+> clé rattachée (`UNIQUE`) ; une réclamation par intervalle et un pack à la fois (verrou + règle du
+> domaine) ; seulement le portefeuille de l'appelant (`edge::require_account`) ; aucune dépense de
+> gems avant 18 ans (claim `age` du jeton, fail-closed).
 
 ---
 
@@ -116,7 +129,8 @@ seule fois.
 
 | Appelant | Utilise | Impact si `wallet` tombe |
 |---|---|---|
-| l'app | `GetWallet`, `ClaimReward`, `ListWalletTransactions` | solde et réclamation indisponibles ; le reste de l'app fonctionne |
+| l'app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack` | solde, réclamation et pack indisponibles ; le reste de l'app fonctionne |
+| geo-discovery | `SpendGems` | déblocages de pays refusés (fail-closed) ; la carte fonctionne |
 
 > **Chemin critique ?** Non — le fil, les posts et le chat ne l'appellent pas.
 
@@ -131,11 +145,19 @@ service WalletService {
   rpc GetWallet (GetWalletRequest) returns (Wallet);
   rpc ClaimReward (ClaimRewardRequest) returns (ClaimRewardResponse);
   rpc ListWalletTransactions (ListWalletTransactionsRequest) returns (ListWalletTransactionsResponse);
+  rpc BuyStakePack (BuyStakePackRequest) returns (BuyStakePackResponse);
+  rpc SpendGems (SpendGemsRequest) returns (SpendGemsResponse);   // mesh seulement
 }
 ```
 
-Les trois sont sur l'edge (`authenticated`), liés au `account_id` de l'appelant
-(`edge::require_account` ; un autre compte ⇒ `PERMISSION_DENIED`).
+Tous sauf `SpendGems` sont sur l'edge (`authenticated`), liés au `account_id` de l'appelant
+(`edge::require_account` ; un autre compte ⇒ `PERMISSION_DENIED`). `SpendGems` est réservé au mesh
+(geo-discovery) : `kind` = `COUNTRY_UNLOCK`, `amount` > 0, `ref_id` ≤ 64 caractères.
+
+- `Wallet.gem_spending_restricted` (edge seulement) dit à l'app de masquer les dépenses de gems ;
+  les conditions du pack sont renvoyées (`stake_pack_price`, `stake_pack_shots`, `points_per_shot`).
+- `BuyStakePack` répond `BOUGHT`, `PACK_STILL_ACTIVE` ou `INSUFFICIENT_GEMS` dans la réponse ;
+  `SpendGems` répond `SPENT` ou `INSUFFICIENT_GEMS`.
 
 - `ClaimReward` répond `CLAIMED`, `TOO_EARLY` ou `DAILY_CAP_REACHED` **dans la réponse** (pas
   d'erreur), avec le portefeuille après l'appel ; `next_claim_at` dit quand la prochaine ouvre.
@@ -147,10 +169,12 @@ Les trois sont sur l'edge (`authenticated`), liés au `account_id` de l'appelant
 
 | Code | Sens | gRPC |
 |---|---|---|
+| `WAL-3001` | les gems ne peuvent pas être dépensés (moins de 18 ans, ou âge inconnu) | `PERMISSION_DENIED` |
 | `WAL-5001` | une ligne du registre illisible (fail closed) | `INTERNAL` |
 | `WAL-9001` | identifiant de compte invalide | `INVALID_ARGUMENT` |
 | `WAL-9002` | clé d'idempotence invalide | `INVALID_ARGUMENT` |
 | `WAL-9003` | jeton de page invalide | `INVALID_ARGUMENT` |
+| `WAL-9004` | dépense de gems invalide (montant, type, référence) | `INVALID_ARGUMENT` |
 | `DB-*` | stockage (délégué) | selon l'erreur |
 
 ---
@@ -199,6 +223,9 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_CLAIM_BASE_POINTS` | `25` | une réclamation sans série |
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points réclamables par jour UTC |
 | `WALLET_STARTER_GEMS` | `100` | gems à l'ouverture d'un portefeuille |
+| `WALLET_STAKE_PACK_SHOTS` | `3` | tirs dans un pack ×100 |
+| `WALLET_STAKE_PACK_PRICE` | `50` | prix d'un pack en gems |
+| `WALLET_POINTS_PER_SHOT` | `100` | points misés par tir |
 
 Une valeur illisible ou négative garde le défaut.
 
@@ -215,7 +242,7 @@ du jeton edge (edge client), OTel.
 
 ## 🚀 Déploiement, migrations & retour arrière &nbsp;·&nbsp; OPS
 
-Migrations : `migrations/0001_create_wallet_tables.sql`, appliquée par `migrator wallet` (init
+Migrations : `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.sql` (`ref_id`), appliquées par `migrator wallet` (init
 container) avant le binaire. Infra (dépôt ECR, manifests, `wallet-postgres`, route d'ingress,
 NetworkPolicy) : core-platform-infra#41 — le binaire rejoint `FLEET_BINS` dès que son dépôt ECR
 existe. Retour arrière : le binaire est sans état ; le schéma est additif.
@@ -224,7 +251,8 @@ existe. Retour arrière : le binaire est sans état ; le schéma est additif.
 
 ## 📈 Télémétrie, performance & métriques &nbsp;·&nbsp; CORE
 
-Spans `wallet.open`, `wallet.claim`, `wallet.history`, `wallet.erase` (avec le shard). Un verrou de
+Spans `wallet.open`, `wallet.claim`, `wallet.buy_stake_pack`, `wallet.spend_gems`, `wallet.history`,
+`wallet.erase` (avec le shard). Un verrou de
 ligne par écriture ; l'historique lit `(account_id, created_at DESC, id DESC)`.
 
 ---
@@ -240,7 +268,8 @@ cargo test -p wallet --features integration-wallet     # Postgres : concurrence,
 
 ## 🧭 Feuille de route (#665)
 
-1. **Ce crate :** le registre, la réclamation horaire, les gems de départ, l'historique, l'effacement.
-2. Dépenses de gems (déblocage de pays, pack de mises ×100) ; gems bloqués côté serveur pour les mineurs.
+1. Le registre, la réclamation horaire, les gems de départ, l'historique, l'effacement (#853).
+2. Dépenses de gems : le pack ×100 et `SpendGems`, aucune dépense de gems avant 18 ans (cette
+   partie) ; déblocage de pays, classement et filtre de la carte dans geo-discovery.
 3. Mises de points sur posts et commentaires (plafonds anti-abus, ex. 1 000 points par heure).
 4. Règlement des mises (gems gagnés).

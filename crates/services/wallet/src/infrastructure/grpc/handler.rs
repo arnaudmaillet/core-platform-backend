@@ -1,5 +1,5 @@
-//! `wallet.v1` over [`Wallets`]. Every RPC is the caller's own wallet on the
-//! edge (`edge::require_account`).
+//! `wallet.v1` over [`Wallets`]. Every edge RPC is the caller's own wallet
+//! (`edge::require_account`); `SpendGems` is mesh only.
 
 use std::sync::Arc;
 
@@ -8,8 +8,9 @@ use error::AppError;
 use tonic::{Request, Response, Status};
 use transport::grpc::edge;
 
-use crate::application::port::ClaimOutcome;
+use crate::application::port::{ClaimOutcome, PackOutcome, SpendOutcome};
 use crate::application::{Wallets, WalletView};
+use crate::config::WalletConfig;
 use crate::domain::{Currency, Transaction, TransactionKind};
 use crate::error::WalletError;
 
@@ -29,8 +30,57 @@ impl WalletServiceHandler {
 
     pub async fn get_wallet(&self, request: Request<proto::GetWalletRequest>) -> Result<Response<proto::Wallet>, Status> {
         edge::require_account(&request, &request.get_ref().account_id)?;
+        let restricted = spending_restricted(&request);
         let view = self.wallets.get(&request.get_ref().account_id, Utc::now()).await.map_err(to_status)?;
-        Ok(Response::new(wallet_to_proto(&view)))
+        Ok(Response::new(self.wallet_to_proto(&view, restricted)))
+    }
+
+    /// Buys the ×100 stake pack. On the edge, a caller under 18 (or of
+    /// unknown age, from the token) is refused: `WAL-3001`.
+    pub async fn buy_stake_pack(
+        &self,
+        request: Request<proto::BuyStakePackRequest>,
+    ) -> Result<Response<proto::BuyStakePackResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let restricted = spending_restricted(&request);
+        let req = request.into_inner();
+        let reply = self
+            .wallets
+            .buy_stake_pack(&req.account_id, &req.idempotency_key, restricted, Utc::now())
+            .await
+            .map_err(to_status)?;
+        Ok(Response::new(proto::BuyStakePackResponse {
+            outcome: match reply.outcome {
+                PackOutcome::Bought => proto::StakePackOutcome::Bought,
+                PackOutcome::StillActive => proto::StakePackOutcome::PackStillActive,
+                PackOutcome::InsufficientGems => proto::StakePackOutcome::InsufficientGems,
+            } as i32,
+            wallet:  Some(self.wallet_to_proto(&reply.view, restricted)),
+        }))
+    }
+
+    /// Mesh only: another service spends gems (it checked the spender may).
+    pub async fn spend_gems(
+        &self,
+        request: Request<proto::SpendGemsRequest>,
+    ) -> Result<Response<proto::SpendGemsResponse>, Status> {
+        let req = request.into_inner();
+        let kind = match proto::TransactionKind::try_from(req.kind) {
+            Ok(proto::TransactionKind::CountryUnlock) => TransactionKind::CountryUnlock,
+            _ => return Err(Status::invalid_argument("kind must be COUNTRY_UNLOCK")),
+        };
+        let (outcome, gems) = self
+            .wallets
+            .spend_gems(&req.account_id, &req.idempotency_key, req.amount, kind, &req.ref_id, Utc::now())
+            .await
+            .map_err(to_status)?;
+        Ok(Response::new(proto::SpendGemsResponse {
+            outcome: match outcome {
+                SpendOutcome::Spent => proto::SpendGemsOutcome::Spent,
+                SpendOutcome::InsufficientGems => proto::SpendGemsOutcome::InsufficientGems,
+            } as i32,
+            gems,
+        }))
     }
 
     pub async fn claim_reward(
@@ -38,6 +88,7 @@ impl WalletServiceHandler {
         request: Request<proto::ClaimRewardRequest>,
     ) -> Result<Response<proto::ClaimRewardResponse>, Status> {
         edge::require_account(&request, &request.get_ref().account_id)?;
+        let restricted = spending_restricted(&request);
         let req = request.into_inner();
         let reply = self.wallets.claim(&req.account_id, &req.idempotency_key, Utc::now()).await.map_err(to_status)?;
         Ok(Response::new(proto::ClaimRewardResponse {
@@ -47,7 +98,7 @@ impl WalletServiceHandler {
                 ClaimOutcome::DailyCapReached => proto::ClaimOutcome::DailyCapReached,
             } as i32,
             awarded: reply.awarded,
-            wallet:  Some(wallet_to_proto(&reply.view)),
+            wallet:  Some(self.wallet_to_proto(&reply.view, restricted)),
         }))
     }
 
@@ -75,7 +126,19 @@ impl WalletServiceHandler {
     }
 }
 
-fn wallet_to_proto(view: &WalletView) -> proto::Wallet {
+impl WalletServiceHandler {
+    fn wallet_to_proto(&self, view: &WalletView, restricted: bool) -> proto::Wallet {
+        wallet_to_proto(view, self.wallets.config(), restricted)
+    }
+}
+
+/// A caller under 18 or of unknown age may not spend gems (from the edge
+/// token); a mesh caller is not restricted here.
+fn spending_restricted<T>(request: &Request<T>) -> bool {
+    edge::principal(request).is_some_and(|p| !p.is_adult())
+}
+
+fn wallet_to_proto(view: &WalletView, config: &WalletConfig, restricted: bool) -> proto::Wallet {
     let (w, c) = (&view.wallet, &view.claim);
     proto::Wallet {
         account_id:      w.account.to_string(),
@@ -93,6 +156,10 @@ fn wallet_to_proto(view: &WalletView) -> proto::Wallet {
         streak_days:     c.streak_days,
         last_claim_at:   w.last_claim_at.map(timestamp),
         stake_shots:     w.stake_shots,
+        gem_spending_restricted: restricted,
+        stake_pack_price: config.stake_pack.price_gems,
+        stake_pack_shots: config.stake_pack.shots,
+        points_per_shot: config.stake_pack.points_per_shot,
     }
 }
 
@@ -108,9 +175,12 @@ fn transaction_to_proto(t: &Transaction) -> proto::WalletTransaction {
         kind:           match t.kind {
             TransactionKind::Claim => proto::TransactionKind::Claim,
             TransactionKind::StarterGift => proto::TransactionKind::StarterGift,
+            TransactionKind::StakePack => proto::TransactionKind::StakePack,
+            TransactionKind::CountryUnlock => proto::TransactionKind::CountryUnlock,
             TransactionKind::Unknown => proto::TransactionKind::Unspecified,
         } as i32,
         created_at:     Some(timestamp(t.created_at)),
+        ref_id:         t.ref_id.clone().unwrap_or_default(),
     }
 }
 
@@ -123,6 +193,7 @@ fn to_status(err: WalletError) -> Status {
     let message = err.to_string();
     let mut status = match err.http_status().as_u16() {
         400 | 422 => Status::invalid_argument(message),
+        403 => Status::permission_denied(message),
         404 => Status::not_found(message),
         409 if err.is_retryable() => Status::aborted(message),
         409 => Status::failed_precondition(message),
@@ -145,9 +216,17 @@ mod tests {
     use crate::application::wallets::fakes::MemoryStore;
     use crate::config::WalletConfig;
 
+    /// An adult caller (the token's `age` claim).
     fn principal(sub: &str) -> edge::EdgePrincipal {
-        let raw: auth_context::OidcClaims =
-            serde_json::from_value(serde_json::json!({ "sub": sub, "exp": 4_102_444_800_i64 })).unwrap();
+        principal_aged(sub, Some("18+"))
+    }
+
+    fn principal_aged(sub: &str, age: Option<&str>) -> edge::EdgePrincipal {
+        let mut claims = serde_json::json!({ "sub": sub, "exp": 4_102_444_800_i64 });
+        if let Some(age) = age {
+            claims["age"] = serde_json::json!(age);
+        }
+        let raw: auth_context::OidcClaims = serde_json::from_value(claims).unwrap();
         edge::EdgePrincipal::new(Arc::new(auth_context::CurrentPrincipal {
             user_id: auth_context::PrincipalId::new(sub),
             tenant_id: None,
@@ -201,6 +280,62 @@ mod tests {
         let other = Uuid::now_v7().to_string();
         let denied = h.get_wallet(as_caller(&me, proto::GetWalletRequest { account_id: other })).await.unwrap_err();
         assert_eq!(denied.code(), Code::PermissionDenied);
+    }
+
+    /// #665: gems are not spent under 18 or with an unknown age.
+    #[tokio::test]
+    async fn a_minor_cannot_buy_a_pack_and_the_wallet_says_so() {
+        let h = handler();
+        let teen = Uuid::now_v7().to_string();
+        let as_teen = |message| {
+            let mut request = Request::new(message);
+            request.extensions_mut().insert(principal_aged(&teen, Some("13-15")));
+            request
+        };
+        let status = h
+            .buy_stake_pack(as_teen(proto::BuyStakePackRequest {
+                account_id:      teen.clone(),
+                idempotency_key: Uuid::now_v7().to_string(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), Code::PermissionDenied);
+        assert_eq!(status.metadata().get(ERROR_CODE_METADATA).unwrap(), "WAL-3001");
+
+        let mut get = Request::new(proto::GetWalletRequest { account_id: teen.clone() });
+        get.extensions_mut().insert(principal_aged(&teen, None));
+        assert!(h.get_wallet(get).await.unwrap().into_inner().gem_spending_restricted, "age unknown: restricted");
+
+        let adult = Uuid::now_v7().to_string();
+        let bought = h
+            .buy_stake_pack(as_caller(&adult, proto::BuyStakePackRequest {
+                account_id:      adult.clone(),
+                idempotency_key: Uuid::now_v7().to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        let wallet = bought.wallet.unwrap();
+        assert_eq!(bought.outcome, proto::StakePackOutcome::Bought as i32);
+        assert_eq!((wallet.gems, wallet.stake_shots, wallet.stake_pack_price, wallet.gem_spending_restricted), (50, 3, 50, false));
+    }
+
+    #[tokio::test]
+    async fn spend_gems_takes_country_unlocks_only() {
+        let h = handler();
+        let account = Uuid::now_v7().to_string();
+        let spend = |kind: proto::TransactionKind| {
+            Request::new(proto::SpendGemsRequest {
+                account_id:      account.clone(),
+                amount:          15,
+                kind:            kind as i32,
+                ref_id:          "IT".into(),
+                idempotency_key: "country-IT".into(),
+            })
+        };
+        let spent = h.spend_gems(spend(proto::TransactionKind::CountryUnlock)).await.unwrap().into_inner();
+        assert_eq!((spent.outcome, spent.gems), (proto::SpendGemsOutcome::Spent as i32, 85));
+        assert_eq!(h.spend_gems(spend(proto::TransactionKind::Claim)).await.unwrap_err().code(), Code::InvalidArgument);
     }
 
     #[tokio::test]

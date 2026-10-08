@@ -25,4 +25,15 @@ service WalletService {
 
     // The caller's transaction history, newest first.
     rpc ListWalletTransactions(ListWalletTransactionsRequest) returns (ListWalletTransactionsResponse);
+
+    // Buys the ×100 stake pack with gems: 3 shots of 100 of the caller's own
+    // points, 50 gems, one pack at a time (PACK_STILL_ACTIVE while shots are
+    // left). WAL-3001 (PERMISSION_DENIED) for a caller under 18 or of
+    // unknown age.
+    rpc BuyStakePack(BuyStakePackRequest) returns (BuyStakePackResponse);
+
+    // Mesh only: another service spends an account's gems (geo-discovery's
+    // country unlocks). The caller checks the spender may spend gems (an
+    // adult); the wallet records the movement. Idempotent per key.
+    rpc SpendGems(SpendGemsRequest) returns (SpendGemsResponse);
 }

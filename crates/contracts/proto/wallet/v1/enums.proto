@@ -22,7 +22,11 @@ enum TransactionKind {
     // The hourly reward (points).
     TRANSACTION_KIND_CLAIM        = 1;
     // The gems every account starts with (once).
-    TRANSACTION_KIND_STARTER_GIFT = 2;
+    TRANSACTION_KIND_STARTER_GIFT   = 2;
+    // A ×100 stake pack bought (gems).
+    TRANSACTION_KIND_STAKE_PACK     = 3;
+    // A country unlocked on the map (gems); `ref_id` is the country code.
+    TRANSACTION_KIND_COUNTRY_UNLOCK = 4;
 }
 
 // The outcome of a claim: ordinary states the app renders, not errors.
@@ -33,4 +37,21 @@ enum ClaimOutcome {
     CLAIM_OUTCOME_TOO_EARLY         = 2;
     // Today's claims reached the daily cap (UTC day): next at 00:00 UTC.
     CLAIM_OUTCOME_DAILY_CAP_REACHED = 3;
+}
+
+// The outcome of buying a ×100 stake pack.
+enum StakePackOutcome {
+    STAKE_PACK_OUTCOME_UNSPECIFIED       = 0;
+    STAKE_PACK_OUTCOME_BOUGHT            = 1;
+    // Shots are left: packs do not stack. Nothing charged.
+    STAKE_PACK_OUTCOME_PACK_STILL_ACTIVE = 2;
+    STAKE_PACK_OUTCOME_INSUFFICIENT_GEMS = 3;
+}
+
+// The outcome of a gem spend asked by another service.
+enum SpendGemsOutcome {
+    SPEND_GEMS_OUTCOME_UNSPECIFIED       = 0;
+    SPEND_GEMS_OUTCOME_SPENT             = 1;
+    // Nothing charged.
+    SPEND_GEMS_OUTCOME_INSUFFICIENT_GEMS = 2;
 }

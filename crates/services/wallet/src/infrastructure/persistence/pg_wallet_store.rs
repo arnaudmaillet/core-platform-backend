@@ -6,13 +6,16 @@
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use postgres_storage::{StorageError, TransactionManager};
-use sqlx::{PgConnection, PgPool};
+use sqlx::{PgConnection, PgPool, Postgres};
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::application::port::{ClaimOutcome, ClaimResult, TransactionCursor, WalletStore};
+use crate::application::port::{
+    ClaimOutcome, ClaimResult, GemSpend, PackOutcome, SpendOutcome, TransactionCursor, WalletStore,
+};
 use crate::domain::{
-    AccountId, ClaimDecision, ClaimPolicy, Currency, IdempotencyKey, Transaction, TransactionKind, Wallet,
+    AccountId, ClaimDecision, ClaimPolicy, Currency, IdempotencyKey, PackDecision, StakePackPolicy, Transaction,
+    TransactionKind, Wallet,
 };
 use crate::error::WalletError;
 
@@ -36,6 +39,55 @@ impl PgWalletStore {
     fn pool(&self, account: &AccountId) -> Result<&PgPool, WalletError> {
         self.tx.pool_for(&account.as_uuid()).map_err(WalletError::Storage)
     }
+
+    /// A transaction on the account's shard, the wallet opened if needed and
+    /// its row locked.
+    async fn locked(
+        &self,
+        account: &AccountId,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<(sqlx::Transaction<'static, Postgres>, Wallet), WalletError> {
+        let mut tx = self.pool(account)?.begin().await.map_err(storage)?;
+        ensure_open(&mut tx, account, starter_gems, now).await?;
+        let wallet = read_wallet(&mut tx, account, true).await?;
+        Ok((tx, wallet))
+    }
+}
+
+/// The delta a key already moved, if it was used.
+async fn replayed(conn: &mut PgConnection, account: &AccountId, key: &IdempotencyKey) -> Result<Option<i64>, WalletError> {
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT delta FROM wallet_transactions WHERE account_id = $1 AND idempotency_key = $2")
+            .bind(account.as_uuid())
+            .bind(key.as_str())
+            .fetch_optional(conn)
+            .await
+            .map_err(storage)?;
+    Ok(row.map(|(delta,)| delta))
+}
+
+/// Writes a wallet's gems side (and its stake shots).
+async fn write_gems(conn: &mut PgConnection, wallet: &Wallet, now: DateTime<Utc>) -> Result<(), WalletError> {
+    sqlx::query("UPDATE wallets SET gems = $2, gems_spent = $3, stake_shots = $4, updated_at = $5 WHERE account_id = $1")
+        .bind(wallet.account.as_uuid())
+        .bind(wallet.gems)
+        .bind(wallet.gems_spent)
+        .bind(wallet.stake_shots)
+        .bind(now)
+        .execute(conn)
+        .await
+        .map_err(storage)?;
+    Ok(())
+}
+
+/// A movement for the ledger.
+struct Movement<'a> {
+    currency:      Currency,
+    delta:         i64,
+    balance_after: i64,
+    kind:          TransactionKind,
+    ref_id:        Option<&'a str>,
 }
 
 type WalletRow = (
@@ -94,42 +146,37 @@ async fn ensure_open(
     .rows_affected()
         == 1;
     if opened && starter_gems > 0 {
-        record(
-            conn,
-            account,
-            Currency::Gems,
-            starter_gems,
-            starter_gems,
-            TransactionKind::StarterGift,
-            &IdempotencyKey::system(STARTER_KEY),
-            now,
-        )
-        .await?;
+        let gift = Movement {
+            currency:      Currency::Gems,
+            delta:         starter_gems,
+            balance_after: starter_gems,
+            kind:          TransactionKind::StarterGift,
+            ref_id:        None,
+        };
+        record(conn, account, gift, &IdempotencyKey::system(STARTER_KEY), now).await?;
     }
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn record(
     conn: &mut PgConnection,
     account: &AccountId,
-    currency: Currency,
-    delta: i64,
-    balance_after: i64,
-    kind: TransactionKind,
+    movement: Movement<'_>,
     key: &IdempotencyKey,
     now: DateTime<Utc>,
 ) -> Result<(), WalletError> {
     sqlx::query(
-        "INSERT INTO wallet_transactions (id, account_id, currency, delta, balance_after, kind, idempotency_key, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        "INSERT INTO wallet_transactions \
+         (id, account_id, currency, delta, balance_after, kind, ref_id, idempotency_key, created_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(Uuid::now_v7())
     .bind(account.as_uuid())
-    .bind(currency.as_str())
-    .bind(delta)
-    .bind(balance_after)
-    .bind(kind.as_str())
+    .bind(movement.currency.as_str())
+    .bind(movement.delta)
+    .bind(movement.balance_after)
+    .bind(movement.kind.as_str())
+    .bind(movement.ref_id)
     .bind(key.as_str())
     .bind(now)
     .execute(conn)
@@ -167,19 +214,10 @@ impl WalletStore for PgWalletStore {
         starter_gems: i64,
         now: DateTime<Utc>,
     ) -> Result<ClaimResult, WalletError> {
-        let mut tx = self.pool(account)?.begin().await.map_err(storage)?;
-        ensure_open(&mut tx, account, starter_gems, now).await?;
-        let mut wallet = read_wallet(&mut tx, account, true).await?;
+        let (mut tx, mut wallet) = self.locked(account, starter_gems, now).await?;
 
         // A key already used: its first award, nothing new.
-        let replay: Option<(i64,)> =
-            sqlx::query_as("SELECT delta FROM wallet_transactions WHERE account_id = $1 AND idempotency_key = $2")
-                .bind(account.as_uuid())
-                .bind(key.as_str())
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(storage)?;
-        if let Some((delta,)) = replay {
+        if let Some(delta) = replayed(&mut tx, account, key).await? {
             tx.commit().await.map_err(storage)?;
             let awarded = i32::try_from(delta).map_err(|_| WalletError::LedgerInconsistent { reason: format!("claim of {delta}") })?;
             return Ok(ClaimResult { outcome: ClaimOutcome::Claimed, awarded, wallet });
@@ -202,8 +240,14 @@ impl WalletStore for PgWalletStore {
                 .execute(&mut *tx)
                 .await
                 .map_err(storage)?;
-                record(&mut tx, account, Currency::Points, i64::from(awarded), wallet.points, TransactionKind::Claim, key, now)
-                    .await?;
+                let movement = Movement {
+                    currency:      Currency::Points,
+                    delta:         i64::from(awarded),
+                    balance_after: wallet.points,
+                    kind:          TransactionKind::Claim,
+                    ref_id:        None,
+                };
+                record(&mut tx, account, movement, key, now).await?;
                 (ClaimOutcome::Claimed, awarded)
             }
             ClaimDecision::TooEarly { .. } => (ClaimOutcome::TooEarly, 0),
@@ -211,6 +255,72 @@ impl WalletStore for PgWalletStore {
         };
         tx.commit().await.map_err(storage)?;
         Ok(ClaimResult { outcome, awarded, wallet })
+    }
+
+    #[instrument(name = "wallet.buy_stake_pack", skip(self, key, policy))]
+    async fn buy_stake_pack(
+        &self,
+        account: &AccountId,
+        key: &IdempotencyKey,
+        policy: &StakePackPolicy,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<(PackOutcome, Wallet), WalletError> {
+        let (mut tx, mut wallet) = self.locked(account, starter_gems, now).await?;
+        let outcome = if replayed(&mut tx, account, key).await?.is_some() {
+            PackOutcome::Bought
+        } else {
+            match wallet.decide_stake_pack(policy) {
+                PackDecision::Buy => {
+                    wallet.apply_stake_pack(policy);
+                    write_gems(&mut tx, &wallet, now).await?;
+                    let movement = Movement {
+                        currency:      Currency::Gems,
+                        delta:         -policy.price_gems,
+                        balance_after: wallet.gems,
+                        kind:          TransactionKind::StakePack,
+                        ref_id:        None,
+                    };
+                    record(&mut tx, account, movement, key, now).await?;
+                    PackOutcome::Bought
+                }
+                PackDecision::StillActive => PackOutcome::StillActive,
+                PackDecision::InsufficientGems => PackOutcome::InsufficientGems,
+            }
+        };
+        tx.commit().await.map_err(storage)?;
+        Ok((outcome, wallet))
+    }
+
+    #[instrument(name = "wallet.spend_gems", skip(self, key))]
+    async fn spend_gems(
+        &self,
+        account: &AccountId,
+        key: &IdempotencyKey,
+        spend: &GemSpend,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<(SpendOutcome, Wallet), WalletError> {
+        let (mut tx, mut wallet) = self.locked(account, starter_gems, now).await?;
+        let outcome = if replayed(&mut tx, account, key).await?.is_some() {
+            SpendOutcome::Spent
+        } else if wallet.can_spend_gems(spend.amount) {
+            wallet.spend_gems(spend.amount);
+            write_gems(&mut tx, &wallet, now).await?;
+            let movement = Movement {
+                currency:      Currency::Gems,
+                delta:         -spend.amount,
+                balance_after: wallet.gems,
+                kind:          spend.kind,
+                ref_id:        spend.ref_id.as_deref(),
+            };
+            record(&mut tx, account, movement, key, now).await?;
+            SpendOutcome::Spent
+        } else {
+            SpendOutcome::InsufficientGems
+        };
+        tx.commit().await.map_err(storage)?;
+        Ok((outcome, wallet))
     }
 
     #[instrument(name = "wallet.history", skip(self))]
@@ -221,8 +331,8 @@ impl WalletStore for PgWalletStore {
         after: Option<TransactionCursor>,
         limit: usize,
     ) -> Result<Vec<Transaction>, WalletError> {
-        let rows: Vec<(Uuid, String, i64, i64, String, DateTime<Utc>)> = sqlx::query_as(
-            "SELECT id, currency, delta, balance_after, kind, created_at FROM wallet_transactions \
+        let rows: Vec<(Uuid, String, i64, i64, String, Option<String>, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT id, currency, delta, balance_after, kind, ref_id, created_at FROM wallet_transactions \
              WHERE account_id = $1 AND ($2::text IS NULL OR currency = $2) \
                AND ($3::timestamptz IS NULL OR (created_at, id) < ($3, $4)) \
              ORDER BY created_at DESC, id DESC LIMIT $5",
@@ -236,7 +346,7 @@ impl WalletStore for PgWalletStore {
         .await
         .map_err(storage)?;
         rows.into_iter()
-            .map(|(id, currency, delta, balance_after, kind, created_at)| {
+            .map(|(id, currency, delta, balance_after, kind, ref_id, created_at)| {
                 Ok(Transaction {
                     id,
                     account: *account,
@@ -245,6 +355,7 @@ impl WalletStore for PgWalletStore {
                     delta,
                     balance_after,
                     kind: TransactionKind::parse(&kind),
+                    ref_id,
                     created_at,
                 })
             })
