@@ -34,6 +34,8 @@ pub struct SetInteractionSettingsHandler {
     repo:      Arc<dyn ProfileRepository>,
     cache:     Arc<dyn ProfileCache>,
     publisher: Arc<dyn EventPublisher>,
+    /// Supervision floors (#670): a setting below its floor is refused.
+    floors:    Option<Arc<dyn crate::application::port::SupervisionFloors>>,
 }
 
 impl SetInteractionSettingsHandler {
@@ -42,7 +44,13 @@ impl SetInteractionSettingsHandler {
         cache: Arc<dyn ProfileCache>,
         publisher: Arc<dyn EventPublisher>,
     ) -> Self {
-        Self { repo, cache, publisher }
+        Self { repo, cache, publisher, floors: None }
+    }
+
+    /// Enforces supervision floors (#670).
+    pub fn with_floors(mut self, floors: Arc<dyn crate::application::port::SupervisionFloors>) -> Self {
+        self.floors = Some(floors);
+        self
     }
 }
 
@@ -66,6 +74,12 @@ impl CommandHandler<SetInteractionSettingsCommand> for SetInteractionSettingsHan
             limit: current.limit,
             ..cmd.settings
         };
+        if let Some(floors) = &self.floors
+            && let Some(floor) = floors.get(&profile.account_id()).await?
+            && !floor.allows_interaction(&settings)
+        {
+            return Err(ProfileError::SupervisionLocked { setting: "who may message or comment".into() });
+        }
         if !profile.set_interaction_settings(settings, envelope.correlation_id)? {
             return Ok(());
         }

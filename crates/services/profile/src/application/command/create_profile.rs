@@ -53,11 +53,19 @@ pub struct CreateProfileHandler {
     repo: Arc<dyn ProfileRepository>,
     cache: Arc<dyn ProfileCache>,
     publisher: Arc<dyn EventPublisher>,
+    /// Supervision floors (#670): a supervised teen's new profile is born at them.
+    floors: Option<Arc<dyn crate::application::port::SupervisionFloors>>,
 }
 
 impl CreateProfileHandler {
     pub fn new(repo: Arc<dyn ProfileRepository>, cache: Arc<dyn ProfileCache>, publisher: Arc<dyn EventPublisher>) -> Self {
-        Self { repo, cache, publisher }
+        Self { repo, cache, publisher, floors: None }
+    }
+
+    /// Applies supervision floors to new profiles (#670).
+    pub fn with_floors(mut self, floors: Arc<dyn crate::application::port::SupervisionFloors>) -> Self {
+        self.floors = Some(floors);
+        self
     }
 }
 
@@ -80,6 +88,11 @@ impl CommandHandler<CreateProfileCommand> for CreateProfileHandler {
             return Err(ProfileError::HandleAlreadyTaken { handle: handle.as_str().to_owned() });
         }
 
+        // A supervised teen's new profile is born at the floors (#670).
+        let floor = match &self.floors {
+            Some(floors) => floors.get(&account_id).await?.unwrap_or_default(),
+            None => crate::domain::value_object::SupervisionFloor::default(),
+        };
         let mut profile = Profile::create(ProfileCreateParams {
             account_id,
             handle: handle.clone(),
@@ -89,10 +102,10 @@ impl CommandHandler<CreateProfileCommand> for CreateProfileHandler {
             banner_url,
             profile_kind,
             locale,
-            visibility: if cmd.minor { ProfileVisibility::Private } else { ProfileVisibility::Public },
-            interaction: if cmd.minor { InteractionSettings::teen() } else { InteractionSettings::default() },
+            visibility: floor.tighten_visibility(if cmd.minor { ProfileVisibility::Private } else { ProfileVisibility::Public }),
+            interaction: floor.tighten_interaction(if cmd.minor { InteractionSettings::teen() } else { InteractionSettings::default() }),
             location: if cmd.minor { LocationSettings::teen() } else { LocationSettings::default() },
-            discovery: if cmd.minor { DiscoverySettings::teen() } else { DiscoverySettings::default() },
+            discovery: floor.tighten_discovery(if cmd.minor { DiscoverySettings::teen() } else { DiscoverySettings::default() }),
             feed: if cmd.minor { FeedSettings::teen() } else { FeedSettings::default() },
             correlation_id: envelope.correlation_id,
         });

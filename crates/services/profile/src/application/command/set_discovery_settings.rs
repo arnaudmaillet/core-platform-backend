@@ -53,6 +53,8 @@ pub struct SetDiscoverySettingsHandler {
     repo:      Arc<dyn ProfileRepository>,
     cache:     Arc<dyn ProfileCache>,
     publisher: Arc<dyn EventPublisher>,
+    /// Supervision floors (#670): a setting below its floor is refused.
+    floors:    Option<Arc<dyn crate::application::port::SupervisionFloors>>,
 }
 
 impl SetDiscoverySettingsHandler {
@@ -61,7 +63,13 @@ impl SetDiscoverySettingsHandler {
         cache: Arc<dyn ProfileCache>,
         publisher: Arc<dyn EventPublisher>,
     ) -> Self {
-        Self { repo, cache, publisher }
+        Self { repo, cache, publisher, floors: None }
+    }
+
+    /// Enforces supervision floors (#670).
+    pub fn with_floors(mut self, floors: Arc<dyn crate::application::port::SupervisionFloors>) -> Self {
+        self.floors = Some(floors);
+        self
     }
 }
 
@@ -86,6 +94,12 @@ impl CommandHandler<SetDiscoverySettingsCommand> for SetDiscoverySettingsHandler
                 field:   "in_suggestions".to_owned(),
                 message: "a holder under 18 does not appear in suggestions".to_owned(),
             });
+        }
+        if let Some(floors) = &self.floors
+            && let Some(floor) = floors.get(&profile.account_id()).await?
+            && !floor.allows_discovery(&settings)
+        {
+            return Err(ProfileError::SupervisionLocked { setting: "being found in search".into() });
         }
         if !profile.set_discovery_settings(settings, envelope.correlation_id)? {
             return Ok(());

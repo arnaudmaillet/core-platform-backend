@@ -19,6 +19,7 @@ use thiserror::Error;
 /// | PRF-5003 | NoPendingVerification    | 409  | Low      | No        |
 /// | PRF-5004 | VerificationDocumentInvalid | 422 | Low     | No        |
 /// | PRF-5005 | MediaUnavailable         | 503  | Medium   | **Yes**   |
+/// | PRF-5006 | SupervisionLocked        | 422  | Low      | No        |
 /// | PRF-9001 | DomainViolation          | 422  | Medium   | No        |
 /// | PRF-9002 | InvalidProfileId         | 422  | Low      | No        |
 /// | PRF-9003 | InvalidHandle            | 422  | Low      | No        |
@@ -86,6 +87,11 @@ pub enum ProfileError {
     #[error("'{id}' is not one of your private documents")]
     VerificationDocumentInvalid { id: String },
 
+    /// A supervisor's floor holds this setting (#670): the teen may only be
+    /// stricter.
+    #[error("{setting} is set by your supervisor")]
+    SupervisionLocked { setting: String },
+
     /// media could not check a private document (#777).
     #[error("media is unavailable: {reason}")]
     MediaUnavailable { reason: String },
@@ -144,6 +150,7 @@ impl AppError for ProfileError {
             ProfileError::NoPendingVerification  => "PRF-5003",
             ProfileError::VerificationDocumentInvalid { .. } => "PRF-5004",
             ProfileError::MediaUnavailable { .. } => "PRF-5005",
+            ProfileError::SupervisionLocked { .. } => "PRF-5006",
 
             ProfileError::DomainViolation { .. }  => "PRF-9001",
             ProfileError::InvalidProfileId(_)     => "PRF-9002",
@@ -231,6 +238,7 @@ impl AppError for ProfileError {
             ProfileError::NoPendingVerification         => "There is no verification request under review.",
             ProfileError::VerificationDocumentInvalid { .. } => "A document is not one of your uploaded private documents.",
             ProfileError::MediaUnavailable { .. }       => "Your documents cannot be checked right now. Please retry.",
+            ProfileError::SupervisionLocked { .. }      => "Your supervisor set this; you can only make it stricter.",
             ProfileError::TooManyCustomLinks { .. }     => "You may have at most 5 custom links.",
             _                                           => "A domain constraint was violated.",
         }

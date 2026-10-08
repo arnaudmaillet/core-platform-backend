@@ -32,11 +32,19 @@ pub struct SetVisibilityHandler {
     repo: Arc<dyn ProfileRepository>,
     cache: Arc<dyn ProfileCache>,
     publisher: Arc<dyn EventPublisher>,
+    /// Supervision floors (#670): a setting below its floor is refused.
+    floors:    Option<Arc<dyn crate::application::port::SupervisionFloors>>,
 }
 
 impl SetVisibilityHandler {
     pub fn new(repo: Arc<dyn ProfileRepository>, cache: Arc<dyn ProfileCache>, publisher: Arc<dyn EventPublisher>) -> Self {
-        Self { repo, cache, publisher }
+        Self { repo, cache, publisher, floors: None }
+    }
+
+    /// Enforces supervision floors (#670).
+    pub fn with_floors(mut self, floors: Arc<dyn crate::application::port::SupervisionFloors>) -> Self {
+        self.floors = Some(floors);
+        self
     }
 }
 
@@ -54,6 +62,12 @@ impl CommandHandler<SetVisibilityCommand> for SetVisibilityHandler {
             .await?
             .ok_or_else(|| ProfileError::ProfileNotFound { id: cmd.profile_id.clone() })?;
 
+        if let Some(floors) = &self.floors
+            && let Some(floor) = floors.get(&profile.account_id()).await?
+            && !floor.allows_visibility(visibility)
+        {
+            return Err(ProfileError::SupervisionLocked { setting: "visibility".into() });
+        }
         profile.set_visibility(visibility, envelope.correlation_id)?;
         self.repo.save(&profile).await?;
 
