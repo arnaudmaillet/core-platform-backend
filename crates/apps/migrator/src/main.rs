@@ -66,6 +66,7 @@ fn services() -> Vec<ServiceMigrations> {
         ServiceMigrations { name: "moderation",         store: Store::Postgres, dir: include_dir!("$CARGO_MANIFEST_DIR/../../services/moderation/migrations/postgres") },
         ServiceMigrations { name: "auth",               store: Store::Postgres, dir: include_dir!("$CARGO_MANIFEST_DIR/../../services/auth/migrations") },
         ServiceMigrations { name: "media",              store: Store::Postgres, dir: include_dir!("$CARGO_MANIFEST_DIR/../../services/media/migrations") },
+        ServiceMigrations { name: "wallet",             store: Store::Postgres, dir: include_dir!("$CARGO_MANIFEST_DIR/../../services/wallet/migrations") },
     ]
 }
 

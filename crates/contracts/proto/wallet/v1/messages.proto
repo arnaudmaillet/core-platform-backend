@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+package wallet.v1;
+
+import "google/protobuf/timestamp.proto";
+import "wallet/v1/enums.proto";
+
+option java_package = "com.coreplatform.wallet.v1";
+option java_multiple_files = true;
+option go_package = "github.com/coreplatform/wallet/v1;walletv1";
+
+// An account's wallet: both balances and everything the claim surface needs,
+// computed by the server's clock (the app never decides eligibility itself).
+message Wallet {
+    string                    account_id      = 1;
+    // Spendable points (likes), never negative.
+    int64                     points          = 2;
+    // Spendable gems, never negative.
+    int64                     gems            = 3;
+    int64                     points_earned   = 4;
+    int64                     points_spent    = 5;
+    int64                     gems_earned     = 6;
+    int64                     gems_spent      = 7;
+
+    // ── The hourly claim ─────────────────────────────────────────────────────
+    bool                      claim_available = 8;
+    // When the next claim opens; unset while `claim_available`.
+    google.protobuf.Timestamp next_claim_at   = 9;
+    // What the next claim pays (streak multiplier and daily cap applied).
+    int32                     claim_amount    = 10;
+    // Points claimed in the current UTC day.
+    int32                     claimed_today   = 11;
+    int32                     daily_claim_cap = 12;
+    // Consecutive UTC days with a claim; 0 once the chain has lapsed.
+    int32                     streak_days     = 13;
+    google.protobuf.Timestamp last_claim_at   = 14;
+
+    // Shots left in the ×100 stake pack; 0 = none.
+    int32                     stake_shots     = 15;
+}
+
+message GetWalletRequest {
+    string account_id = 1;
+}
+
+message ClaimRewardRequest {
+    string account_id      = 1;
+    // Client-generated (8–64 characters: letters, digits, `-`, `_`). A retry
+    // with the same key credits at most once and answers CLAIMED again.
+    string idempotency_key = 2;
+}
+
+message ClaimRewardResponse {
+    ClaimOutcome outcome = 1;
+    // Points credited by this claim; 0 unless CLAIMED.
+    int32        awarded = 2;
+    // The wallet after the call.
+    Wallet       wallet  = 3;
+}
+
+// One movement of one balance.
+message WalletTransaction {
+    string                    transaction_id = 1;
+    Currency                  currency       = 2;
+    // Positive: credited; negative: spent.
+    int64                     delta          = 3;
+    // That balance right after.
+    int64                     balance_after  = 4;
+    TransactionKind           kind           = 5;
+    google.protobuf.Timestamp created_at     = 6;
+}
+
+message ListWalletTransactionsRequest {
+    string   account_id = 1;
+    // Unspecified: both currencies.
+    Currency currency   = 2;
+    // Default 50, capped at 100.
+    int32    page_size  = 3;
+    // Opaque cursor from a previous response; empty for the first page.
+    string   page_token = 4;
+}
+
+message ListWalletTransactionsResponse {
+    // Newest first.
+    repeated WalletTransaction transactions    = 1;
+    // Empty on the last page.
+    string                     next_page_token = 2;
+}

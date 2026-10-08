@@ -123,6 +123,7 @@ jobs:
           - { pkg: search,         feature: integration-search }
           - { pkg: social-graph,   feature: integration-social-graph }
           - { pkg: timeline,       feature: integration-timeline }
+          - { pkg: wallet,         feature: integration-wallet }
           - { pkg: postgres,       feature: integration-postgres }
           - { pkg: traffic-redis,  feature: integration-traffic-redis }
           - { pkg: transport,      feature: integration-kafka }

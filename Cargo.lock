@@ -7296,6 +7296,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "wallet"
+version = "0.1.0"
+dependencies = [
+ "account",
+ "anyhow",
+ "async-trait",
+ "auth-context",
+ "chrono",
+ "error",
+ "http",
+ "postgres",
+ "prost-types",
+ "serde",
+ "serde_json",
+ "service-runtime",
+ "sqlx",
+ "test-support",
+ "thiserror 2.0.18",
+ "tokio",
+ "tonic 0.14.6",
+ "tonic-reflection",
+ "tracing",
+ "transport",
+ "uuid",
+ "wallet-api",
+]
+
+[[package]]
+name = "wallet-api"
+version = "0.1.0"
+dependencies = [
+ "prost 0.14.4",
+ "prost-types",
+ "tonic 0.14.6",
+ "tonic-prost",
+ "tonic-prost-build",
+]
+
+[[package]]
+name = "wallet-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "service-runtime",
+ "tokio",
+ "wallet",
+]
+
+[[package]]
 name = "want"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

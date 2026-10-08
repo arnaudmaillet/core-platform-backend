@@ -1,0 +1,15 @@
+[package]
+name                 = "wallet-server"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+description = "Deployable binary for the wallet service — a thin entrypoint over the shared fleet runtime."
+
+[dependencies]
+wallet          = { workspace = true }
+service-runtime = { workspace = true }
+
+tokio  = { workspace = true }
+anyhow = { workspace = true }
