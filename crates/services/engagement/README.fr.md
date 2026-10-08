@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 29dfc76cec134bb4de0aad935e79325301aa4105f0bcb66483dd90f6dfc34033
+  source_sha256: 241ad02a10f2a399a753de344994150476d570686e5908a4f53166739b389237
   translated_at: 2026-10-08
   status: complete
 ---
@@ -68,12 +68,21 @@ READ PATH: GetPostEngagement / BatchGetLikes ─► Redis (counters + likes, ~0.
 ```
 
 **Disposition des clés Redis :** `engagement:{post:<id>}:likes` / `engagement:{post:<id>}:likers` (et
-`{comment:<id>}` : la somme de la cible et le total de chaque compte, sous le hash tag de la cible) ;
+`{comment:<id>}` : la somme de la cible et le total de chaque compte, sous le hash tag de la cible ;
+les likers expirent 30 jours après le dernier like de la cible, la somme jamais) ;
 `engagement:views/shares/comments:{post}` (compteurs). **ScyllaDB :** `engagement.likes_by_target` (qui a
 liké une cible, PK `((target_kind, target_id), account_id)`), `engagement.likes_by_account` (ce qu'un
 compte a liké, PK `((account_id), target_kind, target_id)`), `engagement.post_interaction_counters`
 (table de compteurs approximative). La migration 0006 supprime les tables des réactions,
 `post_reactions` et `reactions_by_profile`.
+
+**Likers expirés.** Un hash de likers qui contient tous les likers porte `_complete` (posé au premier
+like de la cible, ou à la fin d'une réhydratation). Une fois expiré, un compte absent d'un nouveau hash
+est **inconnu**, pas zéro : le consommateur des mises réhydrate alors tout le hash depuis
+`likes_by_target` (`HSETNX`, un total Redis plus récent l'emporte ; likers anonymes compris) avant
+d'appliquer, si bien que la mise suivante n'ajoute que la différence. Une lecture se rabat sur la ligne
+du lecteur dans `likes_by_target` et lance une réhydratation en arrière-plan (`:rehydrating`, `SET NX`
+pendant 60 s).
 
 **Ce qu'un compte a liké (#653, #665).** `ListLikesByAccount(account_id, limit, page_token)` est **mesh
 uniquement** (jamais sur l'edge) : l'export de données RGPD lit chaque post et commentaire que le compte

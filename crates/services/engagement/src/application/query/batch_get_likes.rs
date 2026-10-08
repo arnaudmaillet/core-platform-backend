@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use cqrs::{Envelope, Query, QueryHandler};
 
-use crate::application::port::{LikeStore, LikeVisibility};
+use crate::application::port::{LikeLedger, LikeStore, LikeVisibility};
 use crate::application::query::get_post_engagement::{read_likes, EngagementReader, LikeSummary};
 use crate::domain::value_object::LikeTarget;
 use crate::error::EngagementError;
@@ -26,8 +26,10 @@ impl Query for BatchGetLikesQuery {
 }
 
 pub struct BatchGetLikesHandler {
-    pub like_store: Arc<dyn LikeStore>,
-    pub likes:      Option<Arc<dyn LikeVisibility>>,
+    pub like_store:  Arc<dyn LikeStore>,
+    /// The durable copy, for a reader whose likes expired from Redis.
+    pub like_ledger: Option<Arc<dyn LikeLedger>>,
+    pub likes:       Option<Arc<dyn LikeVisibility>>,
 }
 
 impl QueryHandler<BatchGetLikesQuery> for BatchGetLikesHandler {
@@ -41,6 +43,6 @@ impl QueryHandler<BatchGetLikesQuery> for BatchGetLikesHandler {
                 message: format!("at most {MAX_TARGETS} per call"),
             });
         }
-        read_likes(self.like_store.as_ref(), self.likes.as_ref(), &query.reader, query.account.as_deref(), &query.targets).await
+        read_likes(&self.like_store, self.like_ledger.as_ref(), self.likes.as_ref(), &query.reader, query.account.as_deref(), &query.targets).await
     }
 }

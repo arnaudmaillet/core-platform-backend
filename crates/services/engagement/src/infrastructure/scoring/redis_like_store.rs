@@ -1,27 +1,77 @@
 //! [`LikeStore`] on Redis (#665). Per target, a hash of each liking account's
 //! total and the target's sum, under the target's hash tag
 //! (`engagement:{post:<id>}:…`) so one script updates both.
+//!
+//! The likers hash expires [`LIKERS_TTL_SECS`] after the last like; the count
+//! never does. A hash that holds every liker carries `_complete`: it is set
+//! when the hash starts with the target's first like (count 0) or when a
+//! rehydration from the durable copy finished. In a hash without it — one
+//! started again after it expired — a missing account is unknown, not zero.
 
 use async_trait::async_trait;
 use fred::interfaces::{HashesInterface, KeysInterface, LuaInterface};
+use fred::types::{Expiration, SetOptions};
 use redis_storage::RedisClient;
 
 use crate::application::port::LikeStore;
 use crate::domain::value_object::LikeTarget;
 use crate::error::EngagementError;
 
-/// KEYS[1] the target's like count, KEYS[2] its likers' totals; ARGV account,
-/// total. A total no larger than the one held changes nothing: redeliveries
-/// and late events are absorbed. Returns the likes added.
-const APPLY_TOTAL_SCRIPT: &str = r#"
-local old = tonumber(redis.call('HGET', KEYS[2], ARGV[1]) or '0')
-local new = tonumber(ARGV[2])
-if new <= old then
-  return 0
+/// A target's likers are kept 30 days after its last like.
+pub const LIKERS_TTL_SECS: i64 = 30 * 24 * 3600;
+
+/// Shared by the scripts: is `account` (ARGV[1]) known on the target?
+/// Returns its total, 0 when the hash is whole or the target never had a like,
+/// or false when unknown.
+const KNOWN: &str = r#"
+local function known(count_key, likers_key, account)
+  local held = redis.call('HGET', likers_key, account)
+  if held then return tonumber(held) end
+  if redis.call('HEXISTS', likers_key, '_complete') == 1 then return 0 end
+  if tonumber(redis.call('GET', count_key) or '0') == 0 then return 0 end
+  return false
 end
-redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
-redis.call('INCRBY', KEYS[1], new - old)
-return new - old
+"#;
+
+/// KEYS[1] the target's like count, KEYS[2] its likers' totals; ARGV account,
+/// total, ttl. A total no larger than the one held changes nothing:
+/// redeliveries and late events are absorbed. Returns the likes added, or -1
+/// when the account is unknown (rehydrate first).
+const APPLY_TOTAL_SCRIPT: &str = r#"
+local old = known(KEYS[1], KEYS[2], ARGV[1])
+if old == false then return -1 end
+if redis.call('EXISTS', KEYS[2]) == 0 and tonumber(redis.call('GET', KEYS[1]) or '0') == 0 then
+  redis.call('HSET', KEYS[2], '_complete', '1')
+end
+local new = tonumber(ARGV[2])
+local added = 0
+if new > old then
+  redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
+  redis.call('INCRBY', KEYS[1], new - old)
+  added = new - old
+end
+redis.call('EXPIRE', KEYS[2], ARGV[3])
+return added
+"#;
+
+/// KEYS as above; ARGV account. The account's total, or -1 when unknown.
+const MINE_SCRIPT: &str = r#"
+local mine = known(KEYS[1], KEYS[2], ARGV[1])
+if mine == false then return -1 end
+return mine
+"#;
+
+/// KEYS[1] the likers; ARGV ttl, complete ('1'/'0'), then account, total
+/// pairs. Keeps any total already held (newer than the durable copy's).
+const REHYDRATE_SCRIPT: &str = r#"
+for i = 3, #ARGV, 2 do
+  redis.call('HSETNX', KEYS[1], ARGV[i], ARGV[i + 1])
+end
+if ARGV[2] == '1' then
+  redis.call('HSET', KEYS[1], '_complete', '1')
+end
+redis.call('EXPIRE', KEYS[1], ARGV[1])
+return 0
 "#;
 
 fn count_key(target: &LikeTarget) -> String {
@@ -30,6 +80,14 @@ fn count_key(target: &LikeTarget) -> String {
 
 fn likers_key(target: &LikeTarget) -> String {
     format!("engagement:{{{target}}}:likers")
+}
+
+fn rehydrating_key(target: &LikeTarget) -> String {
+    format!("engagement:{{{target}}}:rehydrating")
+}
+
+fn script(body: &str) -> String {
+    format!("{KNOWN}{body}")
 }
 
 fn fred_err(e: fred::error::Error) -> EngagementError {
@@ -48,12 +106,18 @@ impl RedisLikeStore {
 
 #[async_trait]
 impl LikeStore for RedisLikeStore {
-    async fn apply_total(&self, target: &LikeTarget, account: &str, total: i64) -> Result<i64, EngagementError> {
-        self.client
+    async fn apply_total(&self, target: &LikeTarget, account: &str, total: i64) -> Result<Option<i64>, EngagementError> {
+        let added: i64 = self
+            .client
             .inner
-            .eval(APPLY_TOTAL_SCRIPT, vec![count_key(target), likers_key(target)], vec![account.to_owned(), total.to_string()])
+            .eval(
+                script(APPLY_TOTAL_SCRIPT),
+                vec![count_key(target), likers_key(target)],
+                vec![account.to_owned(), total.to_string(), LIKERS_TTL_SECS.to_string()],
+            )
             .await
-            .map_err(fred_err)
+            .map_err(fred_err)?;
+        Ok((added >= 0).then_some(added))
     }
 
     async fn counts(&self, targets: &[LikeTarget]) -> Result<Vec<i64>, EngagementError> {
@@ -67,15 +131,15 @@ impl LikeStore for RedisLikeStore {
         Ok(counts.into_iter().map(|c| c.unwrap_or(0)).collect())
     }
 
-    async fn mine(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<i64>, EngagementError> {
+    async fn mine(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<Option<i64>>, EngagementError> {
         let reads = targets.iter().map(|t| {
             let client = self.client.clone();
-            let key = likers_key(t);
+            let keys = vec![count_key(t), likers_key(t)];
             let account = account.to_owned();
-            async move { client.inner.hget::<Option<i64>, _, _>(key, account).await }
+            async move { client.inner.eval::<i64, _, _, _>(script(MINE_SCRIPT), keys, vec![account]).await }
         });
         let mine = futures::future::try_join_all(reads).await.map_err(fred_err)?;
-        Ok(mine.into_iter().map(|m| m.unwrap_or(0)).collect())
+        Ok(mine.into_iter().map(|m| (m >= 0).then_some(m)).collect())
     }
 
     async fn forget(&self, account: &str, targets: &[LikeTarget]) -> Result<(), EngagementError> {
@@ -88,6 +152,26 @@ impl LikeStore for RedisLikeStore {
         futures::future::try_join_all(deletes).await.map_err(fred_err)?;
         Ok(())
     }
+
+    async fn rehydrate(&self, target: &LikeTarget, likers: &[(String, i64)], complete: bool) -> Result<(), EngagementError> {
+        let mut args = vec![LIKERS_TTL_SECS.to_string(), if complete { "1" } else { "0" }.to_owned()];
+        for (account, total) in likers {
+            args.push(account.clone());
+            args.push(total.to_string());
+        }
+        self.client.inner.eval::<i64, _, _, _>(REHYDRATE_SCRIPT, vec![likers_key(target)], args).await.map_err(fred_err)?;
+        Ok(())
+    }
+
+    async fn claim_rehydration(&self, target: &LikeTarget) -> Result<bool, EngagementError> {
+        let claimed: Option<String> = self
+            .client
+            .inner
+            .set(rehydrating_key(target), "1", Some(Expiration::EX(60)), Some(SetOptions::NX), false)
+            .await
+            .map_err(fred_err)?;
+        Ok(claimed.is_some())
+    }
 }
 
 #[cfg(test)]
@@ -99,5 +183,8 @@ mod tests {
         let t = LikeTarget::Comment("c1".into());
         assert_eq!(count_key(&t), "engagement:{comment:c1}:likes");
         assert_eq!(likers_key(&t), "engagement:{comment:c1}:likers");
+        assert_eq!(rehydrating_key(&t), "engagement:{comment:c1}:rehydrating");
+        // The field marking a whole hash, never an account id (UUIDs).
+        assert!(KNOWN.contains("'_complete'") && REHYDRATE_SCRIPT.contains("'_complete'"));
     }
 }

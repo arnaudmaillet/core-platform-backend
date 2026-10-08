@@ -155,7 +155,7 @@ async fn apply_stake(
         tracing::info!(target = %target, "stake of a deleted account dropped");
         return Ok(());
     }
-    likes.apply_total(target, account, total).await?;
+    crate::application::likes::apply_total(likes, ledger, target, account, total).await?;
     ledger.record(target, account, profile, total, at_micros).await?;
     if let Some(erased_at) = ledger.erased_at(account).await? {
         likes.forget(account, std::slice::from_ref(target)).await?;
@@ -209,13 +209,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_deleted_accounts_late_stake_is_dropped() {
-        use crate::application::erasure::fakes::Likes;
+        use crate::application::fakes::Likes;
         let likes = Likes::default();
         let post = LikeTarget::Post("p1".into());
         apply_stake(&likes, &likes, &post, "a", "liker", 4, 1).await.unwrap();
         likes.mark_erased("gone", 1).await.unwrap();
         apply_stake(&likes, &likes, &post, "gone", "liker", 9, 1).await.unwrap();
         assert_eq!(likes.counts(std::slice::from_ref(&post)).await.unwrap(), vec![4]);
-        assert_eq!(likes.mine("gone", &[post]).await.unwrap(), vec![0]);
+        assert_eq!(likes.mine("gone", &[post]).await.unwrap(), vec![Some(0)]);
     }
 }

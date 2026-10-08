@@ -53,12 +53,20 @@ READ PATH: GetPostEngagement / BatchGetLikes ─► Redis (counters + likes, ~0.
 ```
 
 **Redis key layout:** `engagement:{post:<id>}:likes` / `engagement:{post:<id>}:likers` (and
-`{comment:<id>}`: the target's sum and each account's total, under the target's hash tag);
+`{comment:<id>}`: the target's sum and each account's total, under the target's hash tag; the likers
+expire 30 days after the target's last like, the sum never);
 `engagement:views/shares/comments:{post}` (counters). **ScyllaDB:** `engagement.likes_by_target` (who
 liked a target, PK `((target_kind, target_id), account_id)`), `engagement.likes_by_account` (what an
 account liked, PK `((account_id), target_kind, target_id)`), `engagement.post_interaction_counters`
 (approximate counter table). Migration 0006 drops the reactions' `post_reactions` and
 `reactions_by_profile`.
+
+**Expired likers.** A likers hash that holds every liker carries `_complete` (set on the target's first
+like, or when a rehydration finished). Once it expired, an account missing from a new one is
+**unknown**, not zero: the stake consumer then rehydrates the whole hash from `likes_by_target`
+(`HSETNX`, so a newer Redis total wins; anonymous likers included) before applying, so the next stake
+adds only the difference. A read falls back to the reader's row in `likes_by_target` and starts one
+background rehydration (`:rehydrating`, `SET NX` for 60 s).
 
 **What an account liked (#653, #665).** `ListLikesByAccount(account_id, limit, page_token)` is **mesh
 only** (never on the edge): the GDPR data export reads each post and comment the account liked, its

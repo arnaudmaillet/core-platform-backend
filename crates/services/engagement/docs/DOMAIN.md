@@ -141,5 +141,6 @@ engagement publishes no events. It consumes:
 
 - **Classification:** Core — direct content interaction.
 - **Volatility:** low — likes follow the wallet's stake contract.
-- **Known modeling debt:** the likers hash has no TTL (a rehydration floor from Scylla is planned).
+- **Known modeling debt:** a read of a target whose likers expired costs one Scylla read per member
+  reader until its background rehydration lands.
 - **Deferred capabilities:** like settlement (gems earned from likes, #665).
