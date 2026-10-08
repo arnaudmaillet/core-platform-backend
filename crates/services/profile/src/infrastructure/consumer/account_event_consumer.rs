@@ -11,8 +11,9 @@ use transport::kafka::consumer::{
 };
 use transport::kafka::producer::KafkaProducerHandle;
 
+use crate::domain::value_object::SupervisionFloor;
 use crate::application::command::{
-    EraseAccountVerificationsCommand, HideAccountProfilesCommand, RestoreAccountProfilesCommand,
+    ApplySupervisionFloorCommand, EraseAccountVerificationsCommand, HideAccountProfilesCommand, RestoreAccountProfilesCommand,
 };
 
 /// Kafka event payload published by the account service on `account.v1.events`:
@@ -28,6 +29,15 @@ struct AccountEvent {
     account_id: String,
     #[serde(default)]
     reason: Option<String>,
+    // supervision_limits_set (#670): the floors.
+    #[serde(default)]
+    private_account: bool,
+    #[serde(default)]
+    messages: Option<String>,
+    #[serde(default)]
+    comments: Option<String>,
+    #[serde(default)]
+    hidden_from_search: bool,
 }
 
 /// Runs the account event consumer on the shared at-least-once runner.
@@ -91,6 +101,26 @@ async fn process_event<CB: CommandBus>(command_bus: &CB, event: &AccountEvent) -
                 }
                 (outcome, _) => outcome,
             }
+        }
+
+        // Family supervision floors (#670): tighten and lock the teen's
+        // profiles; lifted, unlock them.
+        "supervision_limits_set" => {
+            let audience = |s: &Option<String>| s.as_deref().and_then(crate::infrastructure::persistence::scylla_supervision_floors::audience_from);
+            let cmd = ApplySupervisionFloorCommand {
+                account_id: event.account_id.clone(),
+                floor: Some(SupervisionFloor {
+                    private_account:    event.private_account,
+                    messages:           audience(&event.messages),
+                    comments:           audience(&event.comments),
+                    hidden_from_search: event.hidden_from_search,
+                }),
+            };
+            command_bus.dispatch(Envelope::new(correlation_id, cmd)).await
+        }
+        "supervision_limits_cleared" => {
+            let cmd = ApplySupervisionFloorCommand { account_id: event.account_id.clone(), floor: None };
+            command_bus.dispatch(Envelope::new(correlation_id, cmd)).await
         }
 
         "account_activated" => {
@@ -167,5 +197,36 @@ mod tests {
         }));
         assert_eq!(activated.kind, "account_activated");
         assert_eq!(activated.account_id, id.to_string());
+    }
+
+    /// #670: the limits as account publishes them (its own types) give the
+    /// floors.
+    #[test]
+    fn supervision_limits_decode_into_floors() {
+        use account::domain::event::{SupervisionLimitsCleared, SupervisionLimitsSet};
+
+        let set = wire(AccountDomainEvent::SupervisionLimitsSet(SupervisionLimitsSet {
+            account_id: AccountId::new(),
+            set_by: AccountId::new(),
+            private_account: true,
+            messages: Some("mutuals".into()),
+            comments: None,
+            hidden_from_search: true,
+            daily_minutes: Some(60),
+            teen_profile_ids: vec![],
+            occurred_at: Utc::now(),
+            correlation_id: Uuid::now_v7(),
+        }));
+        assert_eq!(set.kind, "supervision_limits_set");
+        assert!(set.private_account && set.hidden_from_search);
+        assert_eq!((set.messages.as_deref(), set.comments.as_deref()), (Some("mutuals"), None));
+
+        let cleared = wire(AccountDomainEvent::SupervisionLimitsCleared(SupervisionLimitsCleared {
+            account_id: AccountId::new(),
+            teen_profile_ids: vec![],
+            occurred_at: Utc::now(),
+            correlation_id: Uuid::now_v7(),
+        }));
+        assert_eq!(cleared.kind, "supervision_limits_cleared");
     }
 }

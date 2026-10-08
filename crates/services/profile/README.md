@@ -194,6 +194,7 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 | PRF-5003 | `NoPendingVerification` (nothing to decide) | 409 | No |
 | PRF-5004 | `VerificationDocumentInvalid` (a private document is not the requester's own ready one) | 422 | No |
 | PRF-5005 | `MediaUnavailable` (media could not check a private document) | 503 | **Yes** |
+| PRF-5006 | `SupervisionLocked` (a supervisor's floor holds this setting: only stricter is allowed, #670) | 422 | No |
 | PRF-9001–9010 | domain / parse / validation | 422 | No |
 | SDB-* / RDB-* | storage (delegated) | varies | varies |
 
@@ -213,7 +214,7 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
-| `account.v1.events` | `profile-account-events` | account's `DomainEvent` (tagged on `type`, snake_case): `account_suspended` / `account_deactivated` / `account_deleted` → hide **every** profile of the account (`HideAccountProfiles`, the event type is the masking reason); `account_activated` → restore the profiles the suspension or deactivation hid (`RestoreAccountProfiles`; a content-policy hide stays). Idempotent per profile, so a redelivery finishes a partial walk. `account_deleted` then erases the account's verification requests (`EraseAccountVerifications`, #777; idempotent). Other types = no-op commit | DLQ `account.v1.events.dlq` |
+| `account.v1.events` | `profile-account-events` | account's `DomainEvent` (tagged on `type`, snake_case): `account_suspended` / `account_deactivated` / `account_deleted` → hide **every** profile of the account (`HideAccountProfiles`, the event type is the masking reason); `account_activated` → restore the profiles the suspension or deactivation hid (`RestoreAccountProfiles`; a content-policy hide stays). Idempotent per profile, so a redelivery finishes a partial walk. `account_deleted` then erases the account's verification requests (`EraseAccountVerifications`, #777; idempotent). **Family supervision (#670):** `supervision_limits_set` keeps the account's floors (`profile.supervision_floors`, migration 0016) and tightens **every** profile of the account to them at once — private; message / comment audiences at least the floor (everyone < followers < mutuals < no one); handle search, suggestions and finding by phone / email off (a QR code / link still works) — one saved change at a time, announced as usual; `supervision_limits_cleared` drops the floors (the settings keep their values, unlocked). While floors hold, `SetVisibility` / `SetInteractionSettings` / `SetDiscoverySettings` refuse anything looser (`PRF-5006`); stricter, and what no floor covers, stay the holder's; a profile the account creates meanwhile is born at the floors. Idempotent. Other types = no-op commit | DLQ `account.v1.events.dlq` |
 | `social-graph.author_tier_changed` | `profile-author-tier` | denormalize the author tier onto the profile (`SetProfileTier`) → re-emit on `profile.v1.events` (`ProfileTierChanged`); idempotent on unchanged tier | DLQ `social-graph.author_tier_changed.dlq` |
 
 > **Runtime contract (mandatory):** the account-event consumer runs under `run_consumer` — manual

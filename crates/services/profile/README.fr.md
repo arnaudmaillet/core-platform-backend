@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 5bfb9e0b0e592f8bfe5c55bc67aadc7f2d74fd0c24c65b686a394c2919168af4
+  source_sha256: c8ef6bc31d89b40c6b927a0298f91e4957127769b66298967c63b94cd1e16c75
   translated_at: 2026-10-08
   status: complete
 ---
@@ -209,6 +209,7 @@ réactivement).
 | PRF-5003 | `NoPendingVerification` (rien à décider) | 409 | No |
 | PRF-5004 | `VerificationDocumentInvalid` (un document privé n'est pas un document prêt du demandeur) | 422 | No |
 | PRF-5005 | `MediaUnavailable` (media n'a pas pu vérifier un document privé) | 503 | **Yes** |
+| PRF-5006 | `SupervisionLocked` (un plancher posé par un superviseur tient ce réglage : seul plus strict est permis, #670) | 422 | No |
 | PRF-9001–9010 | domain / parse / validation | 422 | No |
 | SDB-* / RDB-* | storage (delegated) | varies | varies |
 
@@ -228,7 +229,7 @@ réactivement).
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
-| `account.v1.events` | `profile-account-events` | le `DomainEvent` d'account (tagué sur `type`, snake_case) : `account_suspended` / `account_deactivated` / `account_deleted` → masquer **chaque** profil du compte (`HideAccountProfiles`, le type d'événement sert de raison de masquage) ; `account_activated` → restaurer les profils masqués par la suspension ou la désactivation (`RestoreAccountProfiles` ; un masquage pour violation de politique reste). Idempotent par profil : une redélivrance termine un parcours partiel. `account_deleted` efface ensuite les demandes de vérification du compte (`EraseAccountVerifications`, #777 ; idempotent). Autres types = commit no-op | DLQ `account.v1.events.dlq` |
+| `account.v1.events` | `profile-account-events` | le `DomainEvent` d'account (tagué sur `type`, snake_case) : `account_suspended` / `account_deactivated` / `account_deleted` → masquer **chaque** profil du compte (`HideAccountProfiles`, le type d'événement sert de raison de masquage) ; `account_activated` → restaurer les profils masqués par la suspension ou la désactivation (`RestoreAccountProfiles` ; un masquage pour violation de politique reste). Idempotent par profil : une redélivrance termine un parcours partiel. `account_deleted` efface ensuite les demandes de vérification du compte (`EraseAccountVerifications`, #777 ; idempotent). **Supervision familiale (#670) :** `supervision_limits_set` garde les planchers du compte (`profile.supervision_floors`, migration 0016) et resserre **chaque** profil du compte à ces planchers tout de suite — privé ; audiences des messages / commentaires au moins au plancher (tout le monde < abonnés < mutuels < personne) ; recherche par pseudo, suggestions et recherche par téléphone / e-mail coupées (un QR code / lien fonctionne toujours) — une modification enregistrée à la fois, annoncée comme d'habitude ; `supervision_limits_cleared` supprime les planchers (les réglages gardent leurs valeurs, déverrouillés). Tant que des planchers tiennent, `SetVisibility` / `SetInteractionSettings` / `SetDiscoverySettings` refusent tout ce qui est plus permissif (`PRF-5006`) ; plus strict, et ce qu'aucun plancher ne couvre, restent au titulaire ; un profil que le compte crée entre-temps naît à ces planchers. Idempotent. Autres types = commit no-op | DLQ `account.v1.events.dlq` |
 | `social-graph.author_tier_changed` | `profile-author-tier` | dénormalise le palier auteur sur le profil (`SetProfileTier`) → ré-émet sur `profile.v1.events` (`ProfileTierChanged`) ; idempotent si palier inchangé | DLQ `social-graph.author_tier_changed.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** le consommateur d'événements compte s'exécute sous

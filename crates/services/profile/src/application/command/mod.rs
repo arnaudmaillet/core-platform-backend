@@ -13,6 +13,7 @@ pub mod set_feed_settings;
 pub mod set_location_settings;
 pub mod set_tab_settings;
 pub mod set_visibility;
+pub mod supervision_floor;
 pub mod update_avatar;
 pub mod update_banner;
 pub mod update_profile;
@@ -33,6 +34,7 @@ pub use set_discovery_settings::{SetDiscoverySettingsCommand, SetDiscoverySettin
 pub use set_tab_settings::{SetTabSettingsCommand, SetTabSettingsHandler};
 pub use set_feed_settings::{SetFeedSettingsCommand, SetFeedSettingsHandler};
 pub use set_location_settings::{SetLocationSettingsCommand, SetLocationSettingsHandler};
+pub use supervision_floor::{ApplySupervisionFloorCommand, ApplySupervisionFloorHandler};
 pub use set_visibility::{SetVisibilityCommand, SetVisibilityHandler};
 pub use update_avatar::{UpdateAvatarCommand, UpdateAvatarHandler};
 pub use update_banner::{UpdateBannerCommand, UpdateBannerHandler};

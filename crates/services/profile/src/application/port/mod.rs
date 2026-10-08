@@ -11,3 +11,5 @@ pub use private_documents::PrivateDocuments;
 pub use verification_store::VerificationStore;
 pub mod share_token_store;
 pub use share_token_store::{is_share_token, new_share_token, ShareTokenStore};
+pub mod supervision_floors;
+pub use supervision_floors::SupervisionFloors;

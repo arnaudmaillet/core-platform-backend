@@ -105,6 +105,9 @@ impl App {
         let verifications: Arc<dyn VerificationStore> = Arc::new(
             crate::infrastructure::persistence::ScyllaVerificationStore::new(Arc::clone(&scylla_client)),
         );
+        let floors: Arc<dyn crate::application::port::SupervisionFloors> = Arc::new(
+            crate::infrastructure::persistence::ScyllaSupervisionFloors::new(Arc::clone(&scylla_client)),
+        );
         let share_tokens: Arc<dyn crate::application::port::ShareTokenStore> = Arc::new(
             crate::infrastructure::persistence::ScyllaShareTokenStore::new(Arc::clone(&scylla_client)),
         );
@@ -139,11 +142,10 @@ impl App {
                     publisher:     Arc::clone(&publisher),
                     verifications: Arc::clone(&verifications),
                 })?
-                .register::<CreateProfileCommand, _>(CreateProfileHandler::new(
-                    Arc::clone(&repository),
-                    Arc::clone(&cache),
-                    Arc::clone(&publisher),
-                ))?
+                .register::<CreateProfileCommand, _>(
+                    CreateProfileHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))
+                        .with_floors(Arc::clone(&floors)),
+                )?
                 .register::<UpdateProfileCommand, _>(UpdateProfileHandler::new(
                     Arc::clone(&repository),
                     Arc::clone(&cache),
@@ -164,16 +166,22 @@ impl App {
                     Arc::clone(&cache),
                     Arc::clone(&publisher),
                 ))?
-                .register::<SetVisibilityCommand, _>(SetVisibilityHandler::new(
-                    Arc::clone(&repository),
-                    Arc::clone(&cache),
-                    Arc::clone(&publisher),
-                ))?
-                .register::<SetInteractionSettingsCommand, _>(SetInteractionSettingsHandler::new(
-                    Arc::clone(&repository),
-                    Arc::clone(&cache),
-                    Arc::clone(&publisher),
-                ))?
+                .register::<SetVisibilityCommand, _>(
+                    SetVisibilityHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))
+                        .with_floors(Arc::clone(&floors)),
+                )?
+                .register::<crate::application::command::ApplySupervisionFloorCommand, _>(
+                    crate::application::command::ApplySupervisionFloorHandler {
+                        repo:      Arc::clone(&repository),
+                        cache:     Arc::clone(&cache),
+                        publisher: Arc::clone(&publisher),
+                        floors:    Arc::clone(&floors),
+                    },
+                )?
+                .register::<SetInteractionSettingsCommand, _>(
+                    SetInteractionSettingsHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))
+                        .with_floors(Arc::clone(&floors)),
+                )?
                 .register::<SetInteractionLimitCommand, _>(SetInteractionLimitHandler {
                     repo:      Arc::clone(&repository),
                     cache:     Arc::clone(&cache),
@@ -200,11 +208,10 @@ impl App {
                     Arc::clone(&publisher),
                 ))?
                 .register::<crate::application::query::RotateShareTokenCommand, _>(share_token_handler())?
-                .register::<SetDiscoverySettingsCommand, _>(SetDiscoverySettingsHandler::new(
-                    Arc::clone(&repository),
-                    Arc::clone(&cache),
-                    Arc::clone(&publisher),
-                ))?
+                .register::<SetDiscoverySettingsCommand, _>(
+                    SetDiscoverySettingsHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))
+                        .with_floors(Arc::clone(&floors)),
+                )?
                 .register::<VerifyProfileCommand, _>(VerifyProfileHandler::new(
                     Arc::clone(&repository),
                     Arc::clone(&cache),
