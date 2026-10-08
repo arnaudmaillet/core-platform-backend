@@ -32,6 +32,17 @@ service WalletService {
     // unknown age.
     rpc BuyStakePack(BuyStakePackRequest) returns (BuyStakePackResponse);
 
+    // Commits a batch of likes on a post or a comment (#665: a like is a
+    // point): taps are batched on the device and sent when the viewer moves
+    // on, the app goes to the background, or 10 s after the last tap, then
+    // retried with the same key until answered (24 h at most). The server
+    // rechecks everything at commit: a plain batch is clamped to the target's
+    // room (250 points per account and target), the balance and the hour's
+    // room (1,000 points); a shot is whole or refused. Never on one's own
+    // content. Final: no unlike. Answered in-band (StakeOutcome). Edge: the
+    // caller's account and one of its profiles.
+    rpc Stake(StakeRequest) returns (StakeResponse);
+
     // Mesh only: another service spends an account's gems (geo-discovery's
     // country unlocks). The caller checks the spender may spend gems (an
     // adult); the wallet records the movement. Idempotent per key.

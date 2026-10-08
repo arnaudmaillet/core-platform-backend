@@ -5,7 +5,11 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::domain::{AccountId, ClaimPolicy, Currency, IdempotencyKey, StakePackPolicy, Transaction, TransactionKind, Wallet};
+use crate::domain::event::WalletEvent;
+use crate::domain::{
+    AccountId, ClaimPolicy, Currency, IdempotencyKey, StakeAsk, StakePackPolicy, StakePolicy, StakeTarget, Transaction,
+    TransactionKind, Wallet,
+};
 use crate::error::WalletError;
 
 /// How a claim ended.
@@ -46,6 +50,54 @@ pub struct GemSpend {
     pub amount: i64,
     pub kind:   TransactionKind,
     pub ref_id: Option<String>,
+}
+
+/// How a batch of likes ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StakeOutcome {
+    Staked,
+    InsufficientBalance,
+    TargetNotStakeable,
+    RateLimited,
+    TargetCapReached,
+    NoStakeShots,
+    ShotDoesNotFit,
+    Expired,
+    OwnContent,
+}
+
+/// A batch's result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StakeResult {
+    pub outcome:  StakeOutcome,
+    /// Points moved (the first result's, on a replayed key).
+    pub spent:    i64,
+    /// The account's points on the target now.
+    pub my_total: i64,
+    /// This batch was the account's first on the target.
+    pub first:    bool,
+    pub wallet:   Wallet,
+}
+
+/// Who wrote a post or comment, and whether it can take likes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetInfo {
+    pub author_profile_id: String,
+    /// Published and not taken down.
+    pub stakeable:         bool,
+}
+
+/// The posts and comments likes land on (post, comment over the mesh).
+#[async_trait]
+pub trait TargetDirectory: Send + Sync + 'static {
+    /// `None`: no such post or comment.
+    async fn target(&self, target: &StakeTarget) -> Result<Option<TargetInfo>, WalletError>;
+}
+
+/// Announces the wallet's events (`wallet.v1.events`).
+#[async_trait]
+pub trait EventPublisher: Send + Sync + 'static {
+    async fn publish(&self, event: &WalletEvent) -> Result<(), WalletError>;
 }
 
 /// Where a history page starts (exclusive): the last row of the previous one.
@@ -96,6 +148,27 @@ pub trait WalletStore: Send + Sync + 'static {
         starter_gems: i64,
         now: DateTime<Utc>,
     ) -> Result<(SpendOutcome, Wallet), WalletError>;
+
+    /// Stakes a batch (the wallet opened if needed, then locked): a key
+    /// already used answers its first result; otherwise the policy decides
+    /// from what the account put on the target and staked in the last hour
+    /// (since `hour_ago`), and a stake moves the points, the target's total
+    /// and its ledger row together.
+    #[allow(clippy::too_many_arguments)]
+    async fn stake(
+        &self,
+        account: &AccountId,
+        key: &IdempotencyKey,
+        target: &StakeTarget,
+        ask: StakeAsk,
+        policy: &StakePolicy,
+        pack: &StakePackPolicy,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<StakeResult, WalletError>;
+
+    /// The account's points on `target`.
+    async fn staked_on(&self, account: &AccountId, target: &StakeTarget) -> Result<i64, WalletError>;
 
     /// The account's transactions, newest first, after `after`.
     async fn history(

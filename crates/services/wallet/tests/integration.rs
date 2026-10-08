@@ -13,10 +13,13 @@ use postgres_storage::TransactionManager;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use wallet::application::port::{ClaimOutcome, GemSpend, PackOutcome, SpendOutcome, WalletStore};
+use wallet::application::port::{ClaimOutcome, GemSpend, PackOutcome, SpendOutcome, StakeOutcome, WalletStore};
 use wallet::application::Wallets;
 use wallet::config::WalletConfig;
-use wallet::domain::{AccountId, ClaimPolicy, Currency, IdempotencyKey, Operation, StakePackPolicy, TransactionKind};
+use wallet::domain::{
+    AccountId, ClaimPolicy, Currency, IdempotencyKey, Operation, StakeAsk, StakePackPolicy, StakePolicy, StakeTarget,
+    TransactionKind,
+};
 use wallet::infrastructure::persistence::PgWalletStore;
 
 const MIGRATIONS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
@@ -165,4 +168,103 @@ async fn concurrent_pack_buys_charge_once_and_gem_spends_are_recorded() {
         (TransactionKind::StarterGift, 100, None),
     ]);
     assert_reconciles(&pool, &account).await;
+}
+
+/// Funds `account` with `points` (direct, for the test: claims are hourly).
+async fn fund(pool: &PgPool, store: &PgWalletStore, account: &AccountId, points: i64) {
+    store.open(account, 0, Utc::now()).await.unwrap();
+    sqlx::query("UPDATE wallets SET points = $2, points_earned = $2 WHERE account_id = $1")
+        .bind(account.as_uuid())
+        .bind(points)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO wallet_transactions (id, account_id, currency, delta, balance_after, kind, idempotency_key, created_at) \
+         VALUES ($1, $2, 'points', $3, $3, 'claim', 'sys:test-funds', now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(account.as_uuid())
+    .bind(points)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn concurrent_batches_never_pass_the_targets_room_and_replays_spend_nothing() {
+    let pool = pool().await;
+    let store = store(&pool);
+    let account = AccountId::from_uuid(Uuid::now_v7());
+    fund(&pool, &store, &account, 2_000).await;
+    let target = StakeTarget::Post(format!("post-{}", Uuid::now_v7()));
+    let batches = (0..8).map(|_| {
+        let (store, target) = (Arc::clone(&store), target.clone());
+        tokio::spawn(async move {
+            let key = IdempotencyKey::for_operation(Operation::Stake, &Uuid::now_v7().to_string()).unwrap();
+            store
+                .stake(&account, &key, &target, StakeAsk::Points(40), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
+                .await
+                .unwrap()
+        })
+    });
+    let mut spent = 0;
+    let mut firsts = 0;
+    for batch in batches {
+        let result = batch.await.unwrap();
+        spent += result.spent;
+        firsts += i32::from(result.first);
+    }
+    assert_eq!(spent, 250, "8 × 40 asked, the room is 250");
+    assert_eq!(firsts, 1, "one first batch");
+    assert_eq!(store.staked_on(&account, &target).await.unwrap(), 250);
+
+    let key = IdempotencyKey::for_operation(Operation::Stake, "replayed-batch").unwrap();
+    let other = StakeTarget::Comment(format!("comment-{}", Uuid::now_v7()));
+    let first = store
+        .stake(&account, &key, &other, StakeAsk::Points(12), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
+        .await
+        .unwrap();
+    let replay = store
+        .stake(&account, &key, &other, StakeAsk::Points(12), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
+        .await
+        .unwrap();
+    assert_eq!((first.spent, first.first), (12, true));
+    assert_eq!((replay.outcome, replay.spent, replay.first, replay.my_total), (StakeOutcome::Staked, 12, true, 12));
+    assert_eq!(replay.wallet.points, 2_000 - 250 - 12, "spent once");
+    assert_reconciles(&pool, &account).await;
+
+    let history = store.history(&account, Some(Currency::Points), None, 1).await.unwrap();
+    assert_eq!((history[0].kind, history[0].ref_id.clone()), (TransactionKind::Stake, Some(other.reference())));
+}
+
+#[tokio::test]
+async fn the_hour_caps_stakes_and_erasure_clears_them() {
+    let pool = pool().await;
+    let store = store(&pool);
+    let account = AccountId::from_uuid(Uuid::now_v7());
+    fund(&pool, &store, &account, 5_000).await;
+    let mut total = 0;
+    for i in 0..5 {
+        let key = IdempotencyKey::for_operation(Operation::Stake, &format!("hour-batch-{i}")).unwrap();
+        let target = StakeTarget::Post(format!("p{i}-{}", Uuid::now_v7()));
+        let result = store
+            .stake(&account, &key, &target, StakeAsk::Points(250), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
+            .await
+            .unwrap();
+        total += result.spent;
+        if i == 4 {
+            assert_eq!(result.outcome, StakeOutcome::RateLimited, "1,000 points an hour");
+        }
+    }
+    assert_eq!(total, 1_000);
+    assert_reconciles(&pool, &account).await;
+
+    assert!(store.erase(&account).await.unwrap());
+    let (left,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM stakes WHERE account_id = $1")
+        .bind(account.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
 }

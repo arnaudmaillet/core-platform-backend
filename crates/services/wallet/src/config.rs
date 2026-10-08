@@ -3,7 +3,7 @@
 
 use chrono::TimeDelta;
 
-use crate::domain::{ClaimPolicy, StakePackPolicy};
+use crate::domain::{ClaimPolicy, StakePackPolicy, StakePolicy};
 
 /// Gems every wallet opens with.
 pub const DEFAULT_STARTER_GEMS: i64 = 100;
@@ -13,11 +13,13 @@ pub struct WalletConfig {
     pub claim:        ClaimPolicy,
     pub starter_gems: i64,
     pub stake_pack:   StakePackPolicy,
+    /// Likes (#665 part 3).
+    pub stakes:       StakePolicy,
 }
 
 impl Default for WalletConfig {
     fn default() -> Self {
-        Self { claim: ClaimPolicy::default(), starter_gems: DEFAULT_STARTER_GEMS, stake_pack: StakePackPolicy::default() }
+        Self { claim: ClaimPolicy::default(), starter_gems: DEFAULT_STARTER_GEMS, stake_pack: StakePackPolicy::default(), stakes: StakePolicy::default() }
     }
 }
 
@@ -25,8 +27,9 @@ impl WalletConfig {
     /// `WALLET_CLAIM_INTERVAL_SECS` (3600), `WALLET_CLAIM_BASE_POINTS` (25),
     /// `WALLET_DAILY_CLAIM_CAP` (200), `WALLET_STARTER_GEMS` (100),
     /// `WALLET_STAKE_PACK_SHOTS` (3), `WALLET_STAKE_PACK_PRICE` (50 gems),
-    /// `WALLET_POINTS_PER_SHOT` (100). An unparsable or negative value keeps
-    /// the default.
+    /// `WALLET_POINTS_PER_SHOT` (100), `WALLET_STAKE_TARGET_CAP` (250),
+    /// `WALLET_STAKE_HOURLY_CAP` (1000), `WALLET_STAKE_MAX_BATCH_AGE_SECS`
+    /// (86400). An unparsable or negative value keeps the default.
     pub fn from_env() -> Self {
         Self::from_lookup(|name| std::env::var(name).ok())
     }
@@ -53,6 +56,14 @@ impl WalletConfig {
                 points_per_shot: number("WALLET_POINTS_PER_SHOT")
                     .and_then(|v| i32::try_from(v).ok())
                     .unwrap_or(defaults.stake_pack.points_per_shot),
+            },
+            stakes: StakePolicy {
+                per_target_cap: number("WALLET_STAKE_TARGET_CAP").unwrap_or(defaults.stakes.per_target_cap),
+                hourly_cap:     number("WALLET_STAKE_HOURLY_CAP").unwrap_or(defaults.stakes.hourly_cap),
+                max_batch_age:  number("WALLET_STAKE_MAX_BATCH_AGE_SECS")
+                    .map(TimeDelta::seconds)
+                    .unwrap_or(defaults.stakes.max_batch_age),
+                max_clock_skew: defaults.stakes.max_clock_skew,
             },
         }
     }

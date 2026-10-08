@@ -33,6 +33,10 @@ impl WalletService for WalletServiceHandler {
         self.buy_stake_pack(request).await
     }
 
+    async fn stake(&self, request: Request<proto::StakeRequest>) -> Result<Response<proto::StakeResponse>, Status> {
+        self.stake(request).await
+    }
+
     async fn spend_gems(&self, request: Request<proto::SpendGemsRequest>) -> Result<Response<proto::SpendGemsResponse>, Status> {
         self.spend_gems(request).await
     }

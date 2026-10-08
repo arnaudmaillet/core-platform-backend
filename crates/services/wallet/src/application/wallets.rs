@@ -6,9 +6,16 @@ use std::sync::Arc;
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use uuid::Uuid;
 
-use crate::application::port::{ClaimOutcome, GemSpend, PackOutcome, SpendOutcome, TransactionCursor, WalletStore};
+use crate::application::port::{
+    ClaimOutcome, EventPublisher, GemSpend, PackOutcome, SpendOutcome, StakeOutcome, StakeResult, TargetDirectory,
+    TransactionCursor, WalletStore,
+};
 use crate::config::WalletConfig;
-use crate::domain::{AccountId, ClaimState, Currency, IdempotencyKey, Operation, Transaction, TransactionKind, Wallet};
+use crate::domain::event::{StakeCommitted, WalletEvent};
+use crate::domain::{
+    AccountId, ClaimState, Currency, IdempotencyKey, Operation, StakeAsk, StakeTarget, Transaction, TransactionKind,
+    Wallet,
+};
 use crate::error::WalletError;
 
 /// Default and maximum history page sizes.
@@ -37,6 +44,26 @@ pub struct PackReply {
     pub view:    WalletView,
 }
 
+/// A batch of likes' answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StakeReply {
+    pub outcome:  StakeOutcome,
+    pub spent:    i64,
+    pub my_total: i64,
+    pub view:     WalletView,
+}
+
+/// A batch of likes, as the app sends it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StakeBatch {
+    /// The profile that likes (one of the caller's).
+    pub profile_id:   String,
+    pub target:       StakeTarget,
+    pub ask:          StakeAsk,
+    pub key:          String,
+    pub first_tap_at: DateTime<Utc>,
+}
+
 /// Longest `ref_id` a spend may name.
 const MAX_REF_LEN: usize = 64;
 
@@ -48,13 +75,24 @@ pub struct HistoryPage {
 }
 
 pub struct Wallets {
-    store:  Arc<dyn WalletStore>,
-    config: WalletConfig,
+    store:     Arc<dyn WalletStore>,
+    config:    WalletConfig,
+    /// What likes land on (part 3); `None`: `WAL-6001`.
+    targets:   Option<Arc<dyn TargetDirectory>>,
+    /// Where stakes are announced; `None`: `WAL-6002`.
+    publisher: Option<Arc<dyn EventPublisher>>,
 }
 
 impl Wallets {
     pub fn new(store: Arc<dyn WalletStore>, config: WalletConfig) -> Self {
-        Self { store, config }
+        Self { store, config, targets: None, publisher: None }
+    }
+
+    /// Likes (#665 part 3): what they land on, and where they are announced.
+    pub fn with_stakes(mut self, targets: Arc<dyn TargetDirectory>, publisher: Arc<dyn EventPublisher>) -> Self {
+        self.targets = Some(targets);
+        self.publisher = Some(publisher);
+        self
     }
 
     /// The economy's terms (echoed to the app).
@@ -128,6 +166,79 @@ impl Wallets {
         Ok((outcome, wallet.gems))
     }
 
+    /// Commits a batch of likes. `own_profiles`: the caller's profiles (the
+    /// edge token's), whose content cannot be liked. A stake is announced on
+    /// every STAKED answer — a replayed batch announces again (at least once;
+    /// consumers dedup on the batch's key) — and a failed announcement fails
+    /// the call so the app retries the batch.
+    pub async fn stake(
+        &self,
+        account: &str,
+        batch: StakeBatch,
+        own_profiles: &[String],
+        now: DateTime<Utc>,
+    ) -> Result<StakeReply, WalletError> {
+        let account = AccountId::parse(account)?;
+        let key = IdempotencyKey::for_operation(Operation::Stake, &batch.key)?;
+        let target = batch.target.checked()?;
+        if let StakeAsk::Points(points) = batch.ask
+            && points <= 0
+        {
+            return Err(WalletError::InvalidSpend { reason: "a batch stakes at least 1 point".into() });
+        }
+        let now = ledger_time(now);
+        let refused = |outcome, wallet| StakeResult { outcome, spent: 0, my_total: 0, first: false, wallet };
+        let result = if self.config.stakes.expired(batch.first_tap_at, now)? {
+            refused(StakeOutcome::Expired, self.store.open(&account, self.config.starter_gems, now).await?)
+        } else {
+            let targets = self.targets.as_ref().ok_or_else(|| WalletError::PeerUnavailable {
+                service: "targets",
+                reason:  "not configured".into(),
+            })?;
+            match targets.target(&target).await? {
+                None => refused(StakeOutcome::TargetNotStakeable, self.store.open(&account, self.config.starter_gems, now).await?),
+                Some(info) if own_profiles.contains(&info.author_profile_id) => {
+                    refused(StakeOutcome::OwnContent, self.store.open(&account, self.config.starter_gems, now).await?)
+                }
+                Some(info) if !info.stakeable => {
+                    refused(StakeOutcome::TargetNotStakeable, self.store.open(&account, self.config.starter_gems, now).await?)
+                }
+                Some(info) => {
+                    let result = self
+                        .store
+                        .stake(&account, &key, &target, batch.ask, &self.config.stakes, &self.config.stake_pack, self.config.starter_gems, now)
+                        .await?;
+                    if result.outcome == StakeOutcome::Staked {
+                        let publisher = self.publisher.as_ref().ok_or_else(|| {
+                            WalletError::EventPublishFailed("no publisher configured".into())
+                        })?;
+                        publisher
+                            .publish(&WalletEvent::StakeCommitted(StakeCommitted {
+                                account_id:        account.to_string(),
+                                profile_id:        batch.profile_id.clone(),
+                                target_kind:       target.kind().to_owned(),
+                                target_id:         target.id().to_owned(),
+                                author_profile_id: info.author_profile_id,
+                                points:            result.spent,
+                                total:             result.my_total,
+                                first:             result.first,
+                                stake_key:         key.as_str().to_owned(),
+                                staked_at:         now,
+                            }))
+                            .await?;
+                    }
+                    result
+                }
+            }
+        };
+        let my_total = if result.outcome == StakeOutcome::Staked {
+            result.my_total
+        } else {
+            self.store.staked_on(&account, &target).await?
+        };
+        Ok(StakeReply { outcome: result.outcome, spent: result.spent, my_total, view: self.view(result.wallet, now) })
+    }
+
     /// One page of the account's history, newest first.
     pub async fn history(
         &self,
@@ -190,14 +301,19 @@ pub(crate) mod fakes {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::application::port::ClaimResult;
-    use crate::domain::{ClaimDecision, ClaimPolicy, PackDecision, StakePackPolicy, TransactionKind};
+    use crate::application::port::{ClaimResult, TargetInfo};
+    use crate::domain::event::WalletEvent;
+    use crate::domain::{
+        ClaimDecision, ClaimPolicy, PackDecision, StakeDecision, StakePackPolicy, StakePolicy, TransactionKind,
+    };
 
     type Movement = (Currency, i64, i64, TransactionKind, Option<String>);
 
     /// The ledger in memory, with the Postgres adapter's semantics.
     #[derive(Default)]
     pub struct MemoryStore {
+        /// (account, `post:<id>`) → (total, first key)
+        stakes:  Mutex<HashMap<(AccountId, String), (i64, String)>>,
         wallets: Mutex<HashMap<AccountId, Wallet>>,
         /// (transaction, idempotency key)
         ledger:  Mutex<Vec<(Transaction, String)>>,
@@ -310,6 +426,63 @@ pub(crate) mod fakes {
             Ok((SpendOutcome::Spent, wallet))
         }
 
+        async fn stake(
+            &self,
+            account: &AccountId,
+            key: &IdempotencyKey,
+            target: &StakeTarget,
+            ask: StakeAsk,
+            policy: &StakePolicy,
+            pack: &StakePackPolicy,
+            starter_gems: i64,
+            now: DateTime<Utc>,
+        ) -> Result<StakeResult, WalletError> {
+            let mut wallet = self.open_locked(account, starter_gems, now);
+            let slot = (*account, target.reference());
+            let before = self.stakes.lock().unwrap().get(&slot).cloned();
+            let on = before.as_ref().map_or(0, |(t, _)| *t);
+            if let Some(delta) = self.replayed(account, key) {
+                let first = before.is_some_and(|(_, k)| k == key.as_str());
+                return Ok(StakeResult { outcome: StakeOutcome::Staked, spent: -delta, my_total: on, first, wallet });
+            }
+            let last_hour: i64 = self
+                .ledger
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(t, _)| t.account == *account && t.kind == TransactionKind::Stake && t.created_at > now - TimeDelta::hours(1))
+                .map(|(t, _)| -t.delta)
+                .sum();
+            let outcome = match wallet.decide_stake(ask, on, last_hour, policy, pack) {
+                StakeDecision::Stake { points, shot } => {
+                    wallet.apply_stake(points, shot);
+                    let movement = (Currency::Points, -points, wallet.points, TransactionKind::Stake, Some(target.reference()));
+                    self.record(account, movement, key.as_str(), now);
+                    self.wallets.lock().unwrap().insert(*account, wallet.clone());
+                    let mut stakes = self.stakes.lock().unwrap();
+                    let entry = stakes.entry(slot).or_insert((0, key.as_str().to_owned()));
+                    entry.0 += points;
+                    return Ok(StakeResult {
+                        outcome: StakeOutcome::Staked,
+                        spent: points,
+                        my_total: entry.0,
+                        first: before.is_none(),
+                        wallet,
+                    });
+                }
+                StakeDecision::InsufficientBalance => StakeOutcome::InsufficientBalance,
+                StakeDecision::RateLimited => StakeOutcome::RateLimited,
+                StakeDecision::TargetCapReached => StakeOutcome::TargetCapReached,
+                StakeDecision::NoStakeShots => StakeOutcome::NoStakeShots,
+                StakeDecision::ShotDoesNotFit => StakeOutcome::ShotDoesNotFit,
+            };
+            Ok(StakeResult { outcome, spent: 0, my_total: on, first: false, wallet })
+        }
+
+        async fn staked_on(&self, account: &AccountId, target: &StakeTarget) -> Result<i64, WalletError> {
+            Ok(self.stakes.lock().unwrap().get(&(*account, target.reference())).map_or(0, |(t, _)| *t))
+        }
+
         async fn history(
             &self,
             account: &AccountId,
@@ -332,8 +505,43 @@ pub(crate) mod fakes {
         }
 
         async fn erase(&self, account: &AccountId) -> Result<bool, WalletError> {
+            self.stakes.lock().unwrap().retain(|(a, _), _| a != account);
             self.ledger.lock().unwrap().retain(|(t, _)| t.account != *account);
             Ok(self.wallets.lock().unwrap().remove(account).is_some())
+        }
+    }
+
+    /// Posts and comments by id: (author, stakeable).
+    #[derive(Default)]
+    pub struct MemTargets(pub Mutex<HashMap<String, (String, bool)>>);
+
+    #[async_trait]
+    impl TargetDirectory for MemTargets {
+        async fn target(&self, target: &StakeTarget) -> Result<Option<TargetInfo>, WalletError> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .get(target.id())
+                .map(|(author, stakeable)| TargetInfo { author_profile_id: author.clone(), stakeable: *stakeable }))
+        }
+    }
+
+    /// Records what is announced; `fail`: the broker is down.
+    #[derive(Default)]
+    pub struct MemPublisher {
+        pub events: Mutex<Vec<WalletEvent>>,
+        pub fail:   Mutex<bool>,
+    }
+
+    #[async_trait]
+    impl EventPublisher for MemPublisher {
+        async fn publish(&self, event: &WalletEvent) -> Result<(), WalletError> {
+            if *self.fail.lock().unwrap() {
+                return Err(WalletError::EventPublishFailed("down".into()));
+            }
+            self.events.lock().unwrap().push(event.clone());
+            Ok(())
         }
     }
 }
@@ -342,7 +550,7 @@ pub(crate) mod fakes {
 mod tests {
     use chrono::TimeZone;
 
-    use super::fakes::MemoryStore;
+    use super::fakes::{MemPublisher, MemTargets, MemoryStore};
     use super::*;
     use crate::domain::TransactionKind;
 
@@ -455,5 +663,102 @@ mod tests {
         w.claim(&account, &key(), at(8, 10)).await.unwrap();
         assert!(w.erase(&AccountId::parse(&account).unwrap()).await.unwrap());
         assert!(!w.erase(&AccountId::parse(&account).unwrap()).await.unwrap());
+    }
+
+    struct Likes {
+        wallets:   Wallets,
+        targets:   Arc<MemTargets>,
+        publisher: Arc<MemPublisher>,
+    }
+
+    fn likes() -> Likes {
+        let (targets, publisher) = (Arc::new(MemTargets::default()), Arc::new(MemPublisher::default()));
+        let wallets = Wallets::new(Arc::new(MemoryStore::default()), WalletConfig::default())
+            .with_stakes(Arc::clone(&targets) as _, Arc::clone(&publisher) as _);
+        targets.lock_insert("post-1", "author", true);
+        targets.lock_insert("gone", "author", false);
+        Likes { wallets, targets, publisher }
+    }
+
+    impl MemTargets {
+        fn lock_insert(&self, id: &str, author: &str, stakeable: bool) {
+            self.0.lock().unwrap().insert(id.to_owned(), (author.to_owned(), stakeable));
+        }
+    }
+
+    fn batch(target: &str, ask: StakeAsk, key: &str, first_tap_at: DateTime<Utc>) -> StakeBatch {
+        StakeBatch {
+            profile_id: "me-profile".into(),
+            target: StakeTarget::Post(target.into()),
+            ask,
+            key: key.into(),
+            first_tap_at,
+        }
+    }
+
+    /// An account with points: claims through a few days.
+    async fn funded(w: &Wallets, account: &str) {
+        for hour in 0..8 {
+            w.claim(account, &key(), at(8, hour)).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_batch_stakes_once_and_is_announced_each_time_it_is_answered() {
+        let l = likes();
+        let me = Uuid::now_v7().to_string();
+        funded(&l.wallets, &me).await;
+        let now = at(8, 10);
+        let k = key();
+        let staked = l.wallets.stake(&me, batch("post-1", StakeAsk::Points(30), &k, now), &[], now).await.unwrap();
+        assert_eq!((staked.outcome, staked.spent, staked.my_total, staked.view.wallet.points), (StakeOutcome::Staked, 30, 30, 170));
+        // The app's retry (lost answer): nothing more spent, announced again.
+        let replay = l.wallets.stake(&me, batch("post-1", StakeAsk::Points(30), &k, now), &[], now).await.unwrap();
+        assert_eq!((replay.spent, replay.my_total, replay.view.wallet.points), (30, 30, 170));
+        let events = l.publisher.events.lock().unwrap().clone();
+        assert_eq!(events.len(), 2);
+        let WalletEvent::StakeCommitted(e) = &events[0];
+        assert_eq!((e.points, e.total, e.first, e.author_profile_id.as_str()), (30, 30, true, "author"));
+        assert_eq!(events[0], events[1], "the same event: consumers dedup on its key");
+        let second = l.wallets.stake(&me, batch("post-1", StakeAsk::Points(5), &key(), now), &[], now).await.unwrap();
+        assert_eq!(second.my_total, 35);
+        let WalletEvent::StakeCommitted(e) = l.publisher.events.lock().unwrap()[2].clone();
+        assert!(!e.first, "only the first batch notifies");
+    }
+
+    #[tokio::test]
+    async fn own_content_gone_targets_and_old_batches_spend_nothing() {
+        let l = likes();
+        let me = Uuid::now_v7().to_string();
+        funded(&l.wallets, &me).await;
+        let now = at(8, 10);
+        let own = l.wallets.stake(&me, batch("post-1", StakeAsk::Points(1), &key(), now), &["author".into()], now).await.unwrap();
+        assert_eq!(own.outcome, StakeOutcome::OwnContent);
+        let gone = l.wallets.stake(&me, batch("gone", StakeAsk::Points(1), &key(), now), &[], now).await.unwrap();
+        assert_eq!(gone.outcome, StakeOutcome::TargetNotStakeable);
+        let unknown = l.wallets.stake(&me, batch("nope", StakeAsk::Points(1), &key(), now), &[], now).await.unwrap();
+        assert_eq!(unknown.outcome, StakeOutcome::TargetNotStakeable);
+        let old = l.wallets.stake(&me, batch("post-1", StakeAsk::Points(1), &key(), now - TimeDelta::hours(25)), &[], now).await.unwrap();
+        assert_eq!((old.outcome, old.view.wallet.points), (StakeOutcome::Expired, 200));
+        assert!(l.publisher.events.lock().unwrap().is_empty());
+        assert!(l.targets.0.lock().unwrap().contains_key("post-1"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_announcement_fails_the_call_and_the_retry_announces() {
+        let l = likes();
+        let me = Uuid::now_v7().to_string();
+        funded(&l.wallets, &me).await;
+        let now = at(8, 10);
+        let k = key();
+        *l.publisher.fail.lock().unwrap() = true;
+        assert!(matches!(
+            l.wallets.stake(&me, batch("post-1", StakeAsk::Points(10), &k, now), &[], now).await,
+            Err(WalletError::EventPublishFailed(_))
+        ));
+        *l.publisher.fail.lock().unwrap() = false;
+        let retry = l.wallets.stake(&me, batch("post-1", StakeAsk::Points(10), &k, now), &[], now).await.unwrap();
+        assert_eq!((retry.spent, retry.view.wallet.points), (10, 190), "spent once");
+        assert_eq!(l.publisher.events.lock().unwrap().len(), 1);
     }
 }

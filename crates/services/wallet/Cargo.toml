@@ -9,7 +9,10 @@ description = "Wallet microservice — the in-app economy's ledger (#665): an ac
 
 [dependencies]
 # ── Contracts ─────────────────────────────────────────────────────────────────
-wallet-api = { workspace = true }
+wallet-api  = { workspace = true }
+# Likes (#665): what they land on.
+post-api    = { workspace = true }
+comment-api = { workspace = true }
 
 # ── Shared platform infrastructure ────────────────────────────────────────────
 error            = { workspace = true }

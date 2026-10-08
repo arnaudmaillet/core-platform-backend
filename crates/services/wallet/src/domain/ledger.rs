@@ -43,6 +43,8 @@ pub enum TransactionKind {
     StakePack,
     /// A country unlocked on the map with gems (`ref_id`: the country).
     CountryUnlock,
+    /// Likes staked on a post or a comment (`ref_id`: `post:<id>`).
+    Stake,
     /// Written by a newer version of this service.
     Unknown,
 }
@@ -54,6 +56,7 @@ impl TransactionKind {
             Self::StarterGift => "starter_gift",
             Self::StakePack => "stake_pack",
             Self::CountryUnlock => "country_unlock",
+            Self::Stake => "stake",
             Self::Unknown => "unknown",
         }
     }
@@ -64,6 +67,7 @@ impl TransactionKind {
             "starter_gift" => Self::StarterGift,
             "stake_pack" => Self::StakePack,
             "country_unlock" => Self::CountryUnlock,
+            "stake" => Self::Stake,
             _ => Self::Unknown,
         }
     }
@@ -92,6 +96,8 @@ pub enum Operation {
     StakePack,
     /// A spend asked by another service.
     SpendGems,
+    /// A batch of likes.
+    Stake,
 }
 
 impl Operation {
@@ -100,6 +106,7 @@ impl Operation {
             Self::Claim => "claim",
             Self::StakePack => "pack",
             Self::SpendGems => "spend",
+            Self::Stake => "stake",
         }
     }
 }

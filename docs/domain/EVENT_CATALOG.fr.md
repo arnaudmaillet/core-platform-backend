@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: e9ef4b912862f496470fb92016200323d8e1f378e7f8a1768ae0bd939515299a
+  source_sha256: 178d7ce55226c9f05e49873c7b9b039120bdd0e449c07bba9582457272efadf8
   translated_at: 2026-10-08
   status: complete
 ---
@@ -42,6 +42,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 |---|---|---|
 | `account.v1.events` | `account` | `audit`, `auth`, `profile`, `media`, `wallet`, `notification` |
 | `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `timeline`, `media`, `comment`, `chat` |
+| `wallet.v1.events` | `wallet` | — *(orphan — see below)* |
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |
 | `post.updated` | `post` | — *(orphan — see below)* |
@@ -83,6 +84,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 
 | Topic | Producer | Why |
 |---|---|---|
+| `wallet.v1.events` | `wallet` | Likes are points (#665): engagement, counter, notification, geo-discovery and timeline move from engagement.reactions to StakeCommitted in the next parts. |
 | `post.updated` | `post` | No stream consumer — search/timeline/realtime act on post.v1.events PostUpdated; the legacy per-type topic is emitted for completeness. |
 | `social-graph.blocked` | `social-graph` | Block is enforced on the gRPC read path; no stream consumer yet. |
 | `chat.conversation.published` | `chat` | Chat delivery-plane headroom. |

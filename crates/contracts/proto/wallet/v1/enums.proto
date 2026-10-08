@@ -27,6 +27,9 @@ enum TransactionKind {
     TRANSACTION_KIND_STAKE_PACK     = 3;
     // A country unlocked on the map (gems); `ref_id` is the country code.
     TRANSACTION_KIND_COUNTRY_UNLOCK = 4;
+    // Likes staked on a post or a comment (points); `ref_id` is
+    // `post:<id>` or `comment:<id>`.
+    TRANSACTION_KIND_STAKE          = 5;
 }
 
 // The outcome of a claim: ordinary states the app renders, not errors.
@@ -54,4 +57,30 @@ enum SpendGemsOutcome {
     SPEND_GEMS_OUTCOME_SPENT             = 1;
     // Nothing charged.
     SPEND_GEMS_OUTCOME_INSUFFICIENT_GEMS = 2;
+}
+
+// What became of a batch of likes (a stake). Ordinary states the app renders
+// in-band; only STAKED moved anything.
+enum StakeOutcome {
+    STAKE_OUTCOME_UNSPECIFIED          = 0;
+    // `spent` points went on the target (possibly fewer than asked: clamped
+    // to the target's room, the balance or the hour's room).
+    STAKE_OUTCOME_STAKED               = 1;
+    // No points left.
+    STAKE_OUTCOME_INSUFFICIENT_BALANCE = 2;
+    // The post or comment is gone, removed, or not published.
+    STAKE_OUTCOME_TARGET_NOT_STAKEABLE = 3;
+    // The hour's room (1,000 points) is used up.
+    STAKE_OUTCOME_RATE_LIMITED         = 4;
+    // This account's 250 points on the target are all in.
+    STAKE_OUTCOME_TARGET_CAP_REACHED   = 5;
+    // A shot asked with no ×100 pack loaded.
+    STAKE_OUTCOME_NO_STAKE_SHOTS       = 6;
+    // A shot on a target with room for less than a whole shot (never clamped).
+    STAKE_OUTCOME_SHOT_DOES_NOT_FIT    = 7;
+    // The batch's first tap is older than 24 hours: refused, nothing spent
+    // (the app gives the points back on screen).
+    STAKE_OUTCOME_EXPIRED              = 8;
+    // One's own post or comment (any profile of the account).
+    STAKE_OUTCOME_OWN_CONTENT          = 9;
 }

@@ -11,11 +11,12 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::application::port::{
-    ClaimOutcome, ClaimResult, GemSpend, PackOutcome, SpendOutcome, TransactionCursor, WalletStore,
+    ClaimOutcome, ClaimResult, GemSpend, PackOutcome, SpendOutcome, StakeOutcome, StakeResult, TransactionCursor,
+    WalletStore,
 };
 use crate::domain::{
-    AccountId, ClaimDecision, ClaimPolicy, Currency, IdempotencyKey, PackDecision, StakePackPolicy, Transaction,
-    TransactionKind, Wallet,
+    AccountId, ClaimDecision, ClaimPolicy, Currency, IdempotencyKey, PackDecision, StakeAsk, StakeDecision,
+    StakePackPolicy, StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
 
@@ -79,6 +80,21 @@ async fn write_gems(conn: &mut PgConnection, wallet: &Wallet, now: DateTime<Utc>
         .await
         .map_err(storage)?;
     Ok(())
+}
+
+/// What `account` put on `target`, and its first batch's key.
+async fn on_target(
+    conn: &mut PgConnection,
+    account: &AccountId,
+    target: &StakeTarget,
+) -> Result<Option<(i64, String)>, WalletError> {
+    sqlx::query_as("SELECT total, first_key FROM stakes WHERE account_id = $1 AND target_kind = $2 AND target_id = $3")
+        .bind(account.as_uuid())
+        .bind(target.kind())
+        .bind(target.id())
+        .fetch_optional(conn)
+        .await
+        .map_err(storage)
 }
 
 /// A movement for the ledger.
@@ -323,6 +339,102 @@ impl WalletStore for PgWalletStore {
         Ok((outcome, wallet))
     }
 
+    #[instrument(name = "wallet.stake", skip(self, key, policy, pack))]
+    async fn stake(
+        &self,
+        account: &AccountId,
+        key: &IdempotencyKey,
+        target: &StakeTarget,
+        ask: StakeAsk,
+        policy: &StakePolicy,
+        pack: &StakePackPolicy,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<StakeResult, WalletError> {
+        let (mut tx, mut wallet) = self.locked(account, starter_gems, now).await?;
+        let before = on_target(&mut tx, account, target).await?;
+        let on = before.as_ref().map_or(0, |(total, _)| *total);
+
+        // A key already used: its first result, nothing new.
+        if let Some(delta) = replayed(&mut tx, account, key).await? {
+            tx.commit().await.map_err(storage)?;
+            let first = before.is_some_and(|(_, first_key)| first_key == key.as_str());
+            return Ok(StakeResult { outcome: StakeOutcome::Staked, spent: -delta, my_total: on, first, wallet });
+        }
+
+        let (last_hour,): (i64,) = sqlx::query_as(
+            "SELECT COALESCE(SUM(-delta), 0)::bigint FROM wallet_transactions \
+             WHERE account_id = $1 AND kind = 'stake' AND created_at > $2",
+        )
+        .bind(account.as_uuid())
+        .bind(now - chrono::TimeDelta::hours(1))
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(storage)?;
+
+        let outcome = match wallet.decide_stake(ask, on, last_hour, policy, pack) {
+            StakeDecision::Stake { points, shot } => {
+                wallet.apply_stake(points, shot);
+                sqlx::query(
+                    "UPDATE wallets SET points = $2, points_spent = $3, stake_shots = $4, updated_at = $5 WHERE account_id = $1",
+                )
+                .bind(account.as_uuid())
+                .bind(wallet.points)
+                .bind(wallet.points_spent)
+                .bind(wallet.stake_shots)
+                .bind(now)
+                .execute(&mut *tx)
+                .await
+                .map_err(storage)?;
+                sqlx::query(
+                    "INSERT INTO stakes (account_id, target_kind, target_id, total, first_key, first_at, last_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $6) \
+                     ON CONFLICT (account_id, target_kind, target_id) \
+                     DO UPDATE SET total = stakes.total + EXCLUDED.total, last_at = EXCLUDED.last_at",
+                )
+                .bind(account.as_uuid())
+                .bind(target.kind())
+                .bind(target.id())
+                .bind(points)
+                .bind(key.as_str())
+                .bind(now)
+                .execute(&mut *tx)
+                .await
+                .map_err(storage)?;
+                let reference = target.reference();
+                let movement = Movement {
+                    currency:      Currency::Points,
+                    delta:         -points,
+                    balance_after: wallet.points,
+                    kind:          TransactionKind::Stake,
+                    ref_id:        Some(&reference),
+                };
+                record(&mut tx, account, movement, key, now).await?;
+                tx.commit().await.map_err(storage)?;
+                return Ok(StakeResult {
+                    outcome: StakeOutcome::Staked,
+                    spent: points,
+                    my_total: on + points,
+                    first: before.is_none(),
+                    wallet,
+                });
+            }
+            StakeDecision::InsufficientBalance => StakeOutcome::InsufficientBalance,
+            StakeDecision::RateLimited => StakeOutcome::RateLimited,
+            StakeDecision::TargetCapReached => StakeOutcome::TargetCapReached,
+            StakeDecision::NoStakeShots => StakeOutcome::NoStakeShots,
+            StakeDecision::ShotDoesNotFit => StakeOutcome::ShotDoesNotFit,
+        };
+        tx.commit().await.map_err(storage)?;
+        Ok(StakeResult { outcome, spent: 0, my_total: on, first: false, wallet })
+    }
+
+    #[instrument(name = "wallet.staked_on", skip(self))]
+    async fn staked_on(&self, account: &AccountId, target: &StakeTarget) -> Result<i64, WalletError> {
+        let mut conn = self.pool(account)?.acquire().await.map_err(storage)?;
+        Ok(on_target(&mut conn, account, target).await?.map_or(0, |(total, _)| total))
+    }
+
     #[instrument(name = "wallet.history", skip(self))]
     async fn history(
         &self,
@@ -366,6 +478,11 @@ impl WalletStore for PgWalletStore {
     async fn erase(&self, account: &AccountId) -> Result<bool, WalletError> {
         let mut tx = self.pool(account)?.begin().await.map_err(storage)?;
         sqlx::query("DELETE FROM wallet_transactions WHERE account_id = $1")
+            .bind(account.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(storage)?;
+        sqlx::query("DELETE FROM stakes WHERE account_id = $1")
             .bind(account.as_uuid())
             .execute(&mut *tx)
             .await
