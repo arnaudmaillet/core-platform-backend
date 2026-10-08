@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use crate::domain::event::WalletEvent;
 use crate::domain::{
-    AccountId, ClaimPolicy, Currency, IdempotencyKey, StakeAsk, StakePackPolicy, StakePolicy, StakeTarget, Transaction,
-    TransactionKind, Wallet,
+    AccountId, ClaimPolicy, Currency, DuePosition, IdempotencyKey, Observed, Settlement, StakeAsk, StakePackPolicy,
+    StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
 
@@ -225,4 +225,27 @@ pub trait WalletStore: Send + Sync + 'static {
 
     /// Erases the account's wallet and history; `false` when it had none.
     async fn erase(&self, account: &AccountId) -> Result<bool, WalletError>;
+
+    /// Claims up to `limit` positions whose first stake was at or before
+    /// `due_before`, not settled and not leased to another replica, oldest
+    /// first (every shard), leasing them until `lease_until`.
+    async fn claim_due_positions(
+        &self,
+        limit: i64,
+        due_before: DateTime<Utc>,
+        now: DateTime<Utc>,
+        lease_until: DateTime<Utc>,
+    ) -> Result<Vec<DuePosition>, WalletError>;
+
+    /// Records a settlement and marks its position settled, at once; a
+    /// position already settled keeps its first settlement.
+    async fn record_settlement(&self, settlement: &Settlement) -> Result<(), WalletError>;
+}
+
+/// What a post or comment came to, for the settlement (#665): engagement's
+/// `GetLikePositions`, over the mesh.
+#[async_trait]
+pub trait LikePositions: Send + Sync + 'static {
+    /// `account`'s position on each target (at most 100), in order.
+    async fn positions(&self, account: &AccountId, targets: &[StakeTarget]) -> Result<Vec<Observed>, WalletError>;
 }

@@ -7315,6 +7315,7 @@ dependencies = [
  "auth-context",
  "chrono",
  "comment-api",
+ "engagement-api",
  "error",
  "http",
  "post-api",

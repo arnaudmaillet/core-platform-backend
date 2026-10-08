@@ -109,6 +109,20 @@ target (the "X liked your post" notice goes out once). Published events are prun
 Without `KAFKA_BROKERS` the service **does not start** (unless `WALLET_ALLOW_LOG_PUBLISHER=true`,
 local runs): a misconfigured env never drops likes silently.
 
+**Stake settlement (#665 part 4, shadow mode).** A **position** — an account's stakes on one post or
+comment, its `stakes` row — settles **once, a day after its first stake** (`WALLET_SETTLEMENT_DELAY_SECS`).
+The **settler** (every `WALLET_SETTLEMENT_SECS`, all shards) leases due positions like the outbox
+(`settle_claimed_until`, `FOR UPDATE SKIP LOCKED`, 5 min), asks engagement what each target came to
+(`GetLikePositions`: the target's count just before the account's first like, and now), and records a
+row in **`settlements`** (migration 0005) with the position's points, the counts, its **earliness**
+(the share of everyone else's points that came after it) and a **pre-score** = earliness ×
+√(points / 250) — model `shadow-v0`, marking the position settled in the same transaction. **No gems
+are minted**: the economy charter's phase 2 (dev/economy in the iOS repo), scores recorded for
+calibration first; the daily envelope (the day's outcome and each position's share) comes next.
+Points staked after a position settled are not settled again (v0). An account engagement cannot
+answer for stays leased and is retried after the lease. Without `WALLET_ENGAGEMENT_GRPC_ENDPOINT`
+nothing settles. Settlements go with the account on erasure.
+
 > **Invariants** (and where enforced): balances ≥ 0 (`CHECK`); each balance = Σ its ledger deltas
 > (same transaction, row lock; IT-checked); one movement per scoped key (`UNIQUE`); one claim per
 > interval and one pack at a time (row lock + domain rule); the caller's own wallet only
@@ -144,6 +158,7 @@ local runs): a misconfigured env never drops likes silently.
 | the app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack` | balance, claim and pack unavailable; the rest of the app works |
 | geo-discovery | `SpendGems` | country unlocks refused (fail-closed); the map works |
 | post, comment, social-graph (downstream) | `GetPost`, `GetComment`, `CheckAccess` | likes refused (`WAL-6001`, retried by the app) |
+| engagement (downstream) | `GetLikePositions` | settlements wait (retried after the lease) |
 
 > **Critical path?** No — the feed, posts and chat do not call it.
 
@@ -246,6 +261,9 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_POST_GRPC_ENDPOINT` · `WALLET_COMMENT_GRPC_ENDPOINT` | `http://localhost:50056` · `:50057` | post's and comment's mesh addresses (what likes land on) |
 | `WALLET_SOCIAL_GRAPH_GRPC_ENDPOINT` | `http://localhost:50053` | social-graph's mesh address (may the reader see the content) |
 | `WALLET_OUTBOX_DRAIN_SECS` | `5` | how often the outbox drainer runs |
+| `WALLET_ENGAGEMENT_GRPC_ENDPOINT` | unset | engagement's mesh address (e.g. `http://engagement:50058`): stake settlement. Unset → nothing settles |
+| `WALLET_SETTLEMENT_DELAY_SECS` | `86400` | how long after its first stake a position settles |
+| `WALLET_SETTLEMENT_SECS` · `WALLET_SETTLEMENT_BATCH` | `60` · `500` | how often the settler runs, and how many positions a pass |
 | `WALLET_ALLOW_LOG_PUBLISHER` | unset | `true`: start without `KAFKA_BROKERS`, logging events (local only) |
 
 An unparsable or negative value keeps the default.
@@ -264,7 +282,8 @@ settings (client edge), OTel.
 ## 🚀 Deployment, Migrations & Rollback &nbsp;·&nbsp; OPS
 
 Migrations: `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.sql` (`ref_id`),
-`0003_create_stakes.sql` (`stakes`, the hour's index), `0004_create_outbox.sql` (`wallet_outbox`), applied by `migrator wallet` (init
+`0003_create_stakes.sql` (`stakes`, the hour's index), `0004_create_outbox.sql` (`wallet_outbox`),
+`0005_create_settlements.sql` (`settlements`; `stakes.settled_at` / `settle_claimed_until`), applied by `migrator wallet` (init
 container) before the binary. Infra (ECR repo, manifests, `wallet-postgres`, ingress route,
 NetworkPolicy): core-platform-infra#41 — the binary joins `FLEET_BINS` once its ECR repo exists.
 Rollback: the binary is stateless; the schema is additive.
@@ -296,4 +315,6 @@ cargo test -p wallet --features integration-wallet     # Postgres: concurrency, 
 3. Likes are points: `Stake` (this part); then the like counts, notifications, the country ladder and
    the interest tags move to `StakeCommitted`; the reactions are gone, and the GDPR export reads
    an account's likes.
-4. Stake settlement (gems earned).
+4. Stake settlement (gems earned), shadow mode first: engagement keeps each liker's arrival (S1), the
+   settler scores positions without minting (S2, this part), then the daily envelope (S3); minting and
+   the creator pool after calibration.

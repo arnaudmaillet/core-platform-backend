@@ -3,7 +3,7 @@
 
 use chrono::TimeDelta;
 
-use crate::domain::{ClaimPolicy, StakePackPolicy, StakePolicy};
+use crate::domain::{ClaimPolicy, SettlementPolicy, StakePackPolicy, StakePolicy};
 
 /// Gems every wallet opens with.
 pub const DEFAULT_STARTER_GEMS: i64 = 100;
@@ -15,11 +15,19 @@ pub struct WalletConfig {
     pub stake_pack:   StakePackPolicy,
     /// Likes (#665 part 3).
     pub stakes:       StakePolicy,
+    /// Stake settlement (#665 part 4, shadow mode).
+    pub settlement:   SettlementPolicy,
 }
 
 impl Default for WalletConfig {
     fn default() -> Self {
-        Self { claim: ClaimPolicy::default(), starter_gems: DEFAULT_STARTER_GEMS, stake_pack: StakePackPolicy::default(), stakes: StakePolicy::default() }
+        Self {
+            claim:        ClaimPolicy::default(),
+            starter_gems: DEFAULT_STARTER_GEMS,
+            stake_pack:   StakePackPolicy::default(),
+            stakes:       StakePolicy::default(),
+            settlement:   SettlementPolicy::default(),
+        }
     }
 }
 
@@ -29,7 +37,9 @@ impl WalletConfig {
     /// `WALLET_STAKE_PACK_SHOTS` (3), `WALLET_STAKE_PACK_PRICE` (50 gems),
     /// `WALLET_POINTS_PER_SHOT` (100), `WALLET_STAKE_TARGET_CAP` (250),
     /// `WALLET_STAKE_HOURLY_CAP` (1000), `WALLET_STAKE_MAX_BATCH_AGE_SECS`
-    /// (86400). An unparsable or negative value keeps the default.
+    /// (86400), `WALLET_SETTLEMENT_DELAY_SECS` (86400; a position's full
+    /// commitment is the per-target cap). An unparsable or negative value
+    /// keeps the default.
     pub fn from_env() -> Self {
         Self::from_lookup(|name| std::env::var(name).ok())
     }
@@ -37,6 +47,7 @@ impl WalletConfig {
     fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Self {
         let number = |name: &str| get(name).and_then(|v| v.trim().parse::<i64>().ok()).filter(|v| *v >= 0);
         let defaults = Self::default();
+        let per_target_cap = number("WALLET_STAKE_TARGET_CAP").unwrap_or(defaults.stakes.per_target_cap);
         Self {
             claim: ClaimPolicy {
                 interval:    number("WALLET_CLAIM_INTERVAL_SECS").map(TimeDelta::seconds).unwrap_or(defaults.claim.interval),
@@ -58,12 +69,18 @@ impl WalletConfig {
                     .unwrap_or(defaults.stake_pack.points_per_shot),
             },
             stakes: StakePolicy {
-                per_target_cap: number("WALLET_STAKE_TARGET_CAP").unwrap_or(defaults.stakes.per_target_cap),
+                per_target_cap,
                 hourly_cap:     number("WALLET_STAKE_HOURLY_CAP").unwrap_or(defaults.stakes.hourly_cap),
                 max_batch_age:  number("WALLET_STAKE_MAX_BATCH_AGE_SECS")
                     .map(TimeDelta::seconds)
                     .unwrap_or(defaults.stakes.max_batch_age),
                 max_clock_skew: defaults.stakes.max_clock_skew,
+            },
+            settlement: SettlementPolicy {
+                delay:         number("WALLET_SETTLEMENT_DELAY_SECS")
+                    .map(TimeDelta::seconds)
+                    .unwrap_or(defaults.settlement.delay),
+                full_position: per_target_cap,
             },
         }
     }

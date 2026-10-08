@@ -7,7 +7,7 @@ use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use uuid::Uuid;
 
 use crate::application::port::{
-    AudienceCheck, ClaimOutcome, EventPublisher, GemSpend, OutboxEvent, PackOutcome, SpendOutcome, StakeAnnouncement,
+    AudienceCheck, ClaimOutcome, EventPublisher, GemSpend, LikePositions, OutboxEvent, PackOutcome, SpendOutcome, StakeAnnouncement,
     StakeOutcome, StakeResult, TargetDirectory, TransactionCursor, WalletStore,
 };
 use crate::config::WalletConfig;
@@ -82,11 +82,26 @@ pub struct Wallets {
     audience:  Option<Arc<dyn AudienceCheck>>,
     /// Where the outbox is published.
     publisher: Option<Arc<dyn EventPublisher>>,
+    /// What the targets came to, for the settlement (part 4); `None`: no
+    /// position settles.
+    positions: Option<Arc<dyn LikePositions>>,
 }
+
+/// Targets engagement answers for per call.
+const POSITIONS_PER_CALL: usize = 100;
+
+/// How long a settler holds the positions it claimed.
+const SETTLEMENT_LEASE_SECS: i64 = 300;
 
 impl Wallets {
     pub fn new(store: Arc<dyn WalletStore>, config: WalletConfig) -> Self {
-        Self { store, config, targets: None, audience: None, publisher: None }
+        Self { store, config, targets: None, audience: None, publisher: None, positions: None }
+    }
+
+    /// Stake settlement (#665 part 4): what the targets came to.
+    pub fn with_settlement(mut self, positions: Arc<dyn LikePositions>) -> Self {
+        self.positions = Some(positions);
+        self
     }
 
     /// Likes (#665 part 3): what they land on, who may see it, and where
@@ -286,6 +301,43 @@ impl Wallets {
         Ok(published)
     }
 
+    /// The settler's pass (#665, shadow mode): settles up to `limit`
+    /// positions due — a day after their first stake — with what engagement
+    /// observed, an account's targets asked together. No gems are minted. An
+    /// account engagement cannot answer for stays leased and is retried once
+    /// the lease ends. Returns how many settled.
+    pub async fn settle_due(&self, limit: i64, now: DateTime<Utc>) -> Result<usize, WalletError> {
+        let Some(positions) = &self.positions else { return Ok(0) };
+        let policy = self.config.settlement;
+        let mut due = self
+            .store
+            .claim_due_positions(limit, now - policy.delay, now, now + TimeDelta::seconds(SETTLEMENT_LEASE_SECS))
+            .await?;
+        due.sort_by_key(|p| p.account.as_uuid());
+        let mut settled = 0;
+        for account in due.chunk_by(|a, b| a.account == b.account) {
+            for chunk in account.chunks(POSITIONS_PER_CALL) {
+                let targets: Vec<StakeTarget> = chunk.iter().map(|p| p.target.clone()).collect();
+                let observed = match positions.positions(&chunk[0].account, &targets).await {
+                    Ok(observed) if observed.len() == chunk.len() => observed,
+                    Ok(observed) => {
+                        tracing::warn!(asked = chunk.len(), got = observed.len(), "settlement: positions mismatched");
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "settlement: positions unavailable; retried after the lease");
+                        continue;
+                    }
+                };
+                for (position, observed) in chunk.iter().zip(observed) {
+                    self.store.record_settlement(&policy.settle(position.clone(), observed, now)).await?;
+                    settled += 1;
+                }
+            }
+        }
+        Ok(settled)
+    }
+
     /// One page of the account's history, newest first.
     pub async fn history(
         &self,
@@ -356,6 +408,9 @@ pub(crate) mod fakes {
 
     type Movement = (Currency, i64, i64, TransactionKind, Option<String>);
 
+    /// A position: its target, its first stake's time, leased until.
+    type MemPosition = (StakeTarget, DateTime<Utc>, Option<DateTime<Utc>>);
+
     /// The ledger in memory, with the Postgres adapter's semantics.
     #[derive(Default)]
     pub struct MemoryStore {
@@ -366,6 +421,9 @@ pub(crate) mod fakes {
         wallets: Mutex<HashMap<AccountId, Wallet>>,
         /// (transaction, idempotency key)
         ledger:  Mutex<Vec<(Transaction, String)>>,
+        /// (account, `post:<id>`) → (target, first stake's time, leased until)
+        positions: Mutex<HashMap<(AccountId, String), MemPosition>>,
+        pub settlements: Mutex<HashMap<(AccountId, String), crate::domain::Settlement>>,
     }
 
     impl MemoryStore {
@@ -509,6 +567,7 @@ pub(crate) mod fakes {
                     let movement = (Currency::Points, -points, wallet.points, TransactionKind::Stake, Some(target.reference()));
                     self.record(account, movement, key.as_str(), now);
                     self.wallets.lock().unwrap().insert(*account, wallet.clone());
+                    self.positions.lock().unwrap().entry(slot.clone()).or_insert((target.clone(), now, None));
                     let mut stakes = self.stakes.lock().unwrap();
                     let entry = stakes.entry(slot).or_insert((0, key.as_str().to_owned()));
                     entry.0 += points;
@@ -599,8 +658,48 @@ pub(crate) mod fakes {
 
         async fn erase(&self, account: &AccountId) -> Result<bool, WalletError> {
             self.stakes.lock().unwrap().retain(|(a, _), _| a != account);
+            self.positions.lock().unwrap().retain(|(a, _), _| a != account);
+            self.settlements.lock().unwrap().retain(|(a, _), _| a != account);
             self.ledger.lock().unwrap().retain(|(t, _)| t.account != *account);
             Ok(self.wallets.lock().unwrap().remove(account).is_some())
+        }
+
+        async fn claim_due_positions(
+            &self,
+            limit: i64,
+            due_before: DateTime<Utc>,
+            now: DateTime<Utc>,
+            lease_until: DateTime<Utc>,
+        ) -> Result<Vec<crate::domain::DuePosition>, WalletError> {
+            let settled = self.settlements.lock().unwrap();
+            let stakes = self.stakes.lock().unwrap();
+            let mut positions = self.positions.lock().unwrap();
+            let mut due: Vec<_> = positions
+                .iter_mut()
+                .filter(|(slot, (_, first_at, leased))| {
+                    !settled.contains_key(*slot) && *first_at <= due_before && leased.is_none_or(|until| until < now)
+                })
+                .collect();
+            due.sort_by_key(|(_, (_, first_at, _))| *first_at);
+            Ok(due
+                .into_iter()
+                .take(limit as usize)
+                .map(|(slot, (target, first_at, leased))| {
+                    *leased = Some(lease_until);
+                    crate::domain::DuePosition {
+                        account:  slot.0,
+                        target:   target.clone(),
+                        points:   stakes.get(slot).map_or(0, |(total, _)| *total),
+                        first_at: *first_at,
+                    }
+                })
+                .collect())
+        }
+
+        async fn record_settlement(&self, settlement: &crate::domain::Settlement) -> Result<(), WalletError> {
+            let slot = (settlement.account, settlement.target.reference());
+            self.settlements.lock().unwrap().entry(slot).or_insert_with(|| settlement.clone());
+            Ok(())
         }
     }
 
@@ -654,10 +753,15 @@ pub(crate) mod fakes {
 mod tests {
     use chrono::TimeZone;
 
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+
     use super::fakes::{MemAudience, MemPublisher, MemTargets, MemoryStore};
     use crate::domain::event::WalletEvent;
     use super::*;
-    use crate::domain::TransactionKind;
+    use crate::domain::{Observed, TransactionKind};
 
     fn at(day: u32, hour: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 10, day, hour, 0, 0).unwrap()
@@ -812,6 +916,76 @@ mod tests {
         for hour in 0..8 {
             w.claim(account, &key(), at(8, hour)).await.unwrap();
         }
+    }
+
+    /// What engagement saw: per target, (count on arrival, count now); an
+    /// account in `down` cannot be answered for.
+    #[derive(Default)]
+    struct MemPositions {
+        seen: Mutex<HashMap<String, (Option<i64>, i64)>>,
+        down: Mutex<Vec<AccountId>>,
+    }
+
+    #[async_trait]
+    impl LikePositions for MemPositions {
+        async fn positions(&self, account: &AccountId, targets: &[StakeTarget]) -> Result<Vec<Observed>, WalletError> {
+            if self.down.lock().unwrap().contains(account) {
+                return Err(WalletError::PeerUnavailable { service: "engagement", reason: "down".into() });
+            }
+            let seen = self.seen.lock().unwrap();
+            Ok(targets
+                .iter()
+                .map(|t| {
+                    let (arrival, now) = seen.get(t.id()).copied().unwrap_or((None, 0));
+                    Observed { total: 30, count_on_arrival: arrival, count_now: now }
+                })
+                .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_position_settles_once_a_day_after_its_first_stake_without_minting() {
+        let store = Arc::new(MemoryStore::default());
+        let (targets, audience, publisher) =
+            (Arc::new(MemTargets::default()), Arc::new(MemAudience::default()), Arc::new(MemPublisher::default()));
+        targets.lock_insert("post-1", "author", true);
+        let positions = Arc::new(MemPositions::default());
+        positions.seen.lock().unwrap().insert("post-1".into(), (Some(10), 130));
+        let w = Wallets::new(Arc::clone(&store) as _, WalletConfig::default())
+            .with_stakes(targets as _, audience as _, publisher as _)
+            .with_settlement(Arc::clone(&positions) as _);
+        let (me, you) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
+        for account in [&me, &you] {
+            funded(&w, account).await;
+        }
+        let staked_at = at(8, 10);
+        w.stake(&me, batch("post-1", StakeAsk::Points(30), &key(), staked_at), &[], staked_at).await.unwrap();
+        w.stake(&you, batch("post-1", StakeAsk::Points(30), &key(), staked_at), &[], staked_at).await.unwrap();
+        let gems = w.get(&me, staked_at).await.unwrap().wallet.gems;
+
+        assert_eq!(w.settle_due(100, staked_at + TimeDelta::hours(23)).await.unwrap(), 0, "not yet");
+        let you_id = AccountId::parse(&you).unwrap();
+        positions.down.lock().unwrap().push(you_id);
+        let settled_at = staked_at + TimeDelta::hours(25);
+        assert_eq!(w.settle_due(100, settled_at).await.unwrap(), 1, "the other account waits for engagement");
+
+        let me_id = AccountId::parse(&me).unwrap();
+        let settlement = store.settlements.lock().unwrap()[&(me_id, "post:post-1".to_owned())].clone();
+        assert_eq!((settlement.points, settlement.count_on_arrival, settlement.count_at_settlement), (30, Some(10), 130));
+        // 100 points from the others, 90 of them after: 0.9 × √(30 / 250).
+        assert!((settlement.pre_score.unwrap() - 0.9 * (30.0_f64 / 250.0).sqrt()).abs() < 1e-12);
+        assert_eq!(settlement.settled_at, settled_at);
+        assert_eq!(w.get(&me, settled_at).await.unwrap().wallet.gems, gems, "shadow mode: no gems minted");
+
+        // Engagement is back: still leased, then settled once the lease ends.
+        positions.down.lock().unwrap().clear();
+        assert_eq!(w.settle_due(100, settled_at + TimeDelta::seconds(1)).await.unwrap(), 0, "leased");
+        assert_eq!(w.settle_due(100, settled_at + TimeDelta::minutes(6)).await.unwrap(), 1);
+        assert_eq!(w.settle_due(100, settled_at + TimeDelta::hours(1)).await.unwrap(), 0, "a position settles once");
+
+        // Erasure takes the settlements with the wallet.
+        w.erase(&me_id).await.unwrap();
+        assert!(!store.settlements.lock().unwrap().contains_key(&(me_id, "post:post-1".to_owned())));
     }
 
     #[tokio::test]

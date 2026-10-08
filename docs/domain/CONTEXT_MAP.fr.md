@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./CONTEXT_MAP.md
-  source_sha256: 69627f00f83ae2ee431b3d49021a400b7b2fff1681121fbf85852a6c3884ad29
+  source_sha256: c7694ec870a1f3deaa2a4e8304a9f4e6c8062d650839cbf024a4f927589dcdd6
   translated_at: 2026-10-08
   status: complete
 ---
@@ -97,6 +97,7 @@ Oriente l'investissement. Consolidé depuis la ligne de classe de chaque Domain 
 | `post` | `media` | Customer/Supplier | références `MediaAttachment` | média dans les posts |
 | `comment` | `post` | Customer/Supplier | références `PostId` | validité des commentaires |
 | `auth` | `account` | Customer/Supplier | `SubjectLink` ↔ `AccountId` | résolution du sujet de session |
+| `wallet` | `engagement` | Customer/Supplier | `GetLikePositions` (mesh) | règlement des mises (#665) : la précocité de chaque position |
 | `realtime` | `auth` | Conformist (verify-only) | vérification du token ES256 via `auth-context` au handshake | authentification des nouvelles connexions |
 | **tous les services** | `auth` | Shared Kernel / OHS | token edge vérifié en process via `auth-context` | tout appel authentifié |
 

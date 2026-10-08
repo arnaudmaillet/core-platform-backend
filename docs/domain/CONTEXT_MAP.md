@@ -85,6 +85,7 @@ Drives investment. Rolled up from each Domain Card's class line.
 | `post` | `media` | Customer/Supplier | `MediaAttachment` references | media in posts |
 | `comment` | `post` | Customer/Supplier | `PostId` references | comment validity |
 | `auth` | `account` | Customer/Supplier | `SubjectLink` ↔ `AccountId` | session subject resolution |
+| `wallet` | `engagement` | Customer/Supplier | `GetLikePositions` (mesh) | stake settlement (#665): how early each position came |
 | `realtime` | `auth` | Conformist (verify-only) | `auth-context` ES256 token verify at handshake | new connection authentication |
 | **all services** | `auth` | Shared Kernel / OHS | edge token verified in-process via `auth-context` | every authenticated call |
 

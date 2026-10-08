@@ -18,7 +18,7 @@ use transport::kafka::consumer::{KafkaConsumerBuilder, KafkaConsumerHandle};
 use transport::kafka::producer::{KafkaProducerBuilder, KafkaProducerHandle};
 
 use crate::application::port::EventPublisher;
-use crate::infrastructure::client::{GrpcAudienceCheck, GrpcTargetDirectory};
+use crate::infrastructure::client::{GrpcAudienceCheck, GrpcLikePositions, GrpcTargetDirectory};
 use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 
 use crate::app::{App, StakeDeps};
@@ -69,9 +69,19 @@ impl Service for WalletService {
             mesh_channel("WALLET_COMMENT_GRPC_ENDPOINT", "http://localhost:50057")?,
         );
         let audience = GrpcAudienceCheck::new(mesh_channel("WALLET_SOCIAL_GRAPH_GRPC_ENDPOINT", "http://localhost:50053")?);
-        let deps = StakeDeps { targets: Arc::new(targets), audience: Arc::new(audience), publisher: build_publisher()? };
+        let positions = like_positions()?;
+        let settles = positions.is_some();
+        let deps = StakeDeps {
+            targets:   Arc::new(targets),
+            audience:  Arc::new(audience),
+            publisher: build_publisher()?,
+            positions,
+        };
         let app = App::build(pool.clone(), WalletConfig::from_env(), Some(deps));
         spawn_outbox_drainer(Arc::clone(&app.wallets));
+        if settles {
+            spawn_settler(Arc::clone(&app.wallets));
+        }
         // A deleted account's wallet goes with it.
         spawn_account_consumer(Arc::clone(&app.wallets));
         Ok(Self { app, pool })
@@ -117,6 +127,36 @@ fn spawn_outbox_drainer(wallets: Arc<Wallets>) {
             tick.tick().await;
             if let Err(error) = wallets.drain_outbox(500, chrono::Utc::now()).await {
                 tracing::warn!(%error, "wallet outbox drain failed; retrying at the next tick");
+            }
+        }
+    });
+}
+
+/// Stake settlement (#665, shadow mode) asks engagement at
+/// `WALLET_ENGAGEMENT_GRPC_ENDPOINT` what each position came to. Unset: no
+/// position settles (until the mesh route exists).
+fn like_positions() -> anyhow::Result<Option<Arc<dyn crate::application::port::LikePositions>>> {
+    if !std::env::var("WALLET_ENGAGEMENT_GRPC_ENDPOINT").is_ok_and(|v| !v.trim().is_empty()) {
+        tracing::warn!("WALLET_ENGAGEMENT_GRPC_ENDPOINT unset: stake settlement is off");
+        return Ok(None);
+    }
+    let channel = mesh_channel("WALLET_ENGAGEMENT_GRPC_ENDPOINT", "")?;
+    Ok(Some(Arc::new(GrpcLikePositions::new(channel))))
+}
+
+/// Settles the positions due, every `WALLET_SETTLEMENT_SECS` (60), up to
+/// `WALLET_SETTLEMENT_BATCH` (500) a pass. Shadow mode: no gems minted.
+fn spawn_settler(wallets: Arc<Wallets>) {
+    let env = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(default);
+    let (every, batch) = (env("WALLET_SETTLEMENT_SECS", 60).max(1), env("WALLET_SETTLEMENT_BATCH", 500).max(1));
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(every));
+        loop {
+            tick.tick().await;
+            match wallets.settle_due(batch as i64, chrono::Utc::now()).await {
+                Ok(0) => {}
+                Ok(settled) => tracing::info!(settled, "stake positions settled (shadow mode)"),
+                Err(error) => tracing::warn!(%error, "stake settlement failed; retrying at the next tick"),
             }
         }
     });
