@@ -157,3 +157,62 @@ message ListWalletTransactionsResponse {
     // Empty on the last page.
     string                     next_page_token = 2;
 }
+
+message ExportWalletRequest {
+    string account_id = 1;
+}
+
+message ExportWalletResponse {
+    // Absent: the account never opened a wallet.
+    Wallet wallet = 1;
+}
+
+message ListStakePositionsRequest {
+    string account_id = 1;
+    // Default 100, capped at 500.
+    int32  page_size  = 2;
+    // The `next_page_token` of the previous page (empty: the first).
+    string page_token = 3;
+}
+
+// An account's stakes on one post or comment (#665).
+message StakePosition {
+    oneof target {
+        string post_id    = 1;
+        string comment_id = 2;
+    }
+    // Points staked on it, all batches together.
+    int64                     points     = 3;
+    google.protobuf.Timestamp first_at   = 4;
+    google.protobuf.Timestamp last_at    = 5;
+    // Absent until it settles (a day after its first stake).
+    StakeSettlement           settlement = 6;
+}
+
+// A position's settlement (shadow mode: the gems are provisional, never
+// minted).
+message StakeSettlement {
+    google.protobuf.Timestamp settled_at          = 1;
+    // The position's points when it settled.
+    int64                     points              = 2;
+    // The target's like count just before the account's first like (absent:
+    // unknown), and when the position settled.
+    optional int64            count_on_arrival    = 3;
+    int64                     count_at_settlement = 4;
+    optional double           earliness           = 5;
+    optional double           pre_score           = 6;
+    string                    model               = 7;
+    // The day's envelope, once computed: the target in the day's top (1) or
+    // not (0), the score, and the provisional gems.
+    optional int32            outcome             = 8;
+    optional double           score               = 9;
+    optional int64            provisional_gems    = 10;
+    // YYYY-MM-DD; empty until the day's envelope is computed.
+    string                    envelope_day        = 11;
+}
+
+message ListStakePositionsResponse {
+    repeated StakePosition positions       = 1;
+    // Empty on the last page.
+    string                 next_page_token = 2;
+}

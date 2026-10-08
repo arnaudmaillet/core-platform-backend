@@ -47,4 +47,13 @@ service WalletService {
     // country unlocks). The caller checks the spender may spend gems (an
     // adult); the wallet records the movement. Idempotent per key.
     rpc SpendGems(SpendGemsRequest) returns (SpendGemsResponse);
+
+    // Mesh only: the account's wallet for its GDPR data export (#653, #665),
+    // read without opening one (absent when it never had one).
+    rpc ExportWallet(ExportWalletRequest) returns (ExportWalletResponse);
+
+    // Mesh only: the account's stake positions — each post or comment it
+    // staked on, and the position's settlement once it settled — paged by
+    // target, for the GDPR data export.
+    rpc ListStakePositions(ListStakePositionsRequest) returns (ListStakePositionsResponse);
 }

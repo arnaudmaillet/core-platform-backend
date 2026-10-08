@@ -1,6 +1,6 @@
 //! The archive's files from the other services (#653): per profile, its
 //! profile, posts, comments, social graph and conversations; for the account,
-//! its likes (#665) and media. Conversations follow the holder's choice: a
+//! its likes and wallet (#665) and media. Conversations follow the holder's choice: a
 //! direct (one-to-one) conversation is exported in full (it is between the
 //! two of them); in a group or channel, only the holder's own messages — the
 //! others' are placeholders (what they wrote is another member's data). Being
@@ -65,6 +65,10 @@ impl ExportSources for PeerExportSources {
             }
         }
         files.push(ExportFile::json("likes.json", &json!(self.peers.likes(account_id).await?)));
+        match self.peers.wallet(account_id).await? {
+            Some(wallet) => files.push(ExportFile::json("wallet.json", &wallet)),
+            None => tracing::warn!("no route to the wallet: the export goes without wallet.json"),
+        }
         let media = self.peers.media(account_id, Duration::days(EXPORT_LINK_TTL_DAYS)).await?;
         files.push(ExportFile::json("media.json", &json!(media)));
         Ok(files)
@@ -93,7 +97,10 @@ mod tests {
 
     /// One profile in a direct conversation, a group, a group that shrank to
     /// two and a two-member channel.
-    struct Peers;
+    struct Peers {
+        /// Whether this instance has a route to the wallet.
+        wallet: bool,
+    }
 
     fn message(sender: &str, at: i64, body: &str) -> MessageExport {
         MessageExport { sender_id: sender.into(), created_at_ms: at, message: json!({ "sender_id": sender, "body": body }) }
@@ -143,6 +150,9 @@ mod tests {
         async fn likes(&self, _: &AccountId) -> Result<Vec<serde_json::Value>, AccountError> {
             Ok(vec![json!({ "target": { "post_id": "p1" }, "total": 12 })])
         }
+        async fn wallet(&self, _: &AccountId) -> Result<Option<serde_json::Value>, AccountError> {
+            Ok(self.wallet.then(|| json!({ "wallet": { "gems": 100 }, "transactions": [], "stake_positions": [] })))
+        }
         async fn media(&self, _: &AccountId, ttl: Duration) -> Result<Vec<serde_json::Value>, AccountError> {
             Ok(vec![json!({ "ttl_days": ttl.num_days() })])
         }
@@ -155,12 +165,13 @@ mod tests {
 
     #[tokio::test]
     async fn the_archive_lays_out_each_profile_and_shields_group_members() {
-        let files = PeerExportSources::new(Arc::new(Peers))
+        let files = PeerExportSources::new(Arc::new(Peers { wallet: true }))
             .gather(&AccountId::new(), Utc::now())
             .await
             .unwrap();
         assert_eq!(file(&files, "profiles/me/posts.json")[0]["caption"], "hello");
         assert_eq!(file(&files, "likes.json")[0]["total"], 12, "the account's likes, once");
+        assert_eq!(file(&files, "wallet.json")["wallet"]["gems"], 100, "the account's wallet, once");
         assert!(files.iter().all(|f| !f.path.ends_with("reactions.json")));
         assert_eq!(file(&files, "profiles/me/recent_searches.json")[0]["query"], "paris food");
         assert!(file(&files, "profiles/me/social.json")["blocks"].is_array());
@@ -189,5 +200,17 @@ mod tests {
         assert!(left["members"].is_null());
         assert_eq!(left["messages"][0]["body"], "before I left");
         assert_eq!(left["messages"][1], json!({ "from": "another member", "created_at_ms": 2 }));
+    }
+
+    /// Without a route to the wallet, the archive goes without it (a
+    /// tolerant default until the mesh route exists).
+    #[tokio::test]
+    async fn without_a_route_to_the_wallet_the_archive_goes_without_it() {
+        let files = PeerExportSources::new(Arc::new(Peers { wallet: false }))
+            .gather(&AccountId::new(), Utc::now())
+            .await
+            .unwrap();
+        assert!(files.iter().all(|f| f.path != "wallet.json"));
+        assert!(files.iter().any(|f| f.path == "likes.json"));
     }
 }

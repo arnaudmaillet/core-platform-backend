@@ -11,7 +11,7 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::application::port::{
-    ClaimOutcome, ClaimResult, EnvelopeSummary, GemSpend, OutboxEvent, PackOutcome, SpendOutcome, StakeAnnouncement, StakeOutcome,
+    ClaimOutcome, ClaimResult, EnvelopeSummary, GemSpend, SettlementRecord, StakePositionRecord, OutboxEvent, PackOutcome, SpendOutcome, StakeAnnouncement, StakeOutcome,
     StakeResult, TransactionCursor, WalletStore,
 };
 use crate::domain::event::{StakeCommitted, WalletEvent};
@@ -787,6 +787,41 @@ impl WalletStore for PgWalletStore {
         Ok(())
     }
 
+    #[instrument(name = "wallet.export.peek", skip(self))]
+    async fn peek(&self, account: &AccountId) -> Result<Option<Wallet>, WalletError> {
+        let sql = format!("SELECT {WALLET_COLUMNS} FROM wallets WHERE account_id = $1");
+        let row: Option<WalletRow> =
+            sqlx::query_as(&sql).bind(account.as_uuid()).fetch_optional(self.pool(account)?).await.map_err(storage)?;
+        Ok(row.map(wallet_from))
+    }
+
+    #[instrument(name = "wallet.export.stake_positions", skip(self))]
+    async fn stake_positions(
+        &self,
+        account: &AccountId,
+        after: Option<&StakeTarget>,
+        limit: i64,
+    ) -> Result<Vec<StakePositionRecord>, WalletError> {
+        let (after_kind, after_id) = after.map_or(("", ""), |t| (t.kind(), t.id()));
+        let rows: Vec<PositionRow> = sqlx::query_as(
+            "SELECT s.target_kind, s.target_id, s.total, s.first_at, s.last_at, \
+               t.settled_at, t.points, t.count_on_arrival, t.count_at_settlement, t.earliness, t.pre_score, \
+               t.model, t.outcome, t.score, t.provisional_gems, t.envelope_day \
+             FROM stakes s LEFT JOIN settlements t \
+               ON t.account_id = s.account_id AND t.target_kind = s.target_kind AND t.target_id = s.target_id \
+             WHERE s.account_id = $1 AND (s.target_kind, s.target_id) > ($2, $3) \
+             ORDER BY s.target_kind, s.target_id LIMIT $4",
+        )
+        .bind(account.as_uuid())
+        .bind(after_kind)
+        .bind(after_id)
+        .bind(limit)
+        .fetch_all(self.pool(account)?)
+        .await
+        .map_err(storage)?;
+        Ok(rows.into_iter().filter_map(PositionRow::into_record).collect())
+    }
+
     #[instrument(name = "wallet.envelope.complete", skip(self, summary))]
     async fn complete_envelope_day(&self, day: NaiveDate, summary: &EnvelopeSummary) -> Result<(), WalletError> {
         sqlx::query(
@@ -810,4 +845,50 @@ impl WalletStore for PgWalletStore {
 /// Midnight (UTC) at the start of `day`.
 fn day_start(day: NaiveDate) -> DateTime<Utc> {
     day.and_time(chrono::NaiveTime::MIN).and_utc()
+}
+
+/// A stake position joined with its settlement, as stored.
+#[derive(sqlx::FromRow)]
+struct PositionRow {
+    target_kind:         String,
+    target_id:           String,
+    total:               i64,
+    first_at:            DateTime<Utc>,
+    last_at:             DateTime<Utc>,
+    settled_at:          Option<DateTime<Utc>>,
+    points:              Option<i64>,
+    count_on_arrival:    Option<i64>,
+    count_at_settlement: Option<i64>,
+    earliness:           Option<f64>,
+    pre_score:           Option<f64>,
+    model:               Option<String>,
+    outcome:             Option<i16>,
+    score:               Option<f64>,
+    provisional_gems:    Option<i64>,
+    envelope_day:        Option<NaiveDate>,
+}
+
+impl PositionRow {
+    /// `None` for a row the service cannot read (never guessed).
+    fn into_record(self) -> Option<StakePositionRecord> {
+        let target = match self.target_kind.as_str() {
+            "post" => StakeTarget::Post(self.target_id),
+            "comment" => StakeTarget::Comment(self.target_id),
+            _ => return None,
+        };
+        let settlement = self.settled_at.map(|settled_at| SettlementRecord {
+            settled_at,
+            points: self.points.unwrap_or(0),
+            count_on_arrival: self.count_on_arrival,
+            count_at_settlement: self.count_at_settlement.unwrap_or(0),
+            earliness: self.earliness,
+            pre_score: self.pre_score,
+            model: self.model.unwrap_or_default(),
+            outcome: self.outcome,
+            score: self.score,
+            provisional_gems: self.provisional_gems,
+            envelope_day: self.envelope_day,
+        });
+        Some(StakePositionRecord { target, points: self.total, first_at: self.first_at, last_at: self.last_at, settlement })
+    }
 }

@@ -40,4 +40,18 @@ impl WalletService for WalletServiceHandler {
     async fn spend_gems(&self, request: Request<proto::SpendGemsRequest>) -> Result<Response<proto::SpendGemsResponse>, Status> {
         self.spend_gems(request).await
     }
+
+    async fn export_wallet(
+        &self,
+        request: Request<proto::ExportWalletRequest>,
+    ) -> Result<Response<proto::ExportWalletResponse>, Status> {
+        self.export_wallet(request).await
+    }
+
+    async fn list_stake_positions(
+        &self,
+        request: Request<proto::ListStakePositionsRequest>,
+    ) -> Result<Response<proto::ListStakePositionsResponse>, Status> {
+        self.list_stake_positions(request).await
+    }
 }

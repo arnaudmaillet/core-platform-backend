@@ -46,6 +46,7 @@ dependencies = [
  "uuid",
  "validate-core",
  "validation",
+ "wallet-api",
  "zip",
 ]
 

@@ -259,7 +259,10 @@ transcoded to JSON through the service's own descriptor set): per profile its pr
 channel through chat's mesh-only `GetFormerMemberHistory`, the holder's own messages with the others' as
 `{"from": "another member"}` placeholders — direct is the conversation's kind, never its roster size;
 groups the holder left (#656, `left_at_ms`) are included, up to the departure, without their roster); for the account its
-likes (engagement's `ListLikesByAccount`, #665: a like is a point, the account's) and its media
+likes (engagement's `ListLikesByAccount`, #665: a like is a point, the account's), its wallet
+(`wallet.json`: wallet's mesh-only `ExportWallet` — read without opening one — every page of
+`ListWalletTransactions`, and `ListStakePositions`, each stake with its settlement; without
+`ACCOUNT_WALLET_GRPC_ENDPOINT` the archive goes without it, logged) and its media
 (`ListAssetsByOwner`, links valid 7 days). The server runs the pass every
 `ACCOUNT_EXPORT_INTERVAL_SECS` when the store is configured (`ACCOUNT_EXPORT_BUCKET`, core-platform-infra#28).
 
@@ -371,6 +374,7 @@ async fn main() -> anyhow::Result<()> {
 | `ACCOUNT_EXPORT_INTERVAL_SECS` | No | `300` | How often the export pass runs; `0` turns it off. |
 | `ACCOUNT_SEARCH_GRPC_ENDPOINT` | No | `http://localhost:50062` | search's mesh address: the profiles' recent searches in the export (#816). |
 | `ACCOUNT_MODERATION_GRPC_ENDPOINT` | No | `http://localhost:50061` | moderation's mesh address: a supervised teen's reports (#670). Unreachable: `ListSupervisedReports` answers `ACC-3008`. |
+| `ACCOUNT_WALLET_GRPC_ENDPOINT` | No | unset | wallet's mesh address (e.g. `http://wallet-server:50072`): the export's `wallet.json` (#665). Unset: the archive goes without it (core-platform-infra#44). |
 | `ACCOUNT_{PROFILE,POST,COMMENT,ENGAGEMENT,SOCIAL_GRAPH,CHAT,MEDIA}_GRPC_ENDPOINT` | No | `http://localhost:<port>` | The export's mesh sources. An unreachable one leaves the export pending. |
 
 > Full connection/timeout/pool tuning lives in the shared `postgres-storage` and `transport` crates.

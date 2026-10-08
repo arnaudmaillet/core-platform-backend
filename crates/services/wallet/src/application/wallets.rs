@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::application::port::{
     AudienceCheck, ClaimOutcome, EnvelopeSummary, EventPublisher, GemSpend, LikePositions, OutboxEvent, PackOutcome, SpendOutcome, StakeAnnouncement,
-    StakeOutcome, StakeResult, TargetDirectory, TransactionCursor, WalletStore,
+    StakeOutcome, StakePositionRecord, StakeResult, TargetDirectory, TransactionCursor, WalletStore,
 };
 use crate::config::WalletConfig;
 use crate::domain::{
@@ -62,6 +62,17 @@ pub struct StakeBatch {
     pub key:          String,
     pub first_tap_at: DateTime<Utc>,
 }
+
+/// One page of stake positions; `next_page_token` is `None` on the last.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StakePositionPage {
+    pub positions:       Vec<StakePositionRecord>,
+    pub next_page_token: Option<String>,
+}
+
+/// Default and maximum stake-position page sizes (the GDPR export).
+pub const DEFAULT_POSITIONS_PAGE: i64 = 100;
+pub const MAX_POSITIONS_PAGE: i64 = 500;
 
 /// Longest `ref_id` a spend may name.
 const MAX_REF_LEN: usize = 64;
@@ -404,6 +415,35 @@ impl Wallets {
         Ok(HistoryPage { transactions, next_page_token })
     }
 
+    /// The account's wallet for its GDPR export, without opening one;
+    /// `None` when it never had one.
+    pub async fn export(&self, account: &str, now: DateTime<Utc>) -> Result<Option<WalletView>, WalletError> {
+        let account = AccountId::parse(account)?;
+        let now = ledger_time(now);
+        Ok(self.store.peek(&account).await?.map(|wallet| self.view(wallet, now)))
+    }
+
+    /// One page of the account's stake positions and their settlements,
+    /// in target order (the token is the last target, `kind:id`).
+    pub async fn stake_positions(&self, account: &str, page_size: i64, page_token: &str) -> Result<StakePositionPage, WalletError> {
+        let account = AccountId::parse(account)?;
+        let after = match page_token.split_once(':') {
+            _ if page_token.is_empty() => None,
+            Some(("post", id)) => Some(StakeTarget::Post(id.to_owned())),
+            Some(("comment", id)) => Some(StakeTarget::Comment(id.to_owned())),
+            _ => return Err(WalletError::InvalidPageToken { value: page_token.to_owned() }),
+        };
+        let limit = match page_size {
+            n if n <= 0 => DEFAULT_POSITIONS_PAGE,
+            n => n.min(MAX_POSITIONS_PAGE),
+        };
+        let positions = self.store.stake_positions(&account, after.as_ref(), limit).await?;
+        let next_page_token = (positions.len() as i64 == limit)
+            .then(|| positions.last().map(|p| p.target.reference()))
+            .flatten();
+        Ok(StakePositionPage { positions, next_page_token })
+    }
+
     /// The account was deleted: its wallet and history go.
     pub async fn erase(&self, account: &AccountId) -> Result<bool, WalletError> {
         self.store.erase(account).await
@@ -742,6 +782,50 @@ pub(crate) mod fakes {
                     }
                 })
                 .collect())
+        }
+
+        async fn peek(&self, account: &AccountId) -> Result<Option<Wallet>, WalletError> {
+            Ok(self.wallets.lock().unwrap().get(account).cloned())
+        }
+
+        async fn stake_positions(
+            &self,
+            account: &AccountId,
+            after: Option<&StakeTarget>,
+            limit: i64,
+        ) -> Result<Vec<StakePositionRecord>, WalletError> {
+            let key = |t: &StakeTarget| (t.kind().to_owned(), t.id().to_owned());
+            let stakes = self.stakes.lock().unwrap();
+            let settlements = self.settlements.lock().unwrap();
+            let mut positions: Vec<_> = self
+                .positions
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|((a, _), (target, _, _))| a == account && after.is_none_or(|after| key(target) > key(after)))
+                .map(|(slot, (target, first_at, _))| StakePositionRecord {
+                    target:     target.clone(),
+                    points:     stakes.get(slot).map_or(0, |(total, _)| *total),
+                    first_at:   *first_at,
+                    last_at:    *first_at,
+                    settlement: settlements.get(slot).map(|s| crate::application::port::SettlementRecord {
+                        settled_at:          s.settled_at,
+                        points:              s.points,
+                        count_on_arrival:    s.count_on_arrival,
+                        count_at_settlement: s.count_at_settlement,
+                        earliness:           s.earliness,
+                        pre_score:           s.pre_score,
+                        model:               s.model.to_owned(),
+                        outcome:             None,
+                        score:               None,
+                        provisional_gems:    None,
+                        envelope_day:        None,
+                    }),
+                })
+                .collect();
+            positions.sort_by_key(|p| key(&p.target));
+            positions.truncate(limit as usize);
+            Ok(positions)
         }
 
         async fn record_settlement(&self, settlement: &crate::domain::Settlement) -> Result<(), WalletError> {
@@ -1119,6 +1203,32 @@ mod tests {
         // Erasure takes the settlements with the wallet.
         w.erase(&me_id).await.unwrap();
         assert!(!store.settlements.lock().unwrap().contains_key(&(me_id, "post:post-1".to_owned())));
+    }
+
+    /// The GDPR export (#653, #665): the wallet read without opening one,
+    /// and every stake position with its settlement, page by page.
+    #[tokio::test]
+    async fn the_export_never_opens_a_wallet_and_pages_the_positions() {
+        let l = likes();
+        let me = Uuid::now_v7().to_string();
+        assert_eq!(l.wallets.export(&me, at(8, 10)).await.unwrap(), None);
+        assert_eq!(l.wallets.export(&me, at(8, 10)).await.unwrap(), None, "the export opened nothing");
+
+        funded(&l.wallets, &me).await;
+        for (i, target) in ["post-1", "post-2", "post-3"].into_iter().enumerate() {
+            l.targets.lock_insert(target, "author", true);
+            l.wallets.stake(&me, batch(target, StakeAsk::Points(10 + i as i64), &key(), at(8, 10)), &[], at(8, 10)).await.unwrap();
+        }
+        let view = l.wallets.export(&me, at(8, 10)).await.unwrap().unwrap();
+        assert_eq!(view.wallet.points, 200 - 33);
+
+        let first = l.wallets.stake_positions(&me, 2, "").await.unwrap();
+        assert_eq!(first.positions.iter().map(|p| p.points).collect::<Vec<_>>(), vec![10, 11]);
+        assert_eq!(first.next_page_token.as_deref(), Some("post:post-2"));
+        let rest = l.wallets.stake_positions(&me, 2, first.next_page_token.as_deref().unwrap()).await.unwrap();
+        assert_eq!((rest.positions.len(), rest.next_page_token), (1, None));
+        assert!(rest.positions[0].settlement.is_none(), "not settled yet");
+        assert!(l.wallets.stake_positions(&me, 2, "bogus").await.is_err());
     }
 
     #[tokio::test]

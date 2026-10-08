@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a25bd507d24f83aeebbff7dc4379e281ab2231290f4c8ed5785430056d2e6d37
+  source_sha256: d0d384902e858f5bd2561f16c7cd835ccf2d07442936aaf30c41703163feb1a9
   translated_at: 2026-10-08
   status: complete
 ---
@@ -20,8 +20,8 @@ i18n:
 > | **Déployable** | `crates/apps/wallet-server` (crate bibliothèque : `crates/services/wallet`) |
 > | **Stockage** | Postgres (cluster CNPG dédié, tables `wallets`, `wallet_transactions`) |
 > | **Asynchrone** | consomme `account.v1.events` (groupe `wallet-account-events`) · publie `wallet.v1.events` (likes misés) |
-> | **Appelants** | l'app (edge client `:9443`) · geo-discovery (mesh `SpendGems`, déblocage de pays) |
-> | **Dépendances** | Postgres, Kafka, post et comment (mesh : là où tombent les likes), social-graph (mesh : le lecteur peut-il le voir) |
+> | **Appelants** | l'app (edge client `:9443`) · geo-discovery (mesh `SpendGems`, déblocage de pays) · account (mesh `ExportWallet` / `ListStakePositions` / `ListWalletTransactions`, l'export RGPD) |
+> | **Dépendances** | Postgres, Kafka, post et comment (mesh : là où tombent les likes), social-graph (mesh : le lecteur peut-il le voir), engagement (mesh : `GetLikePositions`, le règlement des mises) |
 > | **SLO** | 99,9 % de dispo · p99 lecture < 50 ms · p99 réclamation < 100 ms |
 
 ---
@@ -191,6 +191,7 @@ un pool fixe — `WALLET_CURATOR_ENVELOPE_DAILY`, 1000 gems (charte économique 
 |---|---|---|
 | l'app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack` | solde, réclamation et pack indisponibles ; le reste de l'app fonctionne |
 | geo-discovery | `SpendGems` | déblocages de pays refusés (fail-closed) ; la carte fonctionne |
+| account | `ExportWallet`, `ListStakePositions`, `ListWalletTransactions` | exports RGPD réessayés au passage suivant |
 | post, comment, social-graph (en aval) | `GetPost`, `GetComment`, `CheckAccess` | likes refusés (`WAL-6001`, renvoyés par l'app) |
 | engagement (en aval) | `GetLikePositions` | les règlements attendent (réessayés après le bail) |
 
@@ -210,12 +211,18 @@ service WalletService {
   rpc BuyStakePack (BuyStakePackRequest) returns (BuyStakePackResponse);
   rpc Stake (StakeRequest) returns (StakeResponse);               // un lot de likes
   rpc SpendGems (SpendGemsRequest) returns (SpendGemsResponse);   // mesh seulement
+  rpc ExportWallet (ExportWalletRequest) returns (ExportWalletResponse);                 // mesh seulement
+  rpc ListStakePositions (ListStakePositionsRequest) returns (ListStakePositionsResponse); // mesh seulement
 }
 ```
 
 Tous sauf `SpendGems` sont sur l'edge (`authenticated`), liés au `account_id` de l'appelant
 (`edge::require_account` ; un autre compte ⇒ `PERMISSION_DENIED`). `SpendGems` est réservé au mesh
 (geo-discovery) : `kind` = `COUNTRY_UNLOCK`, `amount` > 0, `ref_id` ≤ 64 caractères.
+`ExportWallet` (le wallet lu **sans en ouvrir un** ; absent quand le compte n'en a jamais eu) et
+`ListStakePositions` (chaque position de mise avec son règlement et sa part d'enveloppe, paginée par
+cible, jeton `kind:id`, ≤ 500 par page) sont aussi réservés au mesh : l'export RGPD d'account (#653,
+#665).
 
 - `Wallet.gem_spending_restricted` (edge seulement) dit à l'app de masquer les dépenses de gems ;
   les conditions du pack sont renvoyées (`stake_pack_price`, `stake_pack_shots`, `points_per_shot`).

@@ -87,6 +87,10 @@ pub trait ExportPeers: Send + Sync + 'static {
     /// What the account liked (#665: likes are points, the account's): each
     /// post or comment, its points, the profile that liked and when.
     async fn likes(&self, account_id: &AccountId) -> Result<Vec<serde_json::Value>, AccountError>;
+    /// The account's wallet (#665): its balances, every movement, its stake
+    /// positions and their settlements. `None` when this instance has no
+    /// route to the wallet (the archive goes without `wallet.json`).
+    async fn wallet(&self, account_id: &AccountId) -> Result<Option<serde_json::Value>, AccountError>;
     /// The account's media, each with a download link valid `ttl`.
     async fn media(&self, account_id: &AccountId, ttl: Duration) -> Result<Vec<serde_json::Value>, AccountError>;
 }

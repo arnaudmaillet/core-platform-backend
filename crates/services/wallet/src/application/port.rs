@@ -267,6 +267,45 @@ pub trait WalletStore: Send + Sync + 'static {
 
     /// Marks `day`'s envelope computed, with its summary.
     async fn complete_envelope_day(&self, day: NaiveDate, summary: &EnvelopeSummary) -> Result<(), WalletError>;
+
+    /// The account's wallet, without opening one (the GDPR export).
+    async fn peek(&self, account: &AccountId) -> Result<Option<Wallet>, WalletError>;
+
+    /// The account's stake positions with their settlements, in target
+    /// order, up to `limit` after `after` (the GDPR export).
+    async fn stake_positions(
+        &self,
+        account: &AccountId,
+        after: Option<&StakeTarget>,
+        limit: i64,
+    ) -> Result<Vec<StakePositionRecord>, WalletError>;
+}
+
+/// An account's stakes on one target, and their settlement (the GDPR
+/// export).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StakePositionRecord {
+    pub target:     StakeTarget,
+    pub points:     i64,
+    pub first_at:   DateTime<Utc>,
+    pub last_at:    DateTime<Utc>,
+    pub settlement: Option<SettlementRecord>,
+}
+
+/// A recorded settlement and, once the day's envelope is computed, its share.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettlementRecord {
+    pub settled_at:          DateTime<Utc>,
+    pub points:              i64,
+    pub count_on_arrival:    Option<i64>,
+    pub count_at_settlement: i64,
+    pub earliness:           Option<f64>,
+    pub pre_score:           Option<f64>,
+    pub model:               String,
+    pub outcome:             Option<i16>,
+    pub score:               Option<f64>,
+    pub provisional_gems:    Option<i64>,
+    pub envelope_day:        Option<NaiveDate>,
 }
 
 /// A day's envelope, as computed.

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: bde3c1373176b60d8e49f91a6a953eab76cb877ebf4cf46fab5e0fa2e6557959
+  source_sha256: db52f042fa2c108d3b5d8fe1f579bfc050c804af6586c36a4e35d55ea180386e
   translated_at: 2026-10-08
   status: complete
 ---
@@ -284,7 +284,10 @@ commentaires (`ListCommentsByAuthor`), recherches récentes
 canal via le `GetFormerMemberHistory` mesh de chat, ses propres messages et ceux des autres en placeholders
 `{"from": "another member"}` — « directe » est le type de la conversation, jamais la taille de ses membres ;
 les groupes quittés (#656, `left_at_ms`) sont inclus, jusqu'au départ, sans leurs membres) ; pour le compte, ses
-likes (`ListLikesByAccount` d'engagement, #665 : un like est un point, celui du compte) et ses médias
+likes (`ListLikesByAccount` d'engagement, #665 : un like est un point, celui du compte), son wallet
+(`wallet.json` : `ExportWallet` du wallet, mesh uniquement — lu sans en ouvrir un —, toutes les pages
+de `ListWalletTransactions`, et `ListStakePositions`, chaque mise avec son règlement ; sans
+`ACCOUNT_WALLET_GRPC_ENDPOINT` l'archive part sans lui, avec un log) et ses médias
 (`ListAssetsByOwner`, liens valables 7 jours). Le serveur lance la passe toutes les
 `ACCOUNT_EXPORT_INTERVAL_SECS` quand le stockage est configuré (`ACCOUNT_EXPORT_BUCKET`,
 core-platform-infra#28).
@@ -399,6 +402,7 @@ async fn main() -> anyhow::Result<()> {
 | `ACCOUNT_EXPORT_INTERVAL_SECS` | Non | `300` | Fréquence de la passe d'export ; `0` la désactive. |
 | `ACCOUNT_SEARCH_GRPC_ENDPOINT` | Non | `http://localhost:50062` | Adresse mesh de search : les recherches récentes des profils dans l'export (#816). |
 | `ACCOUNT_MODERATION_GRPC_ENDPOINT` | Non | `http://localhost:50061` | Adresse mesh de moderation : les signalements d'un ado supervisé (#670). Injoignable : `ListSupervisedReports` répond `ACC-3008`. |
+| `ACCOUNT_WALLET_GRPC_ENDPOINT` | Non | non défini | Adresse mesh du wallet (p. ex. `http://wallet-server:50072`) : le `wallet.json` de l'export (#665). Non défini : l'archive part sans lui (core-platform-infra#44). |
 | `ACCOUNT_{PROFILE,POST,COMMENT,ENGAGEMENT,SOCIAL_GRAPH,CHAT,MEDIA}_GRPC_ENDPOINT` | Non | `http://localhost:<port>` | Les sources mesh de l'export. Une source injoignable laisse l'export en attente. |
 
 > Le réglage complet connexion/timeout/pool vit dans les crates partagés `postgres-storage` et `transport`.
