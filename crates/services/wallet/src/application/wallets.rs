@@ -7,7 +7,7 @@ use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use uuid::Uuid;
 
 use crate::application::port::{
-    AudienceCheck, ClaimOutcome, EventPublisher, GemSpend, LikePositions, OutboxEvent, PackOutcome, SpendOutcome, StakeAnnouncement,
+    AudienceCheck, ClaimOutcome, EnvelopeSummary, EventPublisher, GemSpend, LikePositions, OutboxEvent, PackOutcome, SpendOutcome, StakeAnnouncement,
     StakeOutcome, StakeResult, TargetDirectory, TransactionCursor, WalletStore,
 };
 use crate::config::WalletConfig;
@@ -92,6 +92,13 @@ const POSITIONS_PER_CALL: usize = 100;
 
 /// How long a settler holds the positions it claimed.
 const SETTLEMENT_LEASE_SECS: i64 = 300;
+
+/// How long after midnight (UTC) a day's envelope waits: its last
+/// settlements land first.
+const ENVELOPE_GRACE_MINUTES: i64 = 10;
+
+/// How long a replica holds the day it computes.
+const ENVELOPE_LEASE_SECS: i64 = 600;
 
 impl Wallets {
     pub fn new(store: Arc<dyn WalletStore>, config: WalletConfig) -> Self {
@@ -338,6 +345,40 @@ impl Wallets {
         Ok(settled)
     }
 
+    /// The envelope's pass (#665, shadow mode): computes each finished UTC
+    /// day's curator envelope — outcome, score and provisional gems for every
+    /// position settled that day — one replica per day. Recomputing a day
+    /// gives the same shares. No gems are minted. Returns the days computed.
+    pub async fn run_envelopes(&self, now: DateTime<Utc>) -> Result<usize, WalletError> {
+        let policy = self.config.envelope;
+        let cutoff = (now - TimeDelta::minutes(ENVELOPE_GRACE_MINUTES)).date_naive();
+        let mut computed = 0;
+        for day in self.store.pending_envelope_days(cutoff).await? {
+            if !self.store.claim_envelope_day(day, now, now + TimeDelta::seconds(ENVELOPE_LEASE_SECS)).await? {
+                continue;
+            }
+            let positions = self.store.day_positions(day).await?;
+            let allocations = policy.allocate(&positions);
+            let targets = positions.iter().map(|p| p.target.reference()).collect::<std::collections::HashSet<_>>().len();
+            let allocated: i64 = allocations.iter().map(|a| a.provisional_gems).sum();
+            let rows = positions.len();
+            let pairs: Vec<_> = positions.into_iter().zip(allocations).collect();
+            self.store.record_allocations(day, &pairs).await?;
+            let summary = EnvelopeSummary {
+                pool: policy.daily_pool,
+                allocated,
+                positions: rows as i64,
+                targets: targets as i64,
+                model: crate::domain::settlement::SHADOW_MODEL,
+                computed_at: now,
+            };
+            self.store.complete_envelope_day(day, &summary).await?;
+            tracing::info!(%day, positions = rows, targets, allocated, "curator envelope computed (shadow mode)");
+            computed += 1;
+        }
+        Ok(computed)
+    }
+
     /// One page of the account's history, newest first.
     pub async fn history(
         &self,
@@ -411,6 +452,9 @@ pub(crate) mod fakes {
     /// A position: its target, its first stake's time, leased until.
     type MemPosition = (StakeTarget, DateTime<Utc>, Option<DateTime<Utc>>);
 
+    /// An envelope day: leased until, its summary once computed.
+    type MemEnvelopeDay = (Option<DateTime<Utc>>, Option<crate::application::port::EnvelopeSummary>);
+
     /// The ledger in memory, with the Postgres adapter's semantics.
     #[derive(Default)]
     pub struct MemoryStore {
@@ -424,6 +468,10 @@ pub(crate) mod fakes {
         /// (account, `post:<id>`) → (target, first stake's time, leased until)
         positions: Mutex<HashMap<(AccountId, String), MemPosition>>,
         pub settlements: Mutex<HashMap<(AccountId, String), crate::domain::Settlement>>,
+        /// (account, `post:<id>`) → (day, allocation)
+        pub allocations: Mutex<HashMap<(AccountId, String), (chrono::NaiveDate, crate::domain::Allocation)>>,
+        /// day → (leased until, summary once computed)
+        pub envelope_days: Mutex<HashMap<chrono::NaiveDate, MemEnvelopeDay>>,
     }
 
     impl MemoryStore {
@@ -699,6 +747,78 @@ pub(crate) mod fakes {
         async fn record_settlement(&self, settlement: &crate::domain::Settlement) -> Result<(), WalletError> {
             let slot = (settlement.account, settlement.target.reference());
             self.settlements.lock().unwrap().entry(slot).or_insert_with(|| settlement.clone());
+            Ok(())
+        }
+
+        async fn pending_envelope_days(&self, before: chrono::NaiveDate) -> Result<Vec<chrono::NaiveDate>, WalletError> {
+            let counted = self.allocations.lock().unwrap();
+            let computed = self.envelope_days.lock().unwrap();
+            let mut days: Vec<_> = self
+                .settlements
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(slot, _)| !counted.contains_key(*slot))
+                .map(|(_, s)| s.settled_at.date_naive())
+                .chain(computed.iter().filter(|(_, (_, summary))| summary.is_none()).map(|(day, _)| *day))
+                .filter(|day| *day < before)
+                .collect();
+            days.sort();
+            days.dedup();
+            Ok(days)
+        }
+
+        async fn claim_envelope_day(
+            &self,
+            day: chrono::NaiveDate,
+            now: DateTime<Utc>,
+            lease_until: DateTime<Utc>,
+        ) -> Result<bool, WalletError> {
+            let mut days = self.envelope_days.lock().unwrap();
+            let entry = days.entry(day).or_insert((None, None));
+            if entry.1.is_some() || entry.0.is_some_and(|until| until >= now) {
+                return Ok(false);
+            }
+            entry.0 = Some(lease_until);
+            Ok(true)
+        }
+
+        async fn day_positions(&self, day: chrono::NaiveDate) -> Result<Vec<crate::domain::DayPosition>, WalletError> {
+            let mut positions: Vec<_> = self
+                .settlements
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|s| s.settled_at.date_naive() == day)
+                .map(|s| crate::domain::DayPosition {
+                    account:             s.account,
+                    target:              s.target.clone(),
+                    count_at_settlement: s.count_at_settlement,
+                    pre_score:           s.pre_score,
+                })
+                .collect();
+            positions.sort_by_key(|p| (p.account.as_uuid(), p.target.reference()));
+            Ok(positions)
+        }
+
+        async fn record_allocations(
+            &self,
+            day: chrono::NaiveDate,
+            allocations: &[(crate::domain::DayPosition, crate::domain::Allocation)],
+        ) -> Result<(), WalletError> {
+            let mut held = self.allocations.lock().unwrap();
+            for (p, a) in allocations {
+                held.insert((p.account, p.target.reference()), (day, *a));
+            }
+            Ok(())
+        }
+
+        async fn complete_envelope_day(
+            &self,
+            day: chrono::NaiveDate,
+            summary: &crate::application::port::EnvelopeSummary,
+        ) -> Result<(), WalletError> {
+            self.envelope_days.lock().unwrap().insert(day, (None, Some(summary.clone())));
             Ok(())
         }
     }
@@ -982,6 +1102,19 @@ mod tests {
         assert_eq!(w.settle_due(100, settled_at + TimeDelta::seconds(1)).await.unwrap(), 0, "leased");
         assert_eq!(w.settle_due(100, settled_at + TimeDelta::minutes(6)).await.unwrap(), 1);
         assert_eq!(w.settle_due(100, settled_at + TimeDelta::hours(1)).await.unwrap(), 0, "a position settles once");
+
+        // The day ends: its envelope shares the pool, once, without minting.
+        let day = settled_at.date_naive();
+        assert_eq!(w.run_envelopes(settled_at + TimeDelta::hours(1)).await.unwrap(), 0, "the day is not over");
+        let next_day = (settled_at + TimeDelta::days(1)).date_naive().and_hms_opt(0, 11, 0).unwrap().and_utc();
+        assert_eq!(w.run_envelopes(next_day).await.unwrap(), 1);
+        assert_eq!(w.run_envelopes(next_day).await.unwrap(), 0, "computed once");
+        let (counted_on, allocation) = store.allocations.lock().unwrap()[&(me_id, "post:post-1".to_owned())];
+        // One target that day: the day's top; capped at its 2 % of the pool.
+        assert_eq!((counted_on, allocation.outcome, allocation.provisional_gems), (day, 1, 10));
+        let summary = store.envelope_days.lock().unwrap()[&day].1.clone().unwrap();
+        assert_eq!((summary.pool, summary.allocated, summary.positions, summary.targets), (1_000, 20, 2, 1));
+        assert_eq!(w.get(&me, next_day).await.unwrap().wallet.gems, gems, "shadow mode: still no gems minted");
 
         // Erasure takes the settlements with the wallet.
         w.erase(&me_id).await.unwrap();

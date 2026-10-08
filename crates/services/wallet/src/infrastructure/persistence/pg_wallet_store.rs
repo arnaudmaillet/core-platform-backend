@@ -4,19 +4,19 @@
 //! the ledger row lands with the balance it moved (`balance_after`).
 
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use postgres_storage::{StorageError, TransactionManager};
 use sqlx::{PgConnection, PgPool, Postgres};
 use tracing::instrument;
 use uuid::Uuid;
 
 use crate::application::port::{
-    ClaimOutcome, ClaimResult, GemSpend, OutboxEvent, PackOutcome, SpendOutcome, StakeAnnouncement, StakeOutcome,
+    ClaimOutcome, ClaimResult, EnvelopeSummary, GemSpend, OutboxEvent, PackOutcome, SpendOutcome, StakeAnnouncement, StakeOutcome,
     StakeResult, TransactionCursor, WalletStore,
 };
 use crate::domain::event::{StakeCommitted, WalletEvent};
 use crate::domain::{
-    AccountId, ClaimDecision, ClaimPolicy, Currency, DuePosition, IdempotencyKey, PackDecision, Settlement, StakeAsk,
+    AccountId, Allocation, ClaimDecision, ClaimPolicy, Currency, DayPosition, DuePosition, IdempotencyKey, PackDecision, Settlement, StakeAsk,
     StakeDecision, StakePackPolicy, StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
@@ -44,6 +44,12 @@ impl PgWalletStore {
 
     fn pool(&self, account: &AccountId) -> Result<&PgPool, WalletError> {
         self.tx.pool_for(&account.as_uuid()).map_err(WalletError::Storage)
+    }
+
+    /// Where `envelope_days` lives: the nil UUID's shard, the same on every
+    /// replica (the pools' own order is not).
+    fn envelope_pool(&self) -> Result<&PgPool, WalletError> {
+        self.tx.pool_for(&Uuid::nil()).map_err(WalletError::Storage)
     }
 
     /// A transaction on the account's shard, the wallet opened if needed and
@@ -678,4 +684,130 @@ impl WalletStore for PgWalletStore {
         tx.commit().await.map_err(storage)?;
         Ok(())
     }
+
+    #[instrument(name = "wallet.envelope.pending", skip(self))]
+    async fn pending_envelope_days(&self, before: NaiveDate) -> Result<Vec<NaiveDate>, WalletError> {
+        let before_at = day_start(before);
+        let mut days = std::collections::BTreeSet::new();
+        for pool in self.tx.all_pools() {
+            let rows: Vec<(NaiveDate,)> = sqlx::query_as(
+                "SELECT DISTINCT (settled_at AT TIME ZONE 'UTC')::date FROM settlements \
+                 WHERE envelope_day IS NULL AND settled_at < $1",
+            )
+            .bind(before_at)
+            .fetch_all(pool)
+            .await
+            .map_err(storage)?;
+            days.extend(rows.into_iter().map(|(day,)| day));
+        }
+        // A computation left unfinished (its rows counted, its summary not).
+        let unfinished: Vec<(NaiveDate,)> =
+            sqlx::query_as("SELECT day FROM envelope_days WHERE computed_at IS NULL AND day < $1")
+                .bind(before)
+                .fetch_all(self.envelope_pool()?)
+                .await
+                .map_err(storage)?;
+        days.extend(unfinished.into_iter().map(|(day,)| day));
+        Ok(days.into_iter().collect())
+    }
+
+    #[instrument(name = "wallet.envelope.claim", skip(self))]
+    async fn claim_envelope_day(
+        &self,
+        day: NaiveDate,
+        now: DateTime<Utc>,
+        lease_until: DateTime<Utc>,
+    ) -> Result<bool, WalletError> {
+        let claimed: Option<(NaiveDate,)> = sqlx::query_as(
+            "INSERT INTO envelope_days (day, claimed_until) VALUES ($1, $3) \
+             ON CONFLICT (day) DO UPDATE SET claimed_until = EXCLUDED.claimed_until \
+             WHERE envelope_days.computed_at IS NULL \
+               AND (envelope_days.claimed_until IS NULL OR envelope_days.claimed_until < $2) \
+             RETURNING day",
+        )
+        .bind(day)
+        .bind(now)
+        .bind(lease_until)
+        .fetch_optional(self.envelope_pool()?)
+        .await
+        .map_err(storage)?;
+        Ok(claimed.is_some())
+    }
+
+    #[instrument(name = "wallet.envelope.positions", skip(self))]
+    async fn day_positions(&self, day: NaiveDate) -> Result<Vec<DayPosition>, WalletError> {
+        let (start, end) = (day_start(day), day_start(day) + TimeDelta::days(1));
+        let mut positions = Vec::new();
+        for pool in self.tx.all_pools() {
+            let rows: Vec<(Uuid, String, String, i64, Option<f64>)> = sqlx::query_as(
+                "SELECT account_id, target_kind, target_id, count_at_settlement, pre_score FROM settlements \
+                 WHERE settled_at >= $1 AND settled_at < $2",
+            )
+            .bind(start)
+            .bind(end)
+            .fetch_all(pool)
+            .await
+            .map_err(storage)?;
+            for (account, kind, id, count, pre_score) in rows {
+                let target = match kind.as_str() {
+                    "post" => StakeTarget::Post(id),
+                    "comment" => StakeTarget::Comment(id),
+                    _ => continue,
+                };
+                positions.push(DayPosition { account: AccountId::from_uuid(account), target, count_at_settlement: count, pre_score });
+            }
+        }
+        // The same order on every run: the same shares, recomputed.
+        positions.sort_by_key(|p| (p.account.as_uuid(), p.target.reference()));
+        Ok(positions)
+    }
+
+    #[instrument(name = "wallet.envelope.record", skip(self, allocations))]
+    async fn record_allocations(
+        &self,
+        day: NaiveDate,
+        allocations: &[(DayPosition, Allocation)],
+    ) -> Result<(), WalletError> {
+        for (position, allocation) in allocations {
+            sqlx::query(
+                "UPDATE settlements SET outcome = $4, score = $5, provisional_gems = $6, envelope_day = $7 \
+                 WHERE account_id = $1 AND target_kind = $2 AND target_id = $3",
+            )
+            .bind(position.account.as_uuid())
+            .bind(position.target.kind())
+            .bind(position.target.id())
+            .bind(allocation.outcome)
+            .bind(allocation.score)
+            .bind(allocation.provisional_gems)
+            .bind(day)
+            .execute(self.pool(&position.account)?)
+            .await
+            .map_err(storage)?;
+        }
+        Ok(())
+    }
+
+    #[instrument(name = "wallet.envelope.complete", skip(self, summary))]
+    async fn complete_envelope_day(&self, day: NaiveDate, summary: &EnvelopeSummary) -> Result<(), WalletError> {
+        sqlx::query(
+            "UPDATE envelope_days SET computed_at = $2, pool = $3, allocated = $4, positions = $5, targets = $6, \
+               model = $7, claimed_until = NULL WHERE day = $1",
+        )
+        .bind(day)
+        .bind(summary.computed_at)
+        .bind(summary.pool)
+        .bind(summary.allocated)
+        .bind(summary.positions)
+        .bind(summary.targets)
+        .bind(summary.model)
+        .execute(self.envelope_pool()?)
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+}
+
+/// Midnight (UTC) at the start of `day`.
+fn day_start(day: NaiveDate) -> DateTime<Utc> {
+    day.and_time(chrono::NaiveTime::MIN).and_utc()
 }

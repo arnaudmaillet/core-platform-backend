@@ -3,7 +3,7 @@
 
 use chrono::TimeDelta;
 
-use crate::domain::{ClaimPolicy, SettlementPolicy, StakePackPolicy, StakePolicy};
+use crate::domain::{ClaimPolicy, EnvelopePolicy, SettlementPolicy, StakePackPolicy, StakePolicy};
 
 /// Gems every wallet opens with.
 pub const DEFAULT_STARTER_GEMS: i64 = 100;
@@ -17,6 +17,8 @@ pub struct WalletConfig {
     pub stakes:       StakePolicy,
     /// Stake settlement (#665 part 4, shadow mode).
     pub settlement:   SettlementPolicy,
+    /// The daily curator envelope (shadow mode: provisional gems).
+    pub envelope:     EnvelopePolicy,
 }
 
 impl Default for WalletConfig {
@@ -27,6 +29,7 @@ impl Default for WalletConfig {
             stake_pack:   StakePackPolicy::default(),
             stakes:       StakePolicy::default(),
             settlement:   SettlementPolicy::default(),
+            envelope:     EnvelopePolicy::default(),
         }
     }
 }
@@ -38,7 +41,10 @@ impl WalletConfig {
     /// `WALLET_POINTS_PER_SHOT` (100), `WALLET_STAKE_TARGET_CAP` (250),
     /// `WALLET_STAKE_HOURLY_CAP` (1000), `WALLET_STAKE_MAX_BATCH_AGE_SECS`
     /// (86400), `WALLET_SETTLEMENT_DELAY_SECS` (86400; a position's full
-    /// commitment is the per-target cap). An unparsable or negative value
+    /// commitment is the per-target cap), `WALLET_CURATOR_ENVELOPE_DAILY`
+    /// (1000 gems), `WALLET_CURATOR_DAILY_CAP` (40 gems per account),
+    /// `WALLET_ENVELOPE_TARGET_CAP_BPS` (200 = 2 % of the pool per target),
+    /// `WALLET_OUTCOME_TOP_PERCENT` (15). An unparsable or negative value
     /// keeps the default.
     pub fn from_env() -> Self {
         Self::from_lookup(|name| std::env::var(name).ok())
@@ -81,6 +87,16 @@ impl WalletConfig {
                     .map(TimeDelta::seconds)
                     .unwrap_or(defaults.settlement.delay),
                 full_position: per_target_cap,
+            },
+            envelope: EnvelopePolicy {
+                daily_pool:         number("WALLET_CURATOR_ENVELOPE_DAILY").unwrap_or(defaults.envelope.daily_pool),
+                per_account_cap:    number("WALLET_CURATOR_DAILY_CAP").unwrap_or(defaults.envelope.per_account_cap),
+                per_target_cap_bps: number("WALLET_ENVELOPE_TARGET_CAP_BPS")
+                    .filter(|v| *v <= 10_000)
+                    .unwrap_or(defaults.envelope.per_target_cap_bps),
+                top_percent:        number("WALLET_OUTCOME_TOP_PERCENT")
+                    .filter(|v| (1..=100).contains(v))
+                    .unwrap_or(defaults.envelope.top_percent),
             },
         }
     }
