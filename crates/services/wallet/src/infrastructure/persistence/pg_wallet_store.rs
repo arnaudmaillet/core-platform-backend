@@ -21,6 +21,10 @@ use crate::domain::{
 };
 use crate::error::WalletError;
 
+/// How long the writer of a stake holds its outbox row (it publishes right
+/// after the commit; the drainers take it only past this).
+const WRITER_LEASE_SECS: i64 = 30;
+
 /// The starter gift's key: once per wallet.
 const STARTER_KEY: &str = "starter-gems";
 
@@ -430,11 +434,17 @@ impl WalletStore for PgWalletStore {
                         staked_at:         now,
                     }),
                 };
-                sqlx::query("INSERT INTO wallet_outbox (id, account_id, event, created_at) VALUES ($1, $2, $3, $4)")
-                    .bind(outbox.id)
-                    .bind(account.as_uuid())
-                    .bind(sqlx::types::Json(&outbox.event))
-                    .bind(now)
+                // Leased to this replica, which publishes it right after the
+                // commit; the drainers only take it if that fails.
+                sqlx::query(
+                    "INSERT INTO wallet_outbox (id, account_id, event, created_at, claimed_until) \
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(outbox.id)
+                .bind(account.as_uuid())
+                .bind(sqlx::types::Json(&outbox.event))
+                .bind(now)
+                .bind(now + chrono::TimeDelta::seconds(WRITER_LEASE_SECS))
                     .execute(&mut *tx)
                     .await
                     .map_err(storage)?;
@@ -458,18 +468,30 @@ impl WalletStore for PgWalletStore {
         Ok(StakeResult { outcome, spent: 0, my_total: on, first: false, wallet, outbox: None })
     }
 
-    #[instrument(name = "wallet.outbox.unpublished", skip(self))]
-    async fn unpublished(&self, limit: i64) -> Result<Vec<OutboxEvent>, WalletError> {
+    #[instrument(name = "wallet.outbox.claim", skip(self))]
+    async fn claim_unpublished(
+        &self,
+        limit: i64,
+        now: DateTime<Utc>,
+        lease_until: DateTime<Utc>,
+    ) -> Result<Vec<OutboxEvent>, WalletError> {
         let mut events = Vec::new();
         for pool in self.tx.all_pools() {
-            let rows: Vec<(Uuid, Uuid, sqlx::types::Json<WalletEvent>)> = sqlx::query_as(
-                "SELECT id, account_id, event FROM wallet_outbox WHERE published_at IS NULL ORDER BY created_at LIMIT $1",
+            let mut rows: Vec<(Uuid, Uuid, sqlx::types::Json<WalletEvent>, DateTime<Utc>)> = sqlx::query_as(
+                "UPDATE wallet_outbox SET claimed_until = $3 WHERE id IN ( \
+                   SELECT id FROM wallet_outbox \
+                   WHERE published_at IS NULL AND (claimed_until IS NULL OR claimed_until < $2) \
+                   ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED) \
+                 RETURNING id, account_id, event, created_at",
             )
             .bind(limit)
+            .bind(now)
+            .bind(lease_until)
             .fetch_all(pool)
             .await
             .map_err(storage)?;
-            events.extend(rows.into_iter().map(|(id, account, event)| OutboxEvent {
+            rows.sort_by_key(|(_, _, _, created_at)| *created_at);
+            events.extend(rows.into_iter().map(|(id, account, event, _)| OutboxEvent {
                 id,
                 account: AccountId::from_uuid(account),
                 event: event.0,

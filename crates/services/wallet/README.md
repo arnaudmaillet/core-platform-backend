@@ -102,7 +102,9 @@ batches never pass the room. It is **final** (no unlike). Its announcement, `Sta
 written to **`wallet_outbox` in the same transaction** (migration 0004): never a stake without its
 event. It is published right after the commit when the broker answers, else by the **drainer**
 (every `WALLET_OUTBOX_DRAIN_SECS`, all shards, oldest first) — at least once; the consumers dedup on
-`stake_key`. A replayed batch announces nothing new. `first` marks the account's first batch on the
+`stake_key`. A row is **leased** to one replica at a time (`claimed_until`): the writer holds it 30 s
+while it publishes, and the drainers claim the rest with `FOR UPDATE SKIP LOCKED` for a minute, so
+replicas share the backlog instead of all publishing it. A replayed batch announces nothing new. `first` marks the account's first batch on the
 target (the "X liked your post" notice goes out once). Published events are pruned after 7 days.
 Without `KAFKA_BROKERS` the service **does not start** (unless `WALLET_ALLOW_LOG_PUBLISHER=true`,
 local runs): a misconfigured env never drops likes silently.

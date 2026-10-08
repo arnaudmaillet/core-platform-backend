@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 191441875a3072e88e5afdac8dd86e88b966f4bbf6971950993ca6e55ca6e401
+  source_sha256: 8e904533b79ca7ca67d647858ad21107a0bbe8a965bd2cc19226d76fac1f427a
   translated_at: 2026-10-08
   status: complete
 ---
@@ -119,7 +119,9 @@ retrait). Son annonce, `StakeCommitted`, est écrite dans **`wallet_outbox` dans
 transaction** (migration 0004) : jamais une mise sans son événement. Elle est publiée juste après le
 commit si le broker répond, sinon par le **drainer** (toutes les `WALLET_OUTBOX_DRAIN_SECS`, tous les
 shards, la plus ancienne d'abord) — au moins une fois ; les consommateurs dédoublonnent sur
-`stake_key`. Un lot rejoué n'annonce rien de nouveau. `first` marque le premier lot du compte sur la
+`stake_key`. Une ligne est **réservée** à un seul réplica à la fois (`claimed_until`) : l'auteur la
+garde 30 s le temps de la publier, et les drainers réservent le reste avec `FOR UPDATE SKIP LOCKED`
+pour une minute, si bien que les réplicas se partagent l'arriéré au lieu de tous le publier. Un lot rejoué n'annonce rien de nouveau. `first` marque le premier lot du compte sur la
 cible (la notification « X a liké ton post » part une seule fois). Les événements publiés sont
 purgés après 7 jours. Sans `KAFKA_BROKERS` le service **ne démarre pas** (sauf
 `WALLET_ALLOW_LOG_PUBLISHER=true`, en local) : une mauvaise config ne perd jamais de likes en silence.

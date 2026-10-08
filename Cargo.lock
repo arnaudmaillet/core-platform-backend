@@ -7317,6 +7317,7 @@ dependencies = [
  "serde",
  "serde_json",
  "service-runtime",
+ "social-graph-api",
  "sqlx",
  "test-support",
  "thiserror 2.0.18",

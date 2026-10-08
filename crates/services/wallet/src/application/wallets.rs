@@ -275,7 +275,8 @@ impl Wallets {
     /// Returns how many were published.
     pub async fn drain_outbox(&self, limit: i64, now: DateTime<Utc>) -> Result<usize, WalletError> {
         let mut published = 0;
-        for event in self.store.unpublished(limit).await? {
+        // Leased for a minute: another replica's drainer takes other rows.
+        for event in self.store.claim_unpublished(limit, now, now + TimeDelta::seconds(60)).await? {
             if !self.publish(&event, now).await {
                 break;
             }
@@ -546,7 +547,7 @@ pub(crate) mod fakes {
             Ok(StakeResult { outcome, spent: 0, my_total: on, first: false, wallet, outbox: None })
         }
 
-        async fn unpublished(&self, limit: i64) -> Result<Vec<OutboxEvent>, WalletError> {
+        async fn claim_unpublished(&self, limit: i64, _: DateTime<Utc>, _: DateTime<Utc>) -> Result<Vec<OutboxEvent>, WalletError> {
             Ok(self
                 .outbox
                 .lock()

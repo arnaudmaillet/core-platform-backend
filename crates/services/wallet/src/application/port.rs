@@ -195,9 +195,15 @@ pub trait WalletStore: Send + Sync + 'static {
         now: DateTime<Utc>,
     ) -> Result<StakeResult, WalletError>;
 
-    /// Up to `limit` outbox events not yet published, oldest first (every
-    /// shard).
-    async fn unpublished(&self, limit: i64) -> Result<Vec<OutboxEvent>, WalletError>;
+    /// Claims up to `limit` outbox events not yet published and not leased
+    /// to another replica, oldest first (every shard), leasing them until
+    /// `lease_until`: concurrent drainers share the rows, never the same one.
+    async fn claim_unpublished(
+        &self,
+        limit: i64,
+        now: DateTime<Utc>,
+        lease_until: DateTime<Utc>,
+    ) -> Result<Vec<OutboxEvent>, WalletError>;
 
     /// Marks an outbox event published.
     async fn mark_published(&self, event: &OutboxEvent, at: DateTime<Utc>) -> Result<(), WalletError>;

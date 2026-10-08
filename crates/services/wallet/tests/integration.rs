@@ -293,10 +293,20 @@ async fn a_stake_and_its_announcement_are_written_together() {
     assert!(fresh.outbox.is_some() && replay.outbox.is_none());
 
     let mine = |events: Vec<wallet::application::port::OutboxEvent>| events.into_iter().filter(|e| e.account == account).collect::<Vec<_>>();
-    let pending = mine(store.unpublished(10_000).await.unwrap());
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0], fresh.outbox.clone().unwrap(), "read back as written");
-    store.mark_published(&pending[0], Utc::now()).await.unwrap();
-    assert!(mine(store.unpublished(10_000).await.unwrap()).is_empty());
-    assert!(store.prune_outbox(Utc::now() + chrono::TimeDelta::seconds(1)).await.unwrap() >= 1);
+    let now = Utc::now();
+    // The writer holds its row while it publishes: no drainer takes it yet.
+    assert!(mine(store.claim_unpublished(10_000, now, now + chrono::TimeDelta::seconds(60)).await.unwrap()).is_empty());
+    // Past the writer's lease (it failed to publish): one drainer claims it,
+    // a concurrent one does not.
+    let later = now + chrono::TimeDelta::seconds(31);
+    let lease = later + chrono::TimeDelta::seconds(60);
+    let (a, b) = tokio::join!(store.claim_unpublished(10_000, later, lease), store.claim_unpublished(10_000, later, lease));
+    let (a, b) = (mine(a.unwrap()), mine(b.unwrap()));
+    assert_eq!(a.len() + b.len(), 1, "one replica claims it");
+    let claimed = a.into_iter().chain(b).next().unwrap();
+    assert_eq!(claimed, fresh.outbox.clone().unwrap(), "read back as written");
+    store.mark_published(&claimed, later).await.unwrap();
+    let much_later = later + chrono::TimeDelta::seconds(120);
+    assert!(mine(store.claim_unpublished(10_000, much_later, much_later).await.unwrap()).is_empty(), "published");
+    assert!(store.prune_outbox(Utc::now() + chrono::TimeDelta::days(1)).await.unwrap() >= 1);
 }
