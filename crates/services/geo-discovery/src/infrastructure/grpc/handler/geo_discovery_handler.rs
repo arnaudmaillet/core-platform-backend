@@ -27,6 +27,8 @@ where
     query_bus:          QB,
     country_access:     Arc<ResolveCountryAccess>,
     trusted_proxy_hops: usize,
+    /// The country ladder (#665); `None` answers UNAVAILABLE.
+    standings:          Option<Arc<crate::application::country_standings::CountryStandings>>,
 }
 
 impl<QB> GeoDiscoveryHandler<QB>
@@ -34,7 +36,13 @@ where
     QB: QueryBus + Send + Sync + 'static,
 {
     pub fn new(query_bus: QB, country_access: Arc<ResolveCountryAccess>, trusted_proxy_hops: usize) -> Self {
-        Self { query_bus, country_access, trusted_proxy_hops }
+        Self { query_bus, country_access, trusted_proxy_hops, standings: None }
+    }
+
+    /// Serves the country ladder (#665).
+    pub fn with_standings(mut self, standings: Arc<crate::application::country_standings::CountryStandings>) -> Self {
+        self.standings = Some(standings);
+        self
     }
 }
 
@@ -140,6 +148,31 @@ where
         };
         Ok(Response::new(proto::GetCountryAccessResponse { current_country, outcome: outcome as i32 }))
     }
+
+    async fn get_country_standings_inner(
+        &self,
+        _request: Request<proto::GetCountryStandingsRequest>,
+    ) -> Result<Response<proto::GetCountryStandingsResponse>, Status> {
+        let standings = self.standings.as_ref().ok_or_else(|| Status::unavailable("the country ladder is not configured"))?;
+        let ladder = standings.ladder(chrono::Utc::now()).await.map_err(app_to_status)?;
+        Ok(Response::new(proto::GetCountryStandingsResponse {
+            standings:   ladder
+                .standings
+                .iter()
+                .map(|s| proto::CountryStanding {
+                    country_code: s.country.to_string(),
+                    rank:         i32::try_from(s.rank).unwrap_or(i32::MAX),
+                    likes:        s.likes,
+                    posts:        s.posts,
+                    price_gems:   standings.pricing.price(s.rank, false),
+                })
+                .collect(),
+            computed_at: Some(prost_types::Timestamp {
+                seconds: ladder.computed_at.timestamp(),
+                nanos:   i32::try_from(ladder.computed_at.timestamp_subsec_nanos()).unwrap_or(0),
+            }),
+        }))
+    }
 }
 
 // ── Proto trait implementation ─────────────────────────────────────────────────
@@ -168,6 +201,13 @@ where
         request: Request<proto::GetCountryAccessRequest>,
     ) -> Result<Response<proto::GetCountryAccessResponse>, Status> {
         self.get_country_access_inner(request).await
+    }
+
+    async fn get_country_standings(
+        &self,
+        request: Request<proto::GetCountryStandingsRequest>,
+    ) -> Result<Response<proto::GetCountryStandingsResponse>, Status> {
+        self.get_country_standings_inner(request).await
     }
 }
 

@@ -128,6 +128,8 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     // a first reaction teaches the reactor the post's hashtags (#662: the
     // interest tags that rank For You)
     ("engagement.reactions", "timeline"),
+    // hearts → each country's likes, the ladder that prices unlocks (#665)
+    ("engagement.reactions", "geo-discovery"),
     // follows, follow requests and their approval (#755)
     ("social-graph.followed", "notification"),
     ("social-graph.follow_requested", "notification"),

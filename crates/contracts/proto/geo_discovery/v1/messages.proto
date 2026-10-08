@@ -3,6 +3,7 @@ syntax = "proto3";
 package geo_discovery.v1;
 
 import "geo_discovery/v1/enums.proto";
+import "google/protobuf/timestamp.proto";
 
 // ── Shared geometry ───────────────────────────────────────────────────────────
 
@@ -118,4 +119,27 @@ message GetCountryAccessResponse {
     // The current country, echoed only when granted; empty otherwise.
     string               current_country = 1;
     CountryAccessOutcome outcome         = 2;
+}
+
+// ── Country standings (#665) ──────────────────────────────────────────────────
+
+message GetCountryStandingsRequest {}
+
+message CountryStanding {
+    // ISO 3166-1 alpha-2.
+    string country_code = 1;
+    // 1 = most liked.
+    int32  rank         = 2;
+    // Likes on posts published there, over the window.
+    int64  likes        = 3;
+    // Posts published there, over the window.
+    int64  posts        = 4;
+    // What unlocking it costs, in gems.
+    int64  price_gems   = 5;
+}
+
+message GetCountryStandingsResponse {
+    // Every country, busiest first.
+    repeated CountryStanding  standings   = 1;
+    google.protobuf.Timestamp computed_at = 2;
 }

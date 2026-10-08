@@ -32,6 +32,7 @@ tracing      = { workspace = true }
 tonic            = { workspace = true }
 tonic-health     = { workspace = true }
 tonic-reflection = { workspace = true }
+prost-types      = { workspace = true }   # the ladder's computed_at (#665)
 http             = { workspace = true }
 
 scylla = { workspace = true }
@@ -62,6 +63,8 @@ tokio = { workspace = true }
 moderation = { workspace = true }
 # Same for the location-settings worker: profile's own wire type.
 profile    = { workspace = true }
+# Same for the country likes worker: engagement's own reaction events.
+engagement = { workspace = true }
 
 # ── Integration suite (feature = "integration-geo-discovery") ────────────────
 # Container orchestration, the RF=1 migration runner, and `await_until` come from

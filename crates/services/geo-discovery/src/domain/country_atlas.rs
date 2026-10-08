@@ -97,6 +97,11 @@ impl CountryAtlas {
         pairs
     }
 
+    /// Every country the atlas draws.
+    pub fn codes(&self) -> impl Iterator<Item = CountryCode> + '_ {
+        self.countries.keys().copied()
+    }
+
     pub fn knows(&self, code: CountryCode) -> bool {
         self.countries.contains_key(&code)
     }

@@ -57,6 +57,12 @@ pub struct GeoDiscoveryConfig {
     /// Default: 43 200 s (12 h).
     pub country_grant_ttl_secs: u64,
 
+    /// The country ladder (#665): the consumer group counting likes per
+    /// country, the days of likes ranked, and how long a ladder is served.
+    pub country_likes_group_id: String,
+    pub standings_window_days:  u32,
+    pub standings_cache_secs:   u64,
+
     /// Proxies in front of the edge listener that append to `X-Forwarded-For`
     /// (the ALB: 1). The client address is that many entries from the right;
     /// anything further left is client-supplied and never trusted.
@@ -114,6 +120,18 @@ impl GeoDiscoveryConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(43_200),
+
+            country_likes_group_id: std::env::var("GEO_COUNTRY_LIKES_GROUP_ID")
+                .unwrap_or_else(|_| "geo-discovery-country-likes".to_owned()),
+            standings_window_days: std::env::var("GEO_STANDINGS_WINDOW_DAYS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|d| *d > 0)
+                .unwrap_or(30),
+            standings_cache_secs: std::env::var("GEO_STANDINGS_CACHE_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60),
 
             // One setting for the fleet: GEO_ overrides, else the runtime's
             // GRPC_TRUSTED_PROXY_HOPS (also used by per_ip rate limits), else 1.

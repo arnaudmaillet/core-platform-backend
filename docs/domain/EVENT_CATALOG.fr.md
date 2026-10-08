@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: e263376389915a71b79d1b6445fecc19ae074c56cd8e84db81975e81d82b77cf
+  source_sha256: e9ef4b912862f496470fb92016200323d8e1f378e7f8a1768ae0bd939515299a
   translated_at: 2026-10-08
   status: complete
 ---
@@ -49,7 +49,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `post.v1.events` | `post` | `timeline`, `search`, `realtime` |
 | `comment.created` | `comment` | `notification`, `engagement` |
 | `comment.deleted` | `comment` | `engagement` |
-| `engagement.reactions` | `engagement` | `counter`, `notification`, `timeline`, `engagement` |
+| `engagement.reactions` | `engagement` | `counter`, `notification`, `timeline`, `geo-discovery`, `engagement` |
 | `social-graph.followed` | `social-graph` | `notification`, `timeline` |
 | `social-graph.unfollowed` | `social-graph` | `timeline` |
 | `social-graph.blocked` | `social-graph` | — *(orphan — see below)* |

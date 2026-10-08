@@ -1,9 +1,11 @@
+pub mod country_likes_worker;
 pub mod location_settings_worker;
 pub mod post_indexer;
 pub mod score_updater;
 pub mod tile_pruner;
 pub mod visibility_worker;
 
+pub use country_likes_worker::CountryLikesWorker;
 pub use location_settings_worker::LocationSettingsWorker;
 pub use post_indexer::PostIndexerWorker;
 pub use score_updater::ScoreUpdaterWorker;
