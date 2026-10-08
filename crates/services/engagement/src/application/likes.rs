@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use crate::application::port::{LikeLedger, LikeStore};
+use crate::application::port::{Applied, LikeLedger, LikeStore, Position};
 use crate::domain::value_object::LikeTarget;
 use crate::error::EngagementError;
 
@@ -37,16 +37,16 @@ pub async fn rehydrate(store: &dyn LikeStore, ledger: &dyn LikeLedger, target: &
 }
 
 /// Applies `account`'s `total` on `target`, rehydrating the target first if
-/// its likers expired; returns the likes added.
+/// its likers expired; returns the likes added and the account's arrival.
 pub async fn apply_total(
     store: &dyn LikeStore,
     ledger: &dyn LikeLedger,
     target: &LikeTarget,
     account: &str,
     total: i64,
-) -> Result<i64, EngagementError> {
-    if let Some(added) = store.apply_total(target, account, total).await? {
-        return Ok(added);
+) -> Result<Applied, EngagementError> {
+    if let Some(applied) = store.apply_total(target, account, total).await? {
+        return Ok(applied);
     }
     let loaded = rehydrate(store, ledger, target).await?;
     tracing::info!(target = %target, loaded, "likers rehydrated");
@@ -77,10 +77,46 @@ pub async fn mine(
                         }
                     });
                 }
-                ledger.total_of(target, account).await?.unwrap_or(0)
+                ledger.position_of(target, account).await?.map_or(0, |p| p.total)
             }
         };
         out.push(mine);
+    }
+    Ok(out)
+}
+
+/// An account's position on a target, and the target's count now (the
+/// settlement's numbers, #665).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LikePosition {
+    /// The account's points on it (0: none).
+    pub total:   i64,
+    /// The target's count just before the account's first like; `None` when
+    /// it has none, or for a like recorded before arrivals were kept.
+    pub arrival: Option<i64>,
+    /// The target's count now.
+    pub count:   i64,
+}
+
+/// `account`'s position on each target: from Redis, or — where its likers
+/// expired — from the durable copy (none without one).
+pub async fn positions(
+    store: &dyn LikeStore,
+    ledger: Option<&dyn LikeLedger>,
+    account: &str,
+    targets: &[LikeTarget],
+) -> Result<Vec<LikePosition>, EngagementError> {
+    let counts = store.counts(targets).await?;
+    let held = store.positions(account, targets).await?;
+    let mut out = Vec::with_capacity(targets.len());
+    for ((target, count), held) in targets.iter().zip(counts).zip(held) {
+        let position = match (held, ledger) {
+            (Some(position), _) => position,
+            (None, Some(ledger)) => ledger.position_of(target, account).await?.unwrap_or_default(),
+            (None, None) => Position::default(),
+        };
+        let arrival = if position.total > 0 { position.arrival } else { None };
+        out.push(LikePosition { total: position.total, arrival, count });
     }
     Ok(out)
 }
@@ -91,9 +127,9 @@ mod tests {
     use crate::application::fakes::Likes;
 
     async fn stake(likes: &Likes, target: &LikeTarget, account: &str, total: i64) -> i64 {
-        let added = apply_total(likes, likes, target, account, total).await.unwrap();
-        likes.record(target, account, "p", total, 1).await.unwrap();
-        added
+        let applied = apply_total(likes, likes, target, account, total).await.unwrap();
+        likes.record(target, account, "p", Position { total, arrival: applied.arrival }, 1).await.unwrap();
+        applied.added
     }
 
     #[tokio::test]

@@ -27,6 +27,7 @@ use crate::application::command::record_view::{RecordViewCommand, RecordViewHand
 use crate::application::erasure::LikeEraser;
 use crate::application::port::{LikeLedger, LikeStore, LikeVisibility, ScoreStore};
 use crate::application::query::batch_get_likes::{BatchGetLikesHandler, BatchGetLikesQuery};
+use crate::application::query::get_like_positions::{GetLikePositionsHandler, GetLikePositionsQuery};
 use crate::application::query::get_post_engagement::{GetPostEngagementHandler, GetPostEngagementQuery};
 use crate::application::query::list_likes_by_account::{ListLikesByAccountHandler, ListLikesByAccountQuery};
 use crate::infrastructure::persistence::{ScyllaCounterLedger, ScyllaLikeLedger};
@@ -99,6 +100,10 @@ impl App {
             QueryBusBuilder::new()
                 .register::<ListLikesByAccountQuery, _>(ListLikesByAccountHandler {
                     ledger: ledgers.as_ref().map(|(_, likes)| Arc::clone(likes)),
+                })?
+                .register::<GetLikePositionsQuery, _>(GetLikePositionsHandler {
+                    like_store:  Arc::clone(&like_store),
+                    like_ledger: ledgers.as_ref().map(|(_, l)| Arc::clone(l)),
                 })?
                 .register::<BatchGetLikesQuery, _>(BatchGetLikesHandler {
                     like_store:  Arc::clone(&like_store),

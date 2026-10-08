@@ -9,11 +9,16 @@ use uuid::Uuid;
 
 use engagement::application::erasure::{anonymous_liker, LikeEraser};
 use engagement::application::likes;
-use engagement::application::port::{ForgottenLike, LikeLedger};
+use engagement::application::port::{ForgottenLike, LikeLedger, Position};
 use engagement::domain::value_object::LikeTarget;
 use engagement::infrastructure::persistence::ScyllaLikeLedger;
 
 use crate::engagement_it::harness::TestHarness;
+
+/// A total recorded without an arrival (the scenarios that predate it).
+fn pos(total: i64) -> Position {
+    Position { total, arrival: None }
+}
 
 #[tokio::test]
 async fn totals_apply_once_in_any_order_and_concurrently() {
@@ -21,15 +26,15 @@ async fn totals_apply_once_in_any_order_and_concurrently() {
     let post = LikeTarget::Post(Uuid::now_v7().to_string());
     let (me, you) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
 
-    assert_eq!(h.like_store.apply_total(&post, &me, 30).await.unwrap(), Some(30));
-    assert_eq!(h.like_store.apply_total(&post, &me, 30).await.unwrap(), Some(0), "a redelivery adds nothing");
-    assert_eq!(h.like_store.apply_total(&post, &me, 35).await.unwrap(), Some(5));
-    assert_eq!(h.like_store.apply_total(&post, &me, 30).await.unwrap(), Some(0), "a late, older total adds nothing");
+    assert_eq!(h.like_store.apply_total(&post, &me, 30).await.unwrap().map(|a| a.added), Some(30));
+    assert_eq!(h.like_store.apply_total(&post, &me, 30).await.unwrap().map(|a| a.added), Some(0), "a redelivery adds nothing");
+    assert_eq!(h.like_store.apply_total(&post, &me, 35).await.unwrap().map(|a| a.added), Some(5));
+    assert_eq!(h.like_store.apply_total(&post, &me, 30).await.unwrap().map(|a| a.added), Some(0), "a late, older total adds nothing");
 
     // The same events, delivered many times at once.
     let deliveries = (0..20).map(|i| {
         let (store, post, you) = (Arc::clone(&h.like_store), post.clone(), you.clone());
-        tokio::spawn(async move { store.apply_total(&post, &you, 10 + (i % 3)).await.unwrap().unwrap() })
+        tokio::spawn(async move { store.apply_total(&post, &you, 10 + (i % 3)).await.unwrap().unwrap().added })
     });
     let mut added = 0;
     for d in deliveries {
@@ -56,9 +61,9 @@ async fn the_durable_copy_keeps_the_newest_total() {
     let ledger = ScyllaLikeLedger::new(Arc::clone(&client));
     let target = LikeTarget::Comment(Uuid::now_v7().to_string());
     let account = Uuid::now_v7().to_string();
-    ledger.record(&target, &account, "liker", 40, 2_000_000).await.unwrap();
+    ledger.record(&target, &account, "liker", pos(40), 2_000_000).await.unwrap();
     // An older event landing late does not win.
-    ledger.record(&target, &account, "liker", 10, 1_000_000).await.unwrap();
+    ledger.record(&target, &account, "liker", pos(10), 1_000_000).await.unwrap();
 
     let rows = client
         .session
@@ -102,9 +107,9 @@ async fn an_account_lists_what_it_liked_page_by_page() {
         .map(|i| if i % 2 == 0 { LikeTarget::Post(Uuid::now_v7().to_string()) } else { LikeTarget::Comment(Uuid::now_v7().to_string()) })
         .collect();
     for (i, target) in targets.iter().enumerate() {
-        ledger.record(target, &account, "liker", 10 * (i as i64 + 1), 1_000_000).await.unwrap();
+        ledger.record(target, &account, "liker", pos(10 * (i as i64 + 1)), 1_000_000).await.unwrap();
     }
-    ledger.record(&LikeTarget::Post(Uuid::now_v7().to_string()), &Uuid::now_v7().to_string(), "other", 5, 1_000_000).await.unwrap();
+    ledger.record(&LikeTarget::Post(Uuid::now_v7().to_string()), &Uuid::now_v7().to_string(), "other", pos(5), 1_000_000).await.unwrap();
 
     let first = ledger.list_by_account(&account, 2, None).await.unwrap();
     let rest = ledger.list_by_account(&account, 2, Some(&first[1].target)).await.unwrap();
@@ -137,7 +142,7 @@ async fn a_deleted_accounts_likes_are_forgotten_the_counts_kept() {
     for t in &targets {
         for (account, total) in [(&gone, 7), (&stays, 3)] {
             h.like_store.apply_total(t, account, total).await.unwrap().unwrap();
-            ledger.record(t, account, "liker", total, 1_000_000).await.unwrap();
+            ledger.record(t, account, "liker", pos(total), 1_000_000).await.unwrap();
         }
     }
 
@@ -152,7 +157,7 @@ async fn a_deleted_accounts_likes_are_forgotten_the_counts_kept() {
     assert_eq!(ledger.list_by_account(&stays, 10, None).await.unwrap().len(), 2);
 
     // A stake made before the deletion, written after it: still deleted.
-    ledger.record(&targets[0], &gone, "liker", 9, 1_500_000).await.unwrap();
+    ledger.record(&targets[0], &gone, "liker", pos(9), 1_500_000).await.unwrap();
     assert!(ledger.list_by_account(&gone, 10, None).await.unwrap().is_empty());
     let rows = client
         .session
@@ -206,8 +211,8 @@ async fn expired_likers_come_back_from_the_durable_copy() {
     let post = LikeTarget::Post(Uuid::now_v7().to_string());
     let (a, b) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
     for (account, total) in [(&a, 10), (&b, 4)] {
-        assert_eq!(likes::apply_total(h.like_store.as_ref(), &ledger, &post, account, total).await.unwrap(), total);
-        ledger.record(&post, account, "liker", total, 1_000_000).await.unwrap();
+        assert_eq!(likes::apply_total(h.like_store.as_ref(), &ledger, &post, account, total).await.unwrap().added, total);
+        ledger.record(&post, account, "liker", pos(total), 1_000_000).await.unwrap();
     }
     let likers = format!("engagement:{{{post}}}:likers");
     let ttl: i64 = h.redis.inner.ttl(&likers).await.unwrap();
@@ -219,8 +224,8 @@ async fn expired_likers_come_back_from_the_durable_copy() {
     assert_eq!(h.like_store.mine(&a, one).await.unwrap(), vec![None], "unknown, not 0");
     assert_eq!(h.like_store.apply_total(&post, &a, 15).await.unwrap(), None);
 
-    assert_eq!(likes::apply_total(h.like_store.as_ref(), &ledger, &post, &a, 15).await.unwrap(), 5, "only the difference");
-    ledger.record(&post, &a, "liker", 15, 2_000_000).await.unwrap();
+    assert_eq!(likes::apply_total(h.like_store.as_ref(), &ledger, &post, &a, 15).await.unwrap().added, 5, "only the difference");
+    ledger.record(&post, &a, "liker", pos(15), 2_000_000).await.unwrap();
     assert_eq!(h.like_store.counts(one).await.unwrap(), vec![19]);
     assert_eq!(h.like_store.mine(&b, one).await.unwrap(), vec![Some(4)], "every liker is back");
     assert_eq!(h.like_store.mine(&Uuid::now_v7().to_string(), one).await.unwrap(), vec![Some(0)], "whole again");
@@ -228,7 +233,7 @@ async fn expired_likers_come_back_from_the_durable_copy() {
     // A deleted account whose row is still in the durable copy (an erasure
     // racing the rehydration) is not loaded back.
     let gone = Uuid::now_v7().to_string();
-    ledger.record(&post, &gone, "liker", 3, 1_000_000).await.unwrap();
+    ledger.record(&post, &gone, "liker", pos(3), 1_000_000).await.unwrap();
     ledger.mark_erased(&gone, 1_900_000).await.unwrap();
     let _: i64 = h.redis.inner.del(&likers).await.unwrap();
     likes::rehydrate(h.like_store.as_ref(), &ledger, &post).await.unwrap();
@@ -238,4 +243,52 @@ async fn expired_likers_come_back_from_the_durable_copy() {
     // One rehydration at a time from the read path.
     assert!(h.like_store.claim_rehydration(&post).await.unwrap());
     assert!(!h.like_store.claim_rehydration(&post).await.unwrap());
+}
+
+/// Stake settlement (#665): each account's arrival on a target — the count
+/// just before its first like — is kept with its total in Redis and in
+/// Scylla, survives the likers' expiry, and a later stake does not move it.
+#[tokio::test]
+async fn an_accounts_arrival_is_kept_with_its_total() {
+    use fred::interfaces::{HashesInterface, KeysInterface};
+
+    let h = TestHarness::start().await;
+    let contact = test_support::containers::scylla_ready("engagement", concat!(env!("CARGO_MANIFEST_DIR"), "/migrations")).await;
+    let client = Arc::new(
+        ScyllaSessionBuilder::new(ScyllaConfig { contact_points: vec![contact], keyspace: None, ..ScyllaConfig::default() })
+            .build()
+            .await
+            .expect("scylla"),
+    );
+    let ledger = ScyllaLikeLedger::new(client);
+    let post = LikeTarget::Post(Uuid::now_v7().to_string());
+    let (a, b) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
+    for (account, total, arrival) in [(&a, 10, 0), (&b, 4, 10), (&a, 15, 0)] {
+        let applied = likes::apply_total(h.like_store.as_ref(), &ledger, &post, account, total).await.unwrap();
+        assert_eq!(applied.arrival, Some(arrival));
+        ledger.record(&post, account, "liker", Position { total, arrival: applied.arrival }, 1_000_000).await.unwrap();
+    }
+    // A redelivery returns the arrival again (so it can be recorded again).
+    let again = h.like_store.apply_total(&post, &b, 4).await.unwrap().unwrap();
+    assert_eq!((again.added, again.arrival), (0, Some(10)));
+
+    let one = std::slice::from_ref(&post);
+    let held = h.like_store.positions(&b, one).await.unwrap();
+    assert_eq!(held, vec![Some(Position { total: 4, arrival: Some(10) })]);
+    assert_eq!(ledger.position_of(&post, &b).await.unwrap(), Some(Position { total: 4, arrival: Some(10) }));
+    // A null is never written over a known arrival.
+    ledger.record(&post, &b, "liker", pos(4), 2_000_000).await.unwrap();
+    assert_eq!(ledger.position_of(&post, &b).await.unwrap(), Some(Position { total: 4, arrival: Some(10) }));
+
+    // The likers expire; rehydrated, the arrivals come back with them.
+    let likers = format!("engagement:{{{post}}}:likers");
+    let _: i64 = h.redis.inner.del(&likers).await.unwrap();
+    likes::rehydrate(h.like_store.as_ref(), &ledger, &post).await.unwrap();
+    assert_eq!(h.like_store.positions(&a, one).await.unwrap(), vec![Some(Position { total: 15, arrival: Some(0) })]);
+    assert_eq!(h.like_store.mine(&b, one).await.unwrap(), vec![Some(4)]);
+
+    // A value written before arrivals were kept reads as a total alone.
+    let legacy = Uuid::now_v7().to_string();
+    let _: i64 = h.redis.inner.hset(&likers, (legacy.as_str(), "7")).await.unwrap();
+    assert_eq!(h.like_store.positions(&legacy, one).await.unwrap(), vec![Some(Position { total: 7, arrival: None })]);
 }

@@ -11,7 +11,7 @@
 > | **Tier** | **TIER-1** |
 > | **Failure posture** | **Fail-open-ish** — Redis-primary with Lua atomicity, Kafka-fed |
 > | **Upstream contexts** | `wallet` (stakes); `account` (deletions); end-user clients (views/shares); `comment` (counts); `post` (hidden like counts) |
-> | **Downstream contexts** | `account` (GDPR export, `ListLikesByAccount`) — via **Open Host Service** (mesh gRPC) |
+> | **Downstream contexts** | `account` (GDPR export, `ListLikesByAccount`); `wallet` (stake settlement, `GetLikePositions`) — via **Open Host Service** (mesh gRPC) |
 > | **Decision log** | [`ADR-0009`](../../../../docs/adr/0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md) |
 
 ---
@@ -113,6 +113,7 @@ stay rebuildable) and deletes its list; the counts stay.
 | `comment` | upstream | ACL | `comment.created` / `comment.deleted` | comment counts break |
 | `post` | upstream | Customer/Supplier | gRPC `BatchGetLikeVisibility` | hidden like counts withheld from everyone but the mesh |
 | `account` | downstream | Open Host Service | gRPC `ListLikesByAccount` | the GDPR export fails (retried) |
+| `wallet` | downstream | Open Host Service | gRPC `GetLikePositions` | stake settlement waits (retried) |
 
 ---
 

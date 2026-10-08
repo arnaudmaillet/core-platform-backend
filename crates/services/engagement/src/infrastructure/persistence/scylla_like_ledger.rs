@@ -14,7 +14,7 @@ use scylla::DeserializeRow;
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
 use uuid::Uuid;
 
-use crate::application::port::{AccountLike, ForgottenLike, LikeLedger};
+use crate::application::port::{AccountLike, ForgottenLike, LikeLedger, Position};
 use crate::domain::value_object::LikeTarget;
 use crate::error::EngagementError;
 
@@ -58,11 +58,12 @@ impl LikeLedger for ScyllaLikeLedger {
         target: &LikeTarget,
         account: &str,
         profile_id: &str,
-        total: i64,
+        position: Position,
         at_micros: i64,
     ) -> Result<(), EngagementError> {
         let account = Uuid::parse_str(account)
             .map_err(|_| EngagementError::DomainViolation { field: "account_id".into(), message: account.to_owned() })?;
+        let total = position.total;
         // Both tables or neither (a logged batch), the stake's time as the
         // write time: the newer total wins whatever the order.
         let mut batch = Batch::new(BatchType::Logged);
@@ -71,19 +72,27 @@ impl LikeLedger for ScyllaLikeLedger {
         ));
         batch.set_history_listener(Arc::clone(&self.client.history_listener) as Arc<dyn HistoryListener>);
         batch.set_timestamp(Some(at_micros));
-        batch.append_statement(
-            "INSERT INTO engagement.likes_by_target (target_kind, target_id, account_id, total) VALUES (?, ?, ?, ?)",
-        );
+        // The arrival only when known: a null would delete one written before.
+        batch.append_statement(match position.arrival {
+            Some(_) => {
+                "INSERT INTO engagement.likes_by_target (target_kind, target_id, account_id, total, first_count) \
+                 VALUES (?, ?, ?, ?, ?)"
+            }
+            None => "INSERT INTO engagement.likes_by_target (target_kind, target_id, account_id, total) VALUES (?, ?, ?, ?)",
+        });
         batch.append_statement(
             "INSERT INTO engagement.likes_by_account (account_id, target_kind, target_id, total, profile_id, liked_at) \
              VALUES (?, ?, ?, ?, ?, ?)",
         );
         let liked_at = CqlTimestamp(at_micros / 1_000);
-        let values = (
-            (target.kind(), target.id(), account, total),
-            (account, target.kind(), target.id(), total, profile_id, liked_at),
-        );
-        self.client.session.batch(&batch, values).await.map_err(|e| EngagementError::Scylla(ScyllaStorageError::from(e)))?;
+        let by_account = (account, target.kind(), target.id(), total, profile_id, liked_at);
+        let result = match position.arrival {
+            Some(arrival) => {
+                self.client.session.batch(&batch, ((target.kind(), target.id(), account, total, arrival), by_account)).await
+            }
+            None => self.client.session.batch(&batch, ((target.kind(), target.id(), account, total), by_account)).await,
+        };
+        result.map_err(|e| EngagementError::Scylla(ScyllaStorageError::from(e)))?;
         Ok(())
     }
 
@@ -172,10 +181,10 @@ impl LikeLedger for ScyllaLikeLedger {
         Ok(erased)
     }
 
-    async fn total_of(&self, target: &LikeTarget, account: &str) -> Result<Option<i64>, EngagementError> {
+    async fn position_of(&self, target: &LikeTarget, account: &str) -> Result<Option<Position>, EngagementError> {
         let account = account_uuid(account)?;
         let stmt = self.statement(
-            "SELECT total FROM engagement.likes_by_target WHERE target_kind = ? AND target_id = ? AND account_id = ?",
+            "SELECT total, first_count FROM engagement.likes_by_target WHERE target_kind = ? AND target_id = ? AND account_id = ?",
             None,
         );
         let rows = self
@@ -187,9 +196,9 @@ impl LikeLedger for ScyllaLikeLedger {
             .into_rows_result()
             .map_err(|e| EngagementError::DomainViolation { field: "likes_by_target".into(), message: e.to_string() })?;
         let row = rows
-            .maybe_first_row::<(Option<i64>,)>()
+            .maybe_first_row::<(Option<i64>, Option<i64>)>()
             .map_err(|e| EngagementError::DomainViolation { field: "likes_by_target".into(), message: e.to_string() })?;
-        Ok(row.and_then(|(total,)| total))
+        Ok(row.map(|(total, arrival)| Position { total: total.unwrap_or(0), arrival }))
     }
 
     async fn likers_of(
@@ -197,11 +206,11 @@ impl LikeLedger for ScyllaLikeLedger {
         target: &LikeTarget,
         limit: i32,
         after: Option<&str>,
-    ) -> Result<Vec<(String, i64)>, EngagementError> {
+    ) -> Result<Vec<(String, Position)>, EngagementError> {
         let result = match after {
             Some(after) => {
                 let stmt = self.statement(
-                    "SELECT account_id, total FROM engagement.likes_by_target \
+                    "SELECT account_id, total, first_count FROM engagement.likes_by_target \
                      WHERE target_kind = ? AND target_id = ? AND account_id > ? LIMIT ?",
                     None,
                 );
@@ -209,7 +218,8 @@ impl LikeLedger for ScyllaLikeLedger {
             }
             None => {
                 let stmt = self.statement(
-                    "SELECT account_id, total FROM engagement.likes_by_target WHERE target_kind = ? AND target_id = ? LIMIT ?",
+                    "SELECT account_id, total, first_count FROM engagement.likes_by_target \
+                     WHERE target_kind = ? AND target_id = ? LIMIT ?",
                     None,
                 );
                 self.client.session.execute_unpaged(stmt, (target.kind(), target.id(), limit)).await
@@ -221,12 +231,12 @@ impl LikeLedger for ScyllaLikeLedger {
             .map_err(|e| EngagementError::DomainViolation { field: "likes_by_target".into(), message: e.to_string() })?;
         let mut likers = Vec::new();
         for row in rows
-            .rows::<(Uuid, Option<i64>)>()
+            .rows::<(Uuid, Option<i64>, Option<i64>)>()
             .map_err(|e| EngagementError::DomainViolation { field: "likes_by_target".into(), message: e.to_string() })?
         {
-            let (account, total) =
+            let (account, total, arrival) =
                 row.map_err(|e| EngagementError::DomainViolation { field: "likes_by_target".into(), message: e.to_string() })?;
-            likers.push((account.to_string(), total.unwrap_or(0)));
+            likers.push((account.to_string(), Position { total: total.unwrap_or(0), arrival }));
         }
         Ok(likers)
     }

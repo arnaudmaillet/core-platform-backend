@@ -108,10 +108,15 @@ pub(crate) fn like_visibility_from_env() -> anyhow::Result<Option<Arc<dyn crate:
 mod tests {
     use super::*;
 
-    /// An account's likes are the GDPR export's (#653, #665): never on the edge.
+    /// An account's likes are the GDPR export's (#653, #665), its positions
+    /// the settlement's: never on the edge.
     #[test]
     fn listing_by_account_is_mesh_only() {
-        let method = "/engagement.v1.EngagementService/ListLikesByAccount";
-        assert!(EngagementService::EDGE_POLICY.iter().all(|rule| rule.method != method));
+        for method in [
+            "/engagement.v1.EngagementService/ListLikesByAccount",
+            "/engagement.v1.EngagementService/GetLikePositions",
+        ] {
+            assert!(EngagementService::EDGE_POLICY.iter().all(|rule| rule.method != method), "{method}");
+        }
     }
 }

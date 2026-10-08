@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: c2b450f97b7a2604b009ae51e25c956d0901255a1da2b80273152326090cde07
+  source_sha256: 85dba4bd8debc3b715e03f5262c924342929a277c0521d98c5aa3593eb6873f4
   translated_at: 2026-10-08
   status: complete
 ---
@@ -22,7 +22,7 @@ i18n:
 > | **Tier** | **TIER-1** |
 > | **Posture en cas de panne** | **Plutôt fail-open** — Redis-primary avec atomicité Lua, alimenté par Kafka |
 > | **Contextes amont** | `wallet` (mises) ; `account` (suppressions) ; clients finaux (vues/partages) ; `comment` (comptes) ; `post` (compteurs de likes masqués) |
-> | **Contextes aval** | `account` (export RGPD, `ListLikesByAccount`) — via **Open Host Service** (gRPC mesh) |
+> | **Contextes aval** | `account` (export RGPD, `ListLikesByAccount`) ; `wallet` (règlement des mises, `GetLikePositions`) — via **Open Host Service** (gRPC mesh) |
 > | **Journal de décisions** | [`ADR-0009`](../../../../docs/adr/0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md) |
 
 ---
@@ -127,6 +127,7 @@ compteurs restant reconstructibles) et supprime sa liste ; les compteurs restent
 | `comment` | amont | ACL | `comment.created` / `comment.deleted` | les compteurs de commentaires cassent |
 | `post` | amont | Customer/Supplier | gRPC `BatchGetLikeVisibility` | compteurs masqués retenus pour tous sauf le mesh |
 | `account` | aval | Open Host Service | gRPC `ListLikesByAccount` | l'export RGPD échoue (réessayé) |
+| `wallet` | aval | Open Host Service | gRPC `GetLikePositions` | le règlement des mises attend (réessayé) |
 
 ---
 

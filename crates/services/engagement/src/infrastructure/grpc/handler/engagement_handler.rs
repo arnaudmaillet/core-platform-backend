@@ -6,7 +6,9 @@ use cqrs::{CommandBus, Envelope, QueryBus};
 use transport::grpc::edge;
 use crate::application::command::{record_share::RecordShareCommand, record_view::RecordViewCommand};
 use crate::application::port::{AccountLike, PostEngagementSnapshot};
+use crate::application::likes::LikePosition;
 use crate::application::query::batch_get_likes::BatchGetLikesQuery;
+use crate::application::query::get_like_positions::GetLikePositionsQuery;
 use crate::application::query::get_post_engagement::{
     EngagementReader, GetPostEngagementQuery, LikeSummary, PostEngagement,
 };
@@ -122,6 +124,40 @@ where
         }))
     }
 
+    /// Mesh only (#665): an account's position on posts and comments, for
+    /// the wallet's stake settlement.
+    pub async fn get_like_positions(
+        &self,
+        request: Request<proto::GetLikePositionsRequest>,
+    ) -> Result<Response<proto::GetLikePositionsResponse>, Status> {
+        let req = request.into_inner();
+        let targets = req
+            .targets
+            .iter()
+            .map(target_from_proto)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let query = GetLikePositionsQuery { account_id: req.account_id, targets };
+        let positions: Vec<LikePosition> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::GetLikePositionsResponse {
+            positions: req
+                .targets
+                .into_iter()
+                .zip(positions)
+                .map(|(target, p)| proto::LikePosition {
+                    target:           Some(target),
+                    total:            p.total,
+                    count_on_arrival: p.arrival,
+                    count_now:        p.count,
+                })
+                .collect(),
+        }))
+    }
+
     /// Mesh only (#653, #665): what an account liked, for the GDPR export.
     pub async fn list_likes_by_account(
         &self,
@@ -178,6 +214,13 @@ where
         request: Request<proto::ListLikesByAccountRequest>,
     ) -> Result<Response<proto::ListLikesByAccountResponse>, Status> {
         self.list_likes_by_account(request).await
+    }
+
+    async fn get_like_positions(
+        &self,
+        request: Request<proto::GetLikePositionsRequest>,
+    ) -> Result<Response<proto::GetLikePositionsResponse>, Status> {
+        self.get_like_positions(request).await
     }
 
     async fn record_view(

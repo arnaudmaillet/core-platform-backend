@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: b43f1fc90e017857aa09a4fab29248635f34a0146f40894be9eab2cb72bc199b
+  source_sha256: 491f607a49f221bbb278df04d7845d35b80f22191ca06f532e5adb729e835907
   translated_at: 2026-10-08
   status: complete
 ---
@@ -76,6 +76,15 @@ compte a liké, PK `((account_id), target_kind, target_id)`), `engagement.post_i
 (table de compteurs approximative). La migration 0006 supprime les tables des réactions,
 `post_reactions` et `reactions_by_profile`.
 
+**Positions (#665, le règlement des mises).** La valeur de chaque likeur dans `:likers` est
+`total|arrivée` : ses points, et le compteur de la cible juste avant son premier like (une valeur sans
+`|` lui est antérieure). Le script d'application garde l'arrivée au premier like du compte et la
+renvoie à chaque application ; le consommateur des mises l'enregistre dans `likes_by_target.first_count`
+(migration 0008 ; jamais écrasée par un null). `GetLikePositions(account_id, targets)` (**mesh
+uniquement**, ≤ 100 cibles) donne la position sur chaque cible — `total`, `count_on_arrival`,
+`count_now` — depuis Redis, ou depuis Scylla quand les likers ont expiré. Le règlement du wallet en
+déduit la précocité d'un compte.
+
 **Likers expirés.** Un hash de likers qui contient tous les likers porte `_complete` (posé au premier
 like de la cible, ou à la fin d'une réhydratation). Une fois expiré, un compte absent d'un nouveau hash
 est **inconnu**, pas zéro : le consommateur des mises réhydrate alors tout le hash depuis
@@ -142,6 +151,7 @@ Le consommateur des mises ignore les mises d'un compte marqué, et revérifie ap
 |---|---|---|
 | clients (edge) | vue/partage + `GetPostEngagement` / `BatchGetLikes` | pas de compteurs de likes ni d'engagement sur les posts |
 | `account` | `ListLikesByAccount` (export RGPD) | exports réessayés au passage suivant |
+| `wallet` | `GetLikePositions` (règlement des mises, #665) | les règlements attendent le passage suivant |
 
 > **Chemin critique ?** **Oui** pour le chemin de lecture (porté par Redis) ; les likes et la
 > persistance sont asynchrones.
@@ -159,6 +169,7 @@ service EngagementService {
   rpc GetPostEngagement (GetPostEngagementRequest) returns (PostEngagementView);
   rpc BatchGetLikes     (BatchGetLikesRequest)     returns (BatchGetLikesResponse); // likes (#665)
   rpc ListLikesByAccount (ListLikesByAccountRequest) returns (ListLikesByAccountResponse); // mesh only
+  rpc GetLikePositions  (GetLikePositionsRequest)  returns (GetLikePositionsResponse);  // mesh only
 }
 ```
 
@@ -307,7 +318,7 @@ async fn main() -> anyhow::Result<()> {
 - **Migrations :** `0001_create_keyspace.cql` → `0002_create_post_reactions_table.cql` →
   `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` →
   `0005_create_likes_tables.cql` → `0006_drop_reaction_tables.cql` →
-  `0007_create_erased_accounts_table.cql` sur
+  `0007_create_erased_accounts_table.cql` → `0008_likes_by_target_first_count.cql` sur
   `engagement`, appliquées **avant** le premier démarrage. (Le commentaire de table de 0002 contenait un
   `;` ; le lanceur des suites d'intégration coupait dessus jusqu'à ce qu'il respecte les guillemets comme
   `apps/migrator` — la prod n'a jamais été touchée. C'est une virgule désormais — même schéma.)
