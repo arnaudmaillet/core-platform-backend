@@ -13,6 +13,7 @@ wallet-api  = { workspace = true }
 # Likes (#665): what they land on.
 post-api    = { workspace = true }
 comment-api = { workspace = true }
+social-graph-api = { workspace = true }   # CheckAccess: a like needs the content visible
 
 # ── Shared platform infrastructure ────────────────────────────────────────────
 error            = { workspace = true }

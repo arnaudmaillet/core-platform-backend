@@ -11,14 +11,19 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::application::port::{
-    ClaimOutcome, ClaimResult, GemSpend, PackOutcome, SpendOutcome, StakeOutcome, StakeResult, TransactionCursor,
-    WalletStore,
+    ClaimOutcome, ClaimResult, GemSpend, OutboxEvent, PackOutcome, SpendOutcome, StakeAnnouncement, StakeOutcome,
+    StakeResult, TransactionCursor, WalletStore,
 };
+use crate::domain::event::{StakeCommitted, WalletEvent};
 use crate::domain::{
     AccountId, ClaimDecision, ClaimPolicy, Currency, IdempotencyKey, PackDecision, StakeAsk, StakeDecision,
     StakePackPolicy, StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
+
+/// How long the writer of a stake holds its outbox row (it publishes right
+/// after the commit; the drainers take it only past this).
+const WRITER_LEASE_SECS: i64 = 30;
 
 /// The starter gift's key: once per wallet.
 const STARTER_KEY: &str = "starter-gems";
@@ -339,13 +344,14 @@ impl WalletStore for PgWalletStore {
         Ok((outcome, wallet))
     }
 
-    #[instrument(name = "wallet.stake", skip(self, key, policy, pack))]
+    #[instrument(name = "wallet.stake", skip(self, key, announcement, policy, pack))]
     async fn stake(
         &self,
         account: &AccountId,
         key: &IdempotencyKey,
         target: &StakeTarget,
         ask: StakeAsk,
+        announcement: &StakeAnnouncement,
         policy: &StakePolicy,
         pack: &StakePackPolicy,
         starter_gems: i64,
@@ -359,7 +365,7 @@ impl WalletStore for PgWalletStore {
         if let Some(delta) = replayed(&mut tx, account, key).await? {
             tx.commit().await.map_err(storage)?;
             let first = before.is_some_and(|(_, first_key)| first_key == key.as_str());
-            return Ok(StakeResult { outcome: StakeOutcome::Staked, spent: -delta, my_total: on, first, wallet });
+            return Ok(StakeResult { outcome: StakeOutcome::Staked, spent: -delta, my_total: on, first, wallet, outbox: None });
         }
 
         let (last_hour,): (i64,) = sqlx::query_as(
@@ -410,6 +416,38 @@ impl WalletStore for PgWalletStore {
                     ref_id:        Some(&reference),
                 };
                 record(&mut tx, account, movement, key, now).await?;
+                // The announcement, in the same transaction: never a stake
+                // without its event.
+                let outbox = OutboxEvent {
+                    id: Uuid::now_v7(),
+                    account: *account,
+                    event: WalletEvent::StakeCommitted(StakeCommitted {
+                        account_id:        account.to_string(),
+                        profile_id:        announcement.profile_id.clone(),
+                        target_kind:       target.kind().to_owned(),
+                        target_id:         target.id().to_owned(),
+                        author_profile_id: announcement.author_profile_id.clone(),
+                        points,
+                        total:             on + points,
+                        first:             before.is_none(),
+                        stake_key:         key.as_str().to_owned(),
+                        staked_at:         now,
+                    }),
+                };
+                // Leased to this replica, which publishes it right after the
+                // commit; the drainers only take it if that fails.
+                sqlx::query(
+                    "INSERT INTO wallet_outbox (id, account_id, event, created_at, claimed_until) \
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(outbox.id)
+                .bind(account.as_uuid())
+                .bind(sqlx::types::Json(&outbox.event))
+                .bind(now)
+                .bind(now + chrono::TimeDelta::seconds(WRITER_LEASE_SECS))
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(storage)?;
                 tx.commit().await.map_err(storage)?;
                 return Ok(StakeResult {
                     outcome: StakeOutcome::Staked,
@@ -417,6 +455,7 @@ impl WalletStore for PgWalletStore {
                     my_total: on + points,
                     first: before.is_none(),
                     wallet,
+                    outbox: Some(outbox),
                 });
             }
             StakeDecision::InsufficientBalance => StakeOutcome::InsufficientBalance,
@@ -426,7 +465,64 @@ impl WalletStore for PgWalletStore {
             StakeDecision::ShotDoesNotFit => StakeOutcome::ShotDoesNotFit,
         };
         tx.commit().await.map_err(storage)?;
-        Ok(StakeResult { outcome, spent: 0, my_total: on, first: false, wallet })
+        Ok(StakeResult { outcome, spent: 0, my_total: on, first: false, wallet, outbox: None })
+    }
+
+    #[instrument(name = "wallet.outbox.claim", skip(self))]
+    async fn claim_unpublished(
+        &self,
+        limit: i64,
+        now: DateTime<Utc>,
+        lease_until: DateTime<Utc>,
+    ) -> Result<Vec<OutboxEvent>, WalletError> {
+        let mut events = Vec::new();
+        for pool in self.tx.all_pools() {
+            let mut rows: Vec<(Uuid, Uuid, sqlx::types::Json<WalletEvent>, DateTime<Utc>)> = sqlx::query_as(
+                "UPDATE wallet_outbox SET claimed_until = $3 WHERE id IN ( \
+                   SELECT id FROM wallet_outbox \
+                   WHERE published_at IS NULL AND (claimed_until IS NULL OR claimed_until < $2) \
+                   ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED) \
+                 RETURNING id, account_id, event, created_at",
+            )
+            .bind(limit)
+            .bind(now)
+            .bind(lease_until)
+            .fetch_all(pool)
+            .await
+            .map_err(storage)?;
+            rows.sort_by_key(|(_, _, _, created_at)| *created_at);
+            events.extend(rows.into_iter().map(|(id, account, event, _)| OutboxEvent {
+                id,
+                account: AccountId::from_uuid(account),
+                event: event.0,
+            }));
+        }
+        Ok(events)
+    }
+
+    #[instrument(name = "wallet.outbox.mark_published", skip(self, event))]
+    async fn mark_published(&self, event: &OutboxEvent, at: DateTime<Utc>) -> Result<(), WalletError> {
+        sqlx::query("UPDATE wallet_outbox SET published_at = $2 WHERE id = $1 AND published_at IS NULL")
+            .bind(event.id)
+            .bind(at)
+            .execute(self.pool(&event.account)?)
+            .await
+            .map_err(storage)?;
+        Ok(())
+    }
+
+    #[instrument(name = "wallet.outbox.prune", skip(self))]
+    async fn prune_outbox(&self, before: DateTime<Utc>) -> Result<u64, WalletError> {
+        let mut pruned = 0;
+        for pool in self.tx.all_pools() {
+            pruned += sqlx::query("DELETE FROM wallet_outbox WHERE published_at IS NOT NULL AND published_at < $1")
+                .bind(before)
+                .execute(pool)
+                .await
+                .map_err(storage)?
+                .rows_affected();
+        }
+        Ok(pruned)
     }
 
     #[instrument(name = "wallet.staked_on", skip(self))]
@@ -482,6 +578,8 @@ impl WalletStore for PgWalletStore {
             .execute(&mut *tx)
             .await
             .map_err(storage)?;
+        // Unpublished announcements still go out (their likes counted);
+        // published ones are the drainer's to prune.
         sqlx::query("DELETE FROM stakes WHERE account_id = $1")
             .bind(account.as_uuid())
             .execute(&mut *tx)

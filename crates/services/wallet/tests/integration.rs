@@ -13,7 +13,9 @@ use postgres_storage::TransactionManager;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use wallet::application::port::{ClaimOutcome, GemSpend, PackOutcome, SpendOutcome, StakeOutcome, WalletStore};
+use wallet::application::port::{
+    ClaimOutcome, GemSpend, PackOutcome, SpendOutcome, StakeAnnouncement, StakeOutcome, WalletStore,
+};
 use wallet::application::Wallets;
 use wallet::config::WalletConfig;
 use wallet::domain::{
@@ -170,6 +172,10 @@ async fn concurrent_pack_buys_charge_once_and_gem_spends_are_recorded() {
     assert_reconciles(&pool, &account).await;
 }
 
+fn announcement() -> StakeAnnouncement {
+    StakeAnnouncement { profile_id: "liker".into(), author_profile_id: "author".into() }
+}
+
 /// Funds `account` with `points` (direct, for the test: claims are hourly).
 async fn fund(pool: &PgPool, store: &PgWalletStore, account: &AccountId, points: i64) {
     store.open(account, 0, Utc::now()).await.unwrap();
@@ -203,7 +209,7 @@ async fn concurrent_batches_never_pass_the_targets_room_and_replays_spend_nothin
         tokio::spawn(async move {
             let key = IdempotencyKey::for_operation(Operation::Stake, &Uuid::now_v7().to_string()).unwrap();
             store
-                .stake(&account, &key, &target, StakeAsk::Points(40), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
+                .stake(&account, &key, &target, StakeAsk::Points(40), &announcement(), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
                 .await
                 .unwrap()
         })
@@ -222,11 +228,11 @@ async fn concurrent_batches_never_pass_the_targets_room_and_replays_spend_nothin
     let key = IdempotencyKey::for_operation(Operation::Stake, "replayed-batch").unwrap();
     let other = StakeTarget::Comment(format!("comment-{}", Uuid::now_v7()));
     let first = store
-        .stake(&account, &key, &other, StakeAsk::Points(12), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
+        .stake(&account, &key, &other, StakeAsk::Points(12), &announcement(), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
         .await
         .unwrap();
     let replay = store
-        .stake(&account, &key, &other, StakeAsk::Points(12), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
+        .stake(&account, &key, &other, StakeAsk::Points(12), &announcement(), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
         .await
         .unwrap();
     assert_eq!((first.spent, first.first), (12, true));
@@ -249,7 +255,7 @@ async fn the_hour_caps_stakes_and_erasure_clears_them() {
         let key = IdempotencyKey::for_operation(Operation::Stake, &format!("hour-batch-{i}")).unwrap();
         let target = StakeTarget::Post(format!("p{i}-{}", Uuid::now_v7()));
         let result = store
-            .stake(&account, &key, &target, StakeAsk::Points(250), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
+            .stake(&account, &key, &target, StakeAsk::Points(250), &announcement(), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
             .await
             .unwrap();
         total += result.spent;
@@ -267,4 +273,40 @@ async fn the_hour_caps_stakes_and_erasure_clears_them() {
         .await
         .unwrap();
     assert_eq!(left, 0);
+}
+
+/// Every fresh stake leaves its announcement in the outbox, in the same
+/// transaction; a replay leaves none; published events are marked, then
+/// pruned.
+#[tokio::test]
+async fn a_stake_and_its_announcement_are_written_together() {
+    let pool = pool().await;
+    let store = store(&pool);
+    let account = AccountId::from_uuid(Uuid::now_v7());
+    fund(&pool, &store, &account, 100).await;
+    let target = StakeTarget::Post(format!("post-{}", Uuid::now_v7()));
+    let key = IdempotencyKey::for_operation(Operation::Stake, "outbox-batch-1").unwrap();
+    let (who, policy, pack) = (announcement(), StakePolicy::default(), StakePackPolicy::default());
+    let stake = || store.stake(&account, &key, &target, StakeAsk::Points(3), &who, &policy, &pack, 0, Utc::now());
+    let fresh = stake().await.unwrap();
+    let replay = stake().await.unwrap();
+    assert!(fresh.outbox.is_some() && replay.outbox.is_none());
+
+    let mine = |events: Vec<wallet::application::port::OutboxEvent>| events.into_iter().filter(|e| e.account == account).collect::<Vec<_>>();
+    let now = Utc::now();
+    // The writer holds its row while it publishes: no drainer takes it yet.
+    assert!(mine(store.claim_unpublished(10_000, now, now + chrono::TimeDelta::seconds(60)).await.unwrap()).is_empty());
+    // Past the writer's lease (it failed to publish): one drainer claims it,
+    // a concurrent one does not.
+    let later = now + chrono::TimeDelta::seconds(31);
+    let lease = later + chrono::TimeDelta::seconds(60);
+    let (a, b) = tokio::join!(store.claim_unpublished(10_000, later, lease), store.claim_unpublished(10_000, later, lease));
+    let (a, b) = (mine(a.unwrap()), mine(b.unwrap()));
+    assert_eq!(a.len() + b.len(), 1, "one replica claims it");
+    let claimed = a.into_iter().chain(b).next().unwrap();
+    assert_eq!(claimed, fresh.outbox.clone().unwrap(), "read back as written");
+    store.mark_published(&claimed, later).await.unwrap();
+    let much_later = later + chrono::TimeDelta::seconds(120);
+    assert!(mine(store.claim_unpublished(10_000, much_later, much_later).await.unwrap()).is_empty(), "published");
+    assert!(store.prune_outbox(Utc::now() + chrono::TimeDelta::days(1)).await.unwrap() >= 1);
 }

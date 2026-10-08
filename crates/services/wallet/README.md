@@ -10,7 +10,7 @@
 > | **Datastores** | Postgres (own CNPG cluster, tables `wallets`, `wallet_transactions`) |
 > | **Async** | consumes `account.v1.events` (group `wallet-account-events`) · publishes `wallet.v1.events` (likes staked) |
 > | **Upstream callers** | the app (client edge `:9443`) · geo-discovery (mesh `SpendGems`, country unlocks) |
-> | **Downstream deps** | Postgres, Kafka, post and comment (mesh: what likes land on) |
+> | **Downstream deps** | Postgres, Kafka, post and comment (mesh: what likes land on), social-graph (mesh: may the reader see it) |
 > | **SLO** | 99.9% avail · p99 read < 50 ms · p99 claim < 100 ms |
 
 ---
@@ -92,16 +92,22 @@ everything, in this order:
 | The batch's first tap is older than 24 h | `EXPIRED` (nothing spent; the app gives the points back on screen) |
 | The post or comment is gone, removed or unpublished (post / comment over the mesh) | `TARGET_NOT_STAKEABLE` |
 | It is the caller's own (its author is one of the token's `pids`) | `OWN_CONTENT` |
+| The reader may not see it (social-graph `CheckAccess` from the token's `pids` to its author is not `VISIBLE`: a block, a private author not followed, a hidden profile) — no like, so no "liked" channel to its author | `TARGET_NOT_STAKEABLE` |
 | A **shot**: no pack / no room / room for less than 100 / fewer than 100 points / not 100 left in the hour | `NO_STAKE_SHOTS` / `TARGET_CAP_REACHED` / `SHOT_DOES_NOT_FIT` / `INSUFFICIENT_BALANCE` / `RATE_LIMITED` |
 | A **plain batch**: clamped to the target's room (**250** points per account and target, ever), the balance and the hour's room (**1,000** points per rolling hour) | `STAKED` with `spent` ≤ asked, or the binding limit when nothing fits |
 
 A stake moves the points, the account's total on the target (`stakes`, migration 0003) and its
 ledger row (`STAKE`, `ref_id` = `post:<id>`) in one transaction, the wallet row locked: concurrent
-batches never pass the room. It is **final** (no unlike) and is announced as `StakeCommitted` on
-`wallet.v1.events` on every `STAKED` answer — a replayed batch announces again (at least once; the
-consumers dedup on `stake_key`); a failed announcement fails the call (`WAL-6002`) so the app's
-retry announces it. `first` marks the account's first batch on the target (the "X liked your post"
-notice goes out once).
+batches never pass the room. It is **final** (no unlike). Its announcement, `StakeCommitted`, is
+written to **`wallet_outbox` in the same transaction** (migration 0004): never a stake without its
+event. It is published right after the commit when the broker answers, else by the **drainer**
+(every `WALLET_OUTBOX_DRAIN_SECS`, all shards, oldest first) — at least once; the consumers dedup on
+`stake_key`. A row is **leased** to one replica at a time (`claimed_until`): the writer holds it 30 s
+while it publishes, and the drainers claim the rest with `FOR UPDATE SKIP LOCKED` for a minute, so
+replicas share the backlog instead of all publishing it. A replayed batch announces nothing new. `first` marks the account's first batch on the
+target (the "X liked your post" notice goes out once). Published events are pruned after 7 days.
+Without `KAFKA_BROKERS` the service **does not start** (unless `WALLET_ALLOW_LOG_PUBLISHER=true`,
+local runs): a misconfigured env never drops likes silently.
 
 > **Invariants** (and where enforced): balances ≥ 0 (`CHECK`); each balance = Σ its ledger deltas
 > (same transaction, row lock; IT-checked); one movement per scoped key (`UNIQUE`); one claim per
@@ -137,7 +143,7 @@ notice goes out once).
 |---|---|---|
 | the app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack` | balance, claim and pack unavailable; the rest of the app works |
 | geo-discovery | `SpendGems` | country unlocks refused (fail-closed); the map works |
-| post, comment (downstream) | `GetPost`, `GetComment` | likes refused (`WAL-6001`, retried by the app) |
+| post, comment, social-graph (downstream) | `GetPost`, `GetComment`, `CheckAccess` | likes refused (`WAL-6001`, retried by the app) |
 
 > **Critical path?** No — the feed, posts and chat do not call it.
 
@@ -178,8 +184,8 @@ All but `SpendGems` are on the edge (`authenticated`), bound to the caller's `ac
 |---|---|---|
 | `WAL-3001` | gems cannot be spent (under 18, or age unknown) | `PERMISSION_DENIED` |
 | `WAL-5001` | an unreadable ledger row (fail closed) | `INTERNAL` |
-| `WAL-6001` | post or comment unavailable: the like is retried | `UNAVAILABLE` |
-| `WAL-6002` | the stake was recorded, not announced: the retry announces it | `UNAVAILABLE` |
+| `WAL-6001` | post, comment or social-graph unavailable: the like is retried | `UNAVAILABLE` |
+| `WAL-6002` | a publish failed (internal: the outbox keeps the event; never returned by `Stake`) | `UNAVAILABLE` |
 | `WAL-9001` | invalid account id | `INVALID_ARGUMENT` |
 | `WAL-9002` | invalid idempotency key | `INVALID_ARGUMENT` |
 | `WAL-9003` | invalid page token | `INVALID_ARGUMENT` |
@@ -193,7 +199,7 @@ All but `SpendGems` are on the edge (`authenticated`), bound to the caller's `ac
 | Topic | Direction | Event | Effect |
 |---|---|---|---|
 | `account.v1.events` | consumed (`wallet-account-events`, `run_consumer`) | `account_deleted` | the wallet, its history and its stakes are erased (GDPR Art. 17); other events skipped; a bad id is dead-lettered |
-| `wallet.v1.events` | published (key: `<target_kind>:<target_id>`) | `stake_committed` | `{account_id, profile_id, target_kind, target_id, author_profile_id, points, total, first, stake_key, staked_at}` — likes landed; at least once (dedup on `stake_key`). No consumer yet: the like counts move to it in the next parts |
+| `wallet.v1.events` | published (key: `<target_kind>:<target_id>`) | `stake_committed` | `{account_id, profile_id, target_kind, target_id, author_profile_id, points, total, first, stake_key, staked_at}` — likes landed; through the outbox, at least once (dedup on `stake_key`). No consumer yet: the like counts move to it in the next parts |
 
 ---
 
@@ -238,6 +244,9 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_STAKE_HOURLY_CAP` | `1000` | points one account may stake per rolling hour |
 | `WALLET_STAKE_MAX_BATCH_AGE_SECS` | `86400` | how old a batch's first tap may be |
 | `WALLET_POST_GRPC_ENDPOINT` · `WALLET_COMMENT_GRPC_ENDPOINT` | `http://localhost:50056` · `:50057` | post's and comment's mesh addresses (what likes land on) |
+| `WALLET_SOCIAL_GRAPH_GRPC_ENDPOINT` | `http://localhost:50053` | social-graph's mesh address (may the reader see the content) |
+| `WALLET_OUTBOX_DRAIN_SECS` | `5` | how often the outbox drainer runs |
+| `WALLET_ALLOW_LOG_PUBLISHER` | unset | `true`: start without `KAFKA_BROKERS`, logging events (local only) |
 
 An unparsable or negative value keeps the default.
 
@@ -255,7 +264,7 @@ settings (client edge), OTel.
 ## 🚀 Deployment, Migrations & Rollback &nbsp;·&nbsp; OPS
 
 Migrations: `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.sql` (`ref_id`),
-`0003_create_stakes.sql` (`stakes`, the hour's index), applied by `migrator wallet` (init
+`0003_create_stakes.sql` (`stakes`, the hour's index), `0004_create_outbox.sql` (`wallet_outbox`), applied by `migrator wallet` (init
 container) before the binary. Infra (ECR repo, manifests, `wallet-postgres`, ingress route,
 NetworkPolicy): core-platform-infra#41 — the binary joins `FLEET_BINS` once its ECR repo exists.
 Rollback: the binary is stateless; the schema is additive.
