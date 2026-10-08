@@ -8,8 +8,10 @@ use error::AppError;
 use tonic::{Request, Response, Status};
 use transport::grpc::edge;
 
-use crate::application::port::{ClaimOutcome, PackOutcome, SpendOutcome};
+use crate::application::port::{ClaimOutcome, PackOutcome, SpendOutcome, StakeOutcome};
+use crate::application::wallets::StakeBatch;
 use crate::application::{Wallets, WalletView};
+use crate::domain::{StakeAsk, StakeTarget};
 use crate::config::WalletConfig;
 use crate::domain::{Currency, Transaction, TransactionKind};
 use crate::error::WalletError;
@@ -56,6 +58,44 @@ impl WalletServiceHandler {
                 PackOutcome::InsufficientGems => proto::StakePackOutcome::InsufficientGems,
             } as i32,
             wallet:  Some(self.wallet_to_proto(&reply.view, restricted)),
+        }))
+    }
+
+    /// Commits a batch of likes (#665). Edge: the caller's account and one of
+    /// its profiles; its own content (any of its profiles) cannot be liked.
+    pub async fn stake(&self, request: Request<proto::StakeRequest>) -> Result<Response<proto::StakeResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let restricted = spending_restricted(&request);
+        let own: Vec<String> = edge::principal(&request).map(|p| p.profile_ids().map(str::to_owned).collect()).unwrap_or_default();
+        let req = request.into_inner();
+        let target = match req.target {
+            Some(proto::stake_request::Target::PostId(id)) => StakeTarget::Post(id),
+            Some(proto::stake_request::Target::CommentId(id)) => StakeTarget::Comment(id),
+            None => return Err(Status::invalid_argument("a stake names a post or a comment")),
+        };
+        let ask = if req.use_stake_shot { StakeAsk::Shot } else { StakeAsk::Points(i64::from(req.points)) };
+        let first_tap_at = req
+            .first_tap_at
+            .and_then(|t| DateTime::from_timestamp(t.seconds, u32::try_from(t.nanos).unwrap_or(0)))
+            .ok_or_else(|| Status::invalid_argument("first_tap_at is required"))?;
+        let batch = StakeBatch { profile_id: req.profile_id, target, ask, key: req.idempotency_key, first_tap_at };
+        let reply = self.wallets.stake(&req.account_id, batch, &own, Utc::now()).await.map_err(to_status)?;
+        Ok(Response::new(proto::StakeResponse {
+            outcome:  match reply.outcome {
+                StakeOutcome::Staked => proto::StakeOutcome::Staked,
+                StakeOutcome::InsufficientBalance => proto::StakeOutcome::InsufficientBalance,
+                StakeOutcome::TargetNotStakeable => proto::StakeOutcome::TargetNotStakeable,
+                StakeOutcome::RateLimited => proto::StakeOutcome::RateLimited,
+                StakeOutcome::TargetCapReached => proto::StakeOutcome::TargetCapReached,
+                StakeOutcome::NoStakeShots => proto::StakeOutcome::NoStakeShots,
+                StakeOutcome::ShotDoesNotFit => proto::StakeOutcome::ShotDoesNotFit,
+                StakeOutcome::Expired => proto::StakeOutcome::Expired,
+                StakeOutcome::OwnContent => proto::StakeOutcome::OwnContent,
+            } as i32,
+            spent:    i32::try_from(reply.spent).unwrap_or(i32::MAX),
+            my_total: i32::try_from(reply.my_total).unwrap_or(i32::MAX),
+            wallet:   Some(self.wallet_to_proto(&reply.view, restricted)),
         }))
     }
 
@@ -177,6 +217,7 @@ fn transaction_to_proto(t: &Transaction) -> proto::WalletTransaction {
             TransactionKind::StarterGift => proto::TransactionKind::StarterGift,
             TransactionKind::StakePack => proto::TransactionKind::StakePack,
             TransactionKind::CountryUnlock => proto::TransactionKind::CountryUnlock,
+            TransactionKind::Stake => proto::TransactionKind::Stake,
             TransactionKind::Unknown => proto::TransactionKind::Unspecified,
         } as i32,
         created_at:     Some(timestamp(t.created_at)),
@@ -222,7 +263,7 @@ mod tests {
     }
 
     fn principal_aged(sub: &str, age: Option<&str>) -> edge::EdgePrincipal {
-        let mut claims = serde_json::json!({ "sub": sub, "exp": 4_102_444_800_i64 });
+        let mut claims = serde_json::json!({ "sub": sub, "exp": 4_102_444_800_i64, "pids": ["my-profile"] });
         if let Some(age) = age {
             claims["age"] = serde_json::json!(age);
         }
@@ -348,5 +389,30 @@ mod tests {
             .unwrap_err();
         assert_eq!(status.code(), Code::InvalidArgument);
         assert_eq!(status.metadata().get(ERROR_CODE_METADATA).unwrap(), "WAL-9002");
+    }
+
+    /// #665: a like names one of the caller's profiles, never their own post.
+    #[tokio::test]
+    async fn a_stake_is_the_callers_and_never_on_their_own_content() {
+        use crate::application::wallets::fakes::{MemPublisher, MemTargets};
+        let targets = Arc::new(MemTargets::default());
+        targets.0.lock().unwrap().insert("mine".into(), ("my-profile".into(), true));
+        let wallets = Wallets::new(Arc::new(MemoryStore::default()), WalletConfig::default())
+            .with_stakes(targets as _, Arc::new(MemPublisher::default()) as _);
+        let h = WalletServiceHandler::new(Arc::new(wallets));
+        let me = Uuid::now_v7().to_string();
+        let stake = |profile: &str| proto::StakeRequest {
+            account_id:      me.clone(),
+            profile_id:      profile.into(),
+            target:          Some(proto::stake_request::Target::PostId("mine".into())),
+            points:          1,
+            use_stake_shot:  false,
+            idempotency_key: Uuid::now_v7().to_string(),
+            first_tap_at:    Some(timestamp(Utc::now())),
+        };
+        let other = h.stake(as_caller(&me, stake("someone-else"))).await.unwrap_err();
+        assert_eq!(other.code(), Code::PermissionDenied, "not the caller's profile");
+        let own = h.stake(as_caller(&me, stake("my-profile"))).await.unwrap().into_inner();
+        assert_eq!((own.outcome, own.spent), (proto::StakeOutcome::OwnContent as i32, 0));
     }
 }

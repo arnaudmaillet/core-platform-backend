@@ -44,6 +44,8 @@ pub const PRODUCERS: &[(&str, &str)] = &[
     ("account.v1.events", "account"),
     // profile
     ("profile.v1.events", "profile"),
+    // wallet — likes staked on posts and comments (#665: a like is a point)
+    ("wallet.v1.events", "wallet"),
     // notification — per-recipient realtime push stream (consumed by realtime)
     ("notification.v1.events", "notification"),
     // post — legacy per-type topics + the unified v1 stream (mid-migration)
@@ -222,6 +224,11 @@ pub const DEFERRED: &[(&str, &str)] = &[
 /// Topics a producer emits that have **no** in-repo consumer: intentional
 /// headroom or read-path-enforced concerns. Each entry needs a reason.
 pub const ORPHAN_PRODUCERS: &[(&str, &str)] = &[
+    (
+        "wallet.v1.events",
+        "Likes are points (#665): engagement, counter, notification, geo-discovery and timeline move \
+         from engagement.reactions to StakeCommitted in the next parts.",
+    ),
     (
         "post.updated",
         "No stream consumer — search/timeline/realtime act on post.v1.events \

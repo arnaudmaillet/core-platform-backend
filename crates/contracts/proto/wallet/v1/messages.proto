@@ -121,6 +121,36 @@ message SpendGemsResponse {
     int64            gems    = 2;
 }
 
+message StakeRequest {
+    string account_id = 1;
+    // Which of the caller's profiles likes (it is named on the like).
+    string profile_id = 2;
+    oneof target {
+        string post_id    = 3;
+        string comment_id = 4;
+    }
+    // Points to stake: the batch's taps (1 per tap). Ignored with a shot.
+    int32  points          = 5;
+    // Spend one shot of the ×100 pack instead (100 of the caller's points).
+    bool   use_stake_shot  = 6;
+    // One per batch (8–64 characters: letters, digits, `-`, `_`), kept with
+    // the batch on the device: a retry with it stakes at most once.
+    string idempotency_key = 7;
+    // When the batch's first tap was made (the device's clock): a batch older
+    // than 24 hours is EXPIRED.
+    google.protobuf.Timestamp first_tap_at = 8;
+}
+
+message StakeResponse {
+    StakeOutcome outcome     = 1;
+    // Points this batch moved (0 unless STAKED).
+    int32        spent       = 2;
+    // The caller's points on the target now (the heart is filled from 1).
+    int32        my_total    = 3;
+    // The wallet after the call (points, shots).
+    Wallet       wallet      = 4;
+}
+
 message ListWalletTransactionsResponse {
     // Newest first.
     repeated WalletTransaction transactions    = 1;

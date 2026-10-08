@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: d94f58b8f040e4f4106f99e45dd8bb13b94faaa10b3ff22f3f59774e187ede13
+  source_sha256: 66fcba7cb947700d3b13ffcd788286d027043e25e3396938317ab8bbc0daaa1d
   translated_at: 2026-10-08
   status: complete
 ---
@@ -19,9 +19,9 @@ i18n:
 > | **Tier** | TIER-0 (fail-closed) |
 > | **Déployable** | `crates/apps/wallet-server` (crate bibliothèque : `crates/services/wallet`) |
 > | **Stockage** | Postgres (cluster CNPG dédié, tables `wallets`, `wallet_transactions`) |
-> | **Asynchrone** | consomme `account.v1.events` (groupe `wallet-account-events`) · ne publie rien pour l'instant |
+> | **Asynchrone** | consomme `account.v1.events` (groupe `wallet-account-events`) · publie `wallet.v1.events` (likes misés) |
 > | **Appelants** | l'app (edge client `:9443`) · geo-discovery (mesh `SpendGems`, déblocage de pays) |
-> | **Dépendances** | Postgres, Kafka |
+> | **Dépendances** | Postgres, Kafka, post et comment (mesh : là où tombent les likes) |
 > | **SLO** | 99,9 % de dispo · p99 lecture < 50 ms · p99 réclamation < 100 ms |
 
 ---
@@ -33,7 +33,7 @@ compte et chacun de leurs mouvements.
 
 | Monnaie | Affichée comme | Gagnée par | Dépensée pour |
 |---|---|---|---|
-| **Points** | likes (le cœur) | la réclamation horaire | les mises sur posts et commentaires (PR suivante) |
+| **Points** | likes (le cœur) | la réclamation horaire | les likes sur posts et commentaires (`Stake`) |
 | **Gems** | le diamant | le don de départ ; les mises réglées (plus tard) | le pack de mises ×100 ; le déblocage de pays (geo-discovery) |
 
 Rien n'est vendu contre de l'argent réel : ni StoreKit, ni reçus, ni restauration. Aucune monnaie
@@ -98,11 +98,35 @@ seule fois.
 
 Les gems n'achètent jamais de points, d'argent, ni rien pour un autre utilisateur.
 
+**Les likes sont des points** (#665 partie 3). L'app regroupe les taps d'un post sur l'appareil (1 point
+chacun) et envoie le lot avec `Stake` quand on quitte le post, quand l'app passe en arrière-plan, ou 10 s
+après le dernier tap — puis le renvoie avec la même clé jusqu'à réponse. À l'envoi, le serveur
+revérifie tout, dans cet ordre :
+
+| Vérification | Résultat |
+|---|---|
+| Le premier tap du lot a plus de 24 h | `EXPIRED` (rien n'est dépensé ; l'app rend les points à l'écran) |
+| Le post ou commentaire a disparu, est retiré ou non publié (post / comment via le mesh) | `TARGET_NOT_STAKEABLE` |
+| Il est à l'appelant (son auteur est l'un des `pids` du jeton) | `OWN_CONTENT` |
+| Un **tir** : pas de pack / plus de place / place pour moins de 100 / moins de 100 points / pas 100 restants dans l'heure | `NO_STAKE_SHOTS` / `TARGET_CAP_REACHED` / `SHOT_DOES_NOT_FIT` / `INSUFFICIENT_BALANCE` / `RATE_LIMITED` |
+| Un **lot simple** : ramené à la place de la cible (**250** points par compte et par cible, à vie), au solde et à la place de l'heure (**1 000** points par heure glissante) | `STAKED` avec `spent` ≤ demandé, ou la limite atteinte quand rien ne passe |
+
+Une mise déplace les points, le total du compte sur la cible (`stakes`, migration 0003) et sa ligne de
+registre (`STAKE`, `ref_id` = `post:<id>`) dans une seule transaction, la ligne du portefeuille
+verrouillée : des lots concurrents ne dépassent jamais la place. Elle est **définitive** (pas de
+retrait) et annoncée en `StakeCommitted` sur `wallet.v1.events` à chaque réponse `STAKED` — un lot
+rejoué est annoncé de nouveau (au moins une fois ; les consommateurs dédoublonnent sur `stake_key`) ;
+une annonce ratée fait échouer l'appel (`WAL-6002`) pour que le nouvel essai de l'app l'annonce.
+`first` marque le premier lot du compte sur la cible (la notification « X a liké ton post » part une
+seule fois).
+
 > **Invariants** (et où ils sont tenus) : soldes ≥ 0 (`CHECK`) ; chaque solde = Σ des deltas de son
 > registre (même transaction, verrou de ligne ; vérifié en test d'intégration) ; un mouvement par
 > clé rattachée (`UNIQUE`) ; une réclamation par intervalle et un pack à la fois (verrou + règle du
-> domaine) ; seulement le portefeuille de l'appelant (`edge::require_account`) ; aucune dépense de
-> gems avant 18 ans (claim `age` du jeton, fail-closed).
+> domaine) ; seulement le portefeuille de l'appelant (`edge::require_account` ; le profil d'un like :
+> `edge::require_profile`) ; aucune dépense de gems avant 18 ans (claim `age` du jeton, fail-closed) ;
+> un like reste dans la place de sa cible et de son heure (verrou de ligne), jamais sur son propre
+> contenu.
 
 ---
 
@@ -131,6 +155,7 @@ Les gems n'achètent jamais de points, d'argent, ni rien pour un autre utilisate
 |---|---|---|
 | l'app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack` | solde, réclamation et pack indisponibles ; le reste de l'app fonctionne |
 | geo-discovery | `SpendGems` | déblocages de pays refusés (fail-closed) ; la carte fonctionne |
+| post, comment (en aval) | `GetPost`, `GetComment` | likes refusés (`WAL-6001`, renvoyés par l'app) |
 
 > **Chemin critique ?** Non — le fil, les posts et le chat ne l'appellent pas.
 
@@ -146,6 +171,7 @@ service WalletService {
   rpc ClaimReward (ClaimRewardRequest) returns (ClaimRewardResponse);
   rpc ListWalletTransactions (ListWalletTransactionsRequest) returns (ListWalletTransactionsResponse);
   rpc BuyStakePack (BuyStakePackRequest) returns (BuyStakePackResponse);
+  rpc Stake (StakeRequest) returns (StakeResponse);               // un lot de likes
   rpc SpendGems (SpendGemsRequest) returns (SpendGemsResponse);   // mesh seulement
 }
 ```
@@ -171,6 +197,8 @@ Tous sauf `SpendGems` sont sur l'edge (`authenticated`), liés au `account_id` d
 |---|---|---|
 | `WAL-3001` | les gems ne peuvent pas être dépensés (moins de 18 ans, ou âge inconnu) | `PERMISSION_DENIED` |
 | `WAL-5001` | une ligne du registre illisible (fail closed) | `INTERNAL` |
+| `WAL-6001` | post ou comment indisponible : le like est renvoyé | `UNAVAILABLE` |
+| `WAL-6002` | la mise est enregistrée mais pas annoncée : le nouvel essai l'annonce | `UNAVAILABLE` |
 | `WAL-9001` | identifiant de compte invalide | `INVALID_ARGUMENT` |
 | `WAL-9002` | clé d'idempotence invalide | `INVALID_ARGUMENT` |
 | `WAL-9003` | jeton de page invalide | `INVALID_ARGUMENT` |
@@ -183,9 +211,8 @@ Tous sauf `SpendGems` sont sur l'edge (`authenticated`), liés au `account_id` d
 
 | Topic | Sens | Événement | Effet |
 |---|---|---|---|
-| `account.v1.events` | consommé (`wallet-account-events`, `run_consumer`) | `account_deleted` | le portefeuille et son historique sont effacés (RGPD art. 17) ; les autres événements sont ignorés ; un identifiant invalide part en DLQ |
-
-Rien n'est publié pour l'instant.
+| `account.v1.events` | consommé (`wallet-account-events`, `run_consumer`) | `account_deleted` | le portefeuille, son historique et ses mises sont effacés (RGPD art. 17) ; les autres événements sont ignorés ; un identifiant invalide part en DLQ |
+| `wallet.v1.events` | publié (clé : `<target_kind>:<target_id>`) | `stake_committed` | `{account_id, profile_id, target_kind, target_id, author_profile_id, points, total, first, stake_key, staked_at}` — des likes posés ; au moins une fois (dédoublonnage sur `stake_key`). Pas encore de consommateur : les compteurs de likes y passent dans les parties suivantes |
 
 ---
 
@@ -202,7 +229,7 @@ Rien n'est publié pour l'instant.
 ## 📦 Intégration & usage &nbsp;·&nbsp; CORE
 
 ```rust
-let app = wallet::app::App::build(pool, wallet::config::WalletConfig::from_env());
+let app = wallet::app::App::build(pool, wallet::config::WalletConfig::from_env(), None); // + (cibles, éditeur) pour les likes
 let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 ```
 
@@ -226,6 +253,10 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_STAKE_PACK_SHOTS` | `3` | tirs dans un pack ×100 |
 | `WALLET_STAKE_PACK_PRICE` | `50` | prix d'un pack en gems |
 | `WALLET_POINTS_PER_SHOT` | `100` | points misés par tir |
+| `WALLET_STAKE_TARGET_CAP` | `250` | points qu'un compte peut mettre sur une cible, à vie |
+| `WALLET_STAKE_HOURLY_CAP` | `1000` | points qu'un compte peut miser par heure glissante |
+| `WALLET_STAKE_MAX_BATCH_AGE_SECS` | `86400` | âge maximal du premier tap d'un lot |
+| `WALLET_POST_GRPC_ENDPOINT` · `WALLET_COMMENT_GRPC_ENDPOINT` | `http://localhost:50056` · `:50057` | adresses mesh de post et comment (là où tombent les likes) |
 
 Une valeur illisible ou négative garde le défaut.
 
@@ -242,7 +273,8 @@ du jeton edge (edge client), OTel.
 
 ## 🚀 Déploiement, migrations & retour arrière &nbsp;·&nbsp; OPS
 
-Migrations : `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.sql` (`ref_id`), appliquées par `migrator wallet` (init
+Migrations : `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.sql` (`ref_id`),
+`0003_create_stakes.sql` (`stakes`, l'index de l'heure), appliquées par `migrator wallet` (init
 container) avant le binaire. Infra (dépôt ECR, manifests, `wallet-postgres`, route d'ingress,
 NetworkPolicy) : core-platform-infra#41 — le binaire rejoint `FLEET_BINS` dès que son dépôt ECR
 existe. Retour arrière : le binaire est sans état ; le schéma est additif.
@@ -251,8 +283,8 @@ existe. Retour arrière : le binaire est sans état ; le schéma est additif.
 
 ## 📈 Télémétrie, performance & métriques &nbsp;·&nbsp; CORE
 
-Spans `wallet.open`, `wallet.claim`, `wallet.buy_stake_pack`, `wallet.spend_gems`, `wallet.history`,
-`wallet.erase` (avec le shard). Un verrou de
+Spans `wallet.open`, `wallet.claim`, `wallet.buy_stake_pack`, `wallet.spend_gems`, `wallet.stake`,
+`wallet.staked_on`, `wallet.history`, `wallet.erase` (avec le shard). Un verrou de
 ligne par écriture ; l'historique lit `(account_id, created_at DESC, id DESC)`.
 
 ---
@@ -271,5 +303,7 @@ cargo test -p wallet --features integration-wallet     # Postgres : concurrence,
 1. Le registre, la réclamation horaire, les gems de départ, l'historique, l'effacement (#853).
 2. Dépenses de gems : le pack ×100 et `SpendGems`, aucune dépense de gems avant 18 ans (cette
    partie) ; déblocage de pays, classement et filtre de la carte dans geo-discovery.
-3. Mises de points sur posts et commentaires (plafonds anti-abus, ex. 1 000 points par heure).
+3. Les likes sont des points : `Stake` (cette partie) ; puis les compteurs de likes, les
+   notifications, le classement des pays et les centres d'intérêt passent à `StakeCommitted` ; les
+   autres types de réaction disparaissent.
 4. Règlement des mises (gems gagnés).
