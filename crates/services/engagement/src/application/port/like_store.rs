@@ -18,6 +18,11 @@ pub trait LikeStore: Send + Sync + 'static {
 
     /// `account`'s likes on each target, in order.
     async fn mine(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<i64>, EngagementError>;
+
+    /// Forgets who `account` is on each target (its account was deleted):
+    /// its entry goes, the targets' counts stay (the points are kept,
+    /// anonymously).
+    async fn forget(&self, account: &str, targets: &[LikeTarget]) -> Result<(), EngagementError>;
 }
 
 /// One target an account liked, for its GDPR export.
@@ -29,6 +34,17 @@ pub struct AccountLike {
     /// The profile that liked last.
     pub profile_id: String,
     pub liked_at:   DateTime<Utc>,
+}
+
+/// A deleted account's like on one target, as the durable copy keeps it:
+/// the points under an anonymous liker id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForgottenLike {
+    pub target:       LikeTarget,
+    pub total:        i64,
+    /// Stable for a given erasure ([`crate::application::erasure::anonymous_liker`]):
+    /// forgetting again rewrites the same row.
+    pub anonymous_id: uuid::Uuid,
 }
 
 /// The durable copy of the likes (Scylla), written by the stake consumer.
@@ -53,4 +69,24 @@ pub trait LikeLedger: Send + Sync + 'static {
         limit: i32,
         after: Option<&LikeTarget>,
     ) -> Result<Vec<AccountLike>, EngagementError>;
+
+    /// Notes that `account` was deleted at `erased_at_micros` (the deletion's
+    /// own time), for as long as one of its stakes could still arrive: the
+    /// stake consumer then drops them.
+    async fn mark_erased(&self, account: &str, erased_at_micros: i64) -> Result<(), EngagementError>;
+
+    /// When `account` was deleted, if it was (and is still remembered).
+    async fn erased_at(&self, account: &str) -> Result<Option<i64>, EngagementError>;
+
+    /// Forgets `account` on each like as of `at_micros`, one target at a time
+    /// and atomically: its row on the target becomes the anonymous one (same
+    /// total; the count stays rebuildable from the durable copy), and its own
+    /// row on the target goes. A record stamped earlier (a stake made before
+    /// the deletion, landing late) stays deleted; a replay rewrites the same
+    /// anonymous row.
+    async fn forget(&self, account: &str, likes: &[ForgottenLike], at_micros: i64) -> Result<(), EngagementError>;
+
+    /// Deletes what is left of `account`'s list as of `at_micros` (the
+    /// export's partition), likewise.
+    async fn forget_account(&self, account: &str, at_micros: i64) -> Result<(), EngagementError>;
 }

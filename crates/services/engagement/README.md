@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-1** — real-time interaction backbone; degradable to durable ledger |
 > | **Deployable** | `crates/apps/engagement-server` (library crate: `crates/services/engagement`) |
 > | **Datastores** | Redis (authoritative hot path) · ScyllaDB keyspace `engagement` (durable copies) |
-> | **Async** | publishes nothing · consumes `wallet.v1.events` (likes) and `comment.created` / `comment.deleted` |
+> | **Async** | publishes nothing · consumes `wallet.v1.events` (likes), `account.v1.events` (erasure) and `comment.created` / `comment.deleted` |
 > | **Upstream callers** | `<TODO: gateway>` |
 > | **Downstream deps** | Redis, ScyllaDB, Kafka, `post` (hidden like counts) |
 > | **SLO** | snapshot read p99 ~0.3 ms (zero Scylla on the read path) |
@@ -65,6 +65,18 @@ only** (never on the edge): the GDPR data export reads each post and comment the
 points, the profile that liked last and when, paged by target (the token is the last target,
 `kind:id`). It reads Scylla, so it needs the Kafka path; without it the RPC answers `ENG-5003`
 (`UNAVAILABLE`).
+
+**A deleted account's likes (GDPR Art. 17).** On `account.v1.events` `account_deleted` (group
+`engagement-account-erasure`), who liked goes and the counts stay: the points are kept, anonymously.
+`LikeEraser` first marks the account erased (`engagement.erased_accounts`, 30-day TTL, migration 0007,
+with the deletion's own time), then for each target it liked removes its `:likers` entry and, in one
+logged batch, swaps its `likes_by_target` row for an **anonymous** one with the same total and deletes
+its `likes_by_account` row — so the counts stay rebuildable from `likes_by_target`. The anonymous id is
+a UUIDv5 of the account, the target and the deletion's time: a replay (a redelivery, a batch that timed
+out but landed) rewrites the same row, and it never collides with an account id (v7). The Scylla writes
+are stamped with the erasure's time, so a stake made before it and landing late cannot write the
+account back. The stake consumer drops a marked account's stakes, and re-checks after applying one (the
+erasure may have listed the targets before it).
 
 > **Invariants** (and where enforced): a target's like count is the sum of its accounts' totals, and an
 > account's total only grows — both enforced atomically by the Lua script (a total no larger than the
@@ -180,9 +192,10 @@ reads the wallet's `wallet.v1.events` directly.
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `comment.created` / `comment.deleted` | `engagement-comment-consumer` | INCR/DECR comment counter (Redis + Scylla) | DLQ `{topic}.dlq` |
-| `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665): the account's total on a post or comment, idempotent and order-proof (Redis Lua + Scylla) | DLQ `{topic}.dlq` |
+| `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665): the account's total on a post or comment, idempotent and order-proof (Redis Lua + Scylla); a deleted account's stakes are dropped | DLQ `{topic}.dlq` |
+| `account.v1.events` | `engagement-account-erasure` | `account_deleted` → forget who liked (the counts stay); other events skipped | DLQ `{topic}.dlq` |
 
-> **Runtime contract (mandatory):** the stake and comment consumers run under `run_consumer` — manual
+> **Runtime contract (mandatory):** the stake, account and comment consumers run under `run_consumer` — manual
 > commit after success, bounded retry with backoff + jitter, DLQ on exhaustion/poison. Totals are
 > monotone, so re-delivery is safe.
 
@@ -263,7 +276,8 @@ async fn main() -> anyhow::Result<()> {
 
 - **Migrations:** `0001_create_keyspace.cql` → `0002_create_post_reactions_table.cql` →
   `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` →
-  `0005_create_likes_tables.cql` → `0006_drop_reaction_tables.cql` against
+  `0005_create_likes_tables.cql` → `0006_drop_reaction_tables.cql` →
+  `0007_create_erased_accounts_table.cql` against
   `engagement`, applied **before** first start. (0002's table comment held a `;`; the integration
   suites' runner split on it until it became quote-aware like `apps/migrator` — prod never was affected.
   It is a comma now — same schema.)

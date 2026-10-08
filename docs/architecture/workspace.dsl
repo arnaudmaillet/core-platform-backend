@@ -124,7 +124,7 @@ workspace "Core Platform" "Social platform backend — corrected C4, derived fro
             kafka -> geo "post.published, profile.tier_changed" "" "Async"
             kafka -> counter "post.v1.events, wallet.v1.events, view/impression/click" "" "Async"
             kafka -> notification "comment.created, wallet.v1.events, post.published" "" "Async"
-            kafka -> engagement "comment.created/deleted, wallet.v1.events" "" "Async"
+            kafka -> engagement "comment.created/deleted, wallet.v1.events, account.v1.events" "" "Async"
             kafka -> realtimeDispatcher "notification.v1.events, counter.v1.popularity, post.v1.events" "" "Async"
             kafka -> media "moderation.v1.events (takedown), media.v1.events (transform)" "" "Async"
             kafka -> moderation "post/comment/chat content, moderation.reports/signals" "" "Async"

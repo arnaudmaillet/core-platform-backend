@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: 8634a87656500533247290b9b5caf427e06c6030fb7c8b1bfce9bef205ffaaa2
+  source_sha256: 936b8a0adc33d66e55680cc22aa197b6b6fa451637ccd018090a17e96a1ea57f
   translated_at: 2026-10-08
   status: complete
 ---
@@ -21,7 +21,7 @@ i18n:
 > | **Racine(s) d'agrégat** | aucune — les likes sont des totaux appliqués (VO `LikeTarget`), les compteurs des incréments |
 > | **Tier** | **TIER-1** |
 > | **Posture en cas de panne** | **Plutôt fail-open** — Redis-primary avec atomicité Lua, alimenté par Kafka |
-> | **Contextes amont** | `wallet` (mises) ; clients finaux (vues/partages) ; `comment` (comptes) ; `post` (compteurs de likes masqués) |
+> | **Contextes amont** | `wallet` (mises) ; `account` (suppressions) ; clients finaux (vues/partages) ; `comment` (comptes) ; `post` (compteurs de likes masqués) |
 > | **Contextes aval** | `account` (export RGPD, `ListLikesByAccount`) — via **Open Host Service** (gRPC mesh) |
 > | **Journal de décisions** | [`ADR-0009`](../../../../docs/adr/0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md) |
 
@@ -98,6 +98,7 @@ export RGPD).
 | I2 | Le total d'un compte sur une cible ne fait que croître ; re-livraisons et événements tardifs ne changent rien | script Lua ; horodatage d'écriture Scylla = heure de la mise | — (ignoré) |
 | I3 | Les compteurs masqués n'atteignent que l'auteur et le mesh ; quand post ne peut pas répondre, ils sont retenus | application | `ENG-6001` (mode fermé) |
 | I4 | Seuls les posts et les commentaires peuvent être likés | `LikeTarget::parse` | `ENG-9004` |
+| I5 | Un compte supprimé n'est plus connu comme likeur nulle part ; les points qu'il a donnés restent dans les compteurs | `LikeEraser` ; suppressions Scylla à l'heure de l'effacement ; le consommateur des mises ignore ses mises tardives | — |
 
 ---
 
@@ -111,6 +112,10 @@ compteurs masqués selon la réponse de post (`BatchGetLikeVisibility`, en cache
 
 **Export.** L'export RGPD d'account parcourt `ListLikesByAccount` (mesh uniquement) vers `likes.json`.
 
+**Effacement.** Sur `account_deleted`, `LikeEraser` marque le compte comme effacé, l'oublie sur chaque
+cible likée (entrée Redis retirée ; ligne Scylla remplacée par une ligne anonyme de même total, les
+compteurs restant reconstructibles) et supprime sa liste ; les compteurs restent.
+
 ---
 
 ## 7. Relations de contexte (tranche de la Context Map)
@@ -118,6 +123,7 @@ compteurs masqués selon la réponse de post (`BatchGetLikeVisibility`, en cache
 | Contexte voisin | Direction | Patron | Mécanisme | Ce qui casse s'ils changent |
 |---|---|---|---|---|
 | `wallet` | amont | Conformist | `wallet.v1.events` (`stake_committed`) | les compteurs de likes cassent |
+| `account` | amont | ACL | `account.v1.events` (`account_deleted`) | un compte supprimé reste connu comme likeur |
 | `comment` | amont | ACL | `comment.created` / `comment.deleted` | les compteurs de commentaires cassent |
 | `post` | amont | Customer/Supplier | gRPC `BatchGetLikeVisibility` | compteurs masqués retenus pour tous sauf le mesh |
 | `account` | aval | Open Host Service | gRPC `ListLikesByAccount` | l'export RGPD échoue (réessayé) |
@@ -132,6 +138,7 @@ engagement ne publie aucun événement. Il consomme :
 |---|---|---|
 | `wallet.v1.events` `stake_committed` | les points d'un compte sur une cible ont atteint un nouveau total | le compteur de likes et ceux du compte bougent |
 | `comment.created` / `comment.deleted` | un commentaire a été publié / retiré | compteur de commentaires ±1 |
+| `account.v1.events` `account_deleted` | un compte a été supprimé | qui a liké est oublié ; les compteurs restent |
 
 ---
 
@@ -148,6 +155,6 @@ engagement ne publie aucun événement. Il consomme :
 
 - **Classification :** Core — interaction directe avec le contenu.
 - **Volatilité :** faible — les likes suivent le contrat de mise du wallet.
-- **Dette de modélisation connue :** effacer les likes d'un compte sur `account_deleted` ; le hash des
-  likers n'a pas de TTL (un plancher de réhydratation depuis Scylla est prévu).
+- **Dette de modélisation connue :** le hash des likers n'a pas de TTL (un plancher de réhydratation
+  depuis Scylla est prévu).
 - **Capacités différées :** règlement des likes (gems gagnées grâce aux likes, #665).

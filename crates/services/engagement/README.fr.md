@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a251fc84d85996be3ec2b962c1642a7b3d8b649cc52934dbae44111c58a993a3
+  source_sha256: 29dfc76cec134bb4de0aad935e79325301aa4105f0bcb66483dd90f6dfc34033
   translated_at: 2026-10-08
   status: complete
 ---
@@ -21,7 +21,7 @@ i18n:
 > | **Palier (Tier)** | **TIER-1** — colonne vertébrale d'interaction temps réel ; dégradable vers le ledger durable |
 > | **Binaire déployable** | `crates/apps/engagement-server` (crate bibliothèque : `crates/services/engagement`) |
 > | **Bases de données** | Redis (chemin chaud faisant autorité) · ScyllaDB keyspace `engagement` (copies durables) |
-> | **Asynchrone** | ne publie rien · consomme `wallet.v1.events` (likes) et `comment.created` / `comment.deleted` |
+> | **Asynchrone** | ne publie rien · consomme `wallet.v1.events` (likes), `account.v1.events` (effacement) et `comment.created` / `comment.deleted` |
 > | **Appelants amont** | `<TODO: passerelle>` |
 > | **Dépendances aval** | Redis, ScyllaDB, Kafka, `post` (compteurs de likes masqués) |
 > | **SLO** | lecture de snapshot p99 ~0,3 ms (zéro Scylla sur le chemin de lecture) |
@@ -80,6 +80,19 @@ uniquement** (jamais sur l'edge) : l'export de données RGPD lit chaque post et 
 a liké, ses points, le profil qui a liké en dernier et quand, paginé par cible (le jeton est la dernière
 cible, `kind:id`). Elle lit Scylla, donc nécessite le chemin Kafka ; sans lui la RPC répond `ENG-5003`
 (`UNAVAILABLE`).
+
+**Les likes d'un compte supprimé (RGPD art. 17).** Sur `account.v1.events` `account_deleted` (groupe
+`engagement-account-erasure`), qui a liké disparaît et les compteurs restent : les points sont gardés,
+anonymement. `LikeEraser` marque d'abord le compte comme effacé (`engagement.erased_accounts`, TTL de
+30 jours, migration 0007, avec l'heure de la suppression), puis pour chaque cible likée retire son
+entrée `:likers` et, dans un même batch logged, remplace sa ligne `likes_by_target` par une ligne
+**anonyme** de même total et supprime sa ligne `likes_by_account` — les compteurs restent ainsi
+reconstructibles depuis `likes_by_target`. L'id anonyme est un UUIDv5 du compte, de la cible et de
+l'heure de la suppression : un rejeu (re-livraison, batch expiré mais appliqué) réécrit la même ligne,
+et il ne collisionne jamais avec un id de compte (v7). Les écritures Scylla portent l'heure de
+l'effacement, si bien qu'une mise faite avant lui et arrivée en retard ne peut pas réécrire le compte.
+Le consommateur des mises ignore les mises d'un compte marqué, et revérifie après en avoir appliqué une
+(l'effacement a pu lister les cibles avant elle).
 
 > **Invariants** (et où ils sont imposés) : le compteur de likes d'une cible est la somme des totaux de
 > ses comptes, et le total d'un compte ne fait que croître — tous deux imposés atomiquement par le script
@@ -197,9 +210,10 @@ pays) lit directement `wallet.v1.events` du wallet.
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `comment.created` / `comment.deleted` | `engagement-comment-consumer` | INCR/DECR du compteur de commentaires (Redis + Scylla) | DLQ `{topic}.dlq` |
-| `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665) : le total du compte sur un post ou un commentaire, idempotent et insensible à l'ordre (Lua Redis + Scylla) | DLQ `{topic}.dlq` |
+| `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665) : le total du compte sur un post ou un commentaire, idempotent et insensible à l'ordre (Lua Redis + Scylla) ; les mises d'un compte supprimé sont ignorées | DLQ `{topic}.dlq` |
+| `account.v1.events` | `engagement-account-erasure` | `account_deleted` → oublier qui a liké (les compteurs restent) ; autres événements ignorés | DLQ `{topic}.dlq` |
 
-> **Contrat d'exécution (obligatoire) :** les consommateurs des mises et des commentaires tournent sous
+> **Contrat d'exécution (obligatoire) :** les consommateurs des mises, des comptes et des commentaires tournent sous
 > `run_consumer` — commit manuel après succès, retry borné avec backoff + jitter, DLQ à l'épuisement /
 > sur message empoisonné. Les totaux sont monotones, la re-livraison est donc sûre.
 
@@ -281,7 +295,8 @@ async fn main() -> anyhow::Result<()> {
 
 - **Migrations :** `0001_create_keyspace.cql` → `0002_create_post_reactions_table.cql` →
   `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` →
-  `0005_create_likes_tables.cql` → `0006_drop_reaction_tables.cql` sur
+  `0005_create_likes_tables.cql` → `0006_drop_reaction_tables.cql` →
+  `0007_create_erased_accounts_table.cql` sur
   `engagement`, appliquées **avant** le premier démarrage. (Le commentaire de table de 0002 contenait un
   `;` ; le lanceur des suites d'intégration coupait dessus jusqu'à ce qu'il respecte les guillemets comme
   `apps/migrator` — la prod n'a jamais été touchée. C'est une virgule désormais — même schéma.)

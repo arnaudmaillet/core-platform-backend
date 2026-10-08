@@ -1,6 +1,7 @@
 //! [`LikeLedger`] on Scylla (migration 0005): `likes_by_target` and
 //! `likes_by_account`, one LOGGED batch, the stake's time as the write
-//! timestamp so the newer total wins.
+//! timestamp so the newer total wins. An account's erasure (migration 0007)
+//! deletes as of its own time, so a stake made before it never comes back.
 
 use std::sync::Arc;
 
@@ -13,7 +14,7 @@ use scylla::DeserializeRow;
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
 use uuid::Uuid;
 
-use crate::application::port::{AccountLike, LikeLedger};
+use crate::application::port::{AccountLike, ForgottenLike, LikeLedger};
 use crate::domain::value_object::LikeTarget;
 use crate::error::EngagementError;
 
@@ -21,9 +22,32 @@ pub struct ScyllaLikeLedger {
     client: Arc<ScyllaClient>,
 }
 
+/// How long a deleted account is remembered (the table's default TTL): far
+/// beyond the 24 hours a stake batch is accepted and the wallet outbox's lag.
+pub const ERASED_FOR_SECS: i32 = 30 * 24 * 3600;
+
+fn account_uuid(account: &str) -> Result<Uuid, EngagementError> {
+    Uuid::parse_str(account)
+        .map_err(|_| EngagementError::DomainViolation { field: "account_id".into(), message: account.to_owned() })
+}
+
+fn scylla(e: impl Into<ScyllaStorageError>) -> EngagementError {
+    EngagementError::Scylla(e.into())
+}
+
 impl ScyllaLikeLedger {
     pub fn new(client: Arc<ScyllaClient>) -> Self {
         Self { client }
+    }
+
+    fn statement(&self, cql: &str, at_micros: Option<i64>) -> Statement {
+        let mut stmt = Statement::new(cql);
+        stmt.set_execution_profile_handle(Some(
+            self.client.profiles.get(ScyllaProfileKind::Strict).clone().into_handle_with_label("strict".to_string()),
+        ));
+        stmt.set_history_listener(Arc::clone(&self.client.history_listener) as Arc<dyn HistoryListener>);
+        stmt.set_timestamp(at_micros);
+        stmt
     }
 }
 
@@ -120,5 +144,73 @@ impl LikeLedger for ScyllaLikeLedger {
             });
         }
         Ok(likes)
+    }
+
+    async fn mark_erased(&self, account: &str, erased_at_micros: i64) -> Result<(), EngagementError> {
+        let account = account_uuid(account)?;
+        let stmt = self.statement(
+            "INSERT INTO engagement.erased_accounts (account_id, erased_at_us) VALUES (?, ?) USING TTL ?",
+            None,
+        );
+        self.client.session.execute_unpaged(stmt, (account, erased_at_micros, ERASED_FOR_SECS)).await.map_err(scylla)?;
+        Ok(())
+    }
+
+    async fn erased_at(&self, account: &str) -> Result<Option<i64>, EngagementError> {
+        let account = account_uuid(account)?;
+        let stmt = self.statement("SELECT erased_at_us FROM engagement.erased_accounts WHERE account_id = ?", None);
+        let rows = self
+            .client
+            .session
+            .execute_unpaged(stmt, (account,))
+            .await
+            .map_err(scylla)?
+            .into_rows_result()
+            .map_err(|e| EngagementError::DomainViolation { field: "erased_accounts".into(), message: e.to_string() })?;
+        let row = rows
+            .maybe_first_row::<(Option<i64>,)>()
+            .map_err(|e| EngagementError::DomainViolation { field: "erased_accounts".into(), message: e.to_string() })?;
+        Ok(row.map(|(at,)| at.unwrap_or(0)))
+    }
+
+    async fn forget(&self, account: &str, likes: &[ForgottenLike], at_micros: i64) -> Result<(), EngagementError> {
+        let account = account_uuid(account)?;
+        let forgets = likes.iter().map(|like| {
+            let (t, total) = (&like.target, like.total);
+            // One target's swap is atomic, and its anonymous id is the
+            // erasure's: a re-run or a replayed batch rewrites the same row.
+            let mut batch = Batch::new(BatchType::Logged);
+            batch.set_execution_profile_handle(Some(
+                self.client.profiles.get(ScyllaProfileKind::Strict).clone().into_handle_with_label("strict-batch".to_string()),
+            ));
+            batch.set_history_listener(Arc::clone(&self.client.history_listener) as Arc<dyn HistoryListener>);
+            batch.set_timestamp(Some(at_micros));
+            batch.append_statement(
+                "DELETE FROM engagement.likes_by_target WHERE target_kind = ? AND target_id = ? AND account_id = ?",
+            );
+            // Who it was is not kept: the anonymous id, the points only.
+            batch.append_statement(
+                "INSERT INTO engagement.likes_by_target (target_kind, target_id, account_id, total) VALUES (?, ?, ?, ?)",
+            );
+            batch.append_statement(
+                "DELETE FROM engagement.likes_by_account WHERE account_id = ? AND target_kind = ? AND target_id = ?",
+            );
+            let values = (
+                (t.kind(), t.id(), account),
+                (t.kind(), t.id(), like.anonymous_id, total),
+                (account, t.kind(), t.id()),
+            );
+            let session = &self.client.session;
+            async move { session.batch(&batch, values).await }
+        });
+        futures::future::try_join_all(forgets).await.map_err(scylla)?;
+        Ok(())
+    }
+
+    async fn forget_account(&self, account: &str, at_micros: i64) -> Result<(), EngagementError> {
+        let account = account_uuid(account)?;
+        let stmt = self.statement("DELETE FROM engagement.likes_by_account WHERE account_id = ?", Some(at_micros));
+        self.client.session.execute_unpaged(stmt, (account,)).await.map_err(scylla)?;
+        Ok(())
     }
 }

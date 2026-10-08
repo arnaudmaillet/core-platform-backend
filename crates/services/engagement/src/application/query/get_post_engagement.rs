@@ -170,6 +170,9 @@ mod tests {
         async fn mine(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<i64>, EngagementError> {
             Ok(vec![if account == "me" { 2 } else { 0 }; targets.len()])
         }
+        async fn forget(&self, _: &str, _: &[LikeTarget]) -> Result<(), EngagementError> {
+            unimplemented!()
+        }
     }
 
     async fn read(likes: Option<Arc<Post>>, reader: EngagementReader) -> PostEngagement {

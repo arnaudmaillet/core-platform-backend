@@ -27,7 +27,7 @@ producer's `DOMAIN.md §8`.
 
 | Topic | Producer | Consumers |
 |---|---|---|
-| `account.v1.events` | `account` | `audit`, `auth`, `profile`, `media`, `wallet`, `notification` |
+| `account.v1.events` | `account` | `audit`, `auth`, `profile`, `media`, `wallet`, `notification`, `engagement` |
 | `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `timeline`, `media`, `comment`, `chat` |
 | `wallet.v1.events` | `wallet` | `counter`, `notification`, `timeline`, `geo-discovery`, `engagement` |
 | `notification.v1.events` | `notification` | `realtime` |
@@ -82,7 +82,7 @@ producer's `DOMAIN.md §8`.
 |---|---|---|---|
 | `account_created` / `email_changed` / `email_verified` / `phone_changed` | a PII-bearing account lifecycle fact occurred | the matching command commits | `audit` (PII sealed in crypto-shred envelope), `profile` (persona) |
 | `password_changed` / `mfa_enrolled` / `mfa_revoked` | a security/credential fact (no PII) | credential change | `audit` (Authentication category) |
-| `activated` / `deactivated` / `suspended` / `deleted` / `kyc_status_changed` | an identity-lifecycle transition (`deleted`: anonymized by the GDPR janitor, or an admin delete) | lifecycle change | `audit` (Identity; `deleted` → **crypto-shreds the subject**, closing the Art. 17 loop), `profile` |
+| `activated` / `deactivated` / `suspended` / `deleted` / `kyc_status_changed` | an identity-lifecycle transition (`deleted`: anonymized by the GDPR janitor, or an admin delete) | lifecycle change | `audit` (Identity; `deleted` → **crypto-shreds the subject**, closing the Art. 17 loop), `profile`, `wallet` (`deleted` → erases the wallet), `engagement` (`deleted` → forgets who liked, the like counts kept, #665) |
 | `role_assigned` / `role_revoked` | an authorization grant changed | role grant/revoke | `audit` (Authorization) |
 | `gdpr_deletion_requested` | the right to erasure (Art. 17) was invoked; erasure scheduled 30 days out (an active account is deactivated meanwhile) | user/DPO request | `audit` (DataErasure evidence) |
 | `gdpr_deletion_cancelled` | a pending erasure was withdrawn within its grace period | the holder signs back in / `CancelGdprDeletion` | `audit` (DataErasure evidence) |

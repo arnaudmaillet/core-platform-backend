@@ -1,3 +1,4 @@
+pub mod account_consumer;
 pub mod comment_consumer;
 pub mod counter_flush;
 pub mod stake_consumer;
