@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 241ad02a10f2a399a753de344994150476d570686e5908a4f53166739b389237
+  source_sha256: b43f1fc90e017857aa09a4fab29248635f34a0146f40894be9eab2cb72bc199b
   translated_at: 2026-10-08
   status: complete
 ---
@@ -80,7 +80,9 @@ compte a liké, PK `((account_id), target_kind, target_id)`), `engagement.post_i
 like de la cible, ou à la fin d'une réhydratation). Une fois expiré, un compte absent d'un nouveau hash
 est **inconnu**, pas zéro : le consommateur des mises réhydrate alors tout le hash depuis
 `likes_by_target` (`HSETNX`, un total Redis plus récent l'emporte ; likers anonymes compris) avant
-d'appliquer, si bien que la mise suivante n'ajoute que la différence. Une lecture se rabat sur la ligne
+d'appliquer, si bien que la mise suivante n'ajoute que la différence ; un compte supprimé entre-temps
+est oublié à nouveau après chaque page (sa marque `erased_accounts` est écrite avant le `HDEL` de
+l'effaceur). Une lecture se rabat sur la ligne
 du lecteur dans `likes_by_target` et lance une réhydratation en arrière-plan (`:rehydrating`, `SET NX`
 pendant 60 s).
 

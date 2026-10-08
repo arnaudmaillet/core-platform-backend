@@ -93,6 +93,10 @@ impl LikeStore for Likes {
 
 #[async_trait]
 impl LikeLedger for Likes {
+    async fn erased_among(&self, accounts: &[String]) -> Result<Vec<String>, EngagementError> {
+        let erased = self.erased.lock().unwrap();
+        Ok(accounts.iter().filter(|a| erased.contains_key(a.as_str())).cloned().collect())
+    }
     async fn total_of(&self, target: &LikeTarget, account: &str) -> Result<Option<i64>, EngagementError> {
         Ok(self.by_target.lock().unwrap().get(target).and_then(|l| l.get(account)).copied())
     }

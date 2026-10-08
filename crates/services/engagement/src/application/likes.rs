@@ -4,7 +4,9 @@
 //! A stake rehydrates its target before applying (an account's total must be
 //! known for the next one to add only the difference); a read falls back to
 //! the durable copy for the reader and starts one rehydration in the
-//! background.
+//! background. A rehydration racing an account's erasure forgets it again:
+//! the account is marked erased before the eraser forgets it in Redis, so a
+//! total loaded after that is followed by a check that sees the mark.
 
 use std::sync::Arc;
 
@@ -22,6 +24,10 @@ pub async fn rehydrate(store: &dyn LikeStore, ledger: &dyn LikeLedger, target: &
         let page = ledger.likers_of(target, PAGE, after.as_deref()).await?;
         let last = page.len() < PAGE as usize;
         store.rehydrate(target, &page, last).await?;
+        let accounts: Vec<String> = page.iter().map(|(account, _)| account.clone()).collect();
+        for erased in ledger.erased_among(&accounts).await? {
+            store.forget(&erased, std::slice::from_ref(target)).await?;
+        }
         loaded += page.len();
         if last {
             return Ok(loaded);
@@ -108,6 +114,25 @@ mod tests {
         assert_eq!(likes.mine("never", std::slice::from_ref(&post)).await.unwrap(), vec![Some(0)], "and whole again");
         // A redelivery of the old total changes nothing.
         assert_eq!(stake(&likes, &post, "b", 4).await, 0);
+    }
+
+    /// An erasure racing a rehydration: the account's row was read before
+    /// the eraser forgot it; the rehydration forgets it again.
+    #[tokio::test]
+    async fn a_rehydration_never_brings_a_deleted_account_back() {
+        let likes = Likes::default();
+        let post = LikeTarget::Post("p1".into());
+        stake(&likes, &post, "gone", 6).await;
+        stake(&likes, &post, "stays", 2).await;
+        likes.expire(&post);
+        // Marked erased, its durable row not yet swapped (the race).
+        likes.mark_erased("gone", 1).await.unwrap();
+
+        rehydrate(&likes, &likes, &post).await.unwrap();
+        let one = std::slice::from_ref(&post);
+        assert_eq!(likes.mine("gone", one).await.unwrap(), vec![Some(0)]);
+        assert_eq!(likes.mine("stays", one).await.unwrap(), vec![Some(2)]);
+        assert_eq!(likes.counts(one).await.unwrap(), vec![8], "the counts stay");
     }
 
     #[tokio::test]

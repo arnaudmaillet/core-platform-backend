@@ -65,7 +65,8 @@ account liked, PK `((account_id), target_kind, target_id)`), `engagement.post_in
 like, or when a rehydration finished). Once it expired, an account missing from a new one is
 **unknown**, not zero: the stake consumer then rehydrates the whole hash from `likes_by_target`
 (`HSETNX`, so a newer Redis total wins; anonymous likers included) before applying, so the next stake
-adds only the difference. A read falls back to the reader's row in `likes_by_target` and starts one
+adds only the difference; an account deleted meanwhile is forgotten again after each page (its
+`erased_accounts` mark is written before the eraser's `HDEL`). A read falls back to the reader's row in `likes_by_target` and starts one
 background rehydration (`:rehydrating`, `SET NX` for 60 s).
 
 **What an account liked (#653, #665).** `ListLikesByAccount(account_id, limit, page_token)` is **mesh

@@ -146,6 +146,32 @@ impl LikeLedger for ScyllaLikeLedger {
         Ok(likes)
     }
 
+    async fn erased_among(&self, accounts: &[String]) -> Result<Vec<String>, EngagementError> {
+        // Anonymous likers and malformed ids are not accounts: never erased.
+        let ids: Vec<Uuid> = accounts.iter().filter_map(|a| Uuid::parse_str(a).ok()).collect();
+        let mut erased = Vec::new();
+        for chunk in ids.chunks(100) {
+            let stmt = self.statement("SELECT account_id FROM engagement.erased_accounts WHERE account_id IN ?", None);
+            let rows = self
+                .client
+                .session
+                .execute_unpaged(stmt, (chunk.to_vec(),))
+                .await
+                .map_err(scylla)?
+                .into_rows_result()
+                .map_err(|e| EngagementError::DomainViolation { field: "erased_accounts".into(), message: e.to_string() })?;
+            for row in rows
+                .rows::<(Uuid,)>()
+                .map_err(|e| EngagementError::DomainViolation { field: "erased_accounts".into(), message: e.to_string() })?
+            {
+                let (account,) =
+                    row.map_err(|e| EngagementError::DomainViolation { field: "erased_accounts".into(), message: e.to_string() })?;
+                erased.push(account.to_string());
+            }
+        }
+        Ok(erased)
+    }
+
     async fn total_of(&self, target: &LikeTarget, account: &str) -> Result<Option<i64>, EngagementError> {
         let account = account_uuid(account)?;
         let stmt = self.statement(

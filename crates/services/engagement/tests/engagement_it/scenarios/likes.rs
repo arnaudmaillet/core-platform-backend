@@ -220,9 +220,20 @@ async fn expired_likers_come_back_from_the_durable_copy() {
     assert_eq!(h.like_store.apply_total(&post, &a, 15).await.unwrap(), None);
 
     assert_eq!(likes::apply_total(h.like_store.as_ref(), &ledger, &post, &a, 15).await.unwrap(), 5, "only the difference");
+    ledger.record(&post, &a, "liker", 15, 2_000_000).await.unwrap();
     assert_eq!(h.like_store.counts(one).await.unwrap(), vec![19]);
     assert_eq!(h.like_store.mine(&b, one).await.unwrap(), vec![Some(4)], "every liker is back");
     assert_eq!(h.like_store.mine(&Uuid::now_v7().to_string(), one).await.unwrap(), vec![Some(0)], "whole again");
+
+    // A deleted account whose row is still in the durable copy (an erasure
+    // racing the rehydration) is not loaded back.
+    let gone = Uuid::now_v7().to_string();
+    ledger.record(&post, &gone, "liker", 3, 1_000_000).await.unwrap();
+    ledger.mark_erased(&gone, 1_900_000).await.unwrap();
+    let _: i64 = h.redis.inner.del(&likers).await.unwrap();
+    likes::rehydrate(h.like_store.as_ref(), &ledger, &post).await.unwrap();
+    assert_eq!(h.like_store.mine(&gone, one).await.unwrap(), vec![Some(0)]);
+    assert_eq!(h.like_store.mine(&a, one).await.unwrap(), vec![Some(15)]);
 
     // One rehydration at a time from the read path.
     assert!(h.like_store.claim_rehydration(&post).await.unwrap());

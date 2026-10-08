@@ -102,6 +102,10 @@ pub trait LikeLedger: Send + Sync + 'static {
     /// When `account` was deleted, if it was (and is still remembered).
     async fn erased_at(&self, account: &str) -> Result<Option<i64>, EngagementError>;
 
+    /// Which of `accounts` were deleted (and are still remembered); ids that
+    /// are not accounts (anonymous likers) are never among them.
+    async fn erased_among(&self, accounts: &[String]) -> Result<Vec<String>, EngagementError>;
+
     /// Forgets `account` on each like as of `at_micros`, one target at a time
     /// and atomically: its row on the target becomes the anonymous one (same
     /// total; the count stays rebuildable from the durable copy), and its own
