@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use fred::interfaces::{KeysInterface, LuaInterface, SortedSetsInterface};
+use fred::interfaces::{LuaInterface, SortedSetsInterface};
 use redis_storage::RedisClient;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use transport::kafka::consumer::builder::KafkaConsumerBuilder;
 use transport::kafka::consumer::{run_consumer, ProcessOutcome, RetryPolicy};
 use transport::kafka::config::client::KafkaClientConfig;
@@ -23,7 +23,8 @@ use crate::error::NotificationError;
 use crate::infrastructure::worker::build_dlq_producer;
 use crate::infrastructure::worker::collapse::{CollapseBuffer, CollapseKey, SCHEDULE_KEY};
 
-const TOPIC: &str = "engagement.reactions";
+/// Likes are points (#665): a like notice comes from the wallet's stakes.
+const TOPIC: &str = "wallet.v1.events";
 
 // ── Lua scripts ───────────────────────────────────────────────────────────────
 
@@ -108,37 +109,34 @@ end
 return 1
 "#;
 
-// ── Payload shape (from engagement.reactions topic) ───────────────────────────
+// ── Payload shape (from wallet.v1.events, #665) ───────────────────────────────
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(tag = "event_type", rename_all = "snake_case")]
+/// The wallet's events, tagged on `type`; only a stake matters here.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 enum ReactionKafkaEvent {
-    Upserted(ReactionUpsertedPayload),
-    Removed(ReactionRemovedPayload),
+    StakeCommitted(StakeCommittedPayload),
+    #[serde(other)]
+    Other,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct ReactionUpsertedPayload {
-    pub post_id:     String,
-    pub profile_id:  String,
-    pub event_at_ms: i64,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct ReactionRemovedPayload {
-    pub post_id:     String,
-    pub profile_id:  String,
-    pub event_at_ms: i64,
+/// A batch of likes: who liked (`profile_id`), what (`target_kind`,
+/// `target_id`), whose (`author_profile_id`), and whether it is the account's
+/// first batch on it — the only one that notifies.
+#[derive(Debug, Deserialize)]
+struct StakeCommittedPayload {
+    pub profile_id:        String,
+    pub target_kind:       String,
+    pub target_id:         String,
+    pub author_profile_id: String,
+    pub first:             bool,
+    pub staked_at:         chrono::DateTime<chrono::Utc>,
 }
 
 // ── Key builders ──────────────────────────────────────────────────────────────
 
 fn hot_key(subject_id: &SubjectId) -> String {
     format!("notification:hot:{}", subject_id)
-}
-
-fn post_author_key(post_id: &str) -> String {
-    format!("notification:pa:{}", post_id)
 }
 
 fn cap_key(target_id: &ProfileId, subject_id: &SubjectId, kind: &str) -> String {
@@ -270,11 +268,18 @@ where
         event: &ReactionKafkaEvent,
         batch: &mut HashMap<CollapseKey, CollapseBuffer>,
     ) {
-        let (post_id, sender_str, event_at_ms) = match event {
-            ReactionKafkaEvent::Upserted(e) =>
-                (e.post_id.as_str(), e.profile_id.as_str(), e.event_at_ms),
-            // Reaction removals do not generate notifications.
-            ReactionKafkaEvent::Removed(_) => return,
+        // Only a liker's first batch on a post or comment notifies (#665);
+        // later batches and other wallet events never do.
+        let (post_id, sender_str, event_at_ms, subject_kind, author) = match event {
+            ReactionKafkaEvent::StakeCommitted(e) if e.first => {
+                let kind = match e.target_kind.as_str() {
+                    "post" => SubjectKind::Post,
+                    "comment" => SubjectKind::Comment,
+                    _ => return,
+                };
+                (e.target_id.as_str(), e.profile_id.as_str(), e.staked_at.timestamp_millis(), kind, e.author_profile_id.as_str())
+            }
+            ReactionKafkaEvent::StakeCommitted(_) | ReactionKafkaEvent::Other => return,
         };
 
         let sender_uuid = match Uuid::parse_str(sender_str) {
@@ -285,31 +290,11 @@ where
             }
         };
 
-        // Look up post author from Redis cache (populated by MentionWorker).
-        let author_key = post_author_key(post_id);
-        let author_str: Option<String> = match self.redis.inner.get(&author_key).await {
-            Ok(v)    => v,
-            Err(err) => {
-                tracing::warn!(error = %err, post_id, "Redis get post_author failed");
-                None
-            }
-        };
-
-        let target_str = match author_str {
-            Some(s) => s,
-            None => {
-                tracing::debug!(
-                    post_id,
-                    "post author cache miss — reaction notification suppressed (post not yet indexed)"
-                );
-                return;
-            }
-        };
-
-        let target_uuid = match Uuid::parse_str(&target_str) {
+        // The author comes with the stake (the wallet checked the target).
+        let target_uuid = match Uuid::parse_str(author) {
             Ok(u) => u,
             Err(_) => {
-                tracing::warn!(post_id, target = target_str, "invalid target UUID — skipping");
+                tracing::warn!(post_id, target = author, "invalid author UUID — skipping");
                 return;
             }
         };
@@ -330,7 +315,7 @@ where
         let key = CollapseKey::new(
             target_uuid,
             subject_uuid,
-            SubjectKind::Post,
+            subject_kind,
             NotificationKind::Reaction,
         );
 
@@ -529,5 +514,29 @@ where
             .map_err(|e| NotificationError::Redis(redis_storage::RedisStorageError::from(e)))?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The wallet's JSON as it publishes it (#665).
+    fn stake(first: bool, kind: &str) -> ReactionKafkaEvent {
+        serde_json::from_str(&format!(
+            r#"{{"type":"stake_committed","account_id":"a","profile_id":"p","target_kind":"{kind}","target_id":"t",
+                "author_profile_id":"x","points":3,"total":3,"first":{first},"stake_key":"stake:k",
+                "staked_at":"2026-10-08T12:00:00Z"}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_stake_decodes_with_its_author_and_first_flag_other_events_are_other() {
+        let ReactionKafkaEvent::StakeCommitted(e) = stake(true, "comment") else { panic!() };
+        assert_eq!((e.first, e.target_kind.as_str(), e.author_profile_id.as_str()), (true, "comment", "x"));
+        assert!(matches!(stake(false, "post"), ReactionKafkaEvent::StakeCommitted(StakeCommittedPayload { first: false, .. })));
+        let other: ReactionKafkaEvent = serde_json::from_str(r#"{"type":"something_new"}"#).unwrap();
+        assert!(matches!(other, ReactionKafkaEvent::Other));
     }
 }

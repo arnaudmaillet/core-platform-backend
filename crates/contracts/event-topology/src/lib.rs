@@ -124,14 +124,14 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("comment.created", "notification"),
     ("comment.created", "engagement"),
     ("comment.deleted", "engagement"),
-    // engagement reactions → counter aggregation, notif fan-out, write-behind
-    ("engagement.reactions", "counter"),
-    ("engagement.reactions", "notification"),
-    // a first reaction teaches the reactor the post's hashtags (#662: the
-    // interest tags that rank For You)
-    ("engagement.reactions", "timeline"),
-    // hearts → each country's likes, the ladder that prices unlocks (#665)
-    ("engagement.reactions", "geo-discovery"),
+    // likes are points (#665): the wallet's stakes → counter's like magnitude,
+    // the "X liked" notice (a liker's first batch), the interest tags (#662:
+    // a first like teaches the post's hashtags), each country's likes (the
+    // ladder that prices unlocks)
+    ("wallet.v1.events", "counter"),
+    ("wallet.v1.events", "notification"),
+    ("wallet.v1.events", "timeline"),
+    ("wallet.v1.events", "geo-discovery"),
     // follows, follow requests and their approval (#755)
     ("social-graph.followed", "notification"),
     ("social-graph.follow_requested", "notification"),

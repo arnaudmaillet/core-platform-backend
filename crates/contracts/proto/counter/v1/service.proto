@@ -15,7 +15,7 @@ option go_package = "github.com/coreplatform/counter/v1;counterv1";
 // This surface is deliberately READ-ONLY. There is NO write/increment RPC:
 // ingestion happens entirely off the synchronous path via Kafka consumers
 // (`view.v1.events`, `impression.v1.events`, `click.v1.events`,
-// `engagement.reactions`, social-graph follow events). The only thing this
+// `wallet.v1.events` likes, social-graph follow events). The only thing this
 // service publishes is the coarse `counter.v1.popularity` ranking signal,
 // consumed by `search` and `timeline` — never a synchronous call.
 //

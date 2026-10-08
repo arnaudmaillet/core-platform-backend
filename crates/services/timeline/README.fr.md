@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 2c8c74708fc61310a6bc08877038acf3e1c8f1790963f5b957b14136e3d43457
-  translated_at: 2026-10-06
+  source_sha256: 10901ecfe4a6c94753940aeb6ad4eaeee4fc074dbc990ea20414d600ce13a00c
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -188,8 +188,9 @@ pour un membre selon ses centres d'intérêt, sauf s'il l'a désactivé (#662).
   posts) sont exclus du fil de découverte, et ceux des auteurs mis en sourdine par le profil du fil sont
   exclus du **fil des abonnements** (un VIP en sourdine n'est même pas lu ; le curseur passe les posts
   écartés). Un appel `ListMutedProfiles` par requête, en échec ouvert.
-- **Centres d'intérêt (#662).** Le même consumer lit `engagement.reactions` : la *première* réaction d'un
-  profil à un post du pool (`upserted` sans `old_kind` ; un post retiré ou supprimé n'apprend rien) ajoute
+- **Centres d'intérêt (#662).** Le même consumer lit `wallet.v1.events` (#665 : un like est un point) :
+  le *premier* lot de likes d'un profil sur un post du pool (`stake_committed` avec `first` ; les lots
+  suivants, les likes sur les commentaires, et un post retiré ou supprimé n'apprennent rien) ajoute
   du poids aux hashtags du post dans les centres d'intérêt du profil (Redis, ZSET
   `timeline:int:{<profile>}`, plus `:seen` — un post compte une fois par 30 jours — `:muted`, les tags
   supprimés, et `:off`, la désactivation). Les poids décroissent avec une demi-vie de 30 jours (stockés gonflés par rapport à une époque
@@ -254,7 +255,7 @@ pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point *
 | `post.deleted` | `timeline-post-deleted` | VIP ZREM or Scylla purge | DLQ `{topic}.dlq` |
 | `social-graph.followed` | `timeline-sg-followed` | backfill recent posts + update following set | DLQ `{topic}.dlq` |
 | `social-graph.unfollowed` | `timeline-sg-unfollowed` | prune posts + update following set | DLQ `{topic}.dlq` |
-| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` · `engagement.reactions` · `profile.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction) ; centres d'intérêt (première réaction, désactivation sur `ProfileFeedSettingsChanged`, effacement sur `ProfileDeleted`) | DLQ `{topic}.dlq` |
+| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` · `wallet.v1.events` · `profile.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction) ; centres d'intérêt (premier like, désactivation sur `ProfileFeedSettingsChanged`, effacement sur `ProfileDeleted`) | DLQ `{topic}.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** tous les workers s'exécutent sous `run_consumer` — commit manuel
 > après succès, retries bornés avec backoff + jitter, DLQ en cas d'épuisement/poison. Toutes les écritures

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./CONTEXT_MAP.md
-  source_sha256: 9fa9352df3390495c8346ad78054a362495d457257287f2ad9b14a996511395d
-  translated_at: 2026-06-28
+  source_sha256: 9c21ab27072ff88be3d0a45a3290950878d25f353d3a1c1efe2893d4f91e22ae
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`CONTEXT_MAP.md`](./CONTEXT_MAP.md) fait foi.
@@ -69,8 +69,11 @@ Oriente l'investissement. Consolidé depuis la ligne de classe de chaque Domain 
 | `post` | `post.v1.events` | `realtime` | ACL (broadcast) | diffusion live des posts |
 | `comment` | `comment.created` / `comment.deleted` | `notification` | ACL | notifications de réponse |
 | `comment` | `comment.created` / `comment.deleted` | `engagement` / `counter` | ACL | comptes de commentaires |
-| `engagement` | `engagement.reactions` | `notification` | ACL | notifications de réaction |
-| `engagement` | `engagement.reactions` | `counter` | ACL | magnitudes de réactions |
+| `wallet` | `wallet.v1.events` | `engagement` | ACL | compteurs de likes (#665 : un like est un point) |
+| `wallet` | `wallet.v1.events` | `notification` | ACL | notifications de like (le premier lot d'une personne) |
+| `wallet` | `wallet.v1.events` | `counter` | ACL | magnitudes de likes |
+| `wallet` | `wallet.v1.events` | `timeline` | ACL | centres d'intérêt (un premier like) |
+| `wallet` | `wallet.v1.events` | `geo-discovery` | ACL | les likes de chaque pays (le classement des déblocages) |
 | `engagement` | `engagement.score_updated` | `geo-discovery` | ACL | classement de viralité |
 | `counter` | `counter.v1.popularity` | `search` | ACL | signal de classement par popularité |
 | `counter` | `counter.v1.popularity` | `realtime` | ACL (broadcast) | compteurs d'engagement live |

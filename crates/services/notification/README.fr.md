@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 1f02bffd5fad46bb346d22b6405778625aaa1332fca53b1b34356320764ab26b
+  source_sha256: 9dbd17cd07eedb0762385be25cad65e4bc694655a538e9c77e7dc5e8a23b8e1d
   translated_at: 2026-10-08
   status: complete
 ---
@@ -20,7 +20,7 @@ i18n:
 > | **Palier (Tier)** | **TIER-2** — dérivé/best-effort ; le fil est durable, les pushs sont best-effort |
 > | **Binaire déployable** | `crates/apps/notification-server` (crate bibliothèque : `crates/services/notification`) |
 > | **Bases de données** | ScyllaDB keyspace `notification` (fil TWCS + compteurs) · Redis (collapse + non-lus) |
-> | **Asynchrone** | ne publie rien · consomme `engagement.reactions` / `comment.created` / `post.published` / `social-graph.followed` / `social-graph.follow_requested` / `moderation.v1.events` (appeal outcomes) |
+> | **Asynchrone** | ne publie rien · consomme `wallet.v1.events` / `comment.created` / `post.published` / `social-graph.followed` / `social-graph.follow_requested` / `moderation.v1.events` (appeal outcomes) |
 > | **Appelants amont** | `<TODO: mobile / BFF (stream + lectures de fil)>` |
 > | **Dépendances aval** | ScyllaDB, Redis, Kafka ; APNs + `profile` (push, #654) |
 > | **SLO** | lecture du compte de non-lus sub-ms (Redis) · lecture de fil paginée O(1) · push best-effort |
@@ -30,7 +30,7 @@ i18n:
 ## 🎯 Vue d'ensemble & rôle du service
 
 `notification` boucle la rétroaction utilisateur. Il ingère des événements métier sémantiques depuis
-Kafka (`engagement.reactions`, `comment.created`, `post.published`), persiste des enregistrements
+Kafka (`wallet.v1.events`, `comment.created`, `post.published`), persiste des enregistrements
 d'activité durables par profil dans ScyllaDB, et dispatche des pushs temps réel vers les clients actifs
 via un canal gRPC server-streaming.
 
@@ -50,7 +50,7 @@ handle, aucun contenu ; l'hydratation UI est l'affaire du client.
 ## 📐 Architecture & concepts
 
 ```
-Kafka: engagement.reactions │ comment.created │ post.published
+Kafka: wallet.v1.events │ comment.created │ post.published
    │                          │                 │
 ReactionNotificationWorker  CommentNotificationWorker  MentionNotificationWorker
  (L1 in-batch collapse,     (cache comment author,    (cache post author, parse
@@ -228,7 +228,7 @@ identifiers — via le crate partagé `error`.
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
-| `engagement.reactions` | `notification-reaction-consumer` | reaction notifications (collapsed) | DLQ `{topic}.dlq` |
+| `wallet.v1.events` | `notification-stake-consumer` | notifications de like (#665 : un like est un point) : le **premier** lot de likes d'une personne sur un post ou un commentaire (`stake_committed` avec `first`), l'auteur tiré de l'événement ; les lots suivants et les autres événements du wallet sont ignorés (regroupées) | DLQ `{topic}.dlq` |
 | `social-graph.followed` + `social-graph.follow_requested` | `notification-follow-consumer` | follows → `FOLLOW` to the followee; a request to a private profile → `FOLLOW_REQUEST` to its owner (the app opens the requests inbox); an approved request (`via_request`) → `FOLLOW_ACCEPTED` to the requester, not the owner again (#755). A withdrawn request (`withdrawn_at`: cancelled, declined, cut by a block) **retracts** the owner's `FOLLOW_REQUEST`: deleted, and taken off the badge when still unread and newer than a mark-all-read (a replay does nothing). Subject: the other profile (`SUBJECT_KIND_PROFILE`). Block-gated, self-guarded, one notification per event (deterministic id) | DLQ `{topic}.dlq` |
 | `moderation.v1.events` (`appeal_resolved` only) | `notification-appeal-consumer` | an appeal's outcome → `APPEAL_UPHELD` / `APPEAL_OVERTURNED` to **every profile** moderation names (`profile_ids`: the appellant account's profiles, #744). Subject: the appeal (`SUBJECT_KIND_APPEAL`, the app opens it via `ListMyAppeals`). A platform notice: no sender (nil `sender_profile_id`, `sender_count` 0), not block-gated; one notification per (appeal, profile) (deterministic id). Other moderation events are ignored | DLQ `{topic}.dlq` |
 | `account.v1.events` (`supervision_started` / `supervision_ended` seulement) | `notification-supervision-consumer` | supervision familiale (#670) → `SUPERVISION_STARTED` aux deux côtés ; `SUPERVISION_ENDED` à l'autre côté quand l'un y met fin (aux deux quand un compte est effacé) ; `SUPERVISION_CAME_OF_AGE` aux deux à 18 ans. À chaque profil que account nomme sur l'événement ; expéditeur = le premier profil de l'autre côté (sinon la plateforme), sujet = le compte de l'autre côté (`SUBJECT_KIND_ACCOUNT` : l'app ouvre Réglages → Supervision). Sans filtre de blocage (un ado est toujours prévenu) ; fil seulement (pas de catégorie push) ; une notification par (événement, profil) (id déterministe). Les autres événements de compte sont ignorés | DLQ `{topic}.dlq` |
@@ -328,7 +328,7 @@ async fn main() -> anyhow::Result<()> {
 
 - **Migrations :** `001_keyspace.cql` → `002_notifications_by_profile.cql` →
   `003_notification_unread_counters.cql` sur `notification`, appliquées **avant** le premier boot.
-- **Kafka :** topics pré-créés — `engagement.reactions` (key `{post}:{profile}`),
+- **Kafka :** topics pré-créés — `wallet.v1.events` (key `{target_kind}:{target_id}`),
   `comment.created`/`comment.deleted` (key `comment_id`), `post.published` (key `post_id`).
 - **Déploiement/Rollback :** `<TODO>` ; les workers sont des consommateurs at-least-once, la couche gRPC
   est sans état — sûr à déployer.

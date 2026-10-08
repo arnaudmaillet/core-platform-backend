@@ -39,7 +39,7 @@ use crate::error::CounterError;
 use crate::infrastructure::consumer::{run_flush_loop, run_fold_consumer};
 use crate::infrastructure::reconcile::{GrpcReconciliationSource, run_reconcile_loop};
 use crate::infrastructure::decode::{
-    FollowWire, HitWire, ReactionWire, map_click, map_follow, map_impression, map_reaction, map_view,
+    FollowWire, HitWire, WalletWire, map_click, map_follow, map_impression, map_stake, map_view,
 };
 use crate::infrastructure::grpc::{
     CounterServiceHandler, CounterServiceServer, FILE_DESCRIPTOR_SET,
@@ -50,13 +50,14 @@ use transport::kafka::envelope::ConsumablePayload;
 const VIEW_TOPIC: &str = "view.v1.events";
 const IMPRESSION_TOPIC: &str = "impression.v1.events";
 const CLICK_TOPIC: &str = "click.v1.events";
-const REACTION_TOPIC: &str = "engagement.reactions";
+/// Likes are points (#665): the wallet's stakes.
+const STAKE_TOPIC: &str = "wallet.v1.events";
 const FOLLOW_TOPIC: &str = "social-graph.follows";
 
 const VIEW_GROUP: &str = "counter-view-aggregator";
 const IMPRESSION_GROUP: &str = "counter-impression-aggregator";
 const CLICK_GROUP: &str = "counter-click-aggregator";
-const REACTION_GROUP: &str = "counter-reaction-aggregator";
+const STAKE_GROUP: &str = "counter-stake-aggregator";
 const FOLLOW_GROUP: &str = "counter-follow-aggregator";
 
 /// Backoff before respawning a consumer after its runner returns.
@@ -186,13 +187,7 @@ impl Service for CounterWorkerService {
             map_impression,
         );
         spawn_consumer::<HitWire, _>(CLICK_TOPIC, CLICK_GROUP, "click", &aggregator, map_click);
-        spawn_consumer::<ReactionWire, _>(
-            REACTION_TOPIC,
-            REACTION_GROUP,
-            "reaction",
-            &aggregator,
-            map_reaction,
-        );
+        spawn_consumer::<WalletWire, _>(STAKE_TOPIC, STAKE_GROUP, "stake", &aggregator, map_stake);
         spawn_consumer::<FollowWire, _>(
             FOLLOW_TOPIC,
             FOLLOW_GROUP,

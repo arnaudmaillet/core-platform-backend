@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: ad807d78a7035501b29b08b6f4866af8c91d113c00db299e513374d3e931e88e
-  translated_at: 2026-10-06
+  source_sha256: ff76dc31c3105b3a1bbc7e7d4c5564089ad9cb0982e73da442e6de4669196c4e
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -20,7 +20,7 @@ i18n:
 > | **Tier** | **TIER-1** — surface d'engagement très visible, mais **dérivée et fail-open** : hors de tout chemin d'écriture synchrone ; une panne dégrade les compteurs en « périmé mais servi », elle ne bloque jamais un like/abonnement/publication |
 > | **Déployable** | **deux** binaires — `crates/apps/counter-server` (chemin de lecture) **et** `crates/apps/counter-worker` (agrégateur de flux). Crate bibliothèque : `crates/services/counter` |
 > | **Stockages** | **Redis** (compteurs chauds · HLL · CMS) · **Postgres** (totaux matérialisés tièdes + registre de réconciliation) · **ScyllaDB TWCS** (séries temporelles historiques froides). Ne détient aucune entité |
-> | **Async** | publie `counter.v1.popularity` (signal de classement grossier) · consomme `view.v1.events`, `impression.v1.events`, `click.v1.events`, `engagement.reactions`, les événements d'abonnement de social-graph (Kafka) |
+> | **Async** | publie `counter.v1.popularity` (signal de classement grossier) · consomme `view.v1.events`, `impression.v1.events`, `click.v1.events`, `wallet.v1.events` (likes, #665), les événements d'abonnement de social-graph (Kafka) |
 > | **Appelants amont** | gateway / BFF, `timeline`, `search` (hydratation des compteurs + classement) |
 > | **Dépendances aval** | Redis, Postgres, Scylla, Kafka. Le système de référence reste dans `post` / `profile` / `media` / `engagement` / `social-graph` — counter n'appelle **aucun** service sur le chemin de lecture |
 > | **SLO** | `<TODO>` dispo · `BatchGetCounters` p99 `< <TODO ~5> ms` · latence d'ingestion `< <TODO ~10> s` |
@@ -51,7 +51,7 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS là où 
  télémétrie edge/BFF  ── view.v1.events ──┐
                       ── impression.v1.events ──┤
                       ── click.v1.events ──┤      ┌─────────────── counter-worker ───────────────┐
- engagement-service   ── engagement.reactions ──┤  │ [run_consumer · par topic]                    │
+ wallet-service       ── wallet.v1.events ─────┤  │ [run_consumer · par topic]                    │
  social-graph         ── événements d'abonnement ──┘  │  → pré-agrégation fenêtrée (N événements → 1 Δ)│
                                                   ├─►│  → Redis (HINCRBY / PFADD / CMS, ré-agg shard) │
  (clés shardées étalent les entités chaudes)      │  │  → write-behind idempotent (clé de fenêtre)    │
@@ -171,7 +171,7 @@ Chaque faute implémente `error::AppError` avec un code `CTR-XXXX` stable, mapp�
 | `view.v1.events` | `counter-view-aggregator` | agrège les vues (total via compteur shardé, uniques via HLL) | DLQ `view.v1.events.dlq` |
 | `impression.v1.events` | `counter-impression-aggregator` | agrège impressions / portée | DLQ `impression.v1.events.dlq` |
 | `click.v1.events` | `counter-click-aggregator` | agrège clics / entrées de CTR | DLQ `click.v1.events.dlq` |
-| `engagement.reactions` | `counter-reaction-aggregator` | agrège les magnitudes de like/partage (supersède les compteurs bruts d'engagement) | DLQ `engagement.reactions.dlq` |
+| `wallet.v1.events` | `counter-stake-aggregator` | les likes sont des points (#665) : chaque `stake_committed` ajoute ses `points` à la magnitude `like` du post ou du commentaire (autres événements du wallet ignorés). Approximatif comme toute somme ici (une mise relivrée compte deux fois, un crash perd une fenêtre) et entrée de popularité : le compteur exact de likes est celui d'engagement | DLQ `wallet.v1.events.dlq` |
 | `<événements d'abonnement social-graph>` | `counter-follow-aggregator` | agrège les compteurs d'abonnés / abonnements | DLQ `<...>.dlq` |
 
 > **Contrat de runtime (obligatoire) :** tous les consommateurs tournent sous `run_consumer` — commit manuel après un résultat terminal, réessai borné avec backoff + jitter, DLQ à l'épuisement/poison, reconstruction depuis le dernier offset commité en cas d'erreur broker. **Idempotence :** le flush durable est clé sur `(entity, metric, window_id)`, donc un événement re-livré ré-applique la même fenêtre sans double comptage ; un événement non-mappé/inconnu (`CTR-8002`) est replié en `Ok` pour que l'offset commite ; les métriques approximatives tolèrent le double comptage at-least-once par conception.

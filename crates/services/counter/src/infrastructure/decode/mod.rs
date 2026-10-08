@@ -6,5 +6,5 @@
 pub mod decoder;
 pub mod wire;
 
-pub use decoder::{map_click, map_follow, map_impression, map_reaction, map_view};
-pub use wire::{FollowWire, HitWire, ReactionWire};
+pub use decoder::{map_click, map_follow, map_impression, map_stake, map_view};
+pub use wire::{FollowWire, HitWire, WalletWire};

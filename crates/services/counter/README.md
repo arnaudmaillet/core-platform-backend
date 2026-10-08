@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-1** — high-visibility engagement surface, but **derived and fail-open**: not in any synchronous write path; an outage degrades counts to stale-but-served, it never blocks a like/follow/publish |
 > | **Deployable** | **two** binaries — `crates/apps/counter-server` (read path) **and** `crates/apps/counter-worker` (stream aggregator). Library crate: `crates/services/counter` |
 > | **Datastores** | **Redis** (hot live counters · HLL · CMS) · **Postgres** (warm materialized totals + reconciliation ledger) · **ScyllaDB TWCS** (cold historical time-series). Owns no entity |
-> | **Async** | publishes `counter.v1.popularity` (coarse ranking signal) · consumes `view.v1.events`, `impression.v1.events`, `click.v1.events`, `engagement.reactions`, social-graph follow events (Kafka) |
+> | **Async** | publishes `counter.v1.popularity` (coarse ranking signal) · consumes `view.v1.events`, `impression.v1.events`, `click.v1.events`, `wallet.v1.events` (likes, #665), social-graph follow events (Kafka) |
 > | **Upstream callers** | gateway / BFF, `timeline`, `search` (count hydration + ranking) |
 > | **Downstream deps** | Redis, Postgres, Scylla, Kafka. Source-of-record stays in `post` / `profile` / `media` / `engagement` / `social-graph` — counter calls **no** service on the read path |
 > | **SLO** | `<TODO>` avail · `BatchGetCounters` p99 `< <TODO ~5> ms` · ingestion lag `< <TODO ~10> s` |
@@ -40,7 +40,7 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS where it
  edge/BFF telemetry  ── view.v1.events ──┐
                      ── impression.v1.events ──┤
                      ── click.v1.events ──┤      ┌─────────────── counter-worker ───────────────┐
- engagement-service  ── engagement.reactions ──┤  │ [run_consumer · per topic]                    │
+ wallet-service      ── wallet.v1.events ─────┤  │ [run_consumer · per topic]                    │
  social-graph        ── follow events ──┘      ├─►│  → windowed pre-aggregation (N events → 1 Δ)   │
                                                │  │  → Redis (HINCRBY / PFADD / CMS, shard re-agg) │
  (sharded keys spread hot entities)            │  │  → idempotent write-behind (window-keyed)      │
@@ -159,7 +159,7 @@ Every fault implements `error::AppError` with a stable `CTR-XXXX` code, mapped t
 | `view.v1.events` | `counter-view-aggregator` | aggregate views (total via sharded counter, uniques via HLL) | DLQ `view.v1.events.dlq` |
 | `impression.v1.events` | `counter-impression-aggregator` | aggregate impressions / reach | DLQ `impression.v1.events.dlq` |
 | `click.v1.events` | `counter-click-aggregator` | aggregate clicks / CTR inputs | DLQ `click.v1.events.dlq` |
-| `engagement.reactions` | `counter-reaction-aggregator` | aggregate like/share magnitudes (supersedes engagement's raw counters) | DLQ `engagement.reactions.dlq` |
+| `wallet.v1.events` | `counter-stake-aggregator` | likes are points (#665): each `stake_committed` adds its `points` to the post's or comment's `like` magnitude (other wallet events skipped). Approximate like every sum here (a redelivered stake counts twice, a crash loses a window) and a popularity input: the exact like count is engagement's | DLQ `wallet.v1.events.dlq` |
 | `<social-graph follow events>` | `counter-follow-aggregator` | aggregate follower / following counts | DLQ `<...>.dlq` |
 
 > **Runtime contract (mandatory):** all consumers run under `run_consumer` — manual commit after a terminal outcome, bounded retry with backoff + jitter, DLQ on exhaustion/poison, rebuild-from-last-committed-offset on broker error. **Idempotency:** the durable flush is keyed by `(entity, metric, window_id)`, so a redelivered event re-applies the same window without double-counting; an unmapped/unknown event (`CTR-8002`) is folded into `Ok` so the offset still commits; approximate metrics tolerate at-least-once double-counting by design.

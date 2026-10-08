@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-2** — derived/best-effort; feed is durable, pushes are best-effort |
 > | **Deployable** | `crates/apps/notification-server` (library crate: `crates/services/notification`) |
 > | **Datastores** | ScyllaDB keyspace `notification` (TWCS feed + counters) · Redis (collapse + unread) |
-> | **Async** | publishes nothing · consumes `engagement.reactions` / `comment.created` / `post.published` / `social-graph.followed` / `social-graph.follow_requested` / `moderation.v1.events` (appeal outcomes) |
+> | **Async** | publishes nothing · consumes `wallet.v1.events` / `comment.created` / `post.published` / `social-graph.followed` / `social-graph.follow_requested` / `moderation.v1.events` (appeal outcomes) |
 > | **Upstream callers** | `<TODO: mobile / BFF (stream + feed reads)>` |
 > | **Downstream deps** | ScyllaDB, Redis, Kafka; APNs + `profile` (push, #654) |
 > | **SLO** | unread-count read sub-ms (Redis) · feed read O(1) paginated · push best-effort |
@@ -19,7 +19,7 @@
 ## 🎯 Overview & Service Role
 
 `notification` closes the user feedback loop. It ingests semantic business events from Kafka
-(`engagement.reactions`, `comment.created`, `post.published`), persists durable per-profile activity
+(`wallet.v1.events`, `comment.created`, `post.published`), persists durable per-profile activity
 records to ScyllaDB, and dispatches real-time pushes to active clients via a gRPC server-streaming
 channel.
 
@@ -37,7 +37,7 @@ semantic relation IDs only — no localized strings, handles, or content; UI hyd
 ## 📐 Architecture & Concepts
 
 ```
-Kafka: engagement.reactions │ comment.created │ post.published
+Kafka: wallet.v1.events │ comment.created │ post.published
    │                          │                 │
 ReactionNotificationWorker  CommentNotificationWorker  MentionNotificationWorker
  (L1 in-batch collapse,     (cache comment author,    (cache post author, parse
@@ -207,7 +207,7 @@ identifiers — via the shared `error` crate.
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
-| `engagement.reactions` | `notification-reaction-consumer` | reaction notifications (collapsed) | DLQ `{topic}.dlq` |
+| `wallet.v1.events` | `notification-stake-consumer` | like notifications (#665: a like is a point): a liker's **first** batch of likes on a post or comment (`stake_committed` with `first`), the author from the event; later batches and other wallet events skip (collapsed) | DLQ `{topic}.dlq` |
 | `social-graph.followed` + `social-graph.follow_requested` | `notification-follow-consumer` | follows → `FOLLOW` to the followee; a request to a private profile → `FOLLOW_REQUEST` to its owner (the app opens the requests inbox); an approved request (`via_request`) → `FOLLOW_ACCEPTED` to the requester, not the owner again (#755). A withdrawn request (`withdrawn_at`: cancelled, declined, cut by a block) **retracts** the owner's `FOLLOW_REQUEST`: deleted, and taken off the badge when still unread and newer than a mark-all-read (a replay does nothing). Subject: the other profile (`SUBJECT_KIND_PROFILE`). Block-gated, self-guarded, one notification per event (deterministic id) | DLQ `{topic}.dlq` |
 | `moderation.v1.events` (`appeal_resolved` only) | `notification-appeal-consumer` | an appeal's outcome → `APPEAL_UPHELD` / `APPEAL_OVERTURNED` to **every profile** moderation names (`profile_ids`: the appellant account's profiles, #744). Subject: the appeal (`SUBJECT_KIND_APPEAL`, the app opens it via `ListMyAppeals`). A platform notice: no sender (nil `sender_profile_id`, `sender_count` 0), not block-gated; one notification per (appeal, profile) (deterministic id). Other moderation events are ignored | DLQ `{topic}.dlq` |
 | `account.v1.events` (`supervision_started` / `supervision_ended` only) | `notification-supervision-consumer` | family supervision (#670) → `SUPERVISION_STARTED` to both sides; `SUPERVISION_ENDED` to the other side when one ends it (both when an account is erased); `SUPERVISION_CAME_OF_AGE` to both at 18. To every profile account names on the event; sender = the other side's first profile (else the platform), subject = the other side's account (`SUBJECT_KIND_ACCOUNT`: the app opens Settings → Supervision). Not block-gated (a teen is always told); feed only (no push category); one notification per (event, profile) (deterministic id). Other account events are ignored | DLQ `{topic}.dlq` |
@@ -305,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
 
 - **Migrations:** `001_keyspace.cql` → `002_notifications_by_profile.cql` →
   `003_notification_unread_counters.cql` against `notification`, applied **before** first boot.
-- **Kafka:** topics pre-created — `engagement.reactions` (key `{post}:{profile}`),
+- **Kafka:** topics pre-created — `wallet.v1.events` (key `{target_kind}:{target_id}`),
   `comment.created`/`comment.deleted` (key `comment_id`), `post.published` (key `post_id`).
 - **Rollout/Rollback:** `<TODO>`; workers are at-least-once consumers, gRPC tier stateless — safe to roll.
 
