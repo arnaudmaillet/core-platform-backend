@@ -1,9 +1,11 @@
 pub mod event_publisher;
+pub mod like_store;
 pub mod like_visibility;
 pub mod reaction_ledger;
 pub mod score_store;
 
 pub use event_publisher::EngagementEventPublisher;
+pub use like_store::{LikeLedger, LikeStore};
 pub use like_visibility::{LikeVisibility, PostLikeVisibility};
 pub use reaction_ledger::{ProfileReaction, ReactionLedger};
 pub use score_store::{PostEngagementSnapshot, ScoreStore};

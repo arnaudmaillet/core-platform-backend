@@ -55,6 +55,8 @@ impl EngagementEventPublisher for NoopPublisher {
 pub struct TestHarness {
     pub command_bus: Arc<InMemoryCommandBus>,
     pub query_bus:   Arc<InMemoryQueryBus>,
+    /// The likes (#665) over the live Redis.
+    pub like_store:  Arc<dyn engagement::application::port::LikeStore>,
 }
 
 impl TestHarness {
@@ -75,7 +77,7 @@ impl TestHarness {
             .await
             .expect("integration: build engagement app");
 
-        Self { command_bus: app.command_bus, query_bus: app.query_bus }
+        Self { command_bus: app.command_bus, query_bus: app.query_bus, like_store: app.like_store }
     }
 
     /// Upserts a reaction for `(post, profile)`.
@@ -103,13 +105,16 @@ impl TestHarness {
 
     /// Current engagement snapshot for `post`.
     pub async fn snapshot(&self, post: &PostId) -> PostEngagementSnapshot {
-        self.query_bus
+        let engagement: engagement::application::query::get_post_engagement::PostEngagement = self
+            .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), GetPostEngagementQuery {
                 post_id: post.as_str(),
                 reader:  engagement::application::query::get_post_engagement::EngagementReader::Internal,
+                account: None,
             }))
             .await
-            .expect("get_post_engagement")
+            .expect("get_post_engagement");
+        engagement.snapshot
     }
 }
 

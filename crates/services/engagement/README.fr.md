@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 9f103dcd1bec6887863e7adc5f26db3d395261da575310aa9f17e729915b7c74
-  translated_at: 2026-10-06
+  source_sha256: 9bccff4e98dbcf49a4980cebb7655915a6529ff87643b2874aa21a6386648257
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -129,6 +129,7 @@ service EngagementService {
   rpc RecordView        (RecordViewRequest)        returns (CommandResponse);
   rpc RecordShare       (RecordShareRequest)       returns (CommandResponse);
   rpc GetPostEngagement (GetPostEngagementRequest) returns (PostEngagementView);
+  rpc BatchGetLikes     (BatchGetLikesRequest)     returns (BatchGetLikesResponse); // likes (#665)
   rpc ListReactionsByProfile (ListReactionsByProfileRequest) returns (ListReactionsByProfileResponse); // mesh only
 }
 ```
@@ -140,6 +141,19 @@ invités compris ; vues, partages et commentaires restent. Le mesh lit tout. À 
 réglage de l'auteur viennent de post (`BatchGetLikeVisibility`, en cache 60 s par instance) ; quand post
 ne peut pas répondre, les likes sont retenus. Sans `ENGAGEMENT_POST_GRPC_ENDPOINT`, rien n'est retenu
 (un avertissement au démarrage).
+
+**Les likes sont des points (#665).** Un like est un point misé dans le wallet ; engagement transforme le
+`StakeCommitted` du wallet (`wallet.v1.events`, groupe `engagement-stakes`) en compteur de likes de chaque
+post et commentaire. Chaque événement porte le **total** du compte sur la cible, appliqué par un seul
+script Lua (le total du compte et la somme de la cible sous le hash tag de la cible,
+`engagement:{post:<id>}:…`) : un total qui ne dépasse pas celui détenu ne change rien, si bien que les
+relivraisons, le « au moins une fois » de l'outbox du wallet et les événements en désordre sont absorbés
+sans marqueur. La copie durable est Scylla `likes_by_target` / `likes_by_account` (migration 0005),
+écrite avec l'heure de la mise comme horodatage d'écriture. `GetPostEngagement` ajoute `like_count`,
+`my_likes` (un membre : ceux de son compte) et `likes_hidden` ; `BatchGetLikes` (edge `public_read`,
+≤ 100 cibles) donne la même chose pour posts et commentaires. Les compteurs masqués (#809) valent pour les
+posts : `count` 0 et `hidden`, les likes du lecteur restant affichés. Les réactions cœur
+(`UpsertReaction`) disparaissent dans la partie suivante.
 
 ### Ports Rust (contrat hexagonal)
 
@@ -180,6 +194,7 @@ pub trait ReactionLedger: Send + Sync + 'static { /* upsert/remove/scan_for_reco
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `comment.created` / `comment.deleted` | `engagement-comment-consumer` | INCR/DECR comment counter (Redis + Scylla) | DLQ `{topic}.dlq` |
+| `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665) : le total du compte sur un post ou un commentaire, idempotent et insensible à l'ordre (Lua Redis + Scylla) | DLQ `{topic}.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** le consommateur de commentaires et le worker write-behind
 > s'exécutent sous `run_consumer` — commit manuel après succès, retries bornés avec backoff + jitter, DLQ
@@ -268,7 +283,8 @@ async fn main() -> anyhow::Result<()> {
 ## 🚀 Déploiement, migrations & rollback
 
 - **Migrations :** `0001_create_keyspace.cql` → `0002_create_post_reactions_table.cql` →
-  `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` sur
+  `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` →
+  `0005_create_likes_tables.cql` sur
   `engagement`, appliquées **avant** le premier démarrage. (Le commentaire de table de 0002 contenait un
   `;` ; le lanceur des suites d'intégration coupait dessus jusqu'à ce qu'il respecte les guillemets comme
   `apps/migrator` — la prod n'a jamais été touchée. C'est une virgule désormais — même schéma.)

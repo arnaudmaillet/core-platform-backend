@@ -1672,12 +1672,14 @@ dependencies = [
  "engagement-api",
  "error",
  "fred",
+ "futures",
  "http",
  "post-api",
  "redis-storage",
  "scylla",
  "scylla-storage",
  "serde",
+ "serde_json",
  "service-runtime",
  "test-support",
  "thiserror 2.0.18",
@@ -1690,6 +1692,7 @@ dependencies = [
  "uuid",
  "validate-core",
  "validation",
+ "wallet",
 ]
 
 [[package]]

@@ -29,7 +29,7 @@ producer's `DOMAIN.md §8`.
 |---|---|---|
 | `account.v1.events` | `account` | `audit`, `auth`, `profile`, `media`, `wallet`, `notification` |
 | `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `timeline`, `media`, `comment`, `chat` |
-| `wallet.v1.events` | `wallet` | — *(orphan — see below)* |
+| `wallet.v1.events` | `wallet` | `engagement` |
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |
 | `post.updated` | `post` | — *(orphan — see below)* |
@@ -71,7 +71,6 @@ producer's `DOMAIN.md §8`.
 
 | Topic | Producer | Why |
 |---|---|---|
-| `wallet.v1.events` | `wallet` | Likes are points (#665): engagement, counter, notification, geo-discovery and timeline move from engagement.reactions to StakeCommitted in the next parts. |
 | `post.updated` | `post` | No stream consumer — search/timeline/realtime act on post.v1.events PostUpdated; the legacy per-type topic is emitted for completeness. |
 | `social-graph.blocked` | `social-graph` | Block is enforced on the gRPC read path; no stream consumer yet. |
 | `chat.conversation.published` | `chat` | Chat delivery-plane headroom. |

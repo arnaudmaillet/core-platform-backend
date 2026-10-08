@@ -21,6 +21,7 @@ service-runtime = { workspace = true }
 anyhow         = { workspace = true }
 
 tokio        = { workspace = true }
+futures      = { workspace = true }   # likes: per-target reads in parallel (#665)
 async-trait  = { workspace = true }
 serde        = { workspace = true }
 uuid         = { workspace = true }
@@ -46,6 +47,9 @@ integration-engagement = []
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Wire-contract test: StakeCommitted read as the wallet serializes it (#665).
+wallet     = { workspace = true }
+serde_json = { workspace = true }
 
 # ── Integration suite (feature = "integration-engagement") ───────────────────
 # Container orchestration and `await_until` come from the shared `test-support`

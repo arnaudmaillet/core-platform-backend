@@ -56,6 +56,10 @@ pub enum EngagementError {
 
     #[error("domain violation on field '{field}': {message}")]
     DomainViolation { field: String, message: String },
+
+    /// Not a post or comment a like can land on (#665).
+    #[error("invalid like target: '{value}'")]
+    InvalidLikeTarget { value: String },
 }
 
 impl AppError for EngagementError {
@@ -81,6 +85,7 @@ impl AppError for EngagementError {
             Self::InvalidPostId(_)            => "ENG-9001",
             Self::InvalidProfileId(_)         => "ENG-9002",
             Self::DomainViolation { .. }      => "ENG-9003",
+            Self::InvalidLikeTarget { .. }    => "ENG-9004",
         }
     }
 
@@ -96,6 +101,7 @@ impl AppError for EngagementError {
             | Self::InvalidReactionWeight { .. }
             | Self::InvalidPostId(_)
             | Self::InvalidProfileId(_)
+            | Self::InvalidLikeTarget { .. }
             | Self::DomainViolation { .. } => StatusCode::UNPROCESSABLE_ENTITY,
 
             Self::EventPublishFailed { .. }
@@ -124,7 +130,8 @@ impl AppError for EngagementError {
 
             Self::ReactionNotFound { .. }
             | Self::InvalidPostId(_)
-            | Self::InvalidProfileId(_) => Severity::Low,
+            | Self::InvalidProfileId(_)
+            | Self::InvalidLikeTarget { .. } => Severity::Low,
 
             Self::PostUnavailable { .. } => Severity::Medium,
         }
@@ -168,6 +175,7 @@ impl AppError for EngagementError {
 
             Self::InvalidPostId(_)    => "The provided post ID is not valid.",
             Self::InvalidProfileId(_) => "The provided profile ID is not valid.",
+            Self::InvalidLikeTarget { .. } => "Only posts and comments can be liked.",
             Self::DomainViolation { .. } =>
                 "The request contains an invalid domain value.",
 
