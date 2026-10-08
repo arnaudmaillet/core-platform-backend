@@ -1,20 +1,23 @@
 //! A member's countries on the map (#665): the free home country, and those
 //! unlocked with gems at the price their rank sets.
 //!
-//! The home country is the account's country of residence, else the
-//! network's country at the first visit, recorded once for good. An unlock
-//! checks the caller may spend gems (an adult: the edge token), checks the
-//! price the app showed, asks the wallet for the gems (keyed per country: a
-//! country is charged at most once, whatever the retries) and records it.
+//! The home country is the account's country of residence, recorded once
+//! for good when first seen (never the network's: a VPN must not pick a free
+//! country). An unlock checks the caller may spend gems (an adult: the edge
+//! token) and the price the app showed, records that **agreed price as
+//! pending**, asks the wallet for the gems (keyed per country: charged at
+//! most once, whatever the retries), then records the unlock. A retry after a
+//! failure in between finds the pending price: it pays that price (the
+//! wallet replays the key), never another one, and is never refused for a
+//! price that moved meanwhile. A pending price is kept 24 h.
 
-use std::net::IpAddr;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::application::country_standings::CountryStandings;
-use crate::application::port::{AccountCountries, CountryUnlockStore, GemWallet, GeoIp, ResidenceDirectory};
+use crate::application::port::{AccountCountries, CountryUnlockStore, GemWallet, ResidenceDirectory};
 use crate::domain::country_atlas::CountryAtlas;
 use crate::domain::value_object::CountryCode;
 use crate::error::GeoDiscoveryError;
@@ -36,7 +39,7 @@ pub struct UnlockReply {
     pub outcome:   UnlockOutcome,
     pub countries: AccountCountries,
     pub gems:      i64,
-    /// The country's current price.
+    /// The country's price (the agreed one for a pending purchase).
     pub price:     i64,
 }
 
@@ -45,32 +48,27 @@ pub struct CountryUnlocking {
     pub standings: Arc<CountryStandings>,
     pub wallet:    Arc<dyn GemWallet>,
     pub residence: Arc<dyn ResidenceDirectory>,
-    pub geo_ip:    Arc<dyn GeoIp>,
     pub atlas:     &'static CountryAtlas,
     /// The member map filter (`GEO_COUNTRY_UNLOCKS_ENABLED`).
     pub filtering: bool,
 }
 
 impl CountryUnlocking {
-    /// The member's countries, the home country resolved (and recorded) on
-    /// the first visit.
-    pub async fn countries(&self, account: Uuid, client_ip: Option<IpAddr>) -> Result<AccountCountries, GeoDiscoveryError> {
+    /// The member's countries, the home country recorded from the account's
+    /// residence the first time it is known.
+    pub async fn countries(&self, account: Uuid) -> Result<AccountCountries, GeoDiscoveryError> {
         let mut countries = self.store.get(account).await?;
-        if countries.home.is_none() {
-            let resolved = match self.residence.residence(account).await? {
-                Some(country) if self.atlas.knows(country) => Some(country),
-                _ => client_ip.and_then(|ip| self.geo_ip.country_of(ip, None)).filter(|c| self.atlas.knows(*c)),
-            };
-            if let Some(country) = resolved {
-                countries.home = Some(self.store.set_home_once(account, country).await?);
-            }
+        if countries.home.is_none()
+            && let Some(country) = self.residence.residence(account).await?.filter(|c| self.atlas.knows(*c))
+        {
+            countries.home = Some(self.store.set_home_once(account, country).await?);
         }
         Ok(countries)
     }
 
     /// The member's countries and gems (the shop's one read).
-    pub async fn view(&self, account: Uuid, client_ip: Option<IpAddr>) -> Result<(AccountCountries, i64), GeoDiscoveryError> {
-        let countries = self.countries(account, client_ip).await?;
+    pub async fn view(&self, account: Uuid) -> Result<(AccountCountries, i64), GeoDiscoveryError> {
+        let countries = self.countries(account).await?;
         let gems = self.wallet.gems(account).await?;
         Ok((countries, gems))
     }
@@ -83,7 +81,6 @@ impl CountryUnlocking {
         country: &str,
         expected_price: i64,
         adult: bool,
-        client_ip: Option<IpAddr>,
         now: DateTime<Utc>,
     ) -> Result<UnlockReply, GeoDiscoveryError> {
         if !adult {
@@ -93,18 +90,28 @@ impl CountryUnlocking {
         if !self.atlas.knows(country) {
             return Err(GeoDiscoveryError::InvalidCountryCode(country.to_string()));
         }
-        let mut countries = self.countries(account, client_ip).await?;
+        let mut countries = self.countries(account).await?;
         if countries.has(country) {
             let gems = self.wallet.gems(account).await?;
             return Ok(UnlockReply { outcome: UnlockOutcome::AlreadyUnlocked, countries, gems, price: 0 });
         }
-        let price = self.price(country, now).await?;
-        if price != expected_price {
-            let gems = self.wallet.gems(account).await?;
-            return Ok(UnlockReply { outcome: UnlockOutcome::PriceChanged, countries, gems, price });
-        }
+        // A purchase left half-way: its agreed price, no new price check.
+        let price = match countries.pending.iter().find(|(c, _)| *c == country) {
+            Some((_, agreed)) => *agreed,
+            None => {
+                let price = self.price(country, now).await?;
+                if price != expected_price {
+                    let gems = self.wallet.gems(account).await?;
+                    return Ok(UnlockReply { outcome: UnlockOutcome::PriceChanged, countries, gems, price });
+                }
+                self.store.mark_pending(account, country, price).await?;
+                price
+            }
+        };
         let spend = self.wallet.spend_for_country(account, country, price, &format!("country-{country}")).await?;
+        countries.pending.retain(|(c, _)| *c != country);
         if !spend.spent {
+            self.store.clear_pending(account, country).await?;
             return Ok(UnlockReply { outcome: UnlockOutcome::InsufficientGems, countries, gems: spend.gems, price });
         }
         self.store.add(account, country, price, now).await?;
@@ -130,8 +137,9 @@ pub(crate) mod fakes {
     use super::*;
     use crate::application::port::GemSpend;
 
+    /// `fail_next_add`: the next `add` fails (a crash after the spend).
     #[derive(Default)]
-    pub struct MemUnlocks(pub Mutex<HashMap<Uuid, AccountCountries>>);
+    pub struct MemUnlocks(pub Mutex<HashMap<Uuid, AccountCountries>>, pub Mutex<bool>);
 
     #[async_trait]
     impl CountryUnlockStore for MemUnlocks {
@@ -143,9 +151,26 @@ pub(crate) mod fakes {
             let entry = map.entry(account).or_default();
             Ok(*entry.home.get_or_insert(country))
         }
-        async fn add(&self, account: Uuid, country: CountryCode, _: i64, _: DateTime<Utc>) -> Result<(), GeoDiscoveryError> {
+        async fn mark_pending(&self, account: Uuid, country: CountryCode, price: i64) -> Result<(), GeoDiscoveryError> {
             let mut map = self.0.lock().unwrap();
             let entry = map.entry(account).or_default();
+            entry.pending.retain(|(c, _)| *c != country);
+            entry.pending.push((country, price));
+            Ok(())
+        }
+        async fn clear_pending(&self, account: Uuid, country: CountryCode) -> Result<(), GeoDiscoveryError> {
+            if let Some(entry) = self.0.lock().unwrap().get_mut(&account) {
+                entry.pending.retain(|(c, _)| *c != country);
+            }
+            Ok(())
+        }
+        async fn add(&self, account: Uuid, country: CountryCode, _: i64, _: DateTime<Utc>) -> Result<(), GeoDiscoveryError> {
+            if std::mem::take(&mut *self.1.lock().unwrap()) {
+                return Err(GeoDiscoveryError::DomainViolation { field: "store".into(), message: "down".into() });
+            }
+            let mut map = self.0.lock().unwrap();
+            let entry = map.entry(account).or_default();
+            entry.pending.retain(|(c, _)| *c != country);
             if !entry.unlocked.contains(&country) {
                 entry.unlocked.push(country);
             }
@@ -191,15 +216,6 @@ pub(crate) mod fakes {
             Ok(self.0.lock().unwrap().get(&account).copied())
         }
     }
-
-    /// Every address is in `country`.
-    pub struct FixedGeoIp(pub Option<CountryCode>);
-
-    impl GeoIp for FixedGeoIp {
-        fn country_of(&self, _: IpAddr, _: Option<CountryCode>) -> Option<CountryCode> {
-            self.0
-        }
-    }
 }
 
 #[cfg(test)]
@@ -218,14 +234,19 @@ mod tests {
 
     struct World {
         unlocking: CountryUnlocking,
+        store:     Arc<MemUnlocks>,
         wallet:    Arc<MemWallet>,
         residence: Arc<MemResidence>,
         activity:  Arc<MemActivity>,
     }
 
-    fn world(network: Option<&str>) -> World {
-        let (wallet, residence, activity) =
-            (Arc::new(MemWallet::default()), Arc::new(MemResidence::default()), Arc::new(MemActivity::default()));
+    fn world() -> World {
+        let (store, wallet, residence, activity) = (
+            Arc::new(MemUnlocks::default()),
+            Arc::new(MemWallet::default()),
+            Arc::new(MemResidence::default()),
+            Arc::new(MemActivity::default()),
+        );
         let standings = Arc::new(CountryStandings::new(
             Arc::clone(&activity) as _,
             CountryAtlas::embedded(),
@@ -234,73 +255,86 @@ mod tests {
             Duration::ZERO,
         ));
         let unlocking = CountryUnlocking {
-            store: Arc::new(MemUnlocks::default()),
+            store: Arc::clone(&store) as _,
             standings,
             wallet: Arc::clone(&wallet) as _,
             residence: Arc::clone(&residence) as _,
-            geo_ip: Arc::new(FixedGeoIp(network.map(cc))),
             atlas: CountryAtlas::embedded(),
             filtering: true,
         };
-        World { unlocking, wallet, residence, activity }
-    }
-
-    fn ip() -> Option<IpAddr> {
-        Some("203.0.113.9".parse().unwrap())
+        World { unlocking, store, wallet, residence, activity }
     }
 
     #[tokio::test]
-    async fn the_home_country_is_the_residence_else_the_network_and_stays() {
-        let w = world(Some("ES"));
-        let (resident, roaming) = (Uuid::now_v7(), Uuid::now_v7());
-        w.residence.0.lock().unwrap().insert(resident, cc("FR"));
-        assert_eq!(w.unlocking.countries(resident, ip()).await.unwrap().home, Some(cc("FR")));
-        assert_eq!(w.unlocking.countries(roaming, ip()).await.unwrap().home, Some(cc("ES")));
-        // Recorded once: a later residence does not move it.
-        w.residence.0.lock().unwrap().insert(roaming, cc("IT"));
-        assert_eq!(w.unlocking.countries(roaming, None).await.unwrap().home, Some(cc("ES")));
-        // Nothing to tell from: no home yet.
-        let unknown = world(None);
-        assert_eq!(unknown.unlocking.countries(Uuid::now_v7(), None).await.unwrap().home, None);
+    async fn the_home_country_is_the_residence_only_and_stays() {
+        let w = world();
+        let me = Uuid::now_v7();
+        assert_eq!(w.unlocking.countries(me).await.unwrap().home, None, "no residence, no free country");
+        w.residence.0.lock().unwrap().insert(me, cc("FR"));
+        assert_eq!(w.unlocking.countries(me).await.unwrap().home, Some(cc("FR")));
+        // Recorded for good: a later residence does not move it.
+        w.residence.0.lock().unwrap().insert(me, cc("IT"));
+        assert_eq!(w.unlocking.countries(me).await.unwrap().home, Some(cc("FR")));
     }
 
     #[tokio::test]
     async fn an_unlock_is_charged_once_at_the_shown_price() {
-        let w = world(Some("FR"));
+        let w = world();
         let me = Uuid::now_v7();
+        w.residence.0.lock().unwrap().insert(me, cc("FR"));
         let now = Utc::now();
         // A quiet country ranks past 30: 15 gems.
-        let refused = w.unlocking.unlock(me, "IS", 50, true, ip(), now).await.unwrap();
+        let refused = w.unlocking.unlock(me, "IS", 50, true, now).await.unwrap();
         assert_eq!((refused.outcome, refused.price), (UnlockOutcome::PriceChanged, 15));
-        let unlocked = w.unlocking.unlock(me, "IS", 15, true, ip(), now).await.unwrap();
+        assert!(refused.countries.pending.is_empty(), "nothing pending on a refused price");
+        let unlocked = w.unlocking.unlock(me, "IS", 15, true, now).await.unwrap();
         assert_eq!((unlocked.outcome, unlocked.gems), (UnlockOutcome::Unlocked, 85));
         assert!(unlocked.countries.has(cc("IS")) && unlocked.countries.has(cc("FR")));
-        let again = w.unlocking.unlock(me, "IS", 15, true, ip(), now).await.unwrap();
+        let again = w.unlocking.unlock(me, "IS", 15, true, now).await.unwrap();
         assert_eq!((again.outcome, again.gems), (UnlockOutcome::AlreadyUnlocked, 85));
-        let home = w.unlocking.unlock(me, "FR", 0, true, ip(), now).await.unwrap();
+        let home = w.unlocking.unlock(me, "FR", 0, true, now).await.unwrap();
         assert_eq!(home.outcome, UnlockOutcome::AlreadyUnlocked, "home is free");
         assert_eq!(w.wallet.spent.lock().unwrap().len(), 1);
     }
 
+    /// Review of #856: the gems are taken, then recording the unlock fails.
+    /// The retry pays the agreed price once (the wallet replays the key) and
+    /// is not refused for a price that moved meanwhile.
+    #[tokio::test]
+    async fn a_failure_after_the_spend_is_settled_at_the_agreed_price() {
+        let w = world();
+        let me = Uuid::now_v7();
+        *w.store.1.lock().unwrap() = true;
+        assert!(w.unlocking.unlock(me, "JP", 15, true, Utc::now()).await.is_err());
+        assert_eq!(w.store.get(me).await.unwrap().pending, vec![(cc("JP"), 15)]);
+        // Japan climbs to the top tier meanwhile.
+        w.activity.add(cc("JP"), Utc::now().date_naive(), 99, 1, "jp").await.unwrap();
+        let settled = w.unlocking.unlock(me, "JP", 50, true, Utc::now()).await.unwrap();
+        assert_eq!((settled.outcome, settled.price, settled.gems), (UnlockOutcome::Unlocked, 15, 85));
+        assert_eq!(w.wallet.spent.lock().unwrap().len(), 1, "charged once");
+        assert!(w.store.get(me).await.unwrap().pending.is_empty());
+    }
+
     #[tokio::test]
     async fn a_busy_country_costs_more_and_gems_must_suffice() {
-        let w = world(Some("FR"));
+        let w = world();
         let me = Uuid::now_v7();
         w.activity.add(cc("JP"), Utc::now().date_naive(), 10, 1, "jp").await.unwrap();
         w.wallet.gems.lock().unwrap().insert(me, 40);
-        let short = w.unlocking.unlock(me, "JP", 50, true, ip(), Utc::now()).await.unwrap();
+        let short = w.unlocking.unlock(me, "JP", 50, true, Utc::now()).await.unwrap();
         assert_eq!((short.outcome, short.price, short.gems), (UnlockOutcome::InsufficientGems, 50, 40));
         assert!(!short.countries.has(cc("JP")));
+        assert!(w.store.get(me).await.unwrap().pending.is_empty(), "an unpaid purchase is dropped");
     }
 
     #[tokio::test]
     async fn minors_and_unknown_codes_are_refused() {
-        let w = world(Some("FR"));
+        let w = world();
         assert!(matches!(
-            w.unlocking.unlock(Uuid::now_v7(), "IS", 15, false, ip(), Utc::now()).await,
+            w.unlocking.unlock(Uuid::now_v7(), "IS", 15, false, Utc::now()).await,
             Err(GeoDiscoveryError::GemSpendingRestricted)
         ));
-        assert!(w.unlocking.unlock(Uuid::now_v7(), "ZZ", 15, true, ip(), Utc::now()).await.is_err());
+        assert!(w.unlocking.unlock(Uuid::now_v7(), "ZZ", 15, true, Utc::now()).await.is_err());
         assert!(w.wallet.spent.lock().unwrap().is_empty());
     }
 }

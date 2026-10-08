@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: e97e99c304432d5c66d50fccca0fc81f6abc60419ac12feb0436aed83bb960ee
+  source_sha256: f1b70a675a879df3cb53d673c4d933c229cec047c7dde4ce4b9dbc38f1fbe471
   translated_at: 2026-10-08
   status: complete
 ---
@@ -204,17 +204,22 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 >
 > **Déblocage de pays (#665).** Les pays d'un membre sont dans `geo_discovery.country_unlocks` (une
 > partition par compte : le **pays d'origine**, une colonne statique posée une fois par LWT, et une
-> ligne par pays débloqué). Le pays d'origine est le `country_of_residence` du compte (account
-> `GetAccountById`, mesh), sinon le pays du réseau (GeoIP) au premier `GetCountryUnlocks` ; enregistré
-> une fois pour toutes. `GetCountryUnlocks` (edge `authenticated`, le `account_id` de l'appelant)
+> ligne par pays débloqué). Le pays d'origine est **uniquement** le `country_of_residence` du compte
+> (account `GetAccountById`, mesh) — jamais le pays du réseau, pour qu'un VPN ne choisisse pas un pays
+> gratuit — enregistré une fois pour toutes dès qu'il est connu ; un compte sans résidence n'a pas
+> encore de pays gratuit. `GetCountryUnlocks` (edge `authenticated`, le `account_id` de l'appelant)
 > renvoie le pays d'origine, chaque pays débloqué (origine comprise), les gems du wallet (wallet
 > `GetWallet`, mesh) et si le filtre des membres est actif. `UnlockCountry(country_code,
 > expected_price)` (edge `authenticated`) : adultes seulement (claim `age` du jeton, fail-closed :
 > **`GEO-3001`** `PERMISSION_DENIED`) ; le pays d'origine ou un pays déjà débloqué répond
 > `ALREADY_UNLOCKED` (rien n'est débité) ; un prix différent de celui du classement répond
-> `PRICE_CHANGED` avec le prix actuel ; sinon les gems sont demandés au `SpendGems` du wallet
-> (réservé au mesh), **avec la clé `country-<CC>`** — un pays n'est débité qu'une fois, quels que
-> soient les nouveaux essais — qui répond `INSUFFICIENT_GEMS` (avec les gems détenus) ou `UNLOCKED`.
+> `PRICE_CHANGED` avec le prix actuel ; sinon le prix convenu est enregistré **en attente** (une ligne
+> gardée 24 h, jamais sur la carte), les gems sont demandés au `SpendGems` du wallet (réservé au
+> mesh), **avec la clé `country-<CC>`** — un pays n'est débité qu'une fois, quels que soient les
+> nouveaux essais — et le déblocage est enregistré : `UNLOCKED`, ou `INSUFFICIENT_GEMS` (avec les gems
+> détenus ; la ligne en attente supprimée). Un nouvel essai après une panne entre le débit et
+> l'enregistrement paie le prix **convenu** (le wallet rejoue la clé) et n'est jamais refusé pour un
+> prix qui a bougé entre-temps.
 > Wallet ou account injoignable ⇒ **`GEO-6002`** (`UNAVAILABLE`, fail-closed).
 >
 > **Le filtre de la carte des membres** (`GEO_COUNTRY_UNLOCKS_ENABLED`, **coupé** par défaut tant que

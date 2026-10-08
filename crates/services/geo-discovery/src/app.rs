@@ -106,7 +106,7 @@ impl App {
         let atlas = CountryAtlas::embedded();
         let location: Arc<dyn LocationSettingsStore> =
             Arc::new(ScyllaLocationSettingsStore::new(Arc::clone(&scylla_client)));
-        let country_access = Arc::new(ResolveCountryAccess { geo_ip: Arc::clone(&geo_ip), grants: Arc::clone(&grants), atlas });
+        let country_access = Arc::new(ResolveCountryAccess { geo_ip, grants: Arc::clone(&grants), atlas });
         let unlocks: Arc<dyn CountryUnlockStore> = Arc::new(ScyllaCountryUnlockStore::new(Arc::clone(&scylla_client)));
         let activity: Arc<dyn CountryActivityStore> = Arc::new(RedisCountryActivity::new(redis_client.clone()));
         let standings = Arc::new(CountryStandings::new(
@@ -121,7 +121,6 @@ impl App {
             standings: Arc::clone(&standings),
             wallet,
             residence,
-            geo_ip,
             atlas,
             filtering: cfg.country_unlocks_enabled,
         });

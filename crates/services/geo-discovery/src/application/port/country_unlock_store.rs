@@ -11,6 +11,9 @@ pub struct AccountCountries {
     pub home:     Option<CountryCode>,
     /// Bought with gems (the home country is not listed here).
     pub unlocked: Vec<CountryCode>,
+    /// Being bought: the agreed price, while the gems are spent (not on the
+    /// map yet).
+    pub pending:  Vec<(CountryCode, i64)>,
 }
 
 impl AccountCountries {
@@ -36,6 +39,13 @@ pub trait CountryUnlockStore: Send + Sync + 'static {
     /// for good. Returns the home country now.
     async fn set_home_once(&self, account: Uuid, country: CountryCode) -> Result<CountryCode, GeoDiscoveryError>;
 
-    /// Records an unlock (idempotent).
+    /// Records the price agreed for `country` before its gems are spent
+    /// (kept 24 h): a retry after a failure pays that price, once.
+    async fn mark_pending(&self, account: Uuid, country: CountryCode, price: i64) -> Result<(), GeoDiscoveryError>;
+
+    /// Drops a pending purchase that was not paid.
+    async fn clear_pending(&self, account: Uuid, country: CountryCode) -> Result<(), GeoDiscoveryError>;
+
+    /// Records an unlock (idempotent; settles a pending one).
     async fn add(&self, account: Uuid, country: CountryCode, price: i64, at: DateTime<Utc>) -> Result<(), GeoDiscoveryError>;
 }

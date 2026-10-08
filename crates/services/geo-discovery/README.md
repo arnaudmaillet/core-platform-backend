@@ -188,16 +188,19 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > **Country unlocks (#665).** A member's countries live in `geo_discovery.country_unlocks` (one
 > partition per account: the **home country**, a static column set once with an LWT, and one row per
 > country unlocked). The home country is the account's `country_of_residence` (account
-> `GetAccountById`, mesh), else the network's country (GeoIP) at the first `GetCountryUnlocks`;
-> recorded for good. `GetCountryUnlocks` (edge `authenticated`, the caller's `account_id`) returns
+> `GetAccountById`, mesh) **only** — never the network's, so a VPN cannot pick a free country — recorded
+> for good the first time it is known; an account without one has no free country yet. `GetCountryUnlocks` (edge `authenticated`, the caller's `account_id`) returns
 > the home country, every unlocked country (home included), the wallet's gems (wallet `GetWallet`,
 > mesh) and whether the member filter is on. `UnlockCountry(country_code, expected_price)` (edge
 > `authenticated`): an adult only (the token's `age` claim, fail-closed: **`GEO-3001`**
 > `PERMISSION_DENIED`); the home country or one unlocked before answers `ALREADY_UNLOCKED` (nothing
 > charged); a price other than the ladder's answers `PRICE_CHANGED` with the current one; else the
-> wallet's mesh-only `SpendGems` is asked for the gems, **keyed `country-<CC>`** — a country is
-> charged at most once, whatever the retries — answering `INSUFFICIENT_GEMS` (with the gems held) or
-> `UNLOCKED`. The wallet or account unreachable ⇒ **`GEO-6002`** (`UNAVAILABLE`, fail-closed).
+> agreed price is recorded as **pending** (a row kept 24 h, never on the map), the wallet's
+> mesh-only `SpendGems` is asked for the gems, **keyed `country-<CC>`** — a country is charged at
+> most once, whatever the retries — and the unlock is recorded: `UNLOCKED`, or `INSUFFICIENT_GEMS`
+> (with the gems held; the pending row dropped). A retry after a failure between the spend and the
+> record pays the **agreed** price (the wallet replays the key) and is never refused for a price
+> that moved meanwhile. The wallet or account unreachable ⇒ **`GEO-6002`** (`UNAVAILABLE`, fail-closed).
 >
 > **The member map filter** (`GEO_COUNTRY_UNLOCKS_ENABLED`, **off** by default until the app's shop is
 > live): a member's `QueryTile` and `GetGeoTimeline` then show only posts in their home and unlocked

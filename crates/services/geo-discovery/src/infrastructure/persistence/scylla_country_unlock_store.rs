@@ -13,9 +13,12 @@ use crate::application::port::{AccountCountries, CountryUnlockStore};
 use crate::domain::value_object::CountryCode;
 use crate::error::GeoDiscoveryError;
 
+/// How long a pending purchase's agreed price is kept.
+const PENDING_TTL_SECS: i32 = 24 * 3600;
+
 /// Scylla adapter for [`CountryUnlockStore`] (`geo_discovery.country_unlocks`,
 /// migration 0009): one partition per account, the home country a static
-/// column set once (LWT), one row per unlocked country.
+/// column set once (LWT), one row per unlocked (or pending) country.
 pub struct ScyllaCountryUnlockStore {
     client: Arc<ScyllaClient>,
 }
@@ -50,10 +53,12 @@ impl CountryUnlockStore for ScyllaCountryUnlockStore {
         struct Row {
             home_country: Option<String>,
             country:      Option<String>,
+            price:        Option<i64>,
+            pending:      Option<bool>,
         }
         // Strict: an unlock just bought shows on the very next read.
         let stmt = self.stmt(
-            "SELECT home_country, country FROM geo_discovery.country_unlocks WHERE account_id = ?",
+            "SELECT home_country, country, price, pending FROM geo_discovery.country_unlocks WHERE account_id = ?",
             ScyllaProfileKind::Strict,
             "strict",
         );
@@ -73,7 +78,11 @@ impl CountryUnlockStore for ScyllaCountryUnlockStore {
                 countries.home = Some(home);
             }
             if let Some(country) = row.country.as_deref().and_then(|c| CountryCode::try_from(c).ok()) {
-                countries.unlocked.push(country);
+                if row.pending == Some(true) {
+                    countries.pending.push((country, row.price.unwrap_or(0)));
+                } else {
+                    countries.unlocked.push(country);
+                }
             }
         }
         Ok(countries)
@@ -90,9 +99,37 @@ impl CountryUnlockStore for ScyllaCountryUnlockStore {
         Ok(self.get(account).await?.home.unwrap_or(country))
     }
 
-    async fn add(&self, account: Uuid, country: CountryCode, price: i64, at: DateTime<Utc>) -> Result<(), GeoDiscoveryError> {
+    async fn mark_pending(&self, account: Uuid, country: CountryCode, price: i64) -> Result<(), GeoDiscoveryError> {
         let stmt = self.stmt(
-            "INSERT INTO geo_discovery.country_unlocks (account_id, country, price, unlocked_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO geo_discovery.country_unlocks (account_id, country, price, pending) VALUES (?, ?, ?, true) \
+             USING TTL ?",
+            ScyllaProfileKind::Strict,
+            "strict",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt, (account, country.as_str(), price, PENDING_TTL_SECS))
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn clear_pending(&self, account: Uuid, country: CountryCode) -> Result<(), GeoDiscoveryError> {
+        // Only a pending row: an unlock is never undone.
+        let stmt = self.stmt(
+            "DELETE FROM geo_discovery.country_unlocks WHERE account_id = ? AND country = ? IF pending = true",
+            ScyllaProfileKind::Strict,
+            "strict",
+        );
+        self.client.session.execute_unpaged(stmt, (account, country.as_str())).await.map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn add(&self, account: Uuid, country: CountryCode, price: i64, at: DateTime<Utc>) -> Result<(), GeoDiscoveryError> {
+        // Every column rewritten without a TTL: a pending row becomes durable.
+        let stmt = self.stmt(
+            "INSERT INTO geo_discovery.country_unlocks (account_id, country, price, unlocked_at, pending) \
+             VALUES (?, ?, ?, ?, false)",
             ScyllaProfileKind::Strict,
             "strict",
         );

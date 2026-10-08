@@ -209,9 +209,8 @@ where
     ) -> Result<Response<proto::GetCountryUnlocksResponse>, Status> {
         edge::require_account(&request, &request.get_ref().account_id)?;
         let unlocking = self.unlocking()?;
-        let client_ip = client_ip(&request, self.trusted_proxy_hops);
         let account = account_uuid(&request.get_ref().account_id)?;
-        let (countries, gems) = unlocking.view(account, client_ip).await.map_err(app_to_status)?;
+        let (countries, gems) = unlocking.view(account).await.map_err(app_to_status)?;
         Ok(Response::new(proto::GetCountryUnlocksResponse {
             home_country:       countries.home.map(|c| c.to_string()).unwrap_or_default(),
             unlocked_countries: countries.all().iter().map(ToString::to_string).collect(),
@@ -228,11 +227,10 @@ where
         let unlocking = self.unlocking()?;
         // Gems are spent by adults only (the edge token; fail-closed).
         let adult = edge::principal(&request).is_some_and(|p| p.is_adult());
-        let client_ip = client_ip(&request, self.trusted_proxy_hops);
         let req = request.into_inner();
         let account = account_uuid(&req.account_id)?;
         let reply = unlocking
-            .unlock(account, &req.country_code, req.expected_price, adult, client_ip, chrono::Utc::now())
+            .unlock(account, &req.country_code, req.expected_price, adult, chrono::Utc::now())
             .await
             .map_err(app_to_status)?;
         Ok(Response::new(proto::UnlockCountryResponse {
