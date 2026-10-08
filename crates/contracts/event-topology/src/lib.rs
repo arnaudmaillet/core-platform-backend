@@ -140,6 +140,8 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     // chat messages' pushes (#654)
     ("chat.message.push", "notification"),
     ("engagement.reactions", "engagement"),
+    // likes are points (#665): the wallet's stakes become the like counts
+    ("wallet.v1.events", "engagement"),
     // social-graph edges → timeline fan-out, profile tier ownership
     ("social-graph.followed", "timeline"),
     ("social-graph.unfollowed", "timeline"),
@@ -224,11 +226,6 @@ pub const DEFERRED: &[(&str, &str)] = &[
 /// Topics a producer emits that have **no** in-repo consumer: intentional
 /// headroom or read-path-enforced concerns. Each entry needs a reason.
 pub const ORPHAN_PRODUCERS: &[(&str, &str)] = &[
-    (
-        "wallet.v1.events",
-        "Likes are points (#665): engagement, counter, notification, geo-discovery and timeline move \
-         from engagement.reactions to StakeCommitted in the next parts.",
-    ),
     (
         "post.updated",
         "No stream consumer — search/timeline/realtime act on post.v1.events \

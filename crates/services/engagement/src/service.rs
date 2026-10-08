@@ -53,6 +53,8 @@ impl Service for EngagementService {
         public_read("/engagement.v1.EngagementService/RecordView"),
         public_read("/engagement.v1.EngagementService/RecordShare"),
         public_read("/engagement.v1.EngagementService/GetPostEngagement"),
+        // Likes (#665): viewer-aware (hidden counts, the reader's own).
+        public_read("/engagement.v1.EngagementService/BatchGetLikes"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

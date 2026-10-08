@@ -115,6 +115,7 @@ service EngagementService {
   rpc RecordView        (RecordViewRequest)        returns (CommandResponse);
   rpc RecordShare       (RecordShareRequest)       returns (CommandResponse);
   rpc GetPostEngagement (GetPostEngagementRequest) returns (PostEngagementView);
+  rpc BatchGetLikes     (BatchGetLikesRequest)     returns (BatchGetLikesResponse); // likes (#665)
   rpc ListReactionsByProfile (ListReactionsByProfileRequest) returns (ListReactionsByProfileResponse); // mesh only
 }
 ```
@@ -125,6 +126,18 @@ author (one of the caller's profiles, from the token) — guests included; views
 The mesh reads everything. Whose post it is and the author's setting come from post
 (`BatchGetLikeVisibility`, cached 60 s per instance); when post cannot answer, likes are withheld.
 Without `ENGAGEMENT_POST_GRPC_ENDPOINT` nothing is withheld (a warning at boot).
+
+**Likes are points (#665).** A like is a point staked in the wallet; engagement turns the wallet's
+`StakeCommitted` (`wallet.v1.events`, group `engagement-stakes`) into each post's and comment's like
+count. Each event carries the account's **total** on the target, applied with one Lua script (the
+account's total and the target's sum under the target's hash tag, `engagement:{post:<id>}:…`): a total
+no larger than the one held changes nothing, so redeliveries, the wallet outbox's at-least-once and
+out-of-order events are absorbed with no marker. The durable copy is Scylla `likes_by_target` /
+`likes_by_account` (migration 0005), written with the stake's time as the write timestamp.
+`GetPostEngagement` adds `like_count`, `my_likes` (a member: its account's own) and `likes_hidden`;
+`BatchGetLikes` (edge `public_read`, ≤ 100 targets) gives the same for posts and comments. Hidden like
+counts (#809) apply to posts: `count` 0 and `hidden`, the reader's own likes still shown. The heart
+reactions (`UpsertReaction`) go in the next part.
 
 ### Rust ports (hexagonal contract)
 
@@ -165,6 +178,7 @@ pub trait ReactionLedger: Send + Sync + 'static { /* upsert/remove/scan_for_reco
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `comment.created` / `comment.deleted` | `engagement-comment-consumer` | INCR/DECR comment counter (Redis + Scylla) | DLQ `{topic}.dlq` |
+| `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665): the account's total on a post or comment, idempotent and order-proof (Redis Lua + Scylla) | DLQ `{topic}.dlq` |
 
 > **Runtime contract (mandatory):** the comment consumer and write-behind worker run under
 > `run_consumer` — manual commit after success, bounded retry with backoff + jitter, DLQ on
@@ -252,7 +266,8 @@ async fn main() -> anyhow::Result<()> {
 ## 🚀 Deployment, Migrations & Rollback
 
 - **Migrations:** `0001_create_keyspace.cql` → `0002_create_post_reactions_table.cql` →
-  `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` against
+  `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` →
+  `0005_create_likes_tables.cql` against
   `engagement`, applied **before** first start. (0002's table comment held a `;`; the integration
   suites' runner split on it until it became quote-aware like `apps/migrator` — prod never was affected.
   It is a comma now — same schema.)

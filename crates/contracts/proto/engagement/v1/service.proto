@@ -21,6 +21,12 @@ service EngagementService {
     // Returns the full engagement snapshot (scores + counters) from Redis.
     rpc GetPostEngagement (GetPostEngagementRequest) returns (PostEngagementView);
 
+    // The likes of up to 100 posts and comments (#665: a like is a point
+    // staked in the wallet): each one's count — 0 and `hidden` on a post whose
+    // author hides like counts (#809), unless the reader is the author — and
+    // the reader's own likes (a member: its account's; 0 otherwise).
+    rpc BatchGetLikes (BatchGetLikesRequest) returns (BatchGetLikesResponse);
+
     // A profile's reactions (which posts, which reaction, when), paged by post
     // id. Mesh only (never on the edge): the GDPR data export (#653).
     rpc ListReactionsByProfile (ListReactionsByProfileRequest) returns (ListReactionsByProfileResponse);

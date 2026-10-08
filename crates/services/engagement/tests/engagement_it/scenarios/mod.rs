@@ -4,3 +4,4 @@
 mod atomic_reaction_toggle;
 mod concurrent_view_counter;
 mod reactions_by_profile;
+mod likes;

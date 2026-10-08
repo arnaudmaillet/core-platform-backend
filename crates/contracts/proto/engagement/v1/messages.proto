@@ -59,6 +59,40 @@ message PostEngagementView {
     int64                     view_count           = 4;
     int64                     share_count          = 5;
     int64                     comment_count        = 6;
+    // Likes (#665: a like is a point): the points staked on the post (0 when
+    // `likes_hidden`), and the reader's own.
+    int64                     like_count           = 7;
+    int64                     my_likes             = 8;
+    // The author hides like counts (#809) and the reader is not the author.
+    bool                      likes_hidden         = 9;
+}
+
+// What a like lands on.
+message LikeTarget {
+    oneof target {
+        string post_id    = 1;
+        string comment_id = 2;
+    }
+}
+
+message BatchGetLikesRequest {
+    // At most 100.
+    repeated LikeTarget targets = 1;
+}
+
+// One target's likes, as the reader sees them.
+message LikeView {
+    LikeTarget target   = 1;
+    // Points staked on it (0 when `hidden`).
+    int64      count    = 2;
+    // The reader's own.
+    int64      mine     = 3;
+    bool       hidden   = 4;
+}
+
+message BatchGetLikesResponse {
+    // In the request's order.
+    repeated LikeView likes = 1;
 }
 
 // One reaction of a profile (#653).

@@ -11,7 +11,11 @@ use crate::application::command::{
     upsert_reaction::UpsertReactionCommand,
 };
 use crate::application::port::{PostEngagementSnapshot, ProfileReaction};
-use crate::application::query::get_post_engagement::{EngagementReader, GetPostEngagementQuery};
+use crate::application::query::batch_get_likes::BatchGetLikesQuery;
+use crate::application::query::get_post_engagement::{
+    EngagementReader, GetPostEngagementQuery, LikeSummary, PostEngagement,
+};
+use crate::domain::value_object::LikeTarget;
 use crate::application::query::list_reactions_by_profile::ListReactionsByProfileQuery;
 use crate::domain::value_object::ReactionKind;
 
@@ -112,21 +116,55 @@ where
     ) -> Result<Response<proto::PostEngagementView>, Status> {
         // The reader from how the request arrived: hidden likes (#809) reach
         // only the author (one of the caller's profiles) and the mesh.
-        let reader = match edge::viewer(&request) {
-            edge::Viewer::Internal => EngagementReader::Internal,
-            edge::Viewer::Anonymous => EngagementReader::Profiles(Vec::new()),
-            edge::Viewer::Member { profile_ids, .. } => EngagementReader::Profiles(profile_ids),
-        };
+        let (reader, account) = reader_of(&request);
         let req   = request.into_inner();
-        let query = GetPostEngagementQuery { post_id: req.post_id.clone(), reader };
+        let query = GetPostEngagementQuery { post_id: req.post_id.clone(), reader, account };
 
-        let snapshot: PostEngagementSnapshot = self
+        let engagement: PostEngagement = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
 
-        Ok(Response::new(snapshot_to_proto(req.post_id, snapshot)))
+        let mut view = snapshot_to_proto(req.post_id, engagement.snapshot);
+        view.like_count = engagement.likes.count;
+        view.my_likes = engagement.likes.mine;
+        view.likes_hidden = engagement.likes.hidden;
+        Ok(Response::new(view))
+    }
+
+    /// The likes of up to 100 posts and comments (#665), as the reader sees
+    /// them.
+    pub async fn batch_get_likes(
+        &self,
+        request: Request<proto::BatchGetLikesRequest>,
+    ) -> Result<Response<proto::BatchGetLikesResponse>, Status> {
+        let (reader, account) = reader_of(&request);
+        let req = request.into_inner();
+        let targets = req
+            .targets
+            .iter()
+            .map(|t| match &t.target {
+                Some(proto::like_target::Target::PostId(id)) => LikeTarget::parse("post", id),
+                Some(proto::like_target::Target::CommentId(id)) => LikeTarget::parse("comment", id),
+                None => LikeTarget::parse("", ""),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let query = BatchGetLikesQuery { targets, reader, account };
+        let likes: Vec<LikeSummary> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::BatchGetLikesResponse {
+            likes: req
+                .targets
+                .into_iter()
+                .zip(likes)
+                .map(|(target, l)| proto::LikeView { target: Some(target), count: l.count, mine: l.mine, hidden: l.hidden })
+                .collect(),
+        }))
     }
 
     /// Mesh only (#653): a profile's reactions for the GDPR export.
@@ -213,6 +251,26 @@ where
     ) -> Result<Response<proto::PostEngagementView>, Status> {
         self.get_post_engagement(request).await
     }
+
+    async fn batch_get_likes(
+        &self,
+        request: Request<proto::BatchGetLikesRequest>,
+    ) -> Result<Response<proto::BatchGetLikesResponse>, Status> {
+        self.batch_get_likes(request).await
+    }
+}
+
+/// The reader from how the request arrived, and its account when it is a
+/// member (its own likes; a guest has none).
+fn reader_of<T>(request: &Request<T>) -> (EngagementReader, Option<String>) {
+    match edge::viewer(request) {
+        edge::Viewer::Internal => (EngagementReader::Internal, None),
+        edge::Viewer::Anonymous => (EngagementReader::Profiles(Vec::new()), None),
+        edge::Viewer::Member { profile_ids, account_id } => {
+            let guest = edge::principal(request).is_some_and(|p| p.is_guest());
+            (EngagementReader::Profiles(profile_ids), (!guest).then_some(account_id))
+        }
+    }
 }
 
 // ── Conversion helpers ────────────────────────────────────────────────────────
@@ -243,6 +301,10 @@ fn snapshot_to_proto(post_id: String, s: PostEngagementSnapshot) -> proto::PostE
         view_count:    s.view_count,
         share_count:   s.share_count,
         comment_count: s.comment_count,
+        // Filled by the caller (the likes are read alongside, #665).
+        like_count:    0,
+        my_likes:      0,
+        likes_hidden:  false,
     }
 }
 
