@@ -17,7 +17,7 @@ use crate::application::port::ContentHash;
 use crate::application::query::{
     GetEnforcementStateHandler, GetEnforcementStateQuery, GetStatementOfReasonsHandler,
     GetStatementOfReasonsQuery, ListMyAppealsHandler, ListMyAppealsQuery, ListMyReportsHandler,
-    ListMyReportsQuery, ListQueueHandler,
+    HiddenReports, ListMyReportsQuery, ListQueueHandler,
     ListQueueQuery, MyReport, StatementOfReasons,
 };
 use crate::domain::aggregate::{Appeal, Case, Decision, EnforcementAction};
@@ -155,10 +155,47 @@ impl ModerationServiceHandler {
             reporter,
             page_token: (!req.page_token.is_empty()).then_some(req.page_token),
             page_size: usize::try_from(req.page_size).unwrap_or(0),
+            hidden: HiddenReports::default(),
         };
         let page = self.list_my_reports.handle(Self::envelope(query)).await.map_err(status)?;
         Ok(Response::new(proto::ListMyReportsResponse {
             reports: page.reports.iter().map(report_view).collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+        }))
+    }
+
+    /// A member's reports for their supervisor (#670): mesh only (not on the
+    /// edge policy), never the free text, never a self-harm / CSAM / NCII
+    /// report, nor one about a supervisor's content.
+    pub async fn list_reports_by_reporter(
+        &self,
+        request: Request<proto::ListReportsByReporterRequest>,
+    ) -> Result<Response<proto::ListMyReportsResponse>, Status> {
+        let req = request.into_inner();
+        let reporter = ActorId::try_from(req.reporter_id.as_str())
+            .map_err(|_| Status::invalid_argument("reporter_id must be an account id"))?;
+        if req.hidden_account_ids.len() > MAX_HIDDEN_ACCOUNTS {
+            return Err(Status::invalid_argument("at most 10 hidden_account_ids"));
+        }
+        let accounts = req
+            .hidden_account_ids
+            .iter()
+            .map(|id| ActorId::try_from(id.as_str()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| Status::invalid_argument("hidden_account_ids must be account ids"))?;
+        let query = ListMyReportsQuery {
+            reporter: Reporter::Member(reporter),
+            page_token: (!req.page_token.is_empty()).then_some(req.page_token),
+            page_size: usize::try_from(req.page_size).unwrap_or(0),
+            hidden: HiddenReports { categories: SUPERVISION_HIDDEN_CATEGORIES.to_vec(), accounts },
+        };
+        let page = self.list_my_reports.handle(Self::envelope(query)).await.map_err(status)?;
+        Ok(Response::new(proto::ListMyReportsResponse {
+            reports: page
+                .reports
+                .iter()
+                .map(|r| proto::ReportView { reason: String::new(), ..report_view(r) })
+                .collect(),
             next_page_token: page.next_page_token.unwrap_or_default(),
         }))
     }
@@ -349,6 +386,14 @@ fn parse_case_id(s: &str) -> Result<CaseId, Status> {
 
 /// The reporter of a client report, from the verified edge token: a guest's
 /// `sub` is `guest:<id>`, a member's is its account id.
+/// Categories a supervisor never sees in a teen's reports (#670): a teen
+/// reporting self-harm or sexual abuse must be able to do so unseen.
+const SUPERVISION_HIDDEN_CATEGORIES: [PolicyCategory; 3] =
+    [PolicyCategory::SelfHarm, PolicyCategory::Csam, PolicyCategory::Ncii];
+
+/// `ListReportsByReporter.hidden_account_ids` cap (a teen has 2 supervisors).
+const MAX_HIDDEN_ACCOUNTS: usize = 10;
+
 fn reporter_of<T>(request: &Request<T>) -> Result<Reporter, ModerationError> {
     let principal = edge::principal(request).ok_or(ModerationError::ReporterRequired)?;
     let sub = principal.account_id();

@@ -339,6 +339,16 @@ impl SupervisionStore for PgSupervisionStore {
         Ok(total)
     }
 
+    #[instrument(name = "account.supervision.recent_usage", skip(self))]
+    async fn recent_usage(&self, account: &AccountId, days: i64) -> Result<Vec<(NaiveDate, i32)>, AccountError> {
+        sqlx::query_as("SELECT day, minutes FROM screen_time WHERE account_id = $1 ORDER BY day DESC LIMIT $2")
+            .bind(account.as_uuid())
+            .bind(days)
+            .fetch_all(self.pool(account)?)
+            .await
+            .map_err(storage)
+    }
+
     #[instrument(name = "account.supervision.purge_invites", skip(self))]
     async fn purge_expired_invites(&self, now: DateTime<Utc>) -> Result<u64, AccountError> {
         let mut purged = 0;

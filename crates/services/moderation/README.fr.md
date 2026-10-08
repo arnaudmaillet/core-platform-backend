@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 4eafb1371024ded5a8993600460b0128cad2a121f1a122ef5dc0a37c7ecfb3bd
-  translated_at: 2026-10-05
+  source_sha256: 00fec5027a59ad613bd4381fb22e152ff1fb9d476eb6b13b0a77a207047d857a
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -132,6 +132,7 @@ rpc Screen (ScreenRequest) returns (ScreenResponse);
 // Signalements clients (edge member_or_guest — DSA art. 16, invités compris).
 rpc SubmitReport  (..) returns (..);
 rpc ListMyReports (..) returns (..);   // les signalements de l'appelant + leur issue (DSA art. 16(5))
+rpc ListReportsByReporter (..) returns (..);   // les signalements d'un membre, sans texte libre — mesh seul (account, #670)
 
 // Console d'opérations — cycle de vie dossier / file / appel.
 rpc OpenCase   (..) returns (..);   rpc AssignCase (..) returns (..);
@@ -195,6 +196,12 @@ rpc GetEnforcementState   (..) returns (..);   // edge : son propre état unique
 > chaque signalement à son dossier : open / triaged ⇒ `UNDER_REVIEW`, actioned / appealed ⇒ `ACTION_TAKEN`, dismissed
 > (y compris annulé en recours) ⇒ `NO_VIOLATION`. Volontairement grossier : l'auteur n'apprend jamais quelle sanction
 > a frappé le compte signalé. Les ids membre et invité restent distincts (`reporter_kind`).
+> `ListReportsByReporter(reporter_id)` pagine de la même façon les signalements d'un **membre** pour la supervision
+> familiale (account montre les signalements d'un ado à son superviseur, #670) : **mesh seulement** (absent de la
+> politique edge) et **jamais le texte libre** (`reason` toujours vide). Il ne liste jamais un signalement `SELF_HARM`,
+> `CSAM` ou `NCII`, ni un signalement visant le contenu des `hidden_account_ids` (les superviseurs de l'ado, 10 au
+> plus) : un ado doit pouvoir signaler sans être vu. Les lignes écartées sont sautées lot par lot, la pagination
+> reste complète.
 >
 > **Autorisation (exigence de déploiement) :** les RPC d'opérations mutatives (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) sont **privilégiées** — elles bannissent/suspendent/suppriment. Le service n'autorise pas lui-même l'appelant ; les RPC mutatives **doivent** être restreintes à des principaux modérateurs authentifiés en périphérie (autorisation gateway / contrôle de permission `auth-context`, ex. `moderation:decide`) avant exposition. `Screen`, `SubmitReport`, `ListMyReports`, `FileAppeal`, `ListMyAppeals`, `GetStatementOfReasons` et `GetEnforcementState` sont orientées appelant ; le reste est réservé aux modérateurs.
 

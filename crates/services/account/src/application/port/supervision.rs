@@ -68,6 +68,9 @@ pub trait SupervisionStore: Send + Sync + 'static {
     /// the day's total.
     async fn add_usage(&self, account: &AccountId, day: NaiveDate, minutes: i32) -> Result<i32, AccountError>;
 
+    /// `account`'s last `days` days with time counted, most recent first.
+    async fn recent_usage(&self, account: &AccountId, days: i64) -> Result<Vec<(NaiveDate, i32)>, AccountError>;
+
     /// Drops the invites expired at `now`; returns how many.
     async fn purge_expired_invites(&self, now: DateTime<Utc>) -> Result<u64, AccountError>;
 }
@@ -76,4 +79,74 @@ pub trait SupervisionStore: Send + Sync + 'static {
 #[async_trait]
 pub trait AccountAges: Send + Sync + 'static {
     async fn age_bracket(&self, account: &AccountId, today: NaiveDate) -> Result<Option<AgeBracket>, AccountError>;
+}
+
+/// Which of a teen's profile connections a supervisor looks at (#670 part 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionKind {
+    /// The profiles it follows.
+    Following,
+    /// The profiles following it.
+    Followers,
+    /// The profiles it blocked.
+    Blocked,
+}
+
+/// One profile on the other end of a connection, and since when.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Connection {
+    pub profile_id: String,
+    pub since:      Option<DateTime<Utc>>,
+}
+
+/// What became of a report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportOutcome {
+    UnderReview,
+    ActionTaken,
+    NoViolation,
+}
+
+/// A report a teen made: who or what, when, and the decision — never the
+/// teen's own words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportSummary {
+    /// `post`, `comment`, `chat_message`, `media`, `account` or `profile`.
+    pub entity_type: String,
+    pub entity_id:   String,
+    /// The policy category chosen (`spam`, `harassment`, …).
+    pub category:    String,
+    pub outcome:     ReportOutcome,
+    pub reported_at: Option<DateTime<Utc>>,
+}
+
+/// A page of a listing; `next_page_token` is `None` on the last.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityPage<T> {
+    pub items:           Vec<T>,
+    pub next_page_token: Option<String>,
+}
+
+/// A teen's activity elsewhere in the fleet, for their supervisors (#670
+/// part 3): social-graph connections and moderation reports, read as the
+/// mesh. Failures are [`AccountError::SupervisionActivityUnavailable`].
+#[async_trait]
+pub trait SupervisedActivity: Send + Sync + 'static {
+    async fn connections(
+        &self,
+        profile_id: &str,
+        kind: ConnectionKind,
+        limit: u32,
+        page_token: &str,
+    ) -> Result<ActivityPage<Connection>, AccountError>;
+
+    /// The reporter's reports, never a self-harm / CSAM / NCII one, nor one
+    /// about content of `hidden_accounts` (the teen's supervisors).
+    async fn reports(
+        &self,
+        reporter: &AccountId,
+        hidden_accounts: &[AccountId],
+        limit: u32,
+        page_token: &str,
+    ) -> Result<ActivityPage<ReportSummary>, AccountError>;
 }

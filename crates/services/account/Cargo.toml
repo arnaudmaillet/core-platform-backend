@@ -25,6 +25,7 @@ comment-api      = { workspace = true }
 engagement-api   = { workspace = true }
 search-api       = { workspace = true }   # ListRecentSearches for the export (#816)
 social-graph-api = { workspace = true }
+moderation-api   = { workspace = true }   # ListReportsByReporter, the supervisor's view (#670)
 chat-api         = { workspace = true }
 media-api        = { workspace = true }
 account-api = { workspace = true }

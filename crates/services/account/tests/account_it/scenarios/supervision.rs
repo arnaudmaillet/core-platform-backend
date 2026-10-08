@@ -248,6 +248,13 @@ async fn limits_and_screen_time_over_postgres() {
     assert_eq!((first.used_minutes, first.reached), (15, false));
     let second = supervisions.report_time(&teen, 5, "Europe/Paris", Utc::now()).await.unwrap();
     assert_eq!((second.used_minutes, second.limit_minutes, second.reached), (20, Some(20), true));
+    // Part 3: the parent and the teen see the same days; yesterday too.
+    supervisions.report_time(&teen, 7, "UTC", Utc::now() - Duration::days(1)).await.unwrap();
+    let overview = supervisions.overview(&parent, &teen).await.unwrap();
+    assert_eq!(overview, supervisions.overview(&teen, "").await.unwrap());
+    let days: Vec<i32> = overview.screen_time.iter().map(|(_, minutes)| *minutes).collect();
+    assert_eq!(days.len(), 2, "{:?}", overview.screen_time);
+    assert!(overview.screen_time[0].0 > overview.screen_time[1].0, "most recent first");
     // An unsupervised account's time is not kept.
     assert_eq!(supervisions.report_time(&parent, 5, "UTC", Utc::now()).await.unwrap().limit_minutes, None);
     let (rows,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM screen_time WHERE account_id = $1")

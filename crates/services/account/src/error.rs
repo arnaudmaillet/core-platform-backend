@@ -110,6 +110,11 @@ pub enum AccountError {
     #[error("too many invalid codes; try again later")]
     SupervisionAttemptsExceeded,
 
+    /// The teen's connections or reports (social-graph, moderation) could
+    /// not be read.
+    #[error("supervision activity unavailable: {reason}")]
+    SupervisionActivityUnavailable { reason: String },
+
     #[error("concurrent modification detected; reload the account and retry")]
     ConcurrentModification,
 
@@ -233,6 +238,7 @@ impl AppError for AccountError {
             AccountError::SupervisionNotFound              => "ACC-3005",
             AccountError::SelfSupervision                  => "ACC-3006",
             AccountError::SupervisionAttemptsExceeded      => "ACC-3007",
+            AccountError::SupervisionActivityUnavailable { .. } => "ACC-3008",
 
             AccountError::ConcurrentModification           => "ACC-4001",
 
@@ -290,7 +296,8 @@ impl AppError for AccountError {
             AccountError::EventPublishFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
 
             AccountError::DataExportUnavailable { .. }
-            | AccountError::DirectoryUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            | AccountError::DirectoryUnavailable { .. }
+            | AccountError::SupervisionActivityUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             AccountError::ContactLookupQuotaExceeded { .. }
             | AccountError::SupervisionAttemptsExceeded => StatusCode::TOO_MANY_REQUESTS,
 
@@ -308,7 +315,8 @@ impl AppError for AccountError {
             AccountError::AccountNotActive { .. }
             | AccountError::InvalidStatusTransition { .. }
             | AccountError::InvalidKycTransition { .. }
-            | AccountError::DomainViolation { .. } => Severity::Medium,
+            | AccountError::DomainViolation { .. }
+            | AccountError::SupervisionActivityUnavailable { .. } => Severity::Medium,
 
             _ => Severity::Low,
         }
@@ -318,7 +326,9 @@ impl AppError for AccountError {
         match self {
             AccountError::Storage(e)             => e.is_retryable(),
             AccountError::ConcurrentModification => true,
-            AccountError::DataExportUnavailable { .. } | AccountError::DirectoryUnavailable { .. } => true,
+            AccountError::DataExportUnavailable { .. }
+            | AccountError::DirectoryUnavailable { .. }
+            | AccountError::SupervisionActivityUnavailable { .. } => true,
             _                                    => false,
         }
     }
@@ -364,6 +374,7 @@ impl AppError for AccountError {
             AccountError::SupervisionNotFound => "This supervision was not found.",
             AccountError::SelfSupervision => "You cannot supervise your own account.",
             AccountError::SupervisionAttemptsExceeded => "Too many invalid codes. Please try again in an hour.",
+            AccountError::SupervisionActivityUnavailable { .. } => "This activity is unavailable right now; please try again later.",
             AccountError::RoleAlreadyAssigned(_)           => "This role is already assigned to the account.",
             AccountError::RoleNotAssigned(_)               => "This role is not assigned to the account.",
             _                                              => "A domain constraint was violated.",

@@ -153,6 +153,9 @@ service AccountService {
   rpc SetSupervisionLimits (SetSupervisionLimitsRequest) returns (SupervisionLimitsView);
   rpc GetSupervisionLimits (GetSupervisionLimitsRequest) returns (SupervisionLimitsView);
   rpc ReportScreenTime (ReportScreenTimeRequest) returns (ScreenTimeView);
+  rpc GetSupervisionOverview (GetSupervisionOverviewRequest) returns (SupervisionOverview);
+  rpc ListSupervisedConnections (ListSupervisedConnectionsRequest) returns (ListSupervisedConnectionsResponse);
+  rpc ListSupervisedReports (ListSupervisedReportsRequest) returns (ListSupervisedReportsResponse);
 }
 ```
 
@@ -221,6 +224,20 @@ reports its use with `ReportScreenTime(account_id, minutes ≤ 15, timezone)` an
 across devices and whether the limit is reached (it then shows the pause screen; the server does not
 cut requests). Only a teen with a daily limit is counted (`screen_time`, per account and local day,
 kept 4 weeks).
+
+**The supervisor's view (#670 part 3).** Each supervisor and the teen themselves see **the same
+view** (`teen_account_id` empty: the caller's own; anyone else ⇒ `ACC-3005`):
+`GetSupervisionOverview` — the limits, the last 7 days with time counted (most recent first, the
+teen's local days) and the teen's active profiles; `ListSupervisedConnections(profile_id, kind)` —
+one page of a teen's profile's following, followers or blocked profiles, read from social-graph as
+the mesh (whatever the lists' privacy; a profile that is not the teen's ⇒ `ACC-3005`; a supervisor
+the teen blocked is never listed);
+`ListSupervisedReports` — one page of the reports the teen made, newest first: **who or what, when
+and the decision** (`under_review` / `action_taken` / `no_violation`), never the teen's own words
+(moderation's mesh-only `ListReportsByReporter` does not return them). A teen must be able to report
+unseen: a `self_harm`, `csam` or `ncii` report, or one about a supervisor's content, is never listed
+(moderation leaves them out, paging included; the teen still sees them in their own `ListMyReports`). Pages: 50 by default, 100 at
+most. social-graph or moderation unreachable ⇒ `ACC-3008` (`UNAVAILABLE`, retryable).
 
 **GDPR data export (#653, Art. 15/20).** `RequestDataExport` marks the export pending; the **export
 pass** (`ExportDueData`) then builds, per pending account, a ZIP of JSON files — the holder's own
@@ -352,6 +369,7 @@ async fn main() -> anyhow::Result<()> {
 | `ACCOUNT_EXPORT_S3_ACCESS_KEY` · `ACCOUNT_EXPORT_S3_SECRET_KEY` | No | unset | Static keys for that bucket (a 7-day presign needs non-session credentials). |
 | `ACCOUNT_EXPORT_INTERVAL_SECS` | No | `300` | How often the export pass runs; `0` turns it off. |
 | `ACCOUNT_SEARCH_GRPC_ENDPOINT` | No | `http://localhost:50062` | search's mesh address: the profiles' recent searches in the export (#816). |
+| `ACCOUNT_MODERATION_GRPC_ENDPOINT` | No | `http://localhost:50061` | moderation's mesh address: a supervised teen's reports (#670). Unreachable: `ListSupervisedReports` answers `ACC-3008`. |
 | `ACCOUNT_{PROFILE,POST,COMMENT,ENGAGEMENT,SOCIAL_GRAPH,CHAT,MEDIA}_GRPC_ENDPOINT` | No | `http://localhost:<port>` | The export's mesh sources. An unreachable one leaves the export pending. |
 
 > Full connection/timeout/pool tuning lives in the shared `postgres-storage` and `transport` crates.

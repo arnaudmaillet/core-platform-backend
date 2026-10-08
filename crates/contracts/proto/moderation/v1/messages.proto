@@ -305,6 +305,17 @@ message ReportView {
     string                      decision_id = 8;
 }
 
+message ListReportsByReporterRequest {
+    // The member (account id) who filed the reports.
+    string  reporter_id = 1;
+    // Default 20, capped at 50.
+    int32   page_size   = 2;
+    // Opaque cursor from a previous response; empty for the first page.
+    string  page_token  = 3;
+    // Reports about content of these accounts are left out (at most 10).
+    repeated string hidden_account_ids = 4;
+}
+
 message ListMyReportsResponse {
     // Newest first.
     repeated ReportView reports         = 1;

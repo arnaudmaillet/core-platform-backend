@@ -607,4 +607,47 @@ mod tests {
         let mesh = Request::new(proto::ListMyReportsRequest { page_size: 0, page_token: String::new() });
         assert_eq!(handler.list_my_reports(mesh).await.unwrap_err().code(), Code::FailedPrecondition);
     }
+
+    /// #670: a teen's supervisor reads the teen's reports over the mesh,
+    /// without the free text.
+    #[tokio::test]
+    async fn list_reports_by_reporter_rpc_pages_a_members_reports_without_the_text() {
+        let fx = Fixture::new();
+        fx.subjects.own("post-1", ActorId::from_uuid(Uuid::from_u128(7)));
+        let handler = handler_from_fakes(&fx);
+        let teen = Uuid::now_v7().to_string();
+        let mut request = Request::new(report("post-1"));
+        request.extensions_mut().insert(principal(&teen, None));
+        handler.submit_report(request).await.unwrap();
+
+        let by = |reporter_id: &str| {
+            Request::new(proto::ListReportsByReporterRequest {
+                reporter_id: reporter_id.to_owned(),
+                page_size: 0,
+                page_token: String::new(),
+                hidden_account_ids: Vec::new(),
+            })
+        };
+        let page = handler.list_reports_by_reporter(by(&teen)).await.unwrap().into_inner();
+        assert_eq!(page.reports.len(), 1);
+        assert_eq!(page.reports[0].entity_id, "post-1");
+        assert_eq!(page.reports[0].status, proto::ReportStatus::UnderReview as i32);
+        assert!(page.reports[0].reason.is_empty(), "the free text never leaves");
+
+        let other = Uuid::now_v7().to_string();
+        assert!(handler.list_reports_by_reporter(by(&other)).await.unwrap().into_inner().reports.is_empty());
+        assert_eq!(handler.list_reports_by_reporter(by("nope")).await.unwrap_err().code(), Code::InvalidArgument);
+
+        // A report about a supervisor's content, or a self-harm one, never shows.
+        let mut self_harm = report("post-2");
+        self_harm.category = proto::PolicyCategory::SelfHarm as i32;
+        fx.subjects.own("post-2", ActorId::from_uuid(Uuid::from_u128(8)));
+        let mut request = Request::new(self_harm);
+        request.extensions_mut().insert(principal(&teen, None));
+        handler.submit_report(request).await.unwrap();
+        assert_eq!(handler.list_reports_by_reporter(by(&teen)).await.unwrap().into_inner().reports.len(), 1);
+        let mut parent = by(&teen);
+        parent.get_mut().hidden_account_ids = vec![ActorId::from_uuid(Uuid::from_u128(7)).as_str()];
+        assert!(handler.list_reports_by_reporter(parent).await.unwrap().into_inner().reports.is_empty());
+    }
 }
