@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: beaf4a8f4a453190b9862fd60ddf66f8ddd45ff09e7a988c97a172973f18a115
+  source_sha256: a25bd507d24f83aeebbff7dc4379e281ab2231290f4c8ed5785430056d2e6d37
   translated_at: 2026-10-08
   status: complete
 ---
@@ -135,12 +135,26 @@ juste avant le premier like du compte, et maintenant) et écrit une ligne dans *
 (migration 0005) avec les points de la position, les compteurs, sa **précocité** (la part des points des
 autres arrivée après lui) et un **pré-score** = précocité × √(points / 250) — modèle `shadow-v0`, la
 position marquée réglée dans la même transaction. **Aucune gem n'est créée** : c'est la phase 2 de la
-charte économique (dev/economy dans le dépôt iOS), les scores enregistrés d'abord pour calibrer ;
-l'enveloppe journalière (le résultat du jour et la part de chaque position) vient ensuite. Les points
-misés après le règlement d'une position ne sont pas réglés à nouveau (v0). Un compte pour lequel
-engagement ne peut pas répondre reste en bail et est réessayé à sa fin. Sans
+charte économique (dev/economy dans le dépôt iOS), les scores enregistrés d'abord pour calibrer. Les
+points misés après le règlement d'une position ne sont pas réglés à nouveau (v0). Un compte pour
+lequel engagement ne peut pas répondre reste en bail et est réessayé à sa fin. Sans
 `WALLET_ENGAGEMENT_GRPC_ENDPOINT`, rien ne se règle. Les règlements partent avec le compte à
 l'effacement.
+
+**L'enveloppe curateurs journalière (mode shadow).** Une fois une journée UTC terminée (10 min après
+minuit, le temps que ses derniers règlements arrivent), les positions réglées ce jour-là se partagent
+un pool fixe — `WALLET_CURATOR_ENVELOPE_DAILY`, 1000 gems (charte économique §27–§29) :
+1. **résultat** — 1 si la cible de la position a fini la journée dans le top
+   `WALLET_OUTCOME_TOP_PERCENT` (15 %) des cibles du jour par compteur de likes, sinon 0 : la seule
+   popularité ne paie rien hors du top, et c'est la précocité qui compte dedans ;
+2. **score** = résultat × pré-score ; la part brute de chaque position = pool × score / Σ scores ;
+3. **plafonds** — les positions d'une même cible ensemble ≤ `WALLET_ENVELOPE_TARGET_CAP_BPS` (2 % =
+   20 gems), un compte ≤ `WALLET_CURATOR_DAILY_CAP` (40 gems) par jour ; ce que les plafonds retiennent
+   reste non distribué (la réserve) ;
+4. les gems entières (arrondies vers le bas) sont écrites en **`provisional_gems`** sur chaque
+   règlement, avec son `outcome`, son `score` et son `envelope_day`, et le résumé du jour dans
+   **`envelope_days`** (migration 0006 ; sur le shard de l'UUID nul). Une journée est prise en bail
+   par un seul réplica ; la recalculer donne les mêmes parts. **Toujours aucune gem créée.**
 
 > **Invariants** (et où ils sont tenus) : soldes ≥ 0 (`CHECK`) ; chaque solde = Σ des deltas de son
 > registre (même transaction, verrou de ligne ; vérifié en test d'intégration) ; un mouvement par
@@ -285,6 +299,11 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_ENGAGEMENT_GRPC_ENDPOINT` | non défini | adresse mesh d'engagement (p. ex. `http://engagement:50058`) : le règlement des mises. Non défini → rien ne se règle |
 | `WALLET_SETTLEMENT_DELAY_SECS` | `86400` | délai entre la première mise d'une position et son règlement |
 | `WALLET_SETTLEMENT_SECS` · `WALLET_SETTLEMENT_BATCH` | `60` · `500` | fréquence du settler, et positions par passage |
+| `WALLET_CURATOR_ENVELOPE_DAILY` | `1000` | gems que les curateurs se partagent par jour (provisoires, mode shadow) |
+| `WALLET_CURATOR_DAILY_CAP` | `40` | le maximum qu'un compte reçoit de l'enveloppe d'un jour |
+| `WALLET_ENVELOPE_TARGET_CAP_BPS` | `200` | le maximum que les positions d'une cible reçoivent ensemble, en points de base du pool (≤ 10000) |
+| `WALLET_OUTCOME_TOP_PERCENT` | `15` | une cible marque quand elle finit la journée dans cette part du top des cibles du jour (1–100) |
+| `WALLET_ENVELOPE_SECS` | `600` | fréquence à laquelle l'enveloppe cherche une journée terminée |
 | `WALLET_ALLOW_LOG_PUBLISHER` | non défini | `true` : démarrer sans `KAFKA_BROKERS`, en journalisant les événements (local seulement) |
 
 Une valeur illisible ou négative garde le défaut.
@@ -304,7 +323,8 @@ du jeton edge (edge client), OTel.
 
 Migrations : `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.sql` (`ref_id`),
 `0003_create_stakes.sql` (`stakes`, l'index de l'heure), `0004_create_outbox.sql` (`wallet_outbox`),
-`0005_create_settlements.sql` (`settlements` ; `stakes.settled_at` / `settle_claimed_until`), appliquées par `migrator wallet` (init
+`0005_create_settlements.sql` (`settlements` ; `stakes.settled_at` / `settle_claimed_until`),
+`0006_create_envelope_days.sql` (`envelope_days` ; les parts des règlements), appliquées par `migrator wallet` (init
 container) avant le binaire. Infra (dépôt ECR, manifests, `wallet-postgres`, route d'ingress,
 NetworkPolicy) : core-platform-infra#41 — le binaire rejoint `FLEET_BINS` dès que son dépôt ECR
 existe. Retour arrière : le binaire est sans état ; le schéma est additif.
@@ -337,5 +357,6 @@ cargo test -p wallet --features integration-wallet     # Postgres : concurrence,
    notifications, le classement des pays et les centres d'intérêt passent à `StakeCommitted` ; les
    réactions ont disparu, et l'export RGPD lit les likes d'un compte.
 4. Règlement des mises (gems gagnés), en mode shadow d'abord : engagement garde l'arrivée de chaque
-   likeur (S1), le settler note les positions sans créer de gems (S2, cette partie), puis l'enveloppe
-   journalière (S3) ; la création de gems et le pool créateurs après calibration.
+   likeur (S1), le settler note les positions sans créer de gems (S2), puis l'enveloppe journalière
+   répartit des gems provisoires (S3, cette partie) ; la création de gems et le pool créateurs après
+   calibration.

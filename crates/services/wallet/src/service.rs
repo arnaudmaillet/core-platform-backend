@@ -81,6 +81,7 @@ impl Service for WalletService {
         spawn_outbox_drainer(Arc::clone(&app.wallets));
         if settles {
             spawn_settler(Arc::clone(&app.wallets));
+            spawn_envelope(Arc::clone(&app.wallets));
         }
         // A deleted account's wallet goes with it.
         spawn_account_consumer(Arc::clone(&app.wallets));
@@ -157,6 +158,21 @@ fn spawn_settler(wallets: Arc<Wallets>) {
                 Ok(0) => {}
                 Ok(settled) => tracing::info!(settled, "stake positions settled (shadow mode)"),
                 Err(error) => tracing::warn!(%error, "stake settlement failed; retrying at the next tick"),
+            }
+        }
+    });
+}
+
+/// Computes each finished day's curator envelope, checking every
+/// `WALLET_ENVELOPE_SECS` (600). Shadow mode: provisional gems only.
+fn spawn_envelope(wallets: Arc<Wallets>) {
+    let every = std::env::var("WALLET_ENVELOPE_SECS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(600_u64);
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(every.max(1)));
+        loop {
+            tick.tick().await;
+            if let Err(error) = wallets.run_envelopes(chrono::Utc::now()).await {
+                tracing::warn!(%error, "curator envelope failed; retrying at the next tick");
             }
         }
     });

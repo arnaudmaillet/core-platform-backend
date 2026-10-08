@@ -2,12 +2,12 @@
 //! account's shard, the wallet row locked.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use uuid::Uuid;
 
 use crate::domain::event::WalletEvent;
 use crate::domain::{
-    AccountId, ClaimPolicy, Currency, DuePosition, IdempotencyKey, Observed, Settlement, StakeAsk, StakePackPolicy,
+    AccountId, Allocation, ClaimPolicy, Currency, DayPosition, DuePosition, IdempotencyKey, Observed, Settlement, StakeAsk, StakePackPolicy,
     StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
@@ -240,6 +240,44 @@ pub trait WalletStore: Send + Sync + 'static {
     /// Records a settlement and marks its position settled, at once; a
     /// position already settled keeps its first settlement.
     async fn record_settlement(&self, settlement: &Settlement) -> Result<(), WalletError>;
+
+    /// The UTC days before `before` whose envelope is not computed yet
+    /// (settlements not counted, or a computation left unfinished), oldest
+    /// first.
+    async fn pending_envelope_days(&self, before: NaiveDate) -> Result<Vec<NaiveDate>, WalletError>;
+
+    /// Leases `day`'s envelope to this replica until `lease_until`; `false`
+    /// when it is computed already or leased to another.
+    async fn claim_envelope_day(
+        &self,
+        day: NaiveDate,
+        now: DateTime<Utc>,
+        lease_until: DateTime<Utc>,
+    ) -> Result<bool, WalletError>;
+
+    /// The positions settled during `day` (every shard).
+    async fn day_positions(&self, day: NaiveDate) -> Result<Vec<DayPosition>, WalletError>;
+
+    /// Records each position's share of `day`'s envelope.
+    async fn record_allocations(
+        &self,
+        day: NaiveDate,
+        allocations: &[(DayPosition, Allocation)],
+    ) -> Result<(), WalletError>;
+
+    /// Marks `day`'s envelope computed, with its summary.
+    async fn complete_envelope_day(&self, day: NaiveDate, summary: &EnvelopeSummary) -> Result<(), WalletError>;
+}
+
+/// A day's envelope, as computed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvelopeSummary {
+    pub pool:        i64,
+    pub allocated:   i64,
+    pub positions:   i64,
+    pub targets:     i64,
+    pub model:       &'static str,
+    pub computed_at: DateTime<Utc>,
 }
 
 /// What a post or comment came to, for the settlement (#665): engagement's

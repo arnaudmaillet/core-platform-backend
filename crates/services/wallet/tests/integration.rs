@@ -374,3 +374,62 @@ async fn due_positions_are_leased_to_one_settler_and_settle_once() {
         .unwrap();
     assert_eq!(left, 0, "settlements go with the account");
 }
+
+/// The daily curator envelope (#665, shadow mode): once a day is over, its
+/// settlements share the pool — one replica computes it, once — and the
+/// shares land on each settlement; nothing is minted.
+#[tokio::test]
+async fn a_finished_days_envelope_is_computed_once_over_postgres() {
+    use chrono::{NaiveDate, TimeDelta};
+    use wallet::domain::{DuePosition, Observed, SettlementPolicy};
+
+    let pool = pool().await;
+    let store = store(&pool);
+    let day = NaiveDate::from_ymd_opt(2020, 2, 2).unwrap();
+    let noon = day.and_hms_opt(12, 0, 0).unwrap().and_utc();
+    let policy = SettlementPolicy::default();
+    let (a, b) = (AccountId::from_uuid(Uuid::now_v7()), AccountId::from_uuid(Uuid::now_v7()));
+    let hot = StakeTarget::Post(format!("hot-{}", Uuid::now_v7()));
+    let settle = |account: AccountId, target: &StakeTarget, at, observed| {
+        let position = DuePosition { account, target: target.clone(), points: 250, first_at: noon - TimeDelta::days(1) };
+        policy.settle(position, observed, at)
+    };
+    let early = Observed { total: 250, count_on_arrival: Some(0), count_now: 1_250 };
+    let late = Observed { total: 250, count_on_arrival: Some(1_000), count_now: 1_250 };
+    store.record_settlement(&settle(a, &hot, noon, early)).await.unwrap();
+    store.record_settlement(&settle(b, &hot, noon, late)).await.unwrap();
+    // The next day's settlement waits for its own day to end.
+    let tomorrow = settle(a, &StakeTarget::Comment(format!("c-{}", Uuid::now_v7())), noon + TimeDelta::days(1), early);
+    store.record_settlement(&tomorrow).await.unwrap();
+
+    let wallets = |store: &Arc<PgWalletStore>| Wallets::new(Arc::clone(store) as _, WalletConfig::default());
+    let (w1, w2) = (wallets(&store), wallets(&store));
+    let after_midnight = (day + TimeDelta::days(1)).and_hms_opt(0, 11, 0).unwrap().and_utc();
+    let (x, y) = tokio::join!(w1.run_envelopes(after_midnight), w2.run_envelopes(after_midnight));
+    assert_eq!(x.unwrap() + y.unwrap(), 1, "one replica computes the day");
+    assert_eq!(w1.run_envelopes(after_midnight).await.unwrap(), 0, "once");
+
+    let shares: Vec<(Uuid, i16, i64, Option<NaiveDate>)> = sqlx::query_as(
+        "SELECT account_id, outcome, provisional_gems, envelope_day FROM settlements WHERE target_id = $1 ORDER BY provisional_gems DESC",
+    )
+    .bind(hot.id())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    // The day's only target: its top. a came first (earliness 1), b last
+    // (earliness 0): the target's 20 gems (2 % of 1000) go to a.
+    assert_eq!(shares, vec![(a.as_uuid(), 1, 20, Some(day)), (b.as_uuid(), 1, 0, Some(day))]);
+    let (allocated, positions): (i64, i64) =
+        sqlx::query_as("SELECT allocated, positions FROM envelope_days WHERE day = $1 AND computed_at IS NOT NULL")
+            .bind(day)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((allocated, positions), (20, 2));
+    let (pending,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM settlements WHERE target_id = $1 AND envelope_day IS NULL")
+        .bind(tomorrow.target.id())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(pending, 1, "the next day is not over");
+}

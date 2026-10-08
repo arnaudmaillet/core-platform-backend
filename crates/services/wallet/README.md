@@ -118,10 +118,24 @@ row in **`settlements`** (migration 0005) with the position's points, the counts
 (the share of everyone else's points that came after it) and a **pre-score** = earliness ×
 √(points / 250) — model `shadow-v0`, marking the position settled in the same transaction. **No gems
 are minted**: the economy charter's phase 2 (dev/economy in the iOS repo), scores recorded for
-calibration first; the daily envelope (the day's outcome and each position's share) comes next.
-Points staked after a position settled are not settled again (v0). An account engagement cannot
-answer for stays leased and is retried after the lease. Without `WALLET_ENGAGEMENT_GRPC_ENDPOINT`
-nothing settles. Settlements go with the account on erasure.
+calibration first. Points staked after a position settled are not settled again (v0). An account
+engagement cannot answer for stays leased and is retried after the lease. Without
+`WALLET_ENGAGEMENT_GRPC_ENDPOINT` nothing settles. Settlements go with the account on erasure.
+
+**The daily curator envelope (shadow mode).** Once a UTC day is over (10 min after midnight, so its
+last settlements land), the positions settled that day share a fixed pool —
+`WALLET_CURATOR_ENVELOPE_DAILY`, 1000 gems (economy charter §27–§29):
+1. **outcome** — 1 when the position's target ended the day in the top `WALLET_OUTCOME_TOP_PERCENT`
+   (15 %) of the day's targets by like count, else 0: popular alone pays nothing outside the top,
+   and early is what scores within it;
+2. **score** = outcome × pre-score; each position's raw share = pool × score / Σ scores;
+3. **caps** — one target's positions together ≤ `WALLET_ENVELOPE_TARGET_CAP_BPS` (2 % = 20 gems),
+   one account ≤ `WALLET_CURATOR_DAILY_CAP` (40 gems) a day; what the caps hold back stays
+   unallocated (the reserve);
+4. the whole gems (floored) are written as **`provisional_gems`** on each settlement, with its
+   `outcome`, `score` and `envelope_day`, and the day's summary in **`envelope_days`** (migration
+   0006; on the nil UUID's shard). A day is leased to one replica; recomputing it gives the same
+   shares. **Still nothing minted.**
 
 > **Invariants** (and where enforced): balances ≥ 0 (`CHECK`); each balance = Σ its ledger deltas
 > (same transaction, row lock; IT-checked); one movement per scoped key (`UNIQUE`); one claim per
@@ -264,6 +278,11 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_ENGAGEMENT_GRPC_ENDPOINT` | unset | engagement's mesh address (e.g. `http://engagement:50058`): stake settlement. Unset → nothing settles |
 | `WALLET_SETTLEMENT_DELAY_SECS` | `86400` | how long after its first stake a position settles |
 | `WALLET_SETTLEMENT_SECS` · `WALLET_SETTLEMENT_BATCH` | `60` · `500` | how often the settler runs, and how many positions a pass |
+| `WALLET_CURATOR_ENVELOPE_DAILY` | `1000` | gems the curators share per day (provisional, shadow mode) |
+| `WALLET_CURATOR_DAILY_CAP` | `40` | the most one account receives from a day's envelope |
+| `WALLET_ENVELOPE_TARGET_CAP_BPS` | `200` | the most one target's positions receive together, in basis points of the pool (≤ 10000) |
+| `WALLET_OUTCOME_TOP_PERCENT` | `15` | a target scores when it ends the day in this top share of the day's targets (1–100) |
+| `WALLET_ENVELOPE_SECS` | `600` | how often the envelope checks for a finished day |
 | `WALLET_ALLOW_LOG_PUBLISHER` | unset | `true`: start without `KAFKA_BROKERS`, logging events (local only) |
 
 An unparsable or negative value keeps the default.
@@ -283,7 +302,8 @@ settings (client edge), OTel.
 
 Migrations: `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.sql` (`ref_id`),
 `0003_create_stakes.sql` (`stakes`, the hour's index), `0004_create_outbox.sql` (`wallet_outbox`),
-`0005_create_settlements.sql` (`settlements`; `stakes.settled_at` / `settle_claimed_until`), applied by `migrator wallet` (init
+`0005_create_settlements.sql` (`settlements`; `stakes.settled_at` / `settle_claimed_until`),
+`0006_create_envelope_days.sql` (`envelope_days`; the settlements' shares), applied by `migrator wallet` (init
 container) before the binary. Infra (ECR repo, manifests, `wallet-postgres`, ingress route,
 NetworkPolicy): core-platform-infra#41 — the binary joins `FLEET_BINS` once its ECR repo exists.
 Rollback: the binary is stateless; the schema is additive.
@@ -316,5 +336,5 @@ cargo test -p wallet --features integration-wallet     # Postgres: concurrency, 
    the interest tags move to `StakeCommitted`; the reactions are gone, and the GDPR export reads
    an account's likes.
 4. Stake settlement (gems earned), shadow mode first: engagement keeps each liker's arrival (S1), the
-   settler scores positions without minting (S2, this part), then the daily envelope (S3); minting and
-   the creator pool after calibration.
+   settler scores positions without minting (S2), then the daily envelope shares provisional gems
+   (S3, this part); minting and the creator pool after calibration.
