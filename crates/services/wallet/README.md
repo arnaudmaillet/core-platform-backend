@@ -9,7 +9,7 @@
 > | **Deployable** | `crates/apps/wallet-server` (library crate: `crates/services/wallet`) |
 > | **Datastores** | Postgres (own CNPG cluster, tables `wallets`, `wallet_transactions`) |
 > | **Async** | consumes `account.v1.events` (group `wallet-account-events`) · publishes nothing yet |
-> | **Upstream callers** | the app (client edge `:9443`) |
+> | **Upstream callers** | the app (client edge `:9443`) · geo-discovery (mesh `SpendGems`, country unlocks) |
 > | **Downstream deps** | Postgres, Kafka |
 > | **SLO** | 99.9% avail · p99 read < 50 ms · p99 claim < 100 ms |
 
@@ -23,7 +23,7 @@ movement of them.
 | Currency | Shown as | Earned by | Spent on |
 |---|---|---|---|
 | **Points** | likes (the heart) | the hourly claim | stakes on posts and comments (later PR) |
-| **Gems** | the diamond | the starter gift; settled stakes (later) | country unlocks, the ×100 stake pack (later PR) |
+| **Gems** | the diamond | the starter gift; settled stakes (later) | the ×100 stake pack; country unlocks (geo-discovery) |
 
 Nothing is sold for real money: no StoreKit, no receipts, no restore. Neither currency converts to
 the other, to money, or to another user. One wallet per **account** (all its profiles).
@@ -55,9 +55,10 @@ account.v1.events ──► account consumer (run_consumer) ──► Wallets::e
 
 **The ledger.** `wallet_transactions` is append-only: `currency`, signed `delta`, the
 `balance_after` it produced, `kind`, `idempotency_key`, `created_at`. `UNIQUE (account_id,
-idempotency_key)` is the idempotency mechanism: a replayed claim key answers its first award.
-Client keys are 8–64 `[A-Za-z0-9_-]`; the service's own start with `sys:` (e.g.
-`sys:starter-gems`), which no client key can.
+idempotency_key)` is the idempotency mechanism: a replayed key answers its first result. A
+caller's key is 8–64 `[A-Za-z0-9_-]`, stored **scoped to its operation** (`claim:<key>`,
+`pack:<key>`, `spend:<key>`), so a key used for a claim can never pass as a paid pack; the
+service's own start with `sys:` (e.g. `sys:starter-gems`). No caller key holds a `:`.
 
 **The hourly claim** (same rules as the app's mock):
 
@@ -72,9 +73,19 @@ Client keys are 8–64 `[A-Za-z0-9_-]`; the service's own start with `sys:` (e.g
 
 **The starter gift.** A wallet opens on first use with 100 gems (`STARTER_GIFT`), once.
 
+**Spending gems** (adults only: a token under 18, or without an age, gets `WAL-3001`):
+
+| Spend | Rule |
+|---|---|
+| ×100 stake pack (`BuyStakePack`, edge) | 3 shots of 100 of the buyer's **own** points, 50 gems; one pack at a time (`PACK_STILL_ACTIVE` while shots are left, nothing charged); shots never expire |
+| Country unlock (`SpendGems`, mesh) | geo-discovery prices the country, checks the spender is an adult, and asks for the gems with a key of its own; `ref_id` = the country code |
+
+Gems never buy points, money, or anything for another user.
+
 > **Invariants** (and where enforced): balances ≥ 0 (`CHECK`); each balance = Σ its ledger deltas
-> (same transaction, row lock; IT-checked); one credit per key (`UNIQUE`); one claim per interval
-> (row lock + domain rule); the caller's own wallet only (`edge::require_account`).
+> (same transaction, row lock; IT-checked); one movement per scoped key (`UNIQUE`); one claim per
+> interval and one pack at a time (row lock + domain rule); the caller's own wallet only
+> (`edge::require_account`); no gem spend under 18 (the token's `age` claim, fail-closed).
 
 ---
 
@@ -101,7 +112,8 @@ Client keys are 8–64 `[A-Za-z0-9_-]`; the service's own start with `sys:` (e.g
 
 | Caller | Uses | Impact if `wallet` is down |
 |---|---|---|
-| the app | `GetWallet`, `ClaimReward`, `ListWalletTransactions` | balance and claim unavailable; the rest of the app works |
+| the app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack` | balance, claim and pack unavailable; the rest of the app works |
+| geo-discovery | `SpendGems` | country unlocks refused (fail-closed); the map works |
 
 > **Critical path?** No — the feed, posts and chat do not call it.
 
@@ -116,11 +128,19 @@ service WalletService {
   rpc GetWallet (GetWalletRequest) returns (Wallet);
   rpc ClaimReward (ClaimRewardRequest) returns (ClaimRewardResponse);
   rpc ListWalletTransactions (ListWalletTransactionsRequest) returns (ListWalletTransactionsResponse);
+  rpc BuyStakePack (BuyStakePackRequest) returns (BuyStakePackResponse);
+  rpc SpendGems (SpendGemsRequest) returns (SpendGemsResponse);   // mesh only
 }
 ```
 
-All three are on the edge (`authenticated`), bound to the caller's `account_id`
-(`edge::require_account`; another account ⇒ `PERMISSION_DENIED`).
+All but `SpendGems` are on the edge (`authenticated`), bound to the caller's `account_id`
+(`edge::require_account`; another account ⇒ `PERMISSION_DENIED`). `SpendGems` is mesh only
+(geo-discovery): `kind` = `COUNTRY_UNLOCK`, `amount` > 0, `ref_id` ≤ 64 characters.
+
+- `Wallet.gem_spending_restricted` (edge only) tells the app to hide gem spends; the pack's terms
+  are echoed (`stake_pack_price`, `stake_pack_shots`, `points_per_shot`).
+- `BuyStakePack` answers `BOUGHT`, `PACK_STILL_ACTIVE` or `INSUFFICIENT_GEMS` in-band;
+  `SpendGems` answers `SPENT` or `INSUFFICIENT_GEMS`.
 
 - `ClaimReward` answers `CLAIMED`, `TOO_EARLY` or `DAILY_CAP_REACHED` **in-band** (not errors),
   with the wallet after the call; `next_claim_at` says when the next claim opens.
@@ -131,10 +151,12 @@ All three are on the edge (`authenticated`), bound to the caller's `account_id`
 
 | Code | Meaning | gRPC |
 |---|---|---|
+| `WAL-3001` | gems cannot be spent (under 18, or age unknown) | `PERMISSION_DENIED` |
 | `WAL-5001` | an unreadable ledger row (fail closed) | `INTERNAL` |
 | `WAL-9001` | invalid account id | `INVALID_ARGUMENT` |
 | `WAL-9002` | invalid idempotency key | `INVALID_ARGUMENT` |
 | `WAL-9003` | invalid page token | `INVALID_ARGUMENT` |
+| `WAL-9004` | invalid gem spend (amount, kind, ref) | `INVALID_ARGUMENT` |
 | `DB-*` | storage (delegated) | per error |
 
 ---
@@ -183,6 +205,9 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_CLAIM_BASE_POINTS` | `25` | an un-streaked claim |
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points claimable per UTC day |
 | `WALLET_STARTER_GEMS` | `100` | gems a wallet opens with |
+| `WALLET_STAKE_PACK_SHOTS` | `3` | shots in a ×100 pack |
+| `WALLET_STAKE_PACK_PRICE` | `50` | a pack's price in gems |
+| `WALLET_POINTS_PER_SHOT` | `100` | points one shot stakes |
 
 An unparsable or negative value keeps the default.
 
@@ -199,7 +224,7 @@ settings (client edge), OTel.
 
 ## 🚀 Deployment, Migrations & Rollback &nbsp;·&nbsp; OPS
 
-Migrations: `migrations/0001_create_wallet_tables.sql`, applied by `migrator wallet` (init
+Migrations: `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.sql` (`ref_id`), applied by `migrator wallet` (init
 container) before the binary. Infra (ECR repo, manifests, `wallet-postgres`, ingress route,
 NetworkPolicy): core-platform-infra#41 — the binary joins `FLEET_BINS` once its ECR repo exists.
 Rollback: the binary is stateless; the schema is additive.
@@ -208,7 +233,8 @@ Rollback: the binary is stateless; the schema is additive.
 
 ## 📈 Telemetry, Performance & Metrics &nbsp;·&nbsp; CORE
 
-Spans `wallet.open`, `wallet.claim`, `wallet.history`, `wallet.erase` (with the shard). One row
+Spans `wallet.open`, `wallet.claim`, `wallet.buy_stake_pack`, `wallet.spend_gems`, `wallet.history`,
+`wallet.erase` (with the shard). One row
 lock per write; the history reads `(account_id, created_at DESC, id DESC)`.
 
 ---
@@ -224,7 +250,8 @@ cargo test -p wallet --features integration-wallet     # Postgres: concurrency, 
 
 ## 🧭 Roadmap (#665)
 
-1. **This crate:** the ledger, the hourly claim, the starter gems, the history, erasure.
-2. Gem spends (country unlocks, the ×100 stake pack); gems blocked for minors server-side.
+1. The ledger, the hourly claim, the starter gems, the history, erasure (#853).
+2. Gem spends: the ×100 stake pack and `SpendGems`, no gem spend under 18 (this part);
+   country unlocks, standings and the map filter in geo-discovery.
 3. Point stakes on posts and comments (anti-abuse caps, e.g. 1,000 points per hour).
 4. Stake settlement (gems earned).

@@ -13,10 +13,10 @@ use postgres_storage::TransactionManager;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use wallet::application::port::{ClaimOutcome, WalletStore};
+use wallet::application::port::{ClaimOutcome, GemSpend, PackOutcome, SpendOutcome, WalletStore};
 use wallet::application::Wallets;
 use wallet::config::WalletConfig;
-use wallet::domain::{AccountId, ClaimPolicy, Currency, IdempotencyKey, TransactionKind};
+use wallet::domain::{AccountId, ClaimPolicy, Currency, IdempotencyKey, Operation, StakePackPolicy, TransactionKind};
 use wallet::infrastructure::persistence::PgWalletStore;
 
 const MIGRATIONS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
@@ -75,7 +75,7 @@ async fn concurrent_claims_credit_once_per_hour_and_replays_answer_the_same() {
     let claims = (0..8).map(|_| {
         let store = Arc::clone(&store);
         tokio::spawn(async move {
-            let key = IdempotencyKey::from_client(&Uuid::now_v7().to_string()).unwrap();
+            let key = IdempotencyKey::for_operation(Operation::Claim, &Uuid::now_v7().to_string()).unwrap();
             store.claim(&account, &key, &ClaimPolicy::default(), 100, now).await.unwrap()
         })
     });
@@ -87,7 +87,7 @@ async fn concurrent_claims_credit_once_per_hour_and_replays_answer_the_same() {
     }
     assert_eq!(claimed, 1, "the row lock serializes: one claim per hour");
 
-    let key = IdempotencyKey::from_client("retry-key-0001").unwrap();
+    let key = IdempotencyKey::for_operation(Operation::Claim, "retry-key-0001").unwrap();
     let later = now + chrono::TimeDelta::hours(1);
     let first = store.claim(&account, &key, &ClaimPolicy::default(), 100, later).await.unwrap();
     let replay = store.claim(&account, &key, &ClaimPolicy::default(), 100, later).await.unwrap();
@@ -125,4 +125,44 @@ async fn the_history_pages_over_postgres_and_erasure_clears_it() {
         .await
         .unwrap();
     assert_eq!(left, 0);
+}
+
+#[tokio::test]
+async fn concurrent_pack_buys_charge_once_and_gem_spends_are_recorded() {
+    let pool = pool().await;
+    let store = store(&pool);
+    let account = AccountId::from_uuid(Uuid::now_v7());
+    let buys = (0..6).map(|_| {
+        let store = Arc::clone(&store);
+        tokio::spawn(async move {
+            let key = IdempotencyKey::for_operation(Operation::StakePack, &Uuid::now_v7().to_string()).unwrap();
+            store.buy_stake_pack(&account, &key, &StakePackPolicy::default(), 100, Utc::now()).await.unwrap().0
+        })
+    });
+    let mut bought = 0;
+    for buy in buys {
+        if buy.await.unwrap() == PackOutcome::Bought {
+            bought += 1;
+        }
+    }
+    assert_eq!(bought, 1, "packs do not stack, even raced");
+
+    let spend = GemSpend { amount: 30, kind: TransactionKind::CountryUnlock, ref_id: Some("FR".into()) };
+    let key = IdempotencyKey::for_operation(Operation::SpendGems, "country-FR").unwrap();
+    let (first, wallet) = store.spend_gems(&account, &key, &spend, 100, Utc::now()).await.unwrap();
+    let (replay, again) = store.spend_gems(&account, &key, &spend, 100, Utc::now()).await.unwrap();
+    assert_eq!((first, wallet.gems), (SpendOutcome::Spent, 20));
+    assert_eq!((replay, again.gems), (SpendOutcome::Spent, 20), "charged once");
+    let more = GemSpend { amount: 30, kind: TransactionKind::CountryUnlock, ref_id: Some("US".into()) };
+    let key = IdempotencyKey::for_operation(Operation::SpendGems, "country-US").unwrap();
+    assert_eq!(store.spend_gems(&account, &key, &more, 100, Utc::now()).await.unwrap().0, SpendOutcome::InsufficientGems);
+
+    let history = store.history(&account, Some(Currency::Gems), None, 10).await.unwrap();
+    let kinds: Vec<_> = history.iter().map(|t| (t.kind, t.delta, t.ref_id.as_deref())).collect();
+    assert_eq!(kinds, vec![
+        (TransactionKind::CountryUnlock, -30, Some("FR")),
+        (TransactionKind::StakePack, -50, None),
+        (TransactionKind::StarterGift, 100, None),
+    ]);
+    assert_reconciles(&pool, &account).await;
 }

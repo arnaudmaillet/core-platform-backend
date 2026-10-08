@@ -3,5 +3,5 @@
 pub mod ledger;
 pub mod wallet;
 
-pub use ledger::{Currency, IdempotencyKey, Transaction, TransactionKind};
-pub use wallet::{AccountId, ClaimDecision, ClaimPolicy, ClaimState, Wallet};
+pub use ledger::{Currency, IdempotencyKey, Operation, Transaction, TransactionKind};
+pub use wallet::{AccountId, ClaimDecision, ClaimPolicy, ClaimState, PackDecision, StakePackPolicy, Wallet};

@@ -39,6 +39,10 @@ pub enum TransactionKind {
     Claim,
     /// The gems a wallet opens with.
     StarterGift,
+    /// A ×100 stake pack bought with gems.
+    StakePack,
+    /// A country unlocked on the map with gems (`ref_id`: the country).
+    CountryUnlock,
     /// Written by a newer version of this service.
     Unknown,
 }
@@ -48,6 +52,8 @@ impl TransactionKind {
         match self {
             Self::Claim => "claim",
             Self::StarterGift => "starter_gift",
+            Self::StakePack => "stake_pack",
+            Self::CountryUnlock => "country_unlock",
             Self::Unknown => "unknown",
         }
     }
@@ -56,6 +62,8 @@ impl TransactionKind {
         match value {
             "claim" => Self::Claim,
             "starter_gift" => Self::StarterGift,
+            "stake_pack" => Self::StakePack,
+            "country_unlock" => Self::CountryUnlock,
             _ => Self::Unknown,
         }
     }
@@ -71,20 +79,43 @@ pub struct Transaction {
     pub delta:         i64,
     pub balance_after: i64,
     pub kind:          TransactionKind,
+    /// What it was for, when it names something (a country code).
+    pub ref_id:        Option<String>,
     pub created_at:    DateTime<Utc>,
 }
 
-/// Makes a movement happen at most once per account. A client's key is
-/// 8–64 characters of `[A-Za-z0-9_-]`; the service's own start with `sys:`,
-/// which no client key can.
+/// The operations a caller's key is scoped to: a key used for one never
+/// answers for another (a claim's key cannot pass as a paid pack).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operation {
+    Claim,
+    StakePack,
+    /// A spend asked by another service.
+    SpendGems,
+}
+
+impl Operation {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Claim => "claim",
+            Self::StakePack => "pack",
+            Self::SpendGems => "spend",
+        }
+    }
+}
+
+/// Makes a movement happen at most once per account. A caller's key is 8–64
+/// characters of `[A-Za-z0-9_-]`, stored scoped to its operation
+/// (`claim:<key>`); the service's own start with `sys:`. No caller key holds
+/// a `:`, so none can collide with another operation's or the service's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdempotencyKey(String);
 
 impl IdempotencyKey {
-    pub fn from_client(value: &str) -> Result<Self, WalletError> {
+    pub fn for_operation(operation: Operation, value: &str) -> Result<Self, WalletError> {
         let valid = (8..=64).contains(&value.len())
             && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-        if valid { Ok(Self(value.to_owned())) } else { Err(WalletError::InvalidIdempotencyKey) }
+        if valid { Ok(Self(format!("{}:{value}", operation.prefix()))) } else { Err(WalletError::InvalidIdempotencyKey) }
     }
 
     /// The service's own key for a one-off movement.
@@ -102,11 +133,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn client_keys_are_checked_and_never_collide_with_the_services() {
-        assert!(IdempotencyKey::from_client(&Uuid::now_v7().to_string()).is_ok());
-        assert!(IdempotencyKey::from_client("short").is_err());
-        assert!(IdempotencyKey::from_client("sys:starter-gems").is_err());
-        assert!(IdempotencyKey::from_client(&"k".repeat(65)).is_err());
+    fn caller_keys_are_checked_scoped_and_never_collide() {
+        let key = Uuid::now_v7().to_string();
+        let claim = IdempotencyKey::for_operation(Operation::Claim, &key).unwrap();
+        let pack = IdempotencyKey::for_operation(Operation::StakePack, &key).unwrap();
+        assert_ne!(claim, pack, "one key, two operations: two movements");
+        assert_eq!(claim.as_str(), format!("claim:{key}"));
+        assert!(IdempotencyKey::for_operation(Operation::Claim, "short").is_err());
+        assert!(IdempotencyKey::for_operation(Operation::Claim, "sys:starter-gems").is_err());
+        assert!(IdempotencyKey::for_operation(Operation::Claim, &"k".repeat(65)).is_err());
         assert_eq!(IdempotencyKey::system("starter-gems").as_str(), "sys:starter-gems");
     }
 
@@ -115,7 +150,7 @@ mod tests {
         for c in [Currency::Points, Currency::Gems] {
             assert_eq!(Currency::parse(c.as_str()), Some(c));
         }
-        for k in [TransactionKind::Claim, TransactionKind::StarterGift] {
+        for k in [TransactionKind::Claim, TransactionKind::StarterGift, TransactionKind::StakePack, TransactionKind::CountryUnlock] {
             assert_eq!(TransactionKind::parse(k.as_str()), k);
         }
         assert_eq!(TransactionKind::parse("boost_spend"), TransactionKind::Unknown);

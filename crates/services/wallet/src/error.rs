@@ -6,10 +6,12 @@ use thiserror::Error;
 ///
 /// | Code     | Variant               | HTTP | Retryable |
 /// |----------|-----------------------|------|-----------|
+/// | WAL-3001 | GemSpendingRestricted | 403  | No        |
 /// | WAL-5001 | LedgerInconsistent    | 500  | No        |
 /// | WAL-9001 | InvalidAccountId      | 422  | No        |
 /// | WAL-9002 | InvalidIdempotencyKey | 422  | No        |
 /// | WAL-9003 | InvalidPageToken      | 422  | No        |
+/// | WAL-9004 | InvalidSpend          | 422  | No        |
 /// | DB-*     | Storage (delegated)   | var  | var       |
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -29,6 +31,13 @@ pub enum WalletError {
 
     #[error("invalid page_token: '{value}'")]
     InvalidPageToken { value: String },
+
+    /// Gems are not spent under 18 (or with an unknown age).
+    #[error("gems cannot be spent by this account")]
+    GemSpendingRestricted,
+
+    #[error("invalid gem spend: {reason}")]
+    InvalidSpend { reason: String },
 }
 
 impl AppError for WalletError {
@@ -39,6 +48,8 @@ impl AppError for WalletError {
             WalletError::InvalidAccountId { .. } => "WAL-9001",
             WalletError::InvalidIdempotencyKey => "WAL-9002",
             WalletError::InvalidPageToken { .. } => "WAL-9003",
+            WalletError::GemSpendingRestricted => "WAL-3001",
+            WalletError::InvalidSpend { .. } => "WAL-9004",
         }
     }
 
@@ -46,6 +57,7 @@ impl AppError for WalletError {
         match self {
             WalletError::Storage(e) => e.http_status(),
             WalletError::LedgerInconsistent { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            WalletError::GemSpendingRestricted => StatusCode::FORBIDDEN,
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         }
     }
@@ -79,6 +91,8 @@ impl AppError for WalletError {
             WalletError::InvalidAccountId { .. } => "This account id is not valid.",
             WalletError::InvalidIdempotencyKey => "This request key is not valid.",
             WalletError::InvalidPageToken { .. } => "This page is no longer valid; start again.",
+            WalletError::GemSpendingRestricted => "Gems can't be spent before 18.",
+            WalletError::InvalidSpend { .. } => "This purchase is not valid.",
         }
     }
 }

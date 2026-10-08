@@ -3,7 +3,7 @@
 
 use chrono::TimeDelta;
 
-use crate::domain::ClaimPolicy;
+use crate::domain::{ClaimPolicy, StakePackPolicy};
 
 /// Gems every wallet opens with.
 pub const DEFAULT_STARTER_GEMS: i64 = 100;
@@ -12,18 +12,21 @@ pub const DEFAULT_STARTER_GEMS: i64 = 100;
 pub struct WalletConfig {
     pub claim:        ClaimPolicy,
     pub starter_gems: i64,
+    pub stake_pack:   StakePackPolicy,
 }
 
 impl Default for WalletConfig {
     fn default() -> Self {
-        Self { claim: ClaimPolicy::default(), starter_gems: DEFAULT_STARTER_GEMS }
+        Self { claim: ClaimPolicy::default(), starter_gems: DEFAULT_STARTER_GEMS, stake_pack: StakePackPolicy::default() }
     }
 }
 
 impl WalletConfig {
     /// `WALLET_CLAIM_INTERVAL_SECS` (3600), `WALLET_CLAIM_BASE_POINTS` (25),
-    /// `WALLET_DAILY_CLAIM_CAP` (200), `WALLET_STARTER_GEMS` (100). An
-    /// unparsable or negative value keeps the default.
+    /// `WALLET_DAILY_CLAIM_CAP` (200), `WALLET_STARTER_GEMS` (100),
+    /// `WALLET_STAKE_PACK_SHOTS` (3), `WALLET_STAKE_PACK_PRICE` (50 gems),
+    /// `WALLET_POINTS_PER_SHOT` (100). An unparsable or negative value keeps
+    /// the default.
     pub fn from_env() -> Self {
         Self::from_lookup(|name| std::env::var(name).ok())
     }
@@ -42,6 +45,15 @@ impl WalletConfig {
                     .unwrap_or(defaults.claim.daily_cap),
             },
             starter_gems: number("WALLET_STARTER_GEMS").unwrap_or(defaults.starter_gems),
+            stake_pack: StakePackPolicy {
+                shots:           number("WALLET_STAKE_PACK_SHOTS")
+                    .and_then(|v| i32::try_from(v).ok())
+                    .unwrap_or(defaults.stake_pack.shots),
+                price_gems:      number("WALLET_STAKE_PACK_PRICE").unwrap_or(defaults.stake_pack.price_gems),
+                points_per_shot: number("WALLET_POINTS_PER_SHOT")
+                    .and_then(|v| i32::try_from(v).ok())
+                    .unwrap_or(defaults.stake_pack.points_per_shot),
+            },
         }
     }
 }

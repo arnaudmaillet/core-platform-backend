@@ -43,10 +43,12 @@ impl Service for WalletService {
     const GRPC_SERVICE_NAME: &'static str = <WalletServer as tonic::server::NamedService>::NAME;
 
     /// The caller's own wallet only (`account_id` bound to the token).
+    /// `SpendGems` is mesh only: geo-discovery's country unlocks.
     const EDGE_POLICY: EdgePolicy = &[
         authenticated("/wallet.v1.WalletService/GetWallet"),
         authenticated("/wallet.v1.WalletService/ClaimReward"),
         authenticated("/wallet.v1.WalletService/ListWalletTransactions"),
+        authenticated("/wallet.v1.WalletService/BuyStakePack"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -109,7 +111,10 @@ mod tests {
 
     #[test]
     fn the_edge_exposes_the_callers_own_wallet_only() {
-        assert_eq!(WalletService::EDGE_POLICY.len(), 3);
+        assert_eq!(WalletService::EDGE_POLICY.len(), 4);
         assert!(service_runtime::edge::validate_policy(WalletService::EDGE_POLICY).is_ok());
+        // Another service's gem spend never reaches the app.
+        let spend = "/wallet.v1.WalletService/SpendGems";
+        assert!(WalletService::EDGE_POLICY.iter().all(|rule| rule.method != spend));
     }
 }

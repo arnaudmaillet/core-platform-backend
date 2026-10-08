@@ -63,6 +63,30 @@ impl ClaimPolicy {
     }
 }
 
+/// The ×100 stake pack's terms: `shots` of `points_per_shot` of the buyer's
+/// own points, for `price_gems`. Packs do not stack; shots never expire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StakePackPolicy {
+    pub shots:           i32,
+    pub price_gems:      i64,
+    pub points_per_shot: i32,
+}
+
+impl Default for StakePackPolicy {
+    fn default() -> Self {
+        Self { shots: 3, price_gems: 50, points_per_shot: 100 }
+    }
+}
+
+/// What buying a stake pack would do now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackDecision {
+    Buy,
+    /// Shots are left: nothing charged.
+    StillActive,
+    InsufficientGems,
+}
+
 /// What a claim would do now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimDecision {
@@ -177,6 +201,34 @@ impl Wallet {
         self.last_claim_at = Some(now);
     }
 
+    /// What buying a stake pack would do.
+    pub fn decide_stake_pack(&self, policy: &StakePackPolicy) -> PackDecision {
+        if self.stake_shots > 0 {
+            PackDecision::StillActive
+        } else if self.gems < policy.price_gems {
+            PackDecision::InsufficientGems
+        } else {
+            PackDecision::Buy
+        }
+    }
+
+    /// Records a pack [`Self::decide_stake_pack`] allowed.
+    pub fn apply_stake_pack(&mut self, policy: &StakePackPolicy) {
+        self.spend_gems(policy.price_gems);
+        self.stake_shots = policy.shots;
+    }
+
+    /// Whether `amount` gems can be spent.
+    pub fn can_spend_gems(&self, amount: i64) -> bool {
+        amount > 0 && self.gems >= amount
+    }
+
+    /// Spends gems [`Self::can_spend_gems`] allowed.
+    pub fn spend_gems(&mut self, amount: i64) {
+        self.gems -= amount;
+        self.gems_spent += amount;
+    }
+
     /// The claim surface at `now`.
     pub fn claim_state(&self, policy: &ClaimPolicy, now: DateTime<Utc>) -> ClaimState {
         let today = now.date_naive();
@@ -278,6 +330,20 @@ mod tests {
         claim(&mut w, at(8, 10, 0));
         let waiting = w.claim_state(&ClaimPolicy::default(), at(8, 10, 5));
         assert_eq!((waiting.available, waiting.next_claim_at, waiting.streak_days), (false, Some(at(8, 11, 0)), 1));
+    }
+
+    #[test]
+    fn a_pack_needs_the_gems_and_an_empty_one() {
+        let policy = StakePackPolicy::default();
+        let mut w = wallet();
+        assert_eq!(w.decide_stake_pack(&policy), PackDecision::Buy);
+        w.apply_stake_pack(&policy);
+        assert_eq!((w.gems, w.gems_spent, w.stake_shots), (50, 50, 3));
+        assert_eq!(w.decide_stake_pack(&policy), PackDecision::StillActive, "packs do not stack");
+        w.stake_shots = 0;
+        w.gems = 49;
+        assert_eq!(w.decide_stake_pack(&policy), PackDecision::InsufficientGems);
+        assert!(!w.can_spend_gems(50) && w.can_spend_gems(49) && !w.can_spend_gems(0));
     }
 
     #[test]
