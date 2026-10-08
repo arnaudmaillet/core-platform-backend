@@ -7,6 +7,7 @@ use std::sync::Arc;
 use scylla_storage::{ScyllaConfig, ScyllaSessionBuilder};
 use uuid::Uuid;
 
+use engagement::application::erasure::LikeEraser;
 use engagement::application::port::LikeLedger;
 use engagement::domain::value_object::LikeTarget;
 use engagement::infrastructure::persistence::ScyllaLikeLedger;
@@ -114,4 +115,54 @@ async fn an_account_lists_what_it_liked_page_by_page() {
     expected.sort_by_key(|(t, _, _)| key(t));
     assert_eq!(listed, expected, "every like once, none of another account's");
     assert_eq!(first[0].liked_at.timestamp_micros(), 1_000_000);
+}
+
+/// A deleted account's likes (#665): who liked goes — in Redis and Scylla —
+/// the counts stay, and a stake made before the deletion, landing late, does
+/// not write the account back.
+#[tokio::test]
+async fn a_deleted_accounts_likes_are_forgotten_the_counts_kept() {
+    let h = TestHarness::start().await;
+    let contact = test_support::containers::scylla_ready("engagement", concat!(env!("CARGO_MANIFEST_DIR"), "/migrations")).await;
+    let client = Arc::new(
+        ScyllaSessionBuilder::new(ScyllaConfig { contact_points: vec![contact], keyspace: None, ..ScyllaConfig::default() })
+            .build()
+            .await
+            .expect("scylla"),
+    );
+    let ledger = Arc::new(ScyllaLikeLedger::new(Arc::clone(&client)));
+    let (gone, stays) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
+    let targets = [LikeTarget::Post(Uuid::now_v7().to_string()), LikeTarget::Comment(Uuid::now_v7().to_string())];
+    for t in &targets {
+        for (account, total) in [(&gone, 7), (&stays, 3)] {
+            h.like_store.apply_total(t, account, total).await.unwrap();
+            ledger.record(t, account, "liker", total, 1_000_000).await.unwrap();
+        }
+    }
+
+    let eraser = LikeEraser { store: Arc::clone(&h.like_store), ledger: ledger.clone() };
+    assert_eq!(eraser.erase(&gone, 2_000_000).await.unwrap(), 2);
+
+    assert!(ledger.is_erased(&gone).await.unwrap());
+    assert!(!ledger.is_erased(&stays).await.unwrap());
+    assert_eq!(h.like_store.mine(&gone, &targets).await.unwrap(), vec![0, 0]);
+    assert_eq!(h.like_store.counts(&targets).await.unwrap(), vec![10, 10], "the points are kept");
+    assert!(ledger.list_by_account(&gone, 10, None).await.unwrap().is_empty());
+    assert_eq!(ledger.list_by_account(&stays, 10, None).await.unwrap().len(), 2);
+
+    // A stake made before the deletion, written after it: still deleted.
+    ledger.record(&targets[0], &gone, "liker", 9, 1_500_000).await.unwrap();
+    assert!(ledger.list_by_account(&gone, 10, None).await.unwrap().is_empty());
+    let rows = client
+        .session
+        .execute_unpaged(
+            "SELECT account_id FROM engagement.likes_by_target WHERE target_kind = ? AND target_id = ?",
+            (targets[0].kind(), targets[0].id()),
+        )
+        .await
+        .unwrap()
+        .into_rows_result()
+        .unwrap();
+    let likers: Vec<(Uuid,)> = rows.rows::<(Uuid,)>().unwrap().map(|r| r.unwrap()).collect();
+    assert_eq!(likers, vec![(Uuid::parse_str(&stays).unwrap(),)], "only who stays");
 }

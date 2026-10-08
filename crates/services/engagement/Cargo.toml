@@ -50,6 +50,8 @@ integration-engagement = []
 tokio = { workspace = true }
 # Wire-contract test: StakeCommitted read as the wallet serializes it (#665).
 wallet     = { workspace = true }
+# Wire-contract test: AccountDeleted read as account serializes it (#665).
+account    = { workspace = true }
 serde_json = { workspace = true }
 
 # ── Integration suite (feature = "integration-engagement") ───────────────────

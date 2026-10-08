@@ -44,6 +44,7 @@ Drives investment. Rolled up from each Domain Card's class line.
 |---|---|---|---|---|
 | `account` | `account.v1.events` | `audit` | ACL | compliance evidence + GDPR Art. 17 crypto-shred loop |
 | `account` | `account.v1.events` | `profile` | ACL | persona provisioning |
+| `account` | `account.v1.events` (`account_deleted`) | `engagement` | ACL | erasure of who liked (#665; the counts stay) |
 | `auth` | `auth.v1.events` | `audit` | ACL | session-lifecycle evidence |
 | `profile` | `profile.v1.events` | `post` | ACL | author snapshots on posts |
 | `profile` | `profile.v1.events` | `search` | ACL | profile indexing |

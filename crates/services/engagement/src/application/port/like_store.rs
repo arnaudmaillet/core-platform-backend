@@ -18,6 +18,11 @@ pub trait LikeStore: Send + Sync + 'static {
 
     /// `account`'s likes on each target, in order.
     async fn mine(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<i64>, EngagementError>;
+
+    /// Forgets who `account` is on each target (its account was deleted):
+    /// its entry goes, the targets' counts stay (the points are kept,
+    /// anonymously).
+    async fn forget(&self, account: &str, targets: &[LikeTarget]) -> Result<(), EngagementError>;
 }
 
 /// One target an account liked, for its GDPR export.
@@ -53,4 +58,19 @@ pub trait LikeLedger: Send + Sync + 'static {
         limit: i32,
         after: Option<&LikeTarget>,
     ) -> Result<Vec<AccountLike>, EngagementError>;
+
+    /// Notes that `account` was deleted, for as long as one of its stakes
+    /// could still arrive: the stake consumer then drops them.
+    async fn mark_erased(&self, account: &str) -> Result<(), EngagementError>;
+
+    async fn is_erased(&self, account: &str) -> Result<bool, EngagementError>;
+
+    /// Deletes `account`'s rows on each target as of `at_micros`: a record
+    /// stamped earlier (a stake made before the deletion, landing late) stays
+    /// deleted.
+    async fn forget(&self, account: &str, targets: &[LikeTarget], at_micros: i64) -> Result<(), EngagementError>;
+
+    /// Deletes what `account` liked as of `at_micros` (the export's
+    /// partition), likewise.
+    async fn forget_account(&self, account: &str, at_micros: i64) -> Result<(), EngagementError>;
 }

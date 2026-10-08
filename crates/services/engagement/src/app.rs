@@ -24,6 +24,7 @@ use transport::kafka::config::client::KafkaClientConfig;
 
 use crate::application::command::record_share::{RecordShareCommand, RecordShareHandler};
 use crate::application::command::record_view::{RecordViewCommand, RecordViewHandler};
+use crate::application::erasure::LikeEraser;
 use crate::application::port::{LikeLedger, LikeStore, LikeVisibility, ScoreStore};
 use crate::application::query::batch_get_likes::{BatchGetLikesHandler, BatchGetLikesQuery};
 use crate::application::query::get_post_engagement::{GetPostEngagementHandler, GetPostEngagementQuery};
@@ -32,7 +33,8 @@ use crate::infrastructure::persistence::{ScyllaCounterLedger, ScyllaLikeLedger};
 use crate::infrastructure::scoring::redis_like_store::RedisLikeStore;
 use crate::infrastructure::scoring::redis_score_store::{DirtyPostTracker, RedisScoreStore};
 use crate::infrastructure::worker::{
-    comment_consumer::CommentEventConsumer, counter_flush::CounterFlushWorker, stake_consumer::StakeConsumer,
+    account_consumer::AccountConsumer, comment_consumer::CommentEventConsumer, counter_flush::CounterFlushWorker,
+    stake_consumer::StakeConsumer,
 };
 
 /// Storage/transport endpoints the graph is wired against.
@@ -114,8 +116,12 @@ impl App {
         if let (Some(kafka_client), Some((counters, like_ledger))) = (kafka, ledgers) {
             // Likes are points (#665): the wallet's stakes become the likes.
             tokio::spawn(
-                StakeConsumer::new(kafka_client.clone(), Arc::clone(&like_store), like_ledger, "engagement-stakes").run(),
+                StakeConsumer::new(kafka_client.clone(), Arc::clone(&like_store), Arc::clone(&like_ledger), "engagement-stakes")
+                    .run(),
             );
+            // A deleted account's likes: who liked goes, the counts stay.
+            let eraser = LikeEraser { store: Arc::clone(&like_store), ledger: like_ledger };
+            tokio::spawn(AccountConsumer::new(kafka_client.clone(), eraser, "engagement-account-erasure").run());
             tokio::spawn(
                 CounterFlushWorker::new(Arc::clone(&score_store), Arc::clone(&counters), dirty_tracker, Duration::from_secs(5))
                     .run(),

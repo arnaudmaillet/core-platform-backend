@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./CONTEXT_MAP.md
-  source_sha256: 33c6346158c856abb82ad91b568f32838a80063a2a08daddf67f8520fd93f694
+  source_sha256: 69627f00f83ae2ee431b3d49021a400b7b2fff1681121fbf85852a6c3884ad29
   translated_at: 2026-10-08
   status: complete
 ---
@@ -56,6 +56,7 @@ Oriente l'investissement. Consolidé depuis la ligne de classe de chaque Domain 
 |---|---|---|---|---|
 | `account` | `account.v1.events` | `audit` | ACL | preuve de conformité + boucle de crypto-shred RGPD Art. 17 |
 | `account` | `account.v1.events` | `profile` | ACL | provisionnement du persona |
+| `account` | `account.v1.events` (`account_deleted`) | `engagement` | ACL | effacement de qui a liké (#665 ; les compteurs restent) |
 | `auth` | `auth.v1.events` | `audit` | ACL | preuve du cycle de vie des sessions |
 | `profile` | `profile.v1.events` | `post` | ACL | instantanés d'auteur sur les posts |
 | `profile` | `profile.v1.events` | `search` | ACL | indexation des profils |

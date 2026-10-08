@@ -10,7 +10,7 @@
 > | **Aggregate root(s)** | none — likes are applied totals (`LikeTarget` VO), counters are increments |
 > | **Tier** | **TIER-1** |
 > | **Failure posture** | **Fail-open-ish** — Redis-primary with Lua atomicity, Kafka-fed |
-> | **Upstream contexts** | `wallet` (stakes); end-user clients (views/shares); `comment` (counts); `post` (hidden like counts) |
+> | **Upstream contexts** | `wallet` (stakes); `account` (deletions); end-user clients (views/shares); `comment` (counts); `post` (hidden like counts) |
 > | **Downstream contexts** | `account` (GDPR export, `ListLikesByAccount`) — via **Open Host Service** (mesh gRPC) |
 > | **Decision log** | [`ADR-0009`](../../../../docs/adr/0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md) |
 
@@ -84,6 +84,7 @@ forward — without a database round-trip on the read path.
 | I2 | An account's total on a target only grows; redeliveries and late events change nothing | Lua script; Scylla write timestamp = stake time | — (ignored) |
 | I3 | Hidden like counts reach only the author and the mesh; when post cannot say, they are withheld | application | `ENG-6001` (fail closed) |
 | I4 | Only posts and comments can be liked | `LikeTarget::parse` | `ENG-9004` |
+| I5 | A deleted account is no longer known as a liker anywhere; the points it gave stay in the counts | `LikeEraser`; erasure-time Scylla deletes; the stake consumer drops its late stakes | — |
 
 ---
 
@@ -97,6 +98,9 @@ counts per post's answer (`BatchGetLikeVisibility`, cached 60 s).
 
 **Export.** account's GDPR export pages `ListLikesByAccount` (mesh only) into `likes.json`.
 
+**Erasure.** On `account_deleted`, `LikeEraser` marks the account erased, forgets it on each target it
+liked (Redis entry, Scylla row) and deletes its list; the counts stay.
+
 ---
 
 ## 7. Context Relationships (Context-Map slice)
@@ -104,6 +108,7 @@ counts per post's answer (`BatchGetLikeVisibility`, cached 60 s).
 | Neighbour context | Direction | Pattern | Mechanism | What breaks if they change |
 |---|---|---|---|---|
 | `wallet` | upstream | Conformist | `wallet.v1.events` (`stake_committed`) | like counts break |
+| `account` | upstream | ACL | `account.v1.events` (`account_deleted`) | a deleted account stays known as a liker |
 | `comment` | upstream | ACL | `comment.created` / `comment.deleted` | comment counts break |
 | `post` | upstream | Customer/Supplier | gRPC `BatchGetLikeVisibility` | hidden like counts withheld from everyone but the mesh |
 | `account` | downstream | Open Host Service | gRPC `ListLikesByAccount` | the GDPR export fails (retried) |
@@ -118,6 +123,7 @@ engagement publishes no events. It consumes:
 |---|---|---|
 | `wallet.v1.events` `stake_committed` | an account's points on a target reached a new total | like count and the account's own move |
 | `comment.created` / `comment.deleted` | a comment was posted / removed | comment counter ±1 |
+| `account.v1.events` `account_deleted` | an account was deleted | who liked is forgotten; the counts stay |
 
 ---
 
@@ -134,6 +140,5 @@ engagement publishes no events. It consumes:
 
 - **Classification:** Core — direct content interaction.
 - **Volatility:** low — likes follow the wallet's stake contract.
-- **Known modeling debt:** erasing an account's likes on `account_deleted`; the likers hash has no TTL
-  (a rehydration floor from Scylla is planned).
+- **Known modeling debt:** the likers hash has no TTL (a rehydration floor from Scylla is planned).
 - **Deferred capabilities:** like settlement (gems earned from likes, #665).

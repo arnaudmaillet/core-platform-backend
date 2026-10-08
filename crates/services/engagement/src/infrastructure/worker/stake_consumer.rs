@@ -3,7 +3,8 @@
 //! applying it is idempotent and order-proof (a total no larger than the one
 //! held changes nothing): redeliveries and the outbox's at-least-once are
 //! absorbed without a dedup marker. Redis first (what readers see), then the
-//! durable copy. Other wallet events are skipped.
+//! durable copy. Other wallet events are skipped. A deleted account's late
+//! stakes are dropped (its likes were erased, the count kept).
 
 use std::sync::Arc;
 
@@ -133,9 +134,34 @@ impl StakeConsumer {
     }
 
     async fn apply(&self, target: &LikeTarget, account: &str, profile: &str, total: i64, at_micros: i64) -> Result<(), EngagementError> {
-        self.likes.apply_total(target, account, total).await?;
-        self.ledger.record(target, account, profile, total, at_micros).await
+        apply_stake(self.likes.as_ref(), self.ledger.as_ref(), target, account, profile, total, at_micros).await
     }
+}
+
+/// One stake: dropped when its account was deleted; otherwise applied, and
+/// forgotten again if the deletion landed meanwhile (its erasure may have
+/// listed the account's likes before this one was written).
+async fn apply_stake(
+    likes: &dyn LikeStore,
+    ledger: &dyn LikeLedger,
+    target: &LikeTarget,
+    account: &str,
+    profile: &str,
+    total: i64,
+    at_micros: i64,
+) -> Result<(), EngagementError> {
+    if ledger.is_erased(account).await? {
+        tracing::info!(target = %target, "stake of a deleted account dropped");
+        return Ok(());
+    }
+    likes.apply_total(target, account, total).await?;
+    ledger.record(target, account, profile, total, at_micros).await?;
+    if ledger.is_erased(account).await? {
+        let targets = [target.clone()];
+        likes.forget(account, &targets).await?;
+        ledger.forget(account, &targets, chrono::Utc::now().timestamp_micros()).await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -178,5 +204,17 @@ mod tests {
         );
         let other: WalletEvent = serde_json::from_str(r#"{"type":"something_else"}"#).unwrap();
         assert_eq!(outcome(&other), Outcome::Skip);
+    }
+
+    #[tokio::test]
+    async fn a_deleted_accounts_late_stake_is_dropped() {
+        use crate::application::erasure::fakes::Likes;
+        let likes = Likes::default();
+        let post = LikeTarget::Post("p1".into());
+        apply_stake(&likes, &likes, &post, "a", "liker", 4, 1).await.unwrap();
+        likes.mark_erased("gone").await.unwrap();
+        apply_stake(&likes, &likes, &post, "gone", "liker", 9, 1).await.unwrap();
+        assert_eq!(likes.counts(std::slice::from_ref(&post)).await.unwrap(), vec![4]);
+        assert_eq!(likes.mine("gone", &[post]).await.unwrap(), vec![0]);
     }
 }

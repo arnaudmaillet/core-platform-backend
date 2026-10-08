@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 9a9b968c3eb6210259585ce2a2205435320cb8d7615f0f1f5e72c15f222bd5db
+  source_sha256: 8708f454916c0ed16353d7edf9ec13c03aa13a74cbe6c5038449a52764b08b60
   translated_at: 2026-10-08
   status: complete
 ---
@@ -40,7 +40,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 
 | Topic | Producer | Consumers |
 |---|---|---|
-| `account.v1.events` | `account` | `audit`, `auth`, `profile`, `media`, `wallet`, `notification` |
+| `account.v1.events` | `account` | `audit`, `auth`, `profile`, `media`, `wallet`, `notification`, `engagement` |
 | `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `timeline`, `media`, `comment`, `chat` |
 | `wallet.v1.events` | `wallet` | `counter`, `notification`, `timeline`, `geo-discovery`, `engagement` |
 | `notification.v1.events` | `notification` | `realtime` |
@@ -95,7 +95,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 |---|---|---|---|
 | `account_created` / `email_changed` / `email_verified` / `phone_changed` | un fait de cycle de vie de compte porteur de PII s'est produit | la commande correspondante commite | `audit` (PII scellée en enveloppe crypto-shred), `profile` (persona) |
 | `password_changed` / `mfa_enrolled` / `mfa_revoked` | un fait sécurité/identifiant (sans PII) | changement d'identifiant | `audit` (catégorie Authentication) |
-| `activated` / `deactivated` / `suspended` / `deleted` / `kyc_status_changed` | une transition du cycle de vie de l'identité (`deleted` : anonymisé par le janitor RGPD, ou suppression admin) | changement de cycle de vie | `audit` (Identity ; `deleted` → **crypto-shred du sujet**, ferme la boucle Art. 17), `profile` |
+| `activated` / `deactivated` / `suspended` / `deleted` / `kyc_status_changed` | une transition du cycle de vie de l'identité (`deleted` : anonymisé par le janitor RGPD, ou suppression admin) | changement de cycle de vie | `audit` (Identity ; `deleted` → **crypto-shred du sujet**, ferme la boucle Art. 17), `profile`, `wallet` (`deleted` → efface le wallet), `engagement` (`deleted` → oublie qui a liké, les compteurs de likes gardés, #665) |
 | `role_assigned` / `role_revoked` | un octroi d'autorisation a changé | octroi/révocation de rôle | `audit` (Authorization) |
 | `gdpr_deletion_requested` | le droit à l'effacement (Art. 17) a été invoqué ; effacement programmé à 30 jours (un compte actif est désactivé entre-temps) | demande utilisateur/DPO | `audit` (preuve DataErasure) |
 | `gdpr_deletion_cancelled` | un effacement en attente a été retiré pendant son délai de grâce | le titulaire se reconnecte / `CancelGdprDeletion` | `audit` (preuve DataErasure) |

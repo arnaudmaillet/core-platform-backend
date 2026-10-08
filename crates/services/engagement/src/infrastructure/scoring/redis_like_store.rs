@@ -77,6 +77,17 @@ impl LikeStore for RedisLikeStore {
         let mine = futures::future::try_join_all(reads).await.map_err(fred_err)?;
         Ok(mine.into_iter().map(|m| m.unwrap_or(0)).collect())
     }
+
+    async fn forget(&self, account: &str, targets: &[LikeTarget]) -> Result<(), EngagementError> {
+        let deletes = targets.iter().map(|t| {
+            let client = self.client.clone();
+            let key = likers_key(t);
+            let account = account.to_owned();
+            async move { client.inner.hdel::<i64, _, _>(key, account).await }
+        });
+        futures::future::try_join_all(deletes).await.map_err(fred_err)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

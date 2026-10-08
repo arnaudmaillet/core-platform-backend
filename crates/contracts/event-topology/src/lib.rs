@@ -139,6 +139,8 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("chat.message.push", "notification"),
     // likes are points (#665): the wallet's stakes become the like counts
     ("wallet.v1.events", "engagement"),
+    // a deleted account's likes: who liked goes, the counts stay (#665)
+    ("account.v1.events", "engagement"),
     // social-graph edges → timeline fan-out, profile tier ownership
     ("social-graph.followed", "timeline"),
     ("social-graph.unfollowed", "timeline"),
