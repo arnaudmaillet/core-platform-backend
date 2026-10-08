@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: f1b70a675a879df3cb53d673c4d933c229cec047c7dde4ce4b9dbc38f1fbe471
+  source_sha256: 0f9d4805cfd82c7a0681e7d081159f09310e1e6307163b78f8a7969c4fe28caa
   translated_at: 2026-10-08
   status: complete
 ---
@@ -20,7 +20,7 @@ i18n:
 > | **Palier (Tier)** | **TIER-1** — surface de lecture seule ; dégradable vers ScyllaDB |
 > | **Binaire déployable** | `crates/apps/geo-discovery-server` (crate bibliothèque : `crates/services/geo-discovery`) |
 > | **Bases de données** | Redis (index ZSET + projections pin & carte msgpack) · ScyllaDB keyspace `geo_discovery` |
-> | **Asynchrone** | ne publie rien · consomme `post.published` / `post.deleted` / `moderation.v1.events` / `engagement.score_updated` / `profile.tier_changed` / `engagement.reactions` (le classement des pays) |
+> | **Asynchrone** | ne publie rien · consomme `post.published` / `post.deleted` / `moderation.v1.events` / `engagement.score_updated` / `profile.tier_changed` / `wallet.v1.events` (le classement des pays) |
 > | **Appelants amont** | `<TODO: BFF / clients carte>` |
 > | **Dépendances aval** | Redis, ScyllaDB, Kafka |
 > | **SLO** | requête de tuile p99 **< 50 ms** à l'échelle continentale |
@@ -269,7 +269,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 |---|---|---|---|
 | `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
 | `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | suppression de la carte : suppression → définitive ; `remove_content` / `visibility_limit` / `age_gate` sur un post → masqué ; une réversion plus récente → restauré (gardé par version ; événements au niveau de l'acteur et autres ignorés) | DLQ `{topic}.dlq` |
-| `engagement.reactions` | `geo-discovery-country-likes` | le classement des pays (#665) : chaque cœur (+1, −1 quand il est retiré ou changé) compté pour le pays du post où il tombe (la position de sa carte, `data/countries.json`), au jour UTC de la réaction → Redis `sg:geo:cact:{YYYYMMDD:b}` (`l:{CC}` ; 16 seaux par jour selon l'événement, pour que les cœurs d'un jour ne pèsent jamais sur un seul slot ; la lecture les additionne) ; un post hors carte, en mer ou au-delà de la rétention de sa carte ne compte nulle part ; autres types ignorés. L'indexation d'un `post.published` ajoute `p:{CC}` de même. **Idempotent** (le classement fixe le prix des déblocages) : chaque comptage est un script Lua avec un marqueur `SET NX` dans le slot du hash du jour — une réaction identifiée par post, auteur, heure et sens (gardée 48 h, au-delà de toute relivraison), un post par son id (gardé avec son jour, donc un `post.published` réannoncé ne compte pas non plus) | DLQ `{topic}.dlq` |
+| `wallet.v1.events` | `geo-discovery-country-likes` | le classement des pays (#665 : un like est un point) : chaque `stake_committed` sur un post compte ses **points** pour le pays du post (la position de sa carte, `data/countries.json`), au jour UTC de la mise → Redis `sg:geo:cact:{YYYYMMDD:b}` (`l:{CC}` ; 16 seaux par jour selon l'événement, pour que les likes d'un jour ne pèsent jamais sur un seul slot ; la lecture les additionne) ; un post hors carte, en mer ou au-delà de la rétention de sa carte ne compte nulle part ; les likes sur les commentaires et les autres événements du wallet sont ignorés. L'indexation d'un `post.published` ajoute `p:{CC}` de même. **Idempotent** (le classement fixe le prix des déblocages) : chaque comptage est un script Lua avec un marqueur `SET NX` dans le slot du hash du jour — une mise identifiée par son compte et sa clé de lot (gardée 8 jours, au-delà de toute relivraison et des 7 jours de rétention de l'outbox du wallet), un post par son id (gardé avec son jour, donc un `post.published` réannoncé ne compte pas non plus) | DLQ `{topic}.dlq` |
 | `profile.v1.events` | `geo-discovery-location-settings` | partage de localisation des auteurs (#657) depuis `ProfileLocationSettingsChanged` → `geo_discovery.location_settings` ; chaque requête de carte l'applique pour tout lecteur sauf l'auteur (mesh compris) : les pins et cartes d'un **fantôme** quittent la carte ; ceux d'un auteur au **niveau ville** n'apparaissent qu'à la bande R5, au centre de la cellule R5, et ses cartes indiquent la cellule R7 de la ville ; un auteur dont l'**audience** est abonnés / mutuels ne reste que sur la carte d'un lecteur qui le suit / lui est mutuel (`follows` / `mutual` de `CheckAccess`, dans le même appel groupé) — jamais celle du mesh (NEARBY ne lit pour personne) ni d'un lecteur anonyme. Autres événements profile ignorés | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |
@@ -350,7 +350,7 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_GEOIP_PRIVATE_NETWORK_COUNTRY` | Non | — | Ce que vaut une adresse client privée/loopback : un code ISO, ou `*` = la déclaration de l'appareil. **Flotte locale uniquement** — jamais dans un env déployé. |
 | `GEO_TRUSTED_PROXY_HOPS` | Non | `GRPC_TRUSTED_PROXY_HOPS`, sinon `1` | Proxys qui ajoutent à `X-Forwarded-For` (l'ALB) ; l'adresse client est à autant d'entrées depuis la droite. Non défini = le `GRPC_TRUSTED_PROXY_HOPS` de toute la flotte. |
 | `GEO_COUNTRY_GRANT_TTL_SECS` | Non | `43200` | Durée d'ouverture d'un pays accordé sans nouvelle confirmation (12 h). |
-| `GEO_COUNTRY_LIKES_GROUP_ID` | Non | `geo-discovery-country-likes` | groupe Kafka du consumer des likes du classement des pays (`engagement.reactions`). |
+| `GEO_COUNTRY_LIKES_GROUP_ID` | Non | `geo-discovery-country-likes` | groupe Kafka du consumer des likes du classement des pays (`wallet.v1.events`). |
 | `GEO_STANDINGS_WINDOW_DAYS` | Non | `30` | Jours de likes que le classement des pays prend en compte. |
 | `GEO_STANDINGS_CACHE_SECS` | Non | `60` | Durée pendant laquelle un classement calculé est servi. |
 | `GEO_COUNTRY_UNLOCKS_ENABLED` | Non | `false` | Le filtre de la carte des membres (#665) : un membre ne voit que son pays d'origine et ses pays débloqués (et la mer). |

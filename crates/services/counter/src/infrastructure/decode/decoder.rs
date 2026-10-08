@@ -10,7 +10,7 @@ use chrono::{DateTime, TimeZone, Utc};
 
 use crate::domain::{EntityId, EntityKind, EntityRef, MemberId, Metric, Observation};
 use crate::error::CounterError;
-use crate::infrastructure::decode::wire::{FollowWire, HitWire, ReactionWire};
+use crate::infrastructure::decode::wire::{FollowWire, HitWire, WalletWire};
 
 fn at(ms: i64) -> DateTime<Utc> {
     Utc.timestamp_millis_opt(ms).single().unwrap_or_else(Utc::now)
@@ -71,24 +71,20 @@ pub fn map_click(wire: HitWire) -> Result<Vec<Observation>, CounterError> {
     )?])
 }
 
-/// `engagement.reactions` → a `Like` magnitude on the post. A brand-new reaction
-/// is `+1`, a removal is `-1`, and a *replacement* (an upsert carrying a prior
-/// `old_kind`) is a no-op — the reaction count did not change.
-pub fn map_reaction(wire: ReactionWire) -> Result<Vec<Observation>, CounterError> {
+/// `wallet.v1.events` `stake_committed` → a `Like` magnitude on the post or
+/// comment: its `points` (#665: a like is a point; a stake is final, never
+/// negative). Approximate like every counter sum — a redelivered stake counts
+/// twice, a crash loses a window (see the consumer module) — and a popularity
+/// input: the exact like count is engagement's. Other wallet events: nothing.
+pub fn map_stake(wire: WalletWire) -> Result<Vec<Observation>, CounterError> {
     match wire {
-        ReactionWire::Upserted(e) if e.old_kind.is_some() => Ok(Vec::new()), // replacement
-        ReactionWire::Upserted(e) => Ok(vec![Observation::sum(
-            entity("post", &e.post_id)?,
+        WalletWire::StakeCommitted(e) if e.points > 0 => Ok(vec![Observation::sum(
+            entity(&e.target_kind, &e.target_id)?,
             Metric::Like,
-            1,
-            at(e.event_at_ms),
+            e.points,
+            e.staked_at,
         )?]),
-        ReactionWire::Removed(e) => Ok(vec![Observation::sum(
-            entity("post", &e.post_id)?,
-            Metric::Like,
-            -1,
-            at(e.event_at_ms),
-        )?]),
+        WalletWire::StakeCommitted(_) | WalletWire::Other => Ok(Vec::new()),
     }
 }
 
@@ -123,7 +119,7 @@ mod tests {
 
     use super::*;
     use crate::infrastructure::decode::wire::{
-        FollowChangeWire, ReactionRemovedWire, ReactionUpsertedWire,
+        FollowChangeWire,
     };
 
     #[test]
@@ -167,38 +163,27 @@ mod tests {
         assert_eq!(err.error_code(), "CTR-9001");
     }
 
+    /// The wallet's JSON as it publishes it (#665), read back as counter does.
+    fn stake(json: &str) -> WalletWire {
+        serde_json::from_str(json).unwrap()
+    }
+
     #[test]
-    fn new_reaction_is_plus_one_like() {
-        let obs = map_reaction(ReactionWire::Upserted(ReactionUpsertedWire {
-            post_id: "p1".into(),
-            old_kind: None,
-            event_at_ms: 1,
-        }))
+    fn a_stake_adds_its_points_to_the_targets_likes() {
+        let obs = map_stake(stake(
+            r#"{"type":"stake_committed","account_id":"a","profile_id":"p","target_kind":"comment","target_id":"c1",
+                "author_profile_id":"x","points":30,"total":30,"first":true,"stake_key":"stake:k",
+                "staked_at":"2026-10-08T12:00:00Z"}"#,
+        ))
         .unwrap();
         assert_eq!(obs.len(), 1);
-        assert_eq!(obs[0].metric, Metric::Like);
-        assert_eq!(obs[0].amount, 1);
+        assert_eq!((obs[0].metric, obs[0].amount), (Metric::Like, 30));
+        assert_eq!(obs[0].entity.kind, crate::domain::value_object::EntityKind::Comment);
     }
 
     #[test]
-    fn replaced_reaction_is_a_no_op() {
-        let obs = map_reaction(ReactionWire::Upserted(ReactionUpsertedWire {
-            post_id: "p1".into(),
-            old_kind: Some("heart".into()),
-            event_at_ms: 1,
-        }))
-        .unwrap();
-        assert!(obs.is_empty());
-    }
-
-    #[test]
-    fn removed_reaction_is_minus_one_like() {
-        let obs = map_reaction(ReactionWire::Removed(ReactionRemovedWire {
-            post_id: "p1".into(),
-            event_at_ms: 1,
-        }))
-        .unwrap();
-        assert_eq!(obs[0].amount, -1);
+    fn other_wallet_events_count_nothing() {
+        assert!(map_stake(stake(r#"{"type":"something_new","x":1}"#)).unwrap().is_empty());
     }
 
     #[test]

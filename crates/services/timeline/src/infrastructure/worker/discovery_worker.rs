@@ -10,9 +10,10 @@
 //!   keeps it for STANDARD readers only), `enforcement_reversed` lifts it;
 //! - `counter.v1.popularity` (untagged `{entity_type, entity_id, score}`): a
 //!   post's all-time popularity, which drives its hot score;
-//! - `engagement.reactions` (tagged `event_type`, snake_case): a new reaction
-//!   (`upserted` without an `old_kind`) teaches the reactor the post's tags; a
-//!   changed or removed one teaches nothing;
+//! - `wallet.v1.events` (the wallet's `WalletEvent`, tagged `type`,
+//!   snake_case; #665: a like is a point): a liker's first batch of likes on a
+//!   post (`stake_committed` with `first`) teaches them the post's tags; later
+//!   batches, likes on comments and other wallet events teach nothing;
 //! - `profile.v1.events` (tagged `type`): `ProfileFeedSettingsChanged`
 //!   applies the holder's personalisation setting (off erases and stops
 //!   learning), `ProfileDeleted` erases the profile's interests.
@@ -40,7 +41,7 @@ use crate::infrastructure::worker::{build_dlq_producer, dispatch_outcome};
 const TOPIC_POST: &str = "post.v1.events";
 const TOPIC_MODERATION: &str = "moderation.v1.events";
 const TOPIC_POPULARITY: &str = "counter.v1.popularity";
-const TOPIC_REACTIONS: &str = "engagement.reactions";
+const TOPIC_WALLET: &str = "wallet.v1.events";
 const TOPIC_PROFILE: &str = "profile.v1.events";
 
 /// A lenient superset of the five payloads.
@@ -71,13 +72,15 @@ pub struct DiscoveryEvent {
     entity_id:       Option<String>,
     #[serde(default)]
     score:           Option<f64>,
-    // engagement.reactions (`post_id`, `profile_id` = the reactor)
-    #[serde(rename = "event_type", default)]
-    reaction:        Option<String>,
+    // wallet.v1.events stake_committed (`profile_id` = the liker)
     #[serde(default)]
-    old_kind:        Option<String>,
+    target_kind:     Option<String>,
     #[serde(default)]
-    event_at_ms:     Option<i64>,
+    target_id:       Option<String>,
+    #[serde(default)]
+    first:           Option<bool>,
+    #[serde(default)]
+    staked_at:       Option<chrono::DateTime<chrono::Utc>>,
     // profile.v1.events ProfileFeedSettingsChanged
     #[serde(default)]
     non_personalized: Option<bool>,
@@ -98,9 +101,6 @@ enum Outcome {
 }
 
 fn outcome(event: &DiscoveryEvent) -> Outcome {
-    if let Some(reaction_type) = event.reaction.as_deref() {
-        return reaction(reaction_type, event);
-    }
     let Some(event_type) = event.event_type.as_deref() else {
         return popularity(event);
     };
@@ -121,6 +121,7 @@ fn outcome(event: &DiscoveryEvent) -> Outcome {
             None => Outcome::Poison("PostDeleted without a post_id".into()),
         },
         "enforcement_applied" | "enforcement_reversed" => moderation(event_type, event),
+        "stake_committed" => stake(event),
         "ProfileFeedSettingsChanged" => match (&event.profile_id, event.non_personalized) {
             (Some(profile_id), Some(non_personalized)) => Outcome::Apply(DiscoverySignal::Personalization {
                 profile_id: profile_id.clone(),
@@ -136,19 +137,19 @@ fn outcome(event: &DiscoveryEvent) -> Outcome {
     }
 }
 
-/// A first reaction to a post teaches its tags; a kind changed (an
-/// `old_kind`) or a reaction removed teaches nothing.
-fn reaction(reaction_type: &str, event: &DiscoveryEvent) -> Outcome {
-    if reaction_type != "upserted" || event.old_kind.is_some() {
+/// A liker's first batch of likes on a post teaches its tags; later batches
+/// and likes on comments teach nothing.
+fn stake(event: &DiscoveryEvent) -> Outcome {
+    if event.first != Some(true) || event.target_kind.as_deref() != Some("post") {
         return Outcome::Skip;
     }
-    match (&event.post_id, &event.profile_id, event.event_at_ms) {
-        (Some(post_id), Some(profile_id), Some(at_ms)) => Outcome::Apply(DiscoverySignal::Reacted {
+    match (&event.target_id, &event.profile_id, event.staked_at) {
+        (Some(post_id), Some(profile_id), Some(at)) => Outcome::Apply(DiscoverySignal::Reacted {
             post_id:    post_id.clone(),
             profile_id: profile_id.clone(),
-            at_ms,
+            at_ms:      at.timestamp_millis(),
         }),
-        _ => Outcome::Poison("reaction upserted without post_id, profile_id or event_at_ms".into()),
+        _ => Outcome::Poison("stake_committed without target_id, profile_id or staked_at".into()),
     }
 }
 
@@ -220,7 +221,7 @@ impl<CB: CommandBus + 'static> DiscoveryWorker<CB> {
         config.enable_auto_commit = false;
 
         let handle = KafkaConsumerBuilder::new(config)
-            .subscribe_many([TOPIC_POST, TOPIC_MODERATION, TOPIC_POPULARITY, TOPIC_REACTIONS, TOPIC_PROFILE])
+            .subscribe_many([TOPIC_POST, TOPIC_MODERATION, TOPIC_POPULARITY, TOPIC_WALLET, TOPIC_PROFILE])
             .build()
             .map_err(|e| e.to_string())?;
         tracing::info!(group = %self.group_id, "discovery consumer started");
@@ -370,33 +371,33 @@ mod tests {
     }
 
     #[test]
-    fn a_first_reaction_teaches_the_tags_a_change_or_removal_does_not() {
-        use engagement::domain::event::reaction_event::ReactionKafkaEvent;
-        use engagement::domain::event::{ReactionRemovedEvent, ReactionUpsertedEvent};
-        use engagement::domain::value_object::ReactionKind;
+    fn a_first_like_on_a_post_teaches_the_tags_later_ones_do_not() {
+        use chrono::TimeZone;
+        use wallet::domain::event::{StakeCommitted, WalletEvent};
 
         const READER: &str = "0190f0a0-0000-7000-8000-0000000000bb";
-        let upserted = |old_kind| {
-            wire(serde_json::to_vec(&ReactionKafkaEvent::Upserted(ReactionUpsertedEvent {
-                post_id:     POST.into(),
-                profile_id:  READER.into(),
-                new_kind:    ReactionKind::Fire,
-                new_weight:  2,
-                old_kind,
-                old_weight:  old_kind.map(|_| 1),
-                event_at_ms: 1_760_000_000_500,
+        let at = chrono::Utc.timestamp_millis_opt(1_760_000_000_500).unwrap();
+        let stake = |first: bool, kind: &str| {
+            wire(serde_json::to_vec(&WalletEvent::StakeCommitted(StakeCommitted {
+                account_id:        "acc".into(),
+                profile_id:        READER.into(),
+                target_kind:       kind.into(),
+                target_id:         POST.into(),
+                author_profile_id: AUTHOR.into(),
+                points:            3,
+                total:             3,
+                first,
+                stake_key:         "stake:k".into(),
+                staked_at:         at,
             }))
             .unwrap())
         };
         assert_eq!(
-            outcome(&upserted(None)),
+            outcome(&stake(true, "post")),
             Outcome::Apply(DiscoverySignal::Reacted { post_id: POST.into(), profile_id: READER.into(), at_ms: 1_760_000_000_500 })
         );
-        assert_eq!(outcome(&upserted(Some(ReactionKind::Heart))), Outcome::Skip);
-        let removed = ReactionKafkaEvent::Removed(ReactionRemovedEvent {
-            post_id: POST.into(), profile_id: READER.into(), kind: ReactionKind::Fire, weight: 2, event_at_ms: 1,
-        });
-        assert_eq!(outcome(&wire(serde_json::to_vec(&removed).unwrap())), Outcome::Skip);
+        assert_eq!(outcome(&stake(false, "post")), Outcome::Skip, "a later batch");
+        assert_eq!(outcome(&stake(true, "comment")), Outcome::Skip, "a comment has no tags here");
     }
 
     #[test]

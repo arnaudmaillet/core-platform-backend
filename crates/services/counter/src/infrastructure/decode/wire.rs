@@ -10,12 +10,14 @@
 //!   upstream producer exists yet; the edge/BFF will produce telemetry matching
 //!   these shapes. They are notifications, and counts need nothing more than the
 //!   `(entity, actor?, time)` they carry — no hydration.
-//! * `engagement.reactions` **matches the live upstream schema** (`engagement`
-//!   publishes it today, internally tagged on `event_type`, snake_case).
+//! * `wallet.v1.events` **matches the live upstream schema** (the wallet
+//!   publishes it, internally tagged on `type`, snake_case): likes are points
+//!   (#665), each `stake_committed` adds its points to the target's likes.
 //! * `social-graph` follow events are a **counter-owned schema** pending an
 //!   upstream follow stream (an upstream prerequisite, like `profile.v1.events`
 //!   is for search).
 
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 // ── view / impression / click — counter-owned firehose schema ─────────────────
@@ -31,29 +33,25 @@ pub struct HitWire {
     pub occurred_at_ms: i64,
 }
 
-// ── engagement.reactions — MATCHES the upstream engagement schema ─────────────
+// ── wallet.v1.events — MATCHES the upstream wallet schema (#665) ─────────────
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "event_type", rename_all = "snake_case")]
-pub enum ReactionWire {
-    Upserted(ReactionUpsertedWire),
-    Removed(ReactionRemovedWire),
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WalletWire {
+    StakeCommitted(StakeCommittedWire),
+    /// Any other wallet event: nothing to count.
+    #[serde(other)]
+    Other,
 }
 
+/// A batch of likes: `points` more on the post or comment.
 #[derive(Debug, Clone, Deserialize)]
-pub struct ReactionUpsertedWire {
-    pub post_id: String,
-    /// Present ⇒ this upsert *replaced* a prior reaction, so the reaction count is
-    /// unchanged (net-zero like delta). Absent ⇒ a brand-new reaction (`+1`).
-    #[serde(default)]
-    pub old_kind: Option<String>,
-    pub event_at_ms: i64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ReactionRemovedWire {
-    pub post_id: String,
-    pub event_at_ms: i64,
+pub struct StakeCommittedWire {
+    /// `post` or `comment`.
+    pub target_kind: String,
+    pub target_id: String,
+    pub points: i64,
+    pub staked_at: DateTime<Utc>,
 }
 
 // ── social-graph follow — counter-owned schema (upstream stream is a prereq) ──

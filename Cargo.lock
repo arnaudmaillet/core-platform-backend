@@ -1119,6 +1119,7 @@ dependencies = [
  "scylla",
  "scylla-storage",
  "serde",
+ "serde_json",
  "service-runtime",
  "social-graph-api",
  "sqlx",
@@ -2150,7 +2151,6 @@ dependencies = [
  "async-trait",
  "chrono",
  "cqrs",
- "engagement",
  "error",
  "fred",
  "futures",
@@ -2180,6 +2180,7 @@ dependencies = [
  "uuid",
  "validate-core",
  "validation",
+ "wallet",
  "wallet-api",
 ]
 
@@ -6443,7 +6444,6 @@ dependencies = [
  "chrono",
  "counter",
  "cqrs",
- "engagement",
  "error",
  "fred",
  "futures",
@@ -6470,6 +6470,7 @@ dependencies = [
  "uuid",
  "validate-core",
  "validation",
+ "wallet",
 ]
 
 [[package]]

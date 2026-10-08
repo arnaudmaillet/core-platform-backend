@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: ea18057b12c6645e194ee8f42b74ad7505573f1acbb3292f9e2f76a2d48c53de
-  translated_at: 2026-06-28
+  source_sha256: 5e53dc4ef4ea059f2a8475f30ad500b4f87e3bb8a2a7956cc4efe805455d5cc6
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -90,7 +90,7 @@ fil d'activité TWCS, avec des ids UUIDv5 déterministes et un compteur de non-l
 
 ## 6. Workflows & Orchestration &nbsp;·&nbsp; DEEP
 
-N/A (TIER-2, réduit) — consomme les événements amont (`comment.created`, `engagement.reactions`, `post.published`, follows sociaux) sous `run_consumer`, write-collapse vers le fil par-utilisateur, incrémente le compteur de non-lus claim-gated, et pousse via le stream broadcast gRPC (live) ou APNs/FCM (offline, délégué depuis `realtime`).
+N/A (TIER-2, réduit) — consomme les événements amont (`comment.created`, `wallet.v1.events` (likes, #665), `post.published`, follows sociaux) sous `run_consumer`, write-collapse vers le fil par-utilisateur, incrémente le compteur de non-lus claim-gated, et pousse via le stream broadcast gRPC (live) ou APNs/FCM (offline, délégué depuis `realtime`).
 
 ## 7. Relations de Contexte &nbsp;·&nbsp; DEEP
 

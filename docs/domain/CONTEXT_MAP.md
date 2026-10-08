@@ -57,8 +57,11 @@ Drives investment. Rolled up from each Domain Card's class line.
 | `post` | `post.v1.events` | `realtime` | ACL (broadcast) | live post broadcast |
 | `comment` | `comment.created` / `comment.deleted` | `notification` | ACL | reply notifications |
 | `comment` | `comment.created` / `comment.deleted` | `engagement` / `counter` | ACL | comment counts |
-| `engagement` | `engagement.reactions` | `notification` | ACL | reaction notifications |
-| `engagement` | `engagement.reactions` | `counter` | ACL | reaction magnitudes |
+| `wallet` | `wallet.v1.events` | `engagement` | ACL | like counts (#665: a like is a point) |
+| `wallet` | `wallet.v1.events` | `notification` | ACL | like notifications (a liker's first batch) |
+| `wallet` | `wallet.v1.events` | `counter` | ACL | like magnitudes |
+| `wallet` | `wallet.v1.events` | `timeline` | ACL | interest tags (a first like) |
+| `wallet` | `wallet.v1.events` | `geo-discovery` | ACL | each country's likes (the unlock ladder) |
 | `engagement` | `engagement.score_updated` | `geo-discovery` | ACL | virality ranking |
 | `counter` | `counter.v1.popularity` | `search` | ACL | popularity ranking signal |
 | `counter` | `counter.v1.popularity` | `realtime` | ACL (broadcast) | live engagement counters |

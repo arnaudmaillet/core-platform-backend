@@ -27,7 +27,7 @@ pub enum DiscoverySignal {
 
 /// Feeds the discovery pool and the interest tags. Issued by the discovery
 /// worker from `post.v1.events`, `moderation.v1.events`,
-/// `counter.v1.popularity`, `engagement.reactions` and `profile.v1.events`.
+/// `counter.v1.popularity`, `wallet.v1.events` (likes) and `profile.v1.events`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApplyDiscoverySignalCommand {
     pub signal: DiscoverySignal,

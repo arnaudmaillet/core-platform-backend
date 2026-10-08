@@ -72,5 +72,7 @@ http      = { workspace = true }
 integration-counter = []
 
 [dev-dependencies]
+# The wallet's StakeCommitted JSON, read back as counter decodes it (#665).
+serde_json   = { workspace = true }
 # Live integration suite: shared container orchestration + await_until (Phase 6).
 test-support = { workspace = true }

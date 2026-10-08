@@ -27,6 +27,7 @@ async-trait  = { workspace = true }
 
 # ── Serialisation ─────────────────────────────────────────────────────────────
 serde        = { workspace = true }
+chrono       = { workspace = true }   # a like's time on wallet.v1.events (#665)
 serde_json   = { workspace = true }
 
 # ── Domain utilities ──────────────────────────────────────────────────────────
@@ -71,5 +72,5 @@ chrono       = { workspace = true }
 post         = { workspace = true }
 moderation   = { workspace = true }
 counter      = { workspace = true }
-engagement   = { workspace = true }
+wallet       = { workspace = true }
 profile      = { workspace = true }

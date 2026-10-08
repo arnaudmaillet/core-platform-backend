@@ -168,8 +168,9 @@ interest tags unless it opted out (#662).
 - **Mutes (#659).** Posts by authors any of the reader's profiles muted (scope posts) are left out of the
   discovery feed, and posts by authors the feed's profile muted out of the **following feed** (a muted VIP is
   not even read; the cursor moves past skipped posts). One `ListMutedProfiles` call per request, failing open.
-- **Interest tags (#662).** The same consumer reads `engagement.reactions`: a profile's *first* reaction
-  to a pooled post (`upserted` without an `old_kind`; a post taken down or deleted teaches nothing) adds
+- **Interest tags (#662).** The same consumer reads `wallet.v1.events` (#665: a like is a point): a
+  profile's *first* batch of likes on a pooled post (`stake_committed` with `first`; later batches, likes
+  on comments, and a post taken down or deleted teach nothing) adds
   weight to the post's hashtags in the profile's interests (Redis, `timeline:int:{<profile>}` ZSET, plus
   `:seen` — a post counts once per 30 days — `:muted`, the removed tags, and `:off`, the opt-out). Weights decay with a 30-day
   half-life (stored inflated to a fixed epoch, so a write only increments), the 100 heaviest are kept, and
@@ -232,7 +233,7 @@ pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point *
 | `post.deleted` | `timeline-post-deleted` | VIP ZREM or Scylla purge | DLQ `{topic}.dlq` |
 | `social-graph.followed` | `timeline-sg-followed` | backfill recent posts + update following set | DLQ `{topic}.dlq` |
 | `social-graph.unfollowed` | `timeline-sg-unfollowed` | prune posts + update following set | DLQ `{topic}.dlq` |
-| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` · `engagement.reactions` · `profile.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction); interest tags (first reaction, `ProfileFeedSettingsChanged` opt-out, `ProfileDeleted` erasure) | DLQ `{topic}.dlq` |
+| `post.v1.events` · `counter.v1.popularity` · `moderation.v1.events` · `wallet.v1.events` · `profile.v1.events` | `timeline-discovery` | discovery pool (publish / delete, hot score, restriction); interest tags (first like, `ProfileFeedSettingsChanged` opt-out, `ProfileDeleted` erasure) | DLQ `{topic}.dlq` |
 
 > **Runtime contract (mandatory):** all workers run under `run_consumer` — manual commit after success,
 > bounded retry with backoff + jitter, DLQ on exhaustion/poison. All downstream writes are idempotent

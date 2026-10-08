@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 874fd1571dee75b01ee6e01b150ce990083295fd1542bb5c967e8028c53cd2ad
+  source_sha256: fb436c22671a3dc956c88a3f896cfee5385d6e35b9f0ba8982e930c4db2e6253
   translated_at: 2026-10-08
   status: complete
 ---
@@ -42,7 +42,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 |---|---|---|
 | `account.v1.events` | `account` | `audit`, `auth`, `profile`, `media`, `wallet`, `notification` |
 | `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `timeline`, `media`, `comment`, `chat` |
-| `wallet.v1.events` | `wallet` | `engagement` |
+| `wallet.v1.events` | `wallet` | `counter`, `notification`, `timeline`, `geo-discovery`, `engagement` |
 | `notification.v1.events` | `notification` | `realtime` |
 | `post.published` | `post` | `notification`, `geo-discovery` |
 | `post.updated` | `post` | — *(orphan — see below)* |
@@ -50,7 +50,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `post.v1.events` | `post` | `timeline`, `search`, `realtime` |
 | `comment.created` | `comment` | `notification`, `engagement` |
 | `comment.deleted` | `comment` | `engagement` |
-| `engagement.reactions` | `engagement` | `counter`, `notification`, `timeline`, `geo-discovery`, `engagement` |
+| `engagement.reactions` | `engagement` | `engagement` |
 | `social-graph.followed` | `social-graph` | `notification`, `timeline` |
 | `social-graph.unfollowed` | `social-graph` | `timeline` |
 | `social-graph.blocked` | `social-graph` | — *(orphan — see below)* |

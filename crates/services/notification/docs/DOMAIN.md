@@ -78,7 +78,7 @@ feed, with deterministic UUIDv5 ids and a claim-gated unread counter.
 
 ## 6. Workflows & Orchestration &nbsp;·&nbsp; DEEP
 
-N/A (TIER-2, collapsed) — consumes upstream events (`comment.created`, `engagement.reactions`, `post.published`, social follows) under `run_consumer`, write-collapses into the per-user feed, increments the claim-gated unread counter, and pushes via the gRPC broadcast stream (live) or APNs/FCM (offline, delegated from `realtime`).
+N/A (TIER-2, collapsed) — consumes upstream events (`comment.created`, `wallet.v1.events` (likes, #665), `post.published`, social follows) under `run_consumer`, write-collapses into the per-user feed, increments the claim-gated unread counter, and pushes via the gRPC broadcast stream (live) or APNs/FCM (offline, delegated from `realtime`).
 
 ## 7. Context Relationships &nbsp;·&nbsp; DEEP
 

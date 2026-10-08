@@ -233,7 +233,7 @@ impl App {
                     Arc::clone(&counter),
                     Arc::clone(&stream_registry),
                     Arc::clone(&config),
-                    "notification-reaction-consumer",
+                    "notification-stake-consumer",
                 )
                 .with_push(Arc::clone(&push))
                 .run(),

@@ -12,10 +12,10 @@ use crate::error::GeoDiscoveryError;
 
 /// A day's counts are kept a little past the longest window read.
 const DAY_TTL_SECS: i64 = 40 * 24 * 3600;
-/// How long a counted reaction is remembered: past any redelivery (a crash
-/// or rebalance before the commit, a retry), not for the whole window — there
-/// is one marker per reaction.
-const LIKE_MARKER_TTL_SECS: i64 = 48 * 3600;
+/// How long a counted stake is remembered: past any redelivery (a crash or
+/// rebalance before the commit, a retry) and past the wallet outbox's own
+/// retention (7 days), not for the whole window — one marker per stake.
+const LIKE_MARKER_TTL_SECS: i64 = 8 * 24 * 3600;
 /// A counted post is remembered as long as its day, so a late re-announced
 /// `post.published` counts nothing more either (posts are few).
 const POST_MARKER_TTL_SECS: i64 = DAY_TTL_SECS;

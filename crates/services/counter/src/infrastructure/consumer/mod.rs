@@ -38,7 +38,7 @@ impl transport::kafka::consumer::ClassifyError for CounterError {
 }
 
 /// Runs a fold consumer: decode each event into observations and fold them into the
-/// shared aggregator. `map` is the per-topic distillation (`map_view`, `map_reaction`,
+/// shared aggregator. `map` is the per-topic distillation (`map_view`, `map_stake`,
 /// …); `run_consumer` owns deserialization, so poison bytes dead-letter before they
 /// reach `map`.
 pub async fn run_fold_consumer<T, M>(

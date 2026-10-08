@@ -10,7 +10,7 @@ description = "Deployable binary for the counter-analytics WRITE path — the he
 # ── Phase 0 scaffold ──────────────────────────────────────────────────────────
 # No-op entrypoint today. Phase 5 wires this as the stream processor: supervised
 # `run_consumer` loops over the firehose (view/impression/click) + domain topics
-# (engagement.reactions, social-graph follows), the in-process windowed
+# (wallet.v1.events likes, social-graph follows), the in-process windowed
 # pre-aggregation (N events → 1 delta), the batched idempotent write-behind to
 # the Postgres ledger + Scylla time-series, the reconciliation loop, and the
 # `counter.v1.popularity` publisher. CPU/memory heavy; scaled independently of

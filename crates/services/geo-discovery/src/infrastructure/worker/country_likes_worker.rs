@@ -1,14 +1,15 @@
-//! The country ladder's likes (#665): `engagement.reactions` → each heart
-//! counted for the country of the post it lands on (from the post's map card
-//! and the shared borders), on the reaction's UTC day. A post off the map, at
-//! sea, or whose card has expired counts nowhere. Other kinds are skipped.
+//! The country ladder's likes (#665: a like is a point): `wallet.v1.events`
+//! `stake_committed` on a post → its points counted for the country of the
+//! post (from the post's map card and the shared borders), on the stake's UTC
+//! day. A post off the map, at sea, or whose card has expired counts nowhere;
+//! likes on comments and other wallet events are skipped.
 //!
-//! Idempotent: each reaction is counted once, keyed by what makes it that
-//! reaction (post, reactor, time, direction) — a redelivery counts nothing.
+//! Idempotent: each stake is counted once, keyed by its account and batch key
+//! — a redelivery or the wallet outbox's at-least-once counts nothing more.
 
 use std::sync::Arc;
 
-use chrono::{DateTime, NaiveDate};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::Deserialize;
 use transport::kafka::config::client::KafkaClientConfig;
 use transport::kafka::config::consumer::{AutoOffsetReset, ConsumerConfig};
@@ -23,29 +24,28 @@ use crate::domain::value_object::PostId;
 use crate::error::GeoDiscoveryError;
 use crate::infrastructure::worker::build_dlq_producer;
 
-const TOPIC: &str = "engagement.reactions";
-const HEART: &str = "heart";
+const TOPIC: &str = "wallet.v1.events";
 
-/// Lenient read of engagement's `ReactionKafkaEvent` (tagged `event_type`).
+/// Lenient read of the wallet's `WalletEvent` (tagged `type`, snake_case).
 #[derive(Debug, Deserialize)]
 pub struct ReactionEvent {
-    event_type:  String,
+    #[serde(rename = "type")]
+    kind:        String,
     #[serde(default)]
-    post_id:     String,
+    account_id:  String,
     #[serde(default)]
-    profile_id:  String,
+    target_kind: String,
     #[serde(default)]
-    new_kind:    Option<String>,
+    target_id:   String,
     #[serde(default)]
-    old_kind:    Option<String>,
-    /// `removed`'s kind.
+    points:      i64,
     #[serde(default)]
-    kind:        Option<String>,
+    stake_key:   String,
     #[serde(default)]
-    event_at_ms: i64,
+    staked_at:   Option<DateTime<Utc>>,
 }
 
-/// What a reaction does to its post's likes.
+/// What a stake does to its post's likes.
 #[derive(Debug, PartialEq, Eq)]
 enum Outcome {
     Skip,
@@ -54,22 +54,21 @@ enum Outcome {
 }
 
 fn outcome(event: &ReactionEvent) -> Outcome {
-    let is_heart = |k: &Option<String>| k.as_deref() == Some(HEART);
-    let delta = match event.event_type.as_str() {
-        "upserted" if is_heart(&event.new_kind) && !is_heart(&event.old_kind) => 1,
-        "upserted" if !is_heart(&event.new_kind) && is_heart(&event.old_kind) => -1,
-        "removed" if is_heart(&event.kind) => -1,
-        _ => return Outcome::Skip,
+    if event.kind != "stake_committed" || event.target_kind != "post" || event.points <= 0 {
+        return Outcome::Skip;
+    }
+    let Ok(post) = Uuid::parse_str(&event.target_id) else {
+        return Outcome::Poison(format!("bad post id {:?}", event.target_id));
     };
-    let Ok(post) = Uuid::parse_str(&event.post_id) else {
-        return Outcome::Poison(format!("bad post_id {:?}", event.post_id));
+    let Some(at) = event.staked_at else {
+        return Outcome::Poison("stake_committed without staked_at".into());
     };
-    let Some(at) = DateTime::from_timestamp_millis(event.event_at_ms) else {
-        return Outcome::Poison(format!("bad event_at_ms {}", event.event_at_ms));
-    };
-    // What makes it this reaction: a redelivery carries the same key.
-    let event = format!("l:{post}:{}:{}:{delta}", event.profile_id, event.event_at_ms);
-    Outcome::Count { post, delta, day: at.date_naive(), event }
+    if event.account_id.is_empty() || event.stake_key.is_empty() {
+        return Outcome::Poison("stake_committed without account or key".into());
+    }
+    // A batch key is unique per account: together they name the stake.
+    let event_key = format!("l:{}:{}", event.account_id, event.stake_key);
+    Outcome::Count { post, delta: event.points, day: at.date_naive(), event: event_key }
 }
 
 pub struct CountryLikesWorker<TR> {
@@ -148,49 +147,41 @@ impl<TR: TileRepository + 'static> CountryLikesWorker<TR> {
 
 #[cfg(test)]
 mod tests {
-    use engagement::domain::event::reaction_event::ReactionKafkaEvent;
-    use engagement::domain::event::{ReactionRemovedEvent, ReactionUpsertedEvent};
-    use engagement::domain::value_object::ReactionKind;
+    use chrono::TimeZone;
+    use wallet::domain::event::{StakeCommitted, WalletEvent};
 
     use super::*;
 
-    /// Serialized with engagement's own types, read back as the worker does.
-    fn wire(event: ReactionKafkaEvent) -> ReactionEvent {
+    /// Serialized with the wallet's own types, read back as the worker does.
+    fn wire(event: WalletEvent) -> ReactionEvent {
         serde_json::from_slice(&serde_json::to_vec(&event).unwrap()).unwrap()
     }
 
-    fn upserted(new: ReactionKind, old: Option<ReactionKind>) -> ReactionEvent {
-        wire(ReactionKafkaEvent::Upserted(ReactionUpsertedEvent {
-            post_id: Uuid::nil().to_string(),
-            profile_id: Uuid::nil().to_string(),
-            new_kind: new,
-            new_weight: 1,
-            old_kind: old,
-            old_weight: old.map(|_| 1),
-            event_at_ms: 1_791_000_000_000,
+    fn stake(target_kind: &str, target_id: &str, points: i64) -> ReactionEvent {
+        wire(WalletEvent::StakeCommitted(StakeCommitted {
+            account_id: "acc".into(),
+            profile_id: "liker".into(),
+            target_kind: target_kind.into(),
+            target_id: target_id.into(),
+            author_profile_id: "author".into(),
+            points,
+            total: points,
+            first: true,
+            stake_key: "stake:k1".into(),
+            staked_at: Utc.with_ymd_and_hms(2026, 10, 8, 12, 0, 0).unwrap(),
         }))
     }
 
     #[test]
-    fn hearts_count_up_and_down_other_kinds_skip() {
-        let day = DateTime::from_timestamp_millis(1_791_000_000_000).unwrap().date_naive();
-        let count = |delta: i64| Outcome::Count {
-            post: Uuid::nil(),
-            delta,
-            day,
-            event: format!("l:{}:{}:1791000000000:{delta}", Uuid::nil(), Uuid::nil()),
-        };
-        assert_eq!(outcome(&upserted(ReactionKind::Heart, None)), count(1));
-        assert_eq!(outcome(&upserted(ReactionKind::Fire, Some(ReactionKind::Heart))), count(-1));
-        assert_eq!(outcome(&upserted(ReactionKind::Heart, Some(ReactionKind::Heart))), Outcome::Skip);
-        assert_eq!(outcome(&upserted(ReactionKind::Fire, None)), Outcome::Skip);
-        let removed = wire(ReactionKafkaEvent::Removed(ReactionRemovedEvent {
-            post_id: Uuid::nil().to_string(),
-            profile_id: Uuid::nil().to_string(),
-            kind: ReactionKind::Heart,
-            weight: 1,
-            event_at_ms: 1_791_000_000_000,
-        }));
-        assert_eq!(outcome(&removed), count(-1));
+    fn a_stake_on_a_post_counts_its_points_once_per_stake() {
+        let post = Uuid::nil().to_string();
+        let day = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
+        assert_eq!(
+            outcome(&stake("post", &post, 30)),
+            Outcome::Count { post: Uuid::nil(), delta: 30, day, event: "l:acc:stake:k1".into() }
+        );
+        assert_eq!(outcome(&stake("comment", "c1", 30)), Outcome::Skip, "comments have no country");
+        let other: ReactionEvent = serde_json::from_str(r#"{"type":"something_new"}"#).unwrap();
+        assert_eq!(outcome(&other), Outcome::Skip);
     }
 }
