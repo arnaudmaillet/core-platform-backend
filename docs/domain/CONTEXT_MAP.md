@@ -86,6 +86,7 @@ Drives investment. Rolled up from each Domain Card's class line.
 | `comment` | `post` | Customer/Supplier | `PostId` references | comment validity |
 | `auth` | `account` | Customer/Supplier | `SubjectLink` ↔ `AccountId` | session subject resolution |
 | `wallet` | `engagement` | Customer/Supplier | `GetLikePositions` (mesh) | stake settlement (#665): how early each position came |
+| `account` | `wallet` | Customer/Supplier | `ExportWallet` / `ListStakePositions` / `ListWalletTransactions` (mesh) | the GDPR export's `wallet.json` (#665) |
 | `realtime` | `auth` | Conformist (verify-only) | `auth-context` ES256 token verify at handshake | new connection authentication |
 | **all services** | `auth` | Shared Kernel / OHS | edge token verified in-process via `auth-context` | every authenticated call |
 

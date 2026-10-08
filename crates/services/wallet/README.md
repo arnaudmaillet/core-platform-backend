@@ -9,8 +9,8 @@
 > | **Deployable** | `crates/apps/wallet-server` (library crate: `crates/services/wallet`) |
 > | **Datastores** | Postgres (own CNPG cluster, tables `wallets`, `wallet_transactions`) |
 > | **Async** | consumes `account.v1.events` (group `wallet-account-events`) · publishes `wallet.v1.events` (likes staked) |
-> | **Upstream callers** | the app (client edge `:9443`) · geo-discovery (mesh `SpendGems`, country unlocks) |
-> | **Downstream deps** | Postgres, Kafka, post and comment (mesh: what likes land on), social-graph (mesh: may the reader see it) |
+> | **Upstream callers** | the app (client edge `:9443`) · geo-discovery (mesh `SpendGems`, country unlocks) · account (mesh `ExportWallet` / `ListStakePositions` / `ListWalletTransactions`, the GDPR export) |
+> | **Downstream deps** | Postgres, Kafka, post and comment (mesh: what likes land on), social-graph (mesh: may the reader see it), engagement (mesh: `GetLikePositions`, stake settlement) |
 > | **SLO** | 99.9% avail · p99 read < 50 ms · p99 claim < 100 ms |
 
 ---
@@ -171,6 +171,7 @@ last settlements land), the positions settled that day share a fixed pool —
 |---|---|---|
 | the app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack` | balance, claim and pack unavailable; the rest of the app works |
 | geo-discovery | `SpendGems` | country unlocks refused (fail-closed); the map works |
+| account | `ExportWallet`, `ListStakePositions`, `ListWalletTransactions` | GDPR exports retried next pass |
 | post, comment, social-graph (downstream) | `GetPost`, `GetComment`, `CheckAccess` | likes refused (`WAL-6001`, retried by the app) |
 | engagement (downstream) | `GetLikePositions` | settlements wait (retried after the lease) |
 
@@ -190,12 +191,17 @@ service WalletService {
   rpc BuyStakePack (BuyStakePackRequest) returns (BuyStakePackResponse);
   rpc Stake (StakeRequest) returns (StakeResponse);               // a batch of likes
   rpc SpendGems (SpendGemsRequest) returns (SpendGemsResponse);   // mesh only
+  rpc ExportWallet (ExportWalletRequest) returns (ExportWalletResponse);                 // mesh only
+  rpc ListStakePositions (ListStakePositionsRequest) returns (ListStakePositionsResponse); // mesh only
 }
 ```
 
 All but `SpendGems` are on the edge (`authenticated`), bound to the caller's `account_id`
 (`edge::require_account`; another account ⇒ `PERMISSION_DENIED`). `SpendGems` is mesh only
 (geo-discovery): `kind` = `COUNTRY_UNLOCK`, `amount` > 0, `ref_id` ≤ 64 characters.
+`ExportWallet` (the wallet read **without opening one**; absent when the account never had one) and
+`ListStakePositions` (each stake position with its settlement and envelope share, paged by target,
+token `kind:id`, ≤ 500 a page) are mesh only too: account's GDPR export (#653, #665).
 
 - `Wallet.gem_spending_restricted` (edge only) tells the app to hide gem spends; the pack's terms
   are echoed (`stake_pack_price`, `stake_pack_shots`, `points_per_shot`).

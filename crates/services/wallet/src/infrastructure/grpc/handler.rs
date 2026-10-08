@@ -8,7 +8,7 @@ use error::AppError;
 use tonic::{Request, Response, Status};
 use transport::grpc::edge;
 
-use crate::application::port::{ClaimOutcome, PackOutcome, SpendOutcome, StakeOutcome};
+use crate::application::port::{ClaimOutcome, PackOutcome, SettlementRecord, SpendOutcome, StakeOutcome, StakePositionRecord};
 use crate::application::wallets::StakeBatch;
 use crate::application::{Wallets, WalletView};
 use crate::domain::{StakeAsk, StakeTarget};
@@ -123,6 +123,35 @@ impl WalletServiceHandler {
         }))
     }
 
+    /// Mesh only (#653, #665): the account's wallet for its GDPR export,
+    /// never opened by it.
+    pub async fn export_wallet(
+        &self,
+        request: Request<proto::ExportWalletRequest>,
+    ) -> Result<Response<proto::ExportWalletResponse>, Status> {
+        let req = request.into_inner();
+        let view = self.wallets.export(&req.account_id, Utc::now()).await.map_err(to_status)?;
+        Ok(Response::new(proto::ExportWalletResponse { wallet: view.map(|v| self.wallet_to_proto(&v, false)) }))
+    }
+
+    /// Mesh only (#653, #665): the account's stake positions and their
+    /// settlements, for its GDPR export.
+    pub async fn list_stake_positions(
+        &self,
+        request: Request<proto::ListStakePositionsRequest>,
+    ) -> Result<Response<proto::ListStakePositionsResponse>, Status> {
+        let req = request.into_inner();
+        let page = self
+            .wallets
+            .stake_positions(&req.account_id, i64::from(req.page_size), &req.page_token)
+            .await
+            .map_err(to_status)?;
+        Ok(Response::new(proto::ListStakePositionsResponse {
+            positions:       page.positions.iter().map(position_to_proto).collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+        }))
+    }
+
     pub async fn claim_reward(
         &self,
         request: Request<proto::ClaimRewardRequest>,
@@ -222,6 +251,36 @@ fn transaction_to_proto(t: &Transaction) -> proto::WalletTransaction {
         } as i32,
         created_at:     Some(timestamp(t.created_at)),
         ref_id:         t.ref_id.clone().unwrap_or_default(),
+    }
+}
+
+fn position_to_proto(p: &StakePositionRecord) -> proto::StakePosition {
+    use proto::stake_position::Target;
+    proto::StakePosition {
+        target:     Some(match &p.target {
+            StakeTarget::Post(id) => Target::PostId(id.clone()),
+            StakeTarget::Comment(id) => Target::CommentId(id.clone()),
+        }),
+        points:     p.points,
+        first_at:   Some(timestamp(p.first_at)),
+        last_at:    Some(timestamp(p.last_at)),
+        settlement: p.settlement.as_ref().map(settlement_to_proto),
+    }
+}
+
+fn settlement_to_proto(s: &SettlementRecord) -> proto::StakeSettlement {
+    proto::StakeSettlement {
+        settled_at:          Some(timestamp(s.settled_at)),
+        points:              s.points,
+        count_on_arrival:    s.count_on_arrival,
+        count_at_settlement: s.count_at_settlement,
+        earliness:           s.earliness,
+        pre_score:           s.pre_score,
+        model:               s.model.clone(),
+        outcome:             s.outcome.map(i32::from),
+        score:               s.score,
+        provisional_gems:    s.provisional_gems,
+        envelope_day:        s.envelope_day.map(|d| d.to_string()).unwrap_or_default(),
     }
 }
 

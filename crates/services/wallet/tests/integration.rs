@@ -433,3 +433,54 @@ async fn a_finished_days_envelope_is_computed_once_over_postgres() {
         .unwrap();
     assert_eq!(pending, 1, "the next day is not over");
 }
+
+/// The GDPR export (#653, #665): a wallet is read without being opened, and
+/// the stake positions come with their settlements, page by page.
+#[tokio::test]
+async fn the_export_reads_without_opening_and_joins_the_settlements() {
+    use chrono::TimeDelta;
+    use wallet::domain::{DuePosition, Observed, SettlementPolicy};
+
+    let pool = pool().await;
+    let store = store(&pool);
+    let never = AccountId::from_uuid(Uuid::now_v7());
+    assert!(store.peek(&never).await.unwrap().is_none());
+    let (opened,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM wallets WHERE account_id = $1")
+        .bind(never.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(opened, 0, "peeking opens nothing");
+
+    let account = AccountId::from_uuid(Uuid::now_v7());
+    fund(&pool, &store, &account, 500).await;
+    let targets = [
+        StakeTarget::Comment(format!("c-{}", Uuid::now_v7())),
+        StakeTarget::Post(format!("p1-{}", Uuid::now_v7())),
+        StakeTarget::Post(format!("p2-{}", Uuid::now_v7())),
+    ];
+    for target in &targets {
+        let key = IdempotencyKey::for_operation(Operation::Stake, &Uuid::now_v7().to_string()).unwrap();
+        store
+            .stake(&account, &key, target, StakeAsk::Points(7), &announcement(), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
+            .await
+            .unwrap();
+    }
+    assert_eq!(store.peek(&account).await.unwrap().unwrap().points, 500 - 21);
+
+    let settled = DuePosition { account, target: targets[1].clone(), points: 7, first_at: Utc::now() };
+    let observed = Observed { total: 7, count_on_arrival: Some(3), count_now: 30 };
+    store.record_settlement(&SettlementPolicy::default().settle(settled, observed, Utc::now() + TimeDelta::hours(25))).await.unwrap();
+
+    let first = store.stake_positions(&account, None, 2).await.unwrap();
+    assert_eq!(first.len(), 2);
+    assert_eq!(first[0].target, targets[0], "comments sort before posts");
+    let rest = store.stake_positions(&account, Some(&first[1].target), 2).await.unwrap();
+    assert_eq!(rest.len(), 1);
+    let all: Vec<_> = first.into_iter().chain(rest).collect();
+    let with = all.iter().find(|p| p.target == targets[1]).unwrap();
+    let settlement = with.settlement.as_ref().unwrap();
+    assert_eq!((settlement.points, settlement.count_on_arrival, settlement.count_at_settlement), (7, Some(3), 30));
+    assert_eq!((settlement.outcome, settlement.provisional_gems, settlement.envelope_day), (None, None, None), "no envelope yet");
+    assert!(all.iter().filter(|p| p.target != targets[1]).all(|p| p.settlement.is_none() && p.points == 7));
+}

@@ -25,6 +25,7 @@ use post_api::post_service_client::PostServiceClient;
 use profile_api::profile_service_client::ProfileServiceClient;
 use search_api::search_service_client::SearchServiceClient;
 use social_graph_api::social_graph_service_client::SocialGraphServiceClient;
+use wallet_api::wallet_service_client::WalletServiceClient;
 
 /// Items per page when walking a listing.
 const PAGE: i32 = 100;
@@ -42,6 +43,9 @@ pub struct MeshEndpoints {
     pub search: String,
     /// Family supervision's view of a teen's reports (#670).
     pub moderation: String,
+    /// The wallet (#665); `None` until the mesh route exists: the export goes
+    /// without `wallet.json`.
+    pub wallet: Option<String>,
 }
 
 impl MeshEndpoints {
@@ -59,6 +63,7 @@ impl MeshEndpoints {
             media: var("ACCOUNT_MEDIA_GRPC_ENDPOINT", "http://localhost:50063"),
             search: var("ACCOUNT_SEARCH_GRPC_ENDPOINT", "http://localhost:50062"),
             moderation: var("ACCOUNT_MODERATION_GRPC_ENDPOINT", "http://localhost:50061"),
+            wallet: std::env::var("ACCOUNT_WALLET_GRPC_ENDPOINT").ok().filter(|v| !v.trim().is_empty()),
         }
     }
 }
@@ -107,6 +112,7 @@ pub struct MeshExportPeers {
     chat: ChatServiceClient<Channel>,
     media: MediaServiceClient<Channel>,
     search: SearchServiceClient<Channel>,
+    wallet: Option<WalletServiceClient<Channel>>,
     profile_d: Descriptors,
     post_d: Descriptors,
     comment_d: Descriptors,
@@ -115,6 +121,7 @@ pub struct MeshExportPeers {
     chat_d: Descriptors,
     media_d: Descriptors,
     search_d: Descriptors,
+    wallet_d: Descriptors,
 }
 
 impl MeshExportPeers {
@@ -137,6 +144,7 @@ impl MeshExportPeers {
             chat: ChatServiceClient::new(channel(&endpoints.chat)?),
             media: MediaServiceClient::new(channel(&endpoints.media)?),
             search: SearchServiceClient::new(channel(&endpoints.search)?),
+            wallet: endpoints.wallet.as_deref().map(channel).transpose()?.map(WalletServiceClient::new),
             profile_d: Descriptors::of(profile_api::FILE_DESCRIPTOR_SET)?,
             post_d: Descriptors::of(post_api::FILE_DESCRIPTOR_SET)?,
             comment_d: Descriptors::of(comment_api::FILE_DESCRIPTOR_SET)?,
@@ -145,6 +153,7 @@ impl MeshExportPeers {
             chat_d: Descriptors::of(chat_api::FILE_DESCRIPTOR_SET)?,
             media_d: Descriptors::of(media_api::FILE_DESCRIPTOR_SET)?,
             search_d: Descriptors::of(search_api::FILE_DESCRIPTOR_SET)?,
+            wallet_d: Descriptors::of(wallet_api::FILE_DESCRIPTOR_SET)?,
         })
     }
 }
@@ -425,6 +434,60 @@ impl ExportPeers for MeshExportPeers {
                 None => return Ok(likes),
             }
         }
+    }
+
+    /// wallet's mesh-only `ExportWallet` and `ListStakePositions`, and
+    /// `ListWalletTransactions` (read-only; the mesh passes its account
+    /// binding), every page (#665).
+    async fn wallet(&self, account_id: &AccountId) -> Result<Option<serde_json::Value>, AccountError> {
+        let Some(client) = &self.wallet else { return Ok(None) };
+        let account = account_id.as_uuid().to_string();
+        let wallet = client
+            .clone()
+            .export_wallet(wallet_api::ExportWalletRequest { account_id: account.clone() })
+            .await
+            .map_err(rpc("wallet"))?
+            .into_inner()
+            .wallet
+            .map(|w| self.wallet_d.json("wallet.v1.Wallet", &w));
+        let (mut transactions, mut token) = (Vec::new(), String::new());
+        loop {
+            let page = client
+                .clone()
+                .list_wallet_transactions(wallet_api::ListWalletTransactionsRequest {
+                    account_id: account.clone(),
+                    page_size: PAGE,
+                    page_token: token,
+                    ..Default::default()
+                })
+                .await
+                .map_err(rpc("wallet"))?
+                .into_inner();
+            transactions.extend(page.transactions.iter().map(|t| self.wallet_d.json("wallet.v1.WalletTransaction", t)));
+            match page_token(page.next_page_token) {
+                Some(next) => token = next,
+                None => break,
+            }
+        }
+        let (mut positions, mut token) = (Vec::new(), String::new());
+        loop {
+            let page = client
+                .clone()
+                .list_stake_positions(wallet_api::ListStakePositionsRequest {
+                    account_id: account.clone(),
+                    page_size: PAGE * 5,
+                    page_token: token,
+                })
+                .await
+                .map_err(rpc("wallet"))?
+                .into_inner();
+            positions.extend(page.positions.iter().map(|p| self.wallet_d.json("wallet.v1.StakePosition", p)));
+            match page_token(page.next_page_token) {
+                Some(next) => token = next,
+                None => break,
+            }
+        }
+        Ok(Some(json!({ "wallet": wallet, "transactions": transactions, "stake_positions": positions })))
     }
 
     async fn media(&self, account_id: &AccountId, ttl: Duration) -> Result<Vec<serde_json::Value>, AccountError> {

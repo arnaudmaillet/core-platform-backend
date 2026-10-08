@@ -28,6 +28,7 @@ social-graph-api = { workspace = true }
 moderation-api   = { workspace = true }   # ListReportsByReporter, the supervisor's view (#670)
 chat-api         = { workspace = true }
 media-api        = { workspace = true }
+wallet-api       = { workspace = true }   # ExportWallet / ListStakePositions for the export (#665)
 account-api = { workspace = true }
 # ── Shared platform infrastructure ────────────────────────────────────────────
 error            = { workspace = true }
