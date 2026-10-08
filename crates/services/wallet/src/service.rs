@@ -1,0 +1,115 @@
+//! Adapts the wallet composition root to the fleet [`service_runtime::Service`]
+//! contract: the Postgres pool, the account-erasure consumer, and the
+//! `wallet.v1` routes.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::Context;
+use async_trait::async_trait;
+use postgres_storage::{PgPoolBuilder, PostgresConfig};
+use service_runtime::edge::authenticated;
+use service_runtime::{EdgePolicy, HealthProbe, InfraRegistry, Service};
+use sqlx::PgPool;
+use tonic::service::RoutesBuilder;
+use tonic_reflection::server::Builder as ReflectionBuilder;
+use transport::kafka::config::{ConsumerConfig, KafkaClientConfig, ProducerConfig};
+use transport::kafka::consumer::{KafkaConsumerBuilder, KafkaConsumerHandle};
+use transport::kafka::producer::{KafkaProducerBuilder, KafkaProducerHandle};
+
+use crate::app::App;
+use crate::application::Wallets;
+use crate::config::WalletConfig;
+use crate::infrastructure::consumer::run_account_consumer;
+use crate::infrastructure::grpc::{WalletServiceHandler, WalletServiceServer, FILE_DESCRIPTOR_SET};
+
+const ACCOUNT_TOPIC: &str = "account.v1.events";
+const ACCOUNT_GROUP: &str = "wallet-account-events";
+/// Backoff before respawning a consumer after the runner returns.
+const CONSUMER_RESPAWN_BACKOFF: Duration = Duration::from_secs(5);
+
+type WalletServer = WalletServiceServer<WalletServiceHandler>;
+
+/// The wallet service as hosted by [`service_runtime`].
+pub struct WalletService {
+    app:  App,
+    pool: PgPool,
+}
+
+#[async_trait]
+impl Service for WalletService {
+    const NAME: &'static str = "wallet";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+    const GRPC_SERVICE_NAME: &'static str = <WalletServer as tonic::server::NamedService>::NAME;
+
+    /// The caller's own wallet only (`account_id` bound to the token).
+    const EDGE_POLICY: EdgePolicy = &[
+        authenticated("/wallet.v1.WalletService/GetWallet"),
+        authenticated("/wallet.v1.WalletService/ClaimReward"),
+        authenticated("/wallet.v1.WalletService/ListWalletTransactions"),
+    ];
+
+    async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
+        let pool = PgPoolBuilder::build(PostgresConfig::from_env())
+            .await
+            .map_err(|e| anyhow::anyhow!("wallet postgres pool: {e}"))?;
+        let app = App::build(pool.clone(), WalletConfig::from_env());
+        // A deleted account's wallet goes with it.
+        spawn_account_consumer(Arc::clone(&app.wallets));
+        Ok(Self { app, pool })
+    }
+
+    fn health_probes(&self) -> Vec<Arc<dyn HealthProbe>> {
+        vec![postgres_storage::health::probe(self.pool.clone())]
+    }
+
+    fn register(self, routes: &mut RoutesBuilder) -> anyhow::Result<()> {
+        let reflection = ReflectionBuilder::configure()
+            .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+            .build_v1()?;
+        routes.add_service(reflection);
+        routes.add_service(WalletServiceServer::new(self.app.handler));
+        Ok(())
+    }
+}
+
+/// Spawns the supervised account consumer.
+fn spawn_account_consumer(wallets: Arc<Wallets>) {
+    tokio::spawn(async move {
+        loop {
+            match build_consumer(ACCOUNT_TOPIC, ACCOUNT_GROUP) {
+                Ok((consumer, producer)) => {
+                    run_account_consumer(consumer, Arc::clone(&wallets), producer).await;
+                    tracing::warn!("wallet account consumer exited; respawning after backoff");
+                }
+                Err(error) => tracing::error!(%error, "failed to build the account consumer; retrying"),
+            }
+            tokio::time::sleep(CONSUMER_RESPAWN_BACKOFF).await;
+        }
+    });
+}
+
+/// A manual-commit consumer (subscribed to `topic`) and the dead-letter
+/// producer the runner needs.
+fn build_consumer(topic: &str, group: &str) -> anyhow::Result<(KafkaConsumerHandle, KafkaProducerHandle)> {
+    let kafka = KafkaClientConfig::from_env();
+    let consumer = KafkaConsumerBuilder::new(ConsumerConfig::new(kafka.clone(), group))
+        .subscribe(topic)
+        .build()
+        .with_context(|| format!("build consumer for {topic}"))?;
+    let producer = KafkaProducerBuilder::new(ProducerConfig::new(kafka))
+        .build()
+        .with_context(|| format!("build dead-letter producer for {topic}"))?;
+    Ok((consumer, producer))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_edge_exposes_the_callers_own_wallet_only() {
+        assert_eq!(WalletService::EDGE_POLICY.len(), 3);
+        assert!(service_runtime::edge::validate_policy(WalletService::EDGE_POLICY).is_ok());
+    }
+}

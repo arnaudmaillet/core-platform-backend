@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package wallet.v1;
+
+import "wallet/v1/messages.proto";
+
+option java_package = "com.coreplatform.wallet.v1";
+option java_multiple_files = true;
+option go_package = "github.com/coreplatform/wallet/v1;walletv1";
+
+// WalletService is the in-app economy's ledger (#665): an account's points
+// (likes) and gems, every movement recorded. Nothing here is bought with real
+// money. A wallet is opened on first use, with the starter gems.
+//
+// TIER-0, fail-closed: when the ledger cannot be written, the call fails —
+// a balance is never guessed. Edge: the caller's own account (`account_id`).
+service WalletService {
+    // The caller's wallet.
+    rpc GetWallet(GetWalletRequest) returns (Wallet);
+
+    // Claims the hourly reward: 25 points, +10 % per consecutive UTC day up to
+    // ×2, at most 200 points per UTC day, one claim per hour. Idempotent per
+    // `idempotency_key`.
+    rpc ClaimReward(ClaimRewardRequest) returns (ClaimRewardResponse);
+
+    // The caller's transaction history, newest first.
+    rpc ListWalletTransactions(ListWalletTransactionsRequest) returns (ListWalletTransactionsResponse);
+}

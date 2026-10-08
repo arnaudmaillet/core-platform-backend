@@ -1,0 +1,49 @@
+[package]
+name        = "wallet"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+description = "Wallet microservice — the in-app economy's ledger (#665): an account's points (likes) and gems, every movement recorded. TIER-0, fail-closed."
+
+[dependencies]
+# ── Contracts ─────────────────────────────────────────────────────────────────
+wallet-api = { workspace = true }
+
+# ── Shared platform infrastructure ────────────────────────────────────────────
+error            = { workspace = true }
+postgres-storage = { workspace = true }
+transport        = { workspace = true }
+service-runtime  = { workspace = true }
+
+# ── Domain / application ──────────────────────────────────────────────────────
+uuid        = { workspace = true }
+chrono      = { workspace = true }
+async-trait = { workspace = true }
+serde       = { workspace = true }
+thiserror   = { workspace = true }
+http        = { workspace = true }
+
+# ── Infrastructure adapters ───────────────────────────────────────────────────
+sqlx             = { workspace = true }
+tonic            = { workspace = true }
+tonic-reflection = { workspace = true }
+prost-types      = { workspace = true }
+tokio            = { workspace = true }
+tracing          = { workspace = true }
+anyhow           = { workspace = true }
+
+[features]
+# Gates the live, container-backed integration suite (tests/integration.rs):
+# a real Postgres. Off by default so `cargo test -p wallet` stays infra-free.
+integration-wallet = []
+
+[dev-dependencies]
+# Edge principals in the handler tests.
+auth-context = { workspace = true }
+serde_json   = { workspace = true }
+# Wire-contract test: account_deleted read as account's own type serializes it.
+account      = { workspace = true }
+# Live integration suite: the shared Postgres container.
+test-support = { workspace = true }

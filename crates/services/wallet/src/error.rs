@@ -1,0 +1,96 @@
+use error::{AppError, Severity};
+use http::StatusCode;
+use thiserror::Error;
+
+/// The wallet service's errors.
+///
+/// | Code     | Variant               | HTTP | Retryable |
+/// |----------|-----------------------|------|-----------|
+/// | WAL-5001 | LedgerInconsistent    | 500  | No        |
+/// | WAL-9001 | InvalidAccountId      | 422  | No        |
+/// | WAL-9002 | InvalidIdempotencyKey | 422  | No        |
+/// | WAL-9003 | InvalidPageToken      | 422  | No        |
+/// | DB-*     | Storage (delegated)   | var  | var       |
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum WalletError {
+    #[error(transparent)]
+    Storage(#[from] postgres_storage::StorageError),
+
+    /// A stored row the service cannot read (fail closed: never guess).
+    #[error("the ledger holds an unreadable row: {reason}")]
+    LedgerInconsistent { reason: String },
+
+    #[error("invalid account id: '{value}'")]
+    InvalidAccountId { value: String },
+
+    #[error("an idempotency key is 8–64 characters of letters, digits, '-' or '_'")]
+    InvalidIdempotencyKey,
+
+    #[error("invalid page_token: '{value}'")]
+    InvalidPageToken { value: String },
+}
+
+impl AppError for WalletError {
+    fn error_code(&self) -> &'static str {
+        match self {
+            WalletError::Storage(e) => e.error_code(),
+            WalletError::LedgerInconsistent { .. } => "WAL-5001",
+            WalletError::InvalidAccountId { .. } => "WAL-9001",
+            WalletError::InvalidIdempotencyKey => "WAL-9002",
+            WalletError::InvalidPageToken { .. } => "WAL-9003",
+        }
+    }
+
+    fn http_status(&self) -> StatusCode {
+        match self {
+            WalletError::Storage(e) => e.http_status(),
+            WalletError::LedgerInconsistent { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            _ => StatusCode::UNPROCESSABLE_ENTITY,
+        }
+    }
+
+    fn severity(&self) -> Severity {
+        match self {
+            WalletError::Storage(e) => e.severity(),
+            WalletError::LedgerInconsistent { .. } => Severity::Critical,
+            _ => Severity::Low,
+        }
+    }
+
+    fn is_retryable(&self) -> bool {
+        match self {
+            WalletError::Storage(e) => e.is_retryable(),
+            _ => false,
+        }
+    }
+
+    fn category(&self) -> &'static str {
+        match self {
+            WalletError::Storage(e) => e.category(),
+            _ => "WAL",
+        }
+    }
+
+    fn user_facing_message(&self) -> &'static str {
+        match self {
+            WalletError::Storage(e) => e.user_facing_message(),
+            WalletError::LedgerInconsistent { .. } => "Your wallet is unavailable right now; please try again later.",
+            WalletError::InvalidAccountId { .. } => "This account id is not valid.",
+            WalletError::InvalidIdempotencyKey => "This request key is not valid.",
+            WalletError::InvalidPageToken { .. } => "This page is no longer valid; start again.",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codes_are_in_the_wal_namespace() {
+        assert_eq!(WalletError::InvalidIdempotencyKey.error_code(), "WAL-9002");
+        assert_eq!(WalletError::InvalidIdempotencyKey.category(), "WAL");
+        assert_eq!(WalletError::LedgerInconsistent { reason: "x".into() }.http_status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}

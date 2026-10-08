@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package wallet.v1;
+
+option java_package = "com.coreplatform.wallet.v1";
+option java_multiple_files = true;
+option go_package = "github.com/coreplatform/wallet/v1;walletv1";
+
+// The two in-app currencies. Neither is sold for real money.
+enum Currency {
+    CURRENCY_UNSPECIFIED = 0;
+    // Points, shown as likes: earned by the hourly claim, spent on stakes.
+    CURRENCY_POINTS      = 1;
+    // Gems: a reward, spent on country unlocks and stake packs.
+    CURRENCY_GEMS        = 2;
+}
+
+// Why a balance moved. New kinds are added as the economy grows; a client
+// shows an unknown kind generically.
+enum TransactionKind {
+    TRANSACTION_KIND_UNSPECIFIED  = 0;
+    // The hourly reward (points).
+    TRANSACTION_KIND_CLAIM        = 1;
+    // The gems every account starts with (once).
+    TRANSACTION_KIND_STARTER_GIFT = 2;
+}
+
+// The outcome of a claim: ordinary states the app renders, not errors.
+enum ClaimOutcome {
+    CLAIM_OUTCOME_UNSPECIFIED       = 0;
+    CLAIM_OUTCOME_CLAIMED           = 1;
+    // The hourly interval has not passed: `wallet.next_claim_at` says when.
+    CLAIM_OUTCOME_TOO_EARLY         = 2;
+    // Today's claims reached the daily cap (UTC day): next at 00:00 UTC.
+    CLAIM_OUTCOME_DAILY_CAP_REACHED = 3;
+}

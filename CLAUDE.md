@@ -61,14 +61,15 @@ bash tools/i18n/i18n-drift.sh stamp <file>.fr.md   # re-stamp after editing an E
 `account` 50059 · `auth` 50060 · `moderation` 50061 · `search` 50062 · `media` 50063 ·
 `counter-server` 50064 · `counter-worker` 50065 · `realtime-gateway` 50066 (gRPC) + **8443** (public WSS) ·
 `realtime-dispatcher` 50067 · `audit-server` 50068 · `audit-worker` 50069 · `timeline` **50070** ·
-`media-worker` 50071 (health/reflection only — video transcode consumer, no domain RPC)
+`media-worker` 50071 (health/reflection only — video transcode consumer, no domain RPC) ·
+`wallet` 50072 (economy ledger: points and gems, #665)
 
 One port per service. (`timeline` was 50060, moved to 50070 to clear a collision
 with `auth` — PR #522.) Every client-facing server also runs the **client edge**
 listener on **9443** (`GRPC_EDGE_ADDR`): the ALB-facing, token-authenticated,
 allow-listed listener (see the edge rule below). Each service owns an error-code namespace, e.g. `TML-`
 (timeline), `SCH-` (search), `MED-` (media), `CTR-` (counter), `AUD-` (audit),
-`RTM-` (realtime), `SGR-`, `PST-`, etc.
+`RTM-` (realtime), `WAL-` (wallet), `SGR-`, `PST-`, etc.
 
 ## Conventions (do these)
 
@@ -84,7 +85,7 @@ allow-listed listener (see the edge rule below). Each service owns an error-code
   PreSync Job creates every stream topic + `.dlq` (MSK runs with topic
   auto-creation off) — a registry edit is the whole workflow.
 - **Service tiers** are an explicit runtime contract (pod label `tier:`): TIER-0 =
-  fail-closed (`auth`, `moderation`, `audit`); TIER-1 = fail-open
+  fail-closed (`auth`, `moderation`, `audit`, `wallet`); TIER-1 = fail-open
   (`counter`, `media`, `search`, `realtime`). Respect the posture when adding code.
 - **Client edge (public gRPC):** the mesh port trusts the network; the **edge
   listener** (`:9443`, behind the ALB) trusts only the `auth` edge token. A

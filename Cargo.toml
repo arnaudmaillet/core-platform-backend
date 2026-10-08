@@ -34,6 +34,7 @@ members = [
     "crates/services/moderation",
     "crates/services/search",
     "crates/services/media",
+    "crates/services/wallet",
     "crates/services/counter",
     "crates/services/realtime",
     "crates/services/audit",
@@ -52,6 +53,7 @@ members = [
     "crates/apps/search-server",
     "crates/apps/media-server",
     "crates/apps/media-worker",
+    "crates/apps/wallet-server",
     "crates/apps/counter-server",
     "crates/apps/counter-worker",
     "crates/apps/realtime-gateway",
@@ -74,6 +76,7 @@ members = [
     "crates/contracts/moderation-api",
     "crates/contracts/search-api",
     "crates/contracts/media-api",
+    "crates/contracts/wallet-api",
     "crates/contracts/counter-api",
     "crates/contracts/realtime-api",
     "crates/contracts/audit-api",
@@ -131,6 +134,7 @@ auth-api = { path = "crates/contracts/auth-api" }
 moderation-api = { path = "crates/contracts/moderation-api" }
 search-api = { path = "crates/contracts/search-api" }
 media-api = { path = "crates/contracts/media-api" }
+wallet-api = { path = "crates/contracts/wallet-api" }
 counter-api = { path = "crates/contracts/counter-api" }
 realtime-api = { path = "crates/contracts/realtime-api" }
 audit-api = { path = "crates/contracts/audit-api" }
@@ -148,6 +152,7 @@ auth             = { path = "crates/services/auth" }
 moderation       = { path = "crates/services/moderation" }
 search           = { path = "crates/services/search" }
 media            = { path = "crates/services/media" }
+wallet           = { path = "crates/services/wallet" }
 counter          = { path = "crates/services/counter" }
 realtime         = { path = "crates/services/realtime" }
 audit            = { path = "crates/services/audit" }
