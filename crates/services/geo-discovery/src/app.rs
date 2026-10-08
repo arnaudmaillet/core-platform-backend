@@ -25,8 +25,12 @@ use crate::application::command::{
 };
 use crate::application::country_access::ResolveCountryAccess;
 use crate::application::country_standings::CountryStandings;
+use crate::application::country_unlocks::CountryUnlocking;
 use crate::domain::country_standing::UnlockPricing;
-use crate::application::port::{AudienceGate, CountryActivityStore, CountryGrantStore, GeoIp, LocationSettingsStore};
+use crate::application::port::{
+    AudienceGate, CountryActivityStore, CountryGrantStore, CountryUnlockStore, GemWallet, GeoIp, LocationSettingsStore,
+    ResidenceDirectory,
+};
 use crate::domain::country_atlas::CountryAtlas;
 use crate::application::query::get_geo_timeline::{GetGeoTimelineHandler, GetGeoTimelineQuery};
 use crate::application::query::query_tile::{QueryTileHandler, QueryTileQuery};
@@ -34,7 +38,7 @@ use crate::config::GeoDiscoveryConfig;
 use crate::infrastructure::cache::{
     RedisCardStore, RedisCountryActivity, RedisCountryGrantStore, RedisGeoSpatialIndex, RedisPinStore,
 };
-use crate::infrastructure::persistence::{ScyllaLocationSettingsStore, ScyllaTileRepository};
+use crate::infrastructure::persistence::{ScyllaCountryUnlockStore, ScyllaLocationSettingsStore, ScyllaTileRepository};
 use crate::infrastructure::worker::{
     CountryLikesWorker, LocationSettingsWorker, PostIndexerWorker, ScoreUpdaterWorker, TilePrunerWorker,
     VisibilityWorker,
@@ -52,8 +56,12 @@ pub struct Backends {
     /// The audience check (social-graph `CheckAccess`) the read paths apply to
     /// clients. Injected so the harness can script it.
     pub audience: Arc<dyn AudienceGate>,
-    /// The request's network country (country access).
+    /// The request's network country (country access, a member's home).
     pub geo_ip:   Arc<dyn GeoIp>,
+    /// The wallet's gems (country unlocks, #665).
+    pub wallet:    Arc<dyn GemWallet>,
+    /// The account's country of residence (a member's home, #665).
+    pub residence: Arc<dyn ResidenceDirectory>,
 }
 
 /// A fully-wired geo-discovery service bound to its backends. The buses exposed
@@ -71,6 +79,8 @@ pub struct App {
     pub country_access: Arc<ResolveCountryAccess>,
     /// The country ladder (`GetCountryStandings`, #665).
     pub standings: Arc<CountryStandings>,
+    /// A member's countries and unlocks (#665).
+    pub unlocking: Arc<CountryUnlocking>,
     pub trusted_proxy_hops: usize,
 }
 
@@ -82,7 +92,7 @@ impl App {
         cfg:      GeoDiscoveryConfig,
         backends: Backends,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let Backends { scylla, redis, kafka, audience, geo_ip } = backends;
+        let Backends { scylla, redis, kafka, audience, geo_ip, wallet, residence } = backends;
 
         let scylla_client = Arc::new(ScyllaSessionBuilder::new(scylla).build().await?);
         let redis_client = RedisClientBuilder::new(redis).build().await?;
@@ -97,6 +107,7 @@ impl App {
         let location: Arc<dyn LocationSettingsStore> =
             Arc::new(ScyllaLocationSettingsStore::new(Arc::clone(&scylla_client)));
         let country_access = Arc::new(ResolveCountryAccess { geo_ip, grants: Arc::clone(&grants), atlas });
+        let unlocks: Arc<dyn CountryUnlockStore> = Arc::new(ScyllaCountryUnlockStore::new(Arc::clone(&scylla_client)));
         let activity: Arc<dyn CountryActivityStore> = Arc::new(RedisCountryActivity::new(redis_client.clone()));
         let standings = Arc::new(CountryStandings::new(
             Arc::clone(&activity),
@@ -105,6 +116,14 @@ impl App {
             cfg.standings_window_days,
             std::time::Duration::from_secs(cfg.standings_cache_secs),
         ));
+        let unlocking = Arc::new(CountryUnlocking {
+            store: Arc::clone(&unlocks),
+            standings: Arc::clone(&standings),
+            wallet,
+            residence,
+            atlas,
+            filtering: cfg.country_unlocks_enabled,
+        });
 
         let command_bus = Arc::new(
             CommandBusBuilder::new()
@@ -136,6 +155,7 @@ impl App {
                     pin_store:     Arc::clone(&pin_store),
                     audience:      Arc::clone(&audience),
                     grants:        Arc::clone(&grants),
+                    unlocks:       Arc::clone(&unlocks),
                     atlas,
                     location:      Arc::clone(&location),
                 })?
@@ -145,6 +165,7 @@ impl App {
                     tile_repository: Arc::clone(&tile_repository),
                     audience,
                     grants,
+                    unlocks,
                     atlas,
                     location:        Arc::clone(&location),
                 })?
@@ -222,6 +243,7 @@ impl App {
             redis: redis_client,
             country_access,
             standings,
+            unlocking,
             trusted_proxy_hops: cfg.trusted_proxy_hops,
         })
     }

@@ -2142,6 +2142,7 @@ dependencies = [
 name = "geo-discovery"
 version = "0.1.0"
 dependencies = [
+ "account-api",
  "anyhow",
  "async-trait",
  "chrono",
@@ -2176,6 +2177,7 @@ dependencies = [
  "uuid",
  "validate-core",
  "validation",
+ "wallet-api",
 ]
 
 [[package]]

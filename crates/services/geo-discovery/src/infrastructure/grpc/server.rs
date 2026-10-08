@@ -37,6 +37,12 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         kafka:  Some(KafkaClientConfig::from_env()),
         audience: crate::service::audience_gate_from_env().map_err(|e| e.to_string())?,
         geo_ip:   crate::service::geo_ip_from_env(),
+        wallet:    Arc::new(crate::infrastructure::client::GrpcGemWallet::new(
+            crate::service::mesh_channel("GEO_WALLET_GRPC_ENDPOINT", "http://localhost:50072").map_err(|e| e.to_string())?,
+        )),
+        residence: Arc::new(crate::infrastructure::client::GrpcResidenceDirectory::new(
+            crate::service::mesh_channel("GEO_ACCOUNT_GRPC_ENDPOINT", "http://localhost:50059").map_err(|e| e.to_string())?,
+        )),
     };
 
     let app = App::build(cfg, backends).await?;
@@ -56,7 +62,9 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&app.query_bus),
         Arc::clone(&app.country_access),
         app.trusted_proxy_hops,
-    ).with_standings(Arc::clone(&app.standings)));
+    )
+    .with_standings(Arc::clone(&app.standings))
+    .with_unlocking(Arc::clone(&app.unlocking)));
 
     tracing::info!(addr = %addr, "geo-discovery gRPC server listening");
 

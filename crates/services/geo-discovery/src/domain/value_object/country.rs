@@ -76,11 +76,14 @@ pub fn decide(
 /// What part of the map a reader may see.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MapScope {
-    /// Everything (members, the mesh): no country filter in v1.
+    /// Everything (the mesh; members while the member filter is off).
     All,
     /// A guest session: only the country granted to this principal (its token
     /// `sub`), nothing without one.
     Guest(String),
+    /// A member account (#665, with the member filter on): its home and
+    /// unlocked countries, and posts at sea.
+    Member(uuid::Uuid),
 }
 
 #[cfg(test)]

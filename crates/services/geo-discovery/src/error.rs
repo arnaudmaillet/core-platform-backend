@@ -56,11 +56,21 @@ pub enum GeoDiscoveryError {
     #[error("country access needs a client principal")]
     CountryAccessNeedsCaller,
 
+    // ── GEO-3xxx: country unlocks (#665) ──────────────────────────────────────
+    /// Gems are not spent under 18 (or with an unknown age).
+    #[error("gems cannot be spent by this account")]
+    GemSpendingRestricted,
+
     // ── GEO-6xxx: dependencies ────────────────────────────────────────────────
     /// social-graph's `CheckAccess` could not answer. Client reads fail closed
     /// rather than risk showing a private, blocked or hidden author's post.
     #[error("audience check unavailable: {reason}")]
     AccessCheckUnavailable { reason: String },
+
+    /// The wallet (gems) or account (home country) could not answer: an
+    /// unlock fails closed.
+    #[error("{service} unavailable: {reason}")]
+    UnlockDependencyUnavailable { service: &'static str, reason: String },
 }
 
 impl AppError for GeoDiscoveryError {
@@ -87,6 +97,8 @@ impl AppError for GeoDiscoveryError {
             Self::InvalidCountryCode(_)  => "GEO-9004",
             Self::CountryAccessNeedsCaller => "GEO-9005",
             Self::AccessCheckUnavailable { .. } => "GEO-6001",
+            Self::UnlockDependencyUnavailable { .. } => "GEO-6002",
+            Self::GemSpendingRestricted => "GEO-3001",
         }
     }
 
@@ -111,7 +123,10 @@ impl AppError for GeoDiscoveryError {
             | Self::CardSerializationFailed { .. }
             | Self::CardDeserializationFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
 
-            Self::AccessCheckUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            Self::AccessCheckUnavailable { .. } | Self::UnlockDependencyUnavailable { .. } => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+            Self::GemSpendingRestricted => StatusCode::FORBIDDEN,
         }
     }
 
@@ -136,7 +151,8 @@ impl AppError for GeoDiscoveryError {
             | Self::InvalidCountryCode(_)
             | Self::CountryAccessNeedsCaller => Severity::Low,
 
-            Self::AccessCheckUnavailable { .. } => Severity::Medium,
+            Self::AccessCheckUnavailable { .. } | Self::UnlockDependencyUnavailable { .. } => Severity::Medium,
+            Self::GemSpendingRestricted => Severity::Low,
         }
     }
 
@@ -144,7 +160,7 @@ impl AppError for GeoDiscoveryError {
         match self {
             Self::Scylla(e) => e.is_retryable(),
             Self::Redis(e)  => e.is_retryable(),
-            Self::AccessCheckUnavailable { .. } => true,
+            Self::AccessCheckUnavailable { .. } | Self::UnlockDependencyUnavailable { .. } => true,
             _               => false,
         }
     }
@@ -188,6 +204,9 @@ impl AppError for GeoDiscoveryError {
 
             Self::AccessCheckUnavailable { .. } =>
                 "The map is temporarily unavailable. Please try again later.",
+            Self::UnlockDependencyUnavailable { .. } =>
+                "Countries can't be unlocked right now. Please try again later.",
+            Self::GemSpendingRestricted => "Gems can't be spent before 18.",
         }
     }
 }

@@ -3,9 +3,9 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::country_access::country_limit;
+use crate::application::country_access::{country_filter, CountryFilter};
 use crate::application::port::{
-    sharing_for_reader, visible_authors, AudienceGate, CountryGrantStore, LocationSettingsStore, PinStore,
+    sharing_for_reader, visible_authors, AudienceGate, CountryGrantStore, CountryUnlockStore, LocationSettingsStore, PinStore,
     SpatialIndex,
 };
 use crate::domain::country_atlas::CountryAtlas;
@@ -73,6 +73,8 @@ pub struct QueryTileHandler<SI, PS> {
     pub pin_store:     Arc<PS>,
     pub audience:      Arc<dyn AudienceGate>,
     pub grants:        Arc<dyn CountryGrantStore>,
+    /// A member's countries (#665), for the member map filter.
+    pub unlocks:       Arc<dyn CountryUnlockStore>,
     pub atlas:         &'static CountryAtlas,
     /// The authors' location sharing (ghost, city level).
     pub location:      Arc<dyn LocationSettingsStore>,
@@ -99,8 +101,8 @@ where
         }
 
         // A guest without a granted country sees nothing: answer before any read.
-        let limit = country_limit(self.grants.as_ref(), &q.scope).await?;
-        if limit == Some(None) {
+        let filter = country_filter(self.grants.as_ref(), self.unlocks.as_ref(), &q.scope).await?;
+        if filter == CountryFilter::Nothing {
             return Ok(QueryTileResult { pins: vec![], tile_count: 0 });
         }
 
@@ -143,9 +145,10 @@ where
         let cached = self.pin_store.mget(&post_ids).await?;
         let mut pins: Vec<RadarPin> = cached.into_iter().flatten().collect();
 
-        // ── Phase 2b: a guest's country (borders shared with the app).
-        if let Some(Some(country)) = limit {
-            pins.retain(|p| self.atlas.contains(country, p.lat, p.lng));
+        // ── Phase 2b: a guest's country, a member's countries (borders shared
+        //   with the app).
+        if filter != CountryFilter::Open {
+            pins.retain(|p| filter.admits(self.atlas, p.lat, p.lng));
         }
 
         // ── Phase 2c: the authors' location sharing (#657; fails closed). For

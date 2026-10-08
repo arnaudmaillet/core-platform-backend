@@ -12,7 +12,7 @@ use cqrs::query::InMemoryQueryBus;
 use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 use service_runtime::{HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::public_read;
+use service_runtime::edge::{authenticated, public_read};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -45,6 +45,9 @@ impl Service for GeoDiscoveryService {
         public_read("/geo_discovery.v1.GeoDiscoveryService/GetCountryAccess"),
         // The country ladder: aggregates, the same for every reader (#665).
         public_read("/geo_discovery.v1.GeoDiscoveryService/GetCountryStandings"),
+        // A member's countries and unlocks: the caller's account (#665).
+        authenticated("/geo_discovery.v1.GeoDiscoveryService/GetCountryUnlocks"),
+        authenticated("/geo_discovery.v1.GeoDiscoveryService/UnlockCountry"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -55,6 +58,11 @@ impl Service for GeoDiscoveryService {
             kafka:  Some(KafkaClientConfig::from_env()),
             audience: audience_gate_from_env()?,
             geo_ip:   geo_ip_from_env(),
+            wallet:    Arc::new(crate::infrastructure::client::GrpcGemWallet::new(mesh_channel("GEO_WALLET_GRPC_ENDPOINT", "http://localhost:50072")?)),
+            residence: Arc::new(crate::infrastructure::client::GrpcResidenceDirectory::new(mesh_channel(
+                "GEO_ACCOUNT_GRPC_ENDPOINT",
+                "http://localhost:50059",
+            )?)),
         };
 
         let app = App::build(cfg, backends)
@@ -77,7 +85,8 @@ impl Service for GeoDiscoveryService {
             Arc::clone(&self.app.country_access),
             self.app.trusted_proxy_hops,
         )
-        .with_standings(Arc::clone(&self.app.standings));
+        .with_standings(Arc::clone(&self.app.standings))
+        .with_unlocking(Arc::clone(&self.app.unlocking));
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
             .build_v1()?;
@@ -105,6 +114,20 @@ pub(crate) fn audience_gate_from_env() -> anyhow::Result<Arc<dyn crate::applicat
         .connect_timeout(ms("GEO_AUDIENCE_CONNECT_TIMEOUT_MS", 500))
         .connect_lazy();
     Ok(Arc::new(crate::infrastructure::client::GrpcAudienceGate::new(channel)))
+}
+
+/// A lazily-connected mesh channel to `env_key` (default `default`), with the
+/// unlock peers' deadlines (`GEO_UNLOCK_RPC_TIMEOUT_MS`, 1000; connect 500).
+pub(crate) fn mesh_channel(env_key: &str, default: &str) -> anyhow::Result<tonic::transport::Channel> {
+    let ms = |key: &str, default: u64| {
+        std::time::Duration::from_millis(std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default))
+    };
+    let endpoint = std::env::var(env_key).ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| default.to_owned());
+    Ok(tonic::transport::Channel::from_shared(endpoint)
+        .map_err(|e| anyhow::anyhow!("invalid {env_key}: {e}"))?
+        .timeout(ms("GEO_UNLOCK_RPC_TIMEOUT_MS", 1000))
+        .connect_timeout(ms("GEO_UNLOCK_CONNECT_TIMEOUT_MS", 500))
+        .connect_lazy())
 }
 
 /// GeoIP for country access: the MaxMind DB file at `GEO_GEOIP_MMDB_PATH`

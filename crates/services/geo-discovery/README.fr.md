@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 0d89877d45fe47bbb0c31cfa0635c952214e80394cf23e6c6fc14cc3b80e0628
+  source_sha256: f1b70a675a879df3cb53d673c4d933c229cec047c7dde4ce4b9dbc38f1fbe471
   translated_at: 2026-10-08
   status: complete
 ---
@@ -142,6 +142,8 @@ service GeoDiscoveryService {
   rpc GetGeoTimeline (GetGeoTimelineRequest) returns (GetGeoTimelineResponse); // Focus (tap) : cartes complètes
   rpc GetCountryAccess (GetCountryAccessRequest) returns (GetCountryAccessResponse); // country access from location
   rpc GetCountryStandings (GetCountryStandingsRequest) returns (GetCountryStandingsResponse); // le classement des pays (#665)
+  rpc GetCountryUnlocks (GetCountryUnlocksRequest) returns (GetCountryUnlocksResponse); // les pays d'un membre (#665)
+  rpc UnlockCountry (UnlockCountryRequest) returns (UnlockCountryResponse);             // en débloquer un avec des gems (#665)
 }
 message QueryTileRequest  { Viewport viewport = 1; int32 zoom_level = 2; string guest_principal = 3; } // zoom ∈ [0,15]; 3 = mesh only
 message QueryTileResponse { reserved 1; repeated RadarPin pins = 3; int32 tile_count = 2; } // le champ 1 était `cards`
@@ -197,8 +199,34 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > publiés là-bas sur les 30 derniers jours** (`GEO_STANDINGS_WINDOW_DAYS` ; égalités départagées par le
 > code pays), avec ses posts et le prix pour le débloquer — **50 gems** pour les rangs 1–10, **30** pour
 > 11–30, **15** au-delà. Calculé depuis les compteurs Redis par jour au plus une fois par minute
-> (`GEO_STANDINGS_CACHE_SECS`). La gratuité du pays d'origine et les déblocages eux-mêmes arrivent avec
-> le filtre de la carte des membres (partie suivante de #665).
+> (`GEO_STANDINGS_CACHE_SECS`). Le pays d'origine est gratuit : celui qu'un membre a enregistré coûte
+> **0** dans le classement qu'il lit.
+>
+> **Déblocage de pays (#665).** Les pays d'un membre sont dans `geo_discovery.country_unlocks` (une
+> partition par compte : le **pays d'origine**, une colonne statique posée une fois par LWT, et une
+> ligne par pays débloqué). Le pays d'origine est **uniquement** le `country_of_residence` du compte
+> (account `GetAccountById`, mesh) — jamais le pays du réseau, pour qu'un VPN ne choisisse pas un pays
+> gratuit — enregistré une fois pour toutes dès qu'il est connu ; un compte sans résidence n'a pas
+> encore de pays gratuit. `GetCountryUnlocks` (edge `authenticated`, le `account_id` de l'appelant)
+> renvoie le pays d'origine, chaque pays débloqué (origine comprise), les gems du wallet (wallet
+> `GetWallet`, mesh) et si le filtre des membres est actif. `UnlockCountry(country_code,
+> expected_price)` (edge `authenticated`) : adultes seulement (claim `age` du jeton, fail-closed :
+> **`GEO-3001`** `PERMISSION_DENIED`) ; le pays d'origine ou un pays déjà débloqué répond
+> `ALREADY_UNLOCKED` (rien n'est débité) ; un prix différent de celui du classement répond
+> `PRICE_CHANGED` avec le prix actuel ; sinon le prix convenu est enregistré **en attente** (une ligne
+> gardée 24 h, jamais sur la carte), les gems sont demandés au `SpendGems` du wallet (réservé au
+> mesh), **avec la clé `country-<CC>`** — un pays n'est débité qu'une fois, quels que soient les
+> nouveaux essais — et le déblocage est enregistré : `UNLOCKED`, ou `INSUFFICIENT_GEMS` (avec les gems
+> détenus ; la ligne en attente supprimée). Un nouvel essai après une panne entre le débit et
+> l'enregistrement paie le prix **convenu** (le wallet rejoue la clé) et n'est jamais refusé pour un
+> prix qui a bougé entre-temps.
+> Wallet ou account injoignable ⇒ **`GEO-6002`** (`UNAVAILABLE`, fail-closed).
+>
+> **Le filtre de la carte des membres** (`GEO_COUNTRY_UNLOCKS_ENABLED`, **coupé** par défaut tant que
+> la boutique de l'app n'est pas branchée) : `QueryTile` et `GetGeoTimeline` d'un membre ne montrent
+> alors que les posts de son pays d'origine et de ses pays débloqués, **et en mer** (un post hors de
+> toute frontière) ; la carte d'un invité ne change pas, le mesh n'est jamais filtré. Une lecture de
+> partition par requête (`Strict` : un déblocage apparaît à la lecture suivante).
 >
 > **Contrat de sérialisation :** `AuthorTier` est basé sur 0 **avec** un défaut sûr `UNSPECIFIED=0`
 > (= Standard) ; `STANDARD=1, PREMIUM=2, VIP=3`. Rendu du badge : `author_tier` → badge statique ;
@@ -241,7 +269,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 |---|---|---|---|
 | `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
 | `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | suppression de la carte : suppression → définitive ; `remove_content` / `visibility_limit` / `age_gate` sur un post → masqué ; une réversion plus récente → restauré (gardé par version ; événements au niveau de l'acteur et autres ignorés) | DLQ `{topic}.dlq` |
-| `engagement.reactions` | `geo-discovery-country-likes` | le classement des pays (#665) : chaque cœur (+1, −1 quand il est retiré ou changé) compté pour le pays du post où il tombe (la position de sa carte, `data/countries.json`), au jour UTC de la réaction → Redis `sg:geo:cact:{YYYYMMDD}` (`l:{CC}`) ; un post hors carte, en mer ou au-delà de la rétention de sa carte ne compte nulle part ; autres types ignorés. L'indexation d'un `post.published` ajoute `p:{CC}` de même. **Idempotent** (le classement fixe le prix des déblocages) : chaque comptage est un script Lua avec un marqueur `SET NX` dans le slot du hash du jour — une réaction identifiée par post, auteur, heure et sens (gardée 48 h, au-delà de toute relivraison), un post par son id (gardé avec son jour, donc un `post.published` réannoncé ne compte pas non plus) | DLQ `{topic}.dlq` |
+| `engagement.reactions` | `geo-discovery-country-likes` | le classement des pays (#665) : chaque cœur (+1, −1 quand il est retiré ou changé) compté pour le pays du post où il tombe (la position de sa carte, `data/countries.json`), au jour UTC de la réaction → Redis `sg:geo:cact:{YYYYMMDD:b}` (`l:{CC}` ; 16 seaux par jour selon l'événement, pour que les cœurs d'un jour ne pèsent jamais sur un seul slot ; la lecture les additionne) ; un post hors carte, en mer ou au-delà de la rétention de sa carte ne compte nulle part ; autres types ignorés. L'indexation d'un `post.published` ajoute `p:{CC}` de même. **Idempotent** (le classement fixe le prix des déblocages) : chaque comptage est un script Lua avec un marqueur `SET NX` dans le slot du hash du jour — une réaction identifiée par post, auteur, heure et sens (gardée 48 h, au-delà de toute relivraison), un post par son id (gardé avec son jour, donc un `post.published` réannoncé ne compte pas non plus) | DLQ `{topic}.dlq` |
 | `profile.v1.events` | `geo-discovery-location-settings` | partage de localisation des auteurs (#657) depuis `ProfileLocationSettingsChanged` → `geo_discovery.location_settings` ; chaque requête de carte l'applique pour tout lecteur sauf l'auteur (mesh compris) : les pins et cartes d'un **fantôme** quittent la carte ; ceux d'un auteur au **niveau ville** n'apparaissent qu'à la bande R5, au centre de la cellule R5, et ses cartes indiquent la cellule R7 de la ville ; un auteur dont l'**audience** est abonnés / mutuels ne reste que sur la carte d'un lecteur qui le suit / lui est mutuel (`follows` / `mutual` de `CheckAccess`, dans le même appel groupé) — jamais celle du mesh (NEARBY ne lit pour personne) ni d'un lecteur anonyme. Autres événements profile ignorés | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |
@@ -325,6 +353,10 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_COUNTRY_LIKES_GROUP_ID` | Non | `geo-discovery-country-likes` | groupe Kafka du consumer des likes du classement des pays (`engagement.reactions`). |
 | `GEO_STANDINGS_WINDOW_DAYS` | Non | `30` | Jours de likes que le classement des pays prend en compte. |
 | `GEO_STANDINGS_CACHE_SECS` | Non | `60` | Durée pendant laquelle un classement calculé est servi. |
+| `GEO_COUNTRY_UNLOCKS_ENABLED` | Non | `false` | Le filtre de la carte des membres (#665) : un membre ne voit que son pays d'origine et ses pays débloqués (et la mer). |
+| `GEO_WALLET_GRPC_ENDPOINT` | Non | `http://localhost:50072` | Adresse mesh du wallet : les gems affichés et dépensés par les déblocages de pays. |
+| `GEO_ACCOUNT_GRPC_ENDPOINT` | Non | `http://localhost:50059` | Adresse mesh d'account : le pays de résidence d'un membre (pays d'origine). |
+| `GEO_UNLOCK_RPC_TIMEOUT_MS` · `GEO_UNLOCK_CONNECT_TIMEOUT_MS` | Non | `1000` · `500` | Délais de ces deux appels. |
 
 > Aucun flag de feature de compilation. `build.rs` compile `proto/geo_discovery/v1/*.proto`. Profils
 > ScyllaDB : Strict (`LocalQuorum`) pour les mutations, Fast (`LocalOne` + spéculatif) pour les lectures.

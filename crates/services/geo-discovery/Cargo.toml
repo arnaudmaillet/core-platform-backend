@@ -9,6 +9,9 @@ description = "Geo-discovery microservice — H3 spatial indexing engine with Re
 
 [dependencies]
 geo-discovery-api = { workspace = true }
+# Country unlocks (#665): gems in the wallet, the home country from account.
+wallet-api        = { workspace = true }
+account-api       = { workspace = true }
 social-graph-api  = { workspace = true }   # CheckAccess client (map audience filter)
 error          = { workspace = true }
 validate-core  = { workspace = true }
