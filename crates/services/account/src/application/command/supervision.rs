@@ -270,7 +270,8 @@ impl Supervisions {
     }
 
     /// One page of a teen's profile's connections. `ACC-3005` when the
-    /// profile is not the teen's.
+    /// profile is not the teen's. A supervisor the teen blocked never shows
+    /// (the page may then be one short).
     pub async fn connections(
         &self,
         account: &str,
@@ -285,14 +286,26 @@ impl Supervisions {
         if !self.profiles.profiles_of(&teen).await?.iter().any(|p| p.profile_id == profile_id) {
             return Err(AccountError::SupervisionNotFound);
         }
-        activity.connections(profile_id, kind, page_size(limit), page_token).await
+        let mut page = activity.connections(profile_id, kind, page_size(limit), page_token).await?;
+        if kind == ConnectionKind::Blocked {
+            let mut supervisors = Vec::new();
+            for link in self.store.supervisors_of(&teen).await? {
+                supervisors.extend(ids(&self.profiles.profiles_of(&link.supervisor).await?));
+            }
+            page.items.retain(|c| !supervisors.contains(&c.profile_id));
+        }
+        Ok(page)
     }
 
     /// One page of the reports the teen made, newest first: who or what,
-    /// when and the decision — never the teen's own words.
+    /// when and the decision — never the teen's own words, never a
+    /// self-harm / CSAM / NCII report, nor one about a supervisor's content
+    /// (the teen still sees those in their own reports).
     pub async fn reports(&self, account: &str, teen: &str, limit: u32, page_token: &str) -> Result<ActivityPage<ReportSummary>, AccountError> {
         let teen = self.viewable_teen(account, teen).await?;
-        self.activity()?.reports(&teen, page_size(limit), page_token).await
+        let activity = self.activity()?;
+        let supervisors: Vec<AccountId> = self.store.supervisors_of(&teen).await?.into_iter().map(|l| l.supervisor).collect();
+        activity.reports(&teen, &supervisors, page_size(limit), page_token).await
     }
 
     /// `teen` (empty: `account` itself), when `account` is that teen or one
@@ -765,7 +778,10 @@ mod tests {
 
     /// The teen's connections and reports, as the mesh would page them.
     #[derive(Default)]
-    struct Activity(Mutex<Vec<(String, ConnectionKind, u32)>>);
+    struct Activity {
+        calls:  Mutex<Vec<(String, ConnectionKind, u32)>>,
+        hidden: Mutex<Vec<AccountId>>,
+    }
 
     #[async_trait]
     impl SupervisedActivity for Activity {
@@ -776,10 +792,21 @@ mod tests {
             limit: u32,
             _page_token: &str,
         ) -> Result<ActivityPage<Connection>, AccountError> {
-            self.0.lock().unwrap().push((profile_id.to_owned(), kind, limit));
-            Ok(ActivityPage { items: vec![Connection { profile_id: "friend".into(), since: None }], next_page_token: None })
+            self.calls.lock().unwrap().push((profile_id.to_owned(), kind, limit));
+            // A friend, plus the profiles of the accounts last hidden from
+            // `reports` (the supervisors).
+            let mut items = vec![Connection { profile_id: "friend".into(), since: None }];
+            items.extend(self.hidden.lock().unwrap().iter().map(|a| Connection { profile_id: format!("p-{a}"), since: None }));
+            Ok(ActivityPage { items, next_page_token: None })
         }
-        async fn reports(&self, reporter: &AccountId, _limit: u32, _page_token: &str) -> Result<ActivityPage<ReportSummary>, AccountError> {
+        async fn reports(
+            &self,
+            reporter: &AccountId,
+            hidden_accounts: &[AccountId],
+            _limit: u32,
+            _page_token: &str,
+        ) -> Result<ActivityPage<ReportSummary>, AccountError> {
+            *self.hidden.lock().unwrap() = hidden_accounts.to_vec();
             Ok(ActivityPage {
                 items: vec![ReportSummary {
                     entity_type: "post".into(),
@@ -817,18 +844,25 @@ mod tests {
         assert!(matches!(w.handler.overview(&stranger.to_string(), &teen_s).await, Err(AccountError::SupervisionNotFound)));
 
         // Connections of the teen's own profiles only; pages capped.
+        // The teen's reports hide the supervisors' content: mum is passed on.
+        let reports = w.handler.reports(&mum_s, &teen_s, 0, "").await.unwrap();
+        assert_eq!(reports.items[0].entity_id, format!("reported-by-{teen}"));
+        assert_eq!(*activity.hidden.lock().unwrap(), vec![mum]);
+
+        // Blocked: the friend shows, mum (blocked too, in the fake) does not.
         let page = w.handler.connections(&mum_s, &teen_s, &format!("p-{teen}"), ConnectionKind::Blocked, 500, "").await.unwrap();
-        assert_eq!(page.items[0].profile_id, "friend");
-        assert_eq!(activity.0.lock().unwrap()[0], (format!("p-{teen}"), ConnectionKind::Blocked, MAX_PAGE));
+        let blocked: Vec<_> = page.items.iter().map(|c| c.profile_id.as_str()).collect();
+        assert_eq!(blocked, vec!["friend"]);
+        assert_eq!(activity.calls.lock().unwrap()[0], (format!("p-{teen}"), ConnectionKind::Blocked, MAX_PAGE));
+        let following = w.handler.connections(&mum_s, &teen_s, &format!("p-{teen}"), ConnectionKind::Following, 0, "").await.unwrap();
+        assert_eq!(following.items.len(), 2, "only the blocked list hides supervisors");
         assert!(matches!(
             w.handler.connections(&mum_s, &teen_s, &format!("p-{mum}"), ConnectionKind::Following, 0, "").await,
             Err(AccountError::SupervisionNotFound)
         ));
         assert!(w.handler.connections(&stranger.to_string(), &teen_s, &format!("p-{teen}"), ConnectionKind::Following, 0, "").await.is_err());
 
-        // The teen's reports, read for the teen's account.
-        let reports = w.handler.reports(&mum_s, &teen_s, 0, "").await.unwrap();
-        assert_eq!(reports.items[0].entity_id, format!("reported-by-{teen}"));
+        // The teen reads the same reports.
         assert_eq!(reports, w.handler.reports(&teen_s, "", 0, "").await.unwrap());
         assert!(w.handler.reports(&stranger.to_string(), &teen_s, 0, "").await.is_err());
     }

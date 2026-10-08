@@ -11,7 +11,7 @@ pub use enforcement_state::{
     EnforcementStateView, GetEnforcementStateHandler, GetEnforcementStateQuery,
 };
 pub use list_my_appeals::{ListMyAppealsHandler, ListMyAppealsQuery, MyAppealsPage};
-pub use list_my_reports::{ListMyReportsHandler, ListMyReportsQuery, MyReport, MyReportsPage};
+pub use list_my_reports::{HiddenReports, ListMyReportsHandler, ListMyReportsQuery, MyReport, MyReportsPage};
 pub use list_queue::{ListQueueHandler, ListQueueQuery};
 pub use statement_of_reasons::{
     GetStatementOfReasonsHandler, GetStatementOfReasonsQuery, StatementOfReasons,

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 4fbf79d9561dc258087c5bce068a337da517765f3c72bdbf5c7327e046cacf22
+  source_sha256: 581a58cac08db875ae6869feef9f1fcdf21b199f7efd156a00454d1ca3f408ae
   translated_at: 2026-10-08
   status: complete
 ---
@@ -253,10 +253,14 @@ vue** (`teen_account_id` vide : celle de l'appelant ; toute autre personne ⇒ `
 d'abord, en jours locaux de l'ado) et les profils actifs de l'ado ;
 `ListSupervisedConnections(profile_id, kind)` — une page des abonnements, abonnés ou profils bloqués
 d'un profil de l'ado, lus dans social-graph en tant que mesh (quelle que soit la confidentialité des
-listes ; un profil qui n'est pas à l'ado ⇒ `ACC-3005`) ; `ListSupervisedReports` — une page des
+listes ; un profil qui n'est pas à l'ado ⇒ `ACC-3005` ; un superviseur bloqué par l'ado n'est jamais
+listé) ; `ListSupervisedReports` — une page des
 signalements faits par l'ado, du plus récent au plus ancien : **qui ou quoi, quand, et la décision**
 (`under_review` / `action_taken` / `no_violation`), jamais les mots de l'ado (le
-`ListReportsByReporter` de moderation, réservé au mesh, ne les renvoie pas). Pages : 50 par défaut,
+`ListReportsByReporter` de moderation, réservé au mesh, ne les renvoie pas). Un ado doit pouvoir
+signaler sans être vu : un signalement `self_harm`, `csam` ou `ncii`, ou visant le contenu d'un
+superviseur, n'est jamais listé (moderation les écarte, pagination comprise ; l'ado les voit toujours
+dans son propre `ListMyReports`). Pages : 50 par défaut,
 100 au plus. social-graph ou moderation injoignable ⇒ `ACC-3008` (`UNAVAILABLE`, rejouable).
 
 **Export de données RGPD (#653, art. 15/20).** `RequestDataExport` marque l'export en attente ; la

@@ -48,7 +48,9 @@ service ModerationService {
 
     // A member's reports, as ListMyReports pages them, for family supervision
     // (account, #670: a teen's supervisor sees what the teen reported). Mesh
-    // only. Never the reporter's free text: `reason` is always empty.
+    // only. Never the reporter's free text: `reason` is always empty. Never
+    // a SELF_HARM, CSAM or NCII report, nor one about content of the
+    // `hidden_account_ids` (the teen's supervisors).
     rpc ListReportsByReporter(ListReportsByReporterRequest) returns (ListMyReportsResponse);
 
     // ── Case / queue lifecycle (ops console) ──────────────────────────────────

@@ -465,7 +465,8 @@ message SupervisedReport {
     string                    entity_type = 1;
     string                    entity_id   = 2;
     // The policy category chosen: spam, harassment, hate, violent_extremism,
-    // csam, ncii, self_harm, misinformation or other.
+    // misinformation or other (self_harm, csam and ncii reports are never
+    // listed).
     string                    category    = 3;
     SupervisedReportOutcome   outcome     = 4;
     google.protobuf.Timestamp reported_at = 5;

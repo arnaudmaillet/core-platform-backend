@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8cca872af47776f38c2903bd2d6a9ac84b429839facb203538feb1a2d7a5c9b7
+  source_sha256: 00fec5027a59ad613bd4381fb22e152ff1fb9d476eb6b13b0a77a207047d857a
   translated_at: 2026-10-08
   status: complete
 ---
@@ -198,7 +198,10 @@ rpc GetEnforcementState   (..) returns (..);   // edge : son propre état unique
 > a frappé le compte signalé. Les ids membre et invité restent distincts (`reporter_kind`).
 > `ListReportsByReporter(reporter_id)` pagine de la même façon les signalements d'un **membre** pour la supervision
 > familiale (account montre les signalements d'un ado à son superviseur, #670) : **mesh seulement** (absent de la
-> politique edge) et **jamais le texte libre** (`reason` toujours vide).
+> politique edge) et **jamais le texte libre** (`reason` toujours vide). Il ne liste jamais un signalement `SELF_HARM`,
+> `CSAM` ou `NCII`, ni un signalement visant le contenu des `hidden_account_ids` (les superviseurs de l'ado, 10 au
+> plus) : un ado doit pouvoir signaler sans être vu. Les lignes écartées sont sautées lot par lot, la pagination
+> reste complète.
 >
 > **Autorisation (exigence de déploiement) :** les RPC d'opérations mutatives (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) sont **privilégiées** — elles bannissent/suspendent/suppriment. Le service n'autorise pas lui-même l'appelant ; les RPC mutatives **doivent** être restreintes à des principaux modérateurs authentifiés en périphérie (autorisation gateway / contrôle de permission `auth-context`, ex. `moderation:decide`) avant exposition. `Screen`, `SubmitReport`, `ListMyReports`, `FileAppeal`, `ListMyAppeals`, `GetStatementOfReasons` et `GetEnforcementState` sont orientées appelant ; le reste est réservé aux modérateurs.
 

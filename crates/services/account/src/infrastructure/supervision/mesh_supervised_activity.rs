@@ -14,9 +14,10 @@ use crate::domain::value_object::AccountId;
 use crate::error::AccountError;
 
 /// [`SupervisedActivity`] over social-graph (`ListFollowing`,
-/// `ListFollowers`, `ListBlocks`) and moderation (`ListReportsByReporter`),
-/// read as the mesh: the lists in full, whatever their privacy. Lazy
-/// channels with request deadlines.
+/// `ListFollowers`, `ListBlocks`) and moderation (`ListReportsByReporter`,
+/// which leaves out self-harm / CSAM / NCII reports and those about the
+/// hidden accounts' content), read as the mesh: the lists in full, whatever
+/// their privacy. Lazy channels with request deadlines.
 pub struct MeshSupervisedActivity {
     social:     SocialGraphServiceClient<Channel>,
     moderation: ModerationServiceClient<Channel>,
@@ -82,7 +83,13 @@ impl SupervisedActivity for MeshSupervisedActivity {
         Ok(ActivityPage { items, next_page_token: Some(next).filter(|t| !t.is_empty()) })
     }
 
-    async fn reports(&self, reporter: &AccountId, limit: u32, page_token: &str) -> Result<ActivityPage<ReportSummary>, AccountError> {
+    async fn reports(
+        &self,
+        reporter: &AccountId,
+        hidden_accounts: &[AccountId],
+        limit: u32,
+        page_token: &str,
+    ) -> Result<ActivityPage<ReportSummary>, AccountError> {
         let page = self
             .moderation
             .clone()
@@ -90,6 +97,7 @@ impl SupervisedActivity for MeshSupervisedActivity {
                 reporter_id: reporter.as_uuid().to_string(),
                 page_size:   i32::try_from(limit).unwrap_or(i32::MAX),
                 page_token:  page_token.to_owned(),
+                hidden_account_ids: hidden_accounts.iter().map(|a| a.as_uuid().to_string()).collect(),
             })
             .await
             .map_err(unavailable("moderation"))?

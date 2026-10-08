@@ -140,5 +140,13 @@ pub trait SupervisedActivity: Send + Sync + 'static {
         page_token: &str,
     ) -> Result<ActivityPage<Connection>, AccountError>;
 
-    async fn reports(&self, reporter: &AccountId, limit: u32, page_token: &str) -> Result<ActivityPage<ReportSummary>, AccountError>;
+    /// The reporter's reports, never a self-harm / CSAM / NCII one, nor one
+    /// about content of `hidden_accounts` (the teen's supervisors).
+    async fn reports(
+        &self,
+        reporter: &AccountId,
+        hidden_accounts: &[AccountId],
+        limit: u32,
+        page_token: &str,
+    ) -> Result<ActivityPage<ReportSummary>, AccountError>;
 }

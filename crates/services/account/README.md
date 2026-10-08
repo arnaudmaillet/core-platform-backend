@@ -230,10 +230,13 @@ view** (`teen_account_id` empty: the caller's own; anyone else ⇒ `ACC-3005`):
 `GetSupervisionOverview` — the limits, the last 7 days with time counted (most recent first, the
 teen's local days) and the teen's active profiles; `ListSupervisedConnections(profile_id, kind)` —
 one page of a teen's profile's following, followers or blocked profiles, read from social-graph as
-the mesh (whatever the lists' privacy; a profile that is not the teen's ⇒ `ACC-3005`);
+the mesh (whatever the lists' privacy; a profile that is not the teen's ⇒ `ACC-3005`; a supervisor
+the teen blocked is never listed);
 `ListSupervisedReports` — one page of the reports the teen made, newest first: **who or what, when
 and the decision** (`under_review` / `action_taken` / `no_violation`), never the teen's own words
-(moderation's mesh-only `ListReportsByReporter` does not return them). Pages: 50 by default, 100 at
+(moderation's mesh-only `ListReportsByReporter` does not return them). A teen must be able to report
+unseen: a `self_harm`, `csam` or `ncii` report, or one about a supervisor's content, is never listed
+(moderation leaves them out, paging included; the teen still sees them in their own `ListMyReports`). Pages: 50 by default, 100 at
 most. social-graph or moderation unreachable ⇒ `ACC-3008` (`UNAVAILABLE`, retryable).
 
 **GDPR data export (#653, Art. 15/20).** `RequestDataExport` marks the export pending; the **export

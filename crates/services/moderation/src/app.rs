@@ -625,6 +625,7 @@ mod tests {
                 reporter_id: reporter_id.to_owned(),
                 page_size: 0,
                 page_token: String::new(),
+                hidden_account_ids: Vec::new(),
             })
         };
         let page = handler.list_reports_by_reporter(by(&teen)).await.unwrap().into_inner();
@@ -636,5 +637,17 @@ mod tests {
         let other = Uuid::now_v7().to_string();
         assert!(handler.list_reports_by_reporter(by(&other)).await.unwrap().into_inner().reports.is_empty());
         assert_eq!(handler.list_reports_by_reporter(by("nope")).await.unwrap_err().code(), Code::InvalidArgument);
+
+        // A report about a supervisor's content, or a self-harm one, never shows.
+        let mut self_harm = report("post-2");
+        self_harm.category = proto::PolicyCategory::SelfHarm as i32;
+        fx.subjects.own("post-2", ActorId::from_uuid(Uuid::from_u128(8)));
+        let mut request = Request::new(self_harm);
+        request.extensions_mut().insert(principal(&teen, None));
+        handler.submit_report(request).await.unwrap();
+        assert_eq!(handler.list_reports_by_reporter(by(&teen)).await.unwrap().into_inner().reports.len(), 1);
+        let mut parent = by(&teen);
+        parent.get_mut().hidden_account_ids = vec![ActorId::from_uuid(Uuid::from_u128(7)).as_str()];
+        assert!(handler.list_reports_by_reporter(parent).await.unwrap().into_inner().reports.is_empty());
     }
 }
