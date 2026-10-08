@@ -101,13 +101,15 @@ impl App {
                     ledger: ledgers.as_ref().map(|(_, likes)| Arc::clone(likes)),
                 })?
                 .register::<BatchGetLikesQuery, _>(BatchGetLikesHandler {
-                    like_store: Arc::clone(&like_store),
-                    likes:      likes.clone(),
+                    like_store:  Arc::clone(&like_store),
+                    like_ledger: ledgers.as_ref().map(|(_, l)| Arc::clone(l)),
+                    likes:       likes.clone(),
                 })?
                 .register::<GetPostEngagementQuery, _>(GetPostEngagementHandler {
                     score_store: Arc::clone(&score_store),
                     likes,
                     like_store:  Arc::clone(&like_store),
+                    like_ledger: ledgers.as_ref().map(|(_, l)| Arc::clone(l)),
                 })?
                 .build(),
         );

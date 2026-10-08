@@ -5,19 +5,31 @@ use crate::domain::value_object::LikeTarget;
 use crate::error::EngagementError;
 
 /// Likes per post and comment (#665: a like is a point): each account's
-/// total on a target, and the target's sum. Redis-primary.
+/// total on a target, and the target's sum. Redis-primary. A target's likers
+/// expire after a while without a like (its count never does); until they are
+/// rehydrated from the durable copy, an account missing from them is unknown,
+/// not zero.
 #[async_trait]
 pub trait LikeStore: Send + Sync + 'static {
     /// Records `account`'s total on `target` — idempotent and order-proof: a
     /// total no larger than the one held changes nothing (a redelivered or
-    /// late event). Returns the likes it added.
-    async fn apply_total(&self, target: &LikeTarget, account: &str, total: i64) -> Result<i64, EngagementError>;
+    /// late event). Returns the likes it added; `None` when `account` is
+    /// unknown on `target` (rehydrate it first).
+    async fn apply_total(&self, target: &LikeTarget, account: &str, total: i64) -> Result<Option<i64>, EngagementError>;
 
     /// Each target's like count, in order.
     async fn counts(&self, targets: &[LikeTarget]) -> Result<Vec<i64>, EngagementError>;
 
-    /// `account`'s likes on each target, in order.
-    async fn mine(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<i64>, EngagementError>;
+    /// `account`'s likes on each target, in order; `None` where unknown.
+    async fn mine(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<Option<i64>>, EngagementError>;
+
+    /// Loads `likers` (from the durable copy) into `target`'s, keeping any
+    /// total it already holds (newer); `complete`: they were all of them, so
+    /// an account still missing has none.
+    async fn rehydrate(&self, target: &LikeTarget, likers: &[(String, i64)], complete: bool) -> Result<(), EngagementError>;
+
+    /// Claims `target`'s rehydration for a minute: one at a time from reads.
+    async fn claim_rehydration(&self, target: &LikeTarget) -> Result<bool, EngagementError>;
 
     /// Forgets who `account` is on each target (its account was deleted):
     /// its entry goes, the targets' counts stay (the points are kept,
@@ -70,6 +82,18 @@ pub trait LikeLedger: Send + Sync + 'static {
         after: Option<&LikeTarget>,
     ) -> Result<Vec<AccountLike>, EngagementError>;
 
+    /// `account`'s total on `target`, if it liked it.
+    async fn total_of(&self, target: &LikeTarget, account: &str) -> Result<Option<i64>, EngagementError>;
+
+    /// Who liked `target` and how much, up to `limit` after the liker
+    /// `after` (anonymous likers included: the sum is the count).
+    async fn likers_of(
+        &self,
+        target: &LikeTarget,
+        limit: i32,
+        after: Option<&str>,
+    ) -> Result<Vec<(String, i64)>, EngagementError>;
+
     /// Notes that `account` was deleted at `erased_at_micros` (the deletion's
     /// own time), for as long as one of its stakes could still arrive: the
     /// stake consumer then drops them.
@@ -77,6 +101,10 @@ pub trait LikeLedger: Send + Sync + 'static {
 
     /// When `account` was deleted, if it was (and is still remembered).
     async fn erased_at(&self, account: &str) -> Result<Option<i64>, EngagementError>;
+
+    /// Which of `accounts` were deleted (and are still remembered); ids that
+    /// are not accounts (anonymous likers) are never among them.
+    async fn erased_among(&self, accounts: &[String]) -> Result<Vec<String>, EngagementError>;
 
     /// Forgets `account` on each like as of `at_micros`, one target at a time
     /// and atomically: its row on the target becomes the anonymous one (same

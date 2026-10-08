@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cqrs::{Envelope, Query, QueryHandler};
 
-use crate::application::port::{LikeStore, LikeVisibility, PostEngagementSnapshot, ScoreStore};
+use crate::application::port::{LikeLedger, LikeStore, LikeVisibility, PostEngagementSnapshot, ScoreStore};
 use crate::domain::value_object::{LikeTarget, PostId};
 use crate::error::EngagementError;
 
@@ -50,6 +50,8 @@ pub struct GetPostEngagementHandler<S> {
     pub likes:       Option<Arc<dyn LikeVisibility>>,
     /// The likes themselves (#665).
     pub like_store:  Arc<dyn LikeStore>,
+    /// Their durable copy, for a reader whose likes expired from Redis.
+    pub like_ledger: Option<Arc<dyn LikeLedger>>,
 }
 
 /// Whether a post's likes are withheld from `reader` (#809): only the author
@@ -68,7 +70,8 @@ pub(crate) async fn withheld(likes: Option<&Arc<dyn LikeVisibility>>, reader: &E
 
 /// The likes of `targets` for `reader` (`account`: its own likes).
 pub(crate) async fn read_likes(
-    store: &dyn LikeStore,
+    store: &Arc<dyn LikeStore>,
+    ledger: Option<&Arc<dyn LikeLedger>>,
     visibility: Option<&Arc<dyn LikeVisibility>>,
     reader: &EngagementReader,
     account: Option<&str>,
@@ -76,7 +79,7 @@ pub(crate) async fn read_likes(
 ) -> Result<Vec<LikeSummary>, EngagementError> {
     let counts = store.counts(targets).await?;
     let mine = match account {
-        Some(account) => store.mine(account, targets).await?,
+        Some(account) => crate::application::likes::mine(store, ledger, account, targets).await?,
         None => vec![0; targets.len()],
     };
     let mut out = Vec::with_capacity(targets.len());
@@ -102,7 +105,7 @@ impl<S: ScoreStore> QueryHandler<GetPostEngagementQuery> for GetPostEngagementHa
         let post_id = PostId::try_from(query.post_id.as_str())?;
         let snapshot = self.score_store.get_snapshot(&post_id).await?;
         let target = [LikeTarget::Post(query.post_id.clone())];
-        let likes = read_likes(self.like_store.as_ref(), self.likes.as_ref(), &query.reader, query.account.as_deref(), &target)
+        let likes = read_likes(&self.like_store, self.like_ledger.as_ref(), self.likes.as_ref(), &query.reader, query.account.as_deref(), &target)
             .await?
             .pop()
             .unwrap_or_default();
@@ -161,14 +164,20 @@ mod tests {
 
     #[async_trait]
     impl LikeStore for Likes {
-        async fn apply_total(&self, _: &LikeTarget, _: &str, _: i64) -> Result<i64, EngagementError> {
+        async fn apply_total(&self, _: &LikeTarget, _: &str, _: i64) -> Result<Option<i64>, EngagementError> {
             unimplemented!()
         }
         async fn counts(&self, targets: &[LikeTarget]) -> Result<Vec<i64>, EngagementError> {
             Ok(vec![9; targets.len()])
         }
-        async fn mine(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<i64>, EngagementError> {
-            Ok(vec![if account == "me" { 2 } else { 0 }; targets.len()])
+        async fn mine(&self, account: &str, targets: &[LikeTarget]) -> Result<Vec<Option<i64>>, EngagementError> {
+            Ok(vec![Some(if account == "me" { 2 } else { 0 }); targets.len()])
+        }
+        async fn rehydrate(&self, _: &LikeTarget, _: &[(String, i64)], _: bool) -> Result<(), EngagementError> {
+            unimplemented!()
+        }
+        async fn claim_rehydration(&self, _: &LikeTarget) -> Result<bool, EngagementError> {
+            unimplemented!()
         }
         async fn forget(&self, _: &str, _: &[LikeTarget]) -> Result<(), EngagementError> {
             unimplemented!()
@@ -180,6 +189,7 @@ mod tests {
             score_store: Arc::new(Snapshots),
             likes:       likes.map(|l| l as Arc<dyn LikeVisibility>),
             like_store:  Arc::new(Likes),
+            like_ledger: None,
         };
         let query = GetPostEngagementQuery { post_id: Uuid::now_v7().to_string(), reader, account: Some("me".into()) };
         handler.handle(Envelope::new(Uuid::now_v7(), query)).await.unwrap()

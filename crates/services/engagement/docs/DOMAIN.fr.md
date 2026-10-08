@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: 936b8a0adc33d66e55680cc22aa197b6b6fa451637ccd018090a17e96a1ea57f
+  source_sha256: c2b450f97b7a2604b009ae51e25c956d0901255a1da2b80273152326090cde07
   translated_at: 2026-10-08
   status: complete
 ---
@@ -155,6 +155,6 @@ engagement ne publie aucun événement. Il consomme :
 
 - **Classification :** Core — interaction directe avec le contenu.
 - **Volatilité :** faible — les likes suivent le contrat de mise du wallet.
-- **Dette de modélisation connue :** le hash des likers n'a pas de TTL (un plancher de réhydratation
-  depuis Scylla est prévu).
+- **Dette de modélisation connue :** la lecture d'une cible dont les likers ont expiré coûte une
+  lecture Scylla par membre lecteur, jusqu'à ce que sa réhydratation en arrière-plan aboutisse.
 - **Capacités différées :** règlement des likes (gems gagnées grâce aux likes, #665).

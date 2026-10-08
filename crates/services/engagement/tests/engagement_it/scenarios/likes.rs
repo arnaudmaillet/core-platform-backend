@@ -8,6 +8,7 @@ use scylla_storage::{ScyllaConfig, ScyllaSessionBuilder};
 use uuid::Uuid;
 
 use engagement::application::erasure::{anonymous_liker, LikeEraser};
+use engagement::application::likes;
 use engagement::application::port::{ForgottenLike, LikeLedger};
 use engagement::domain::value_object::LikeTarget;
 use engagement::infrastructure::persistence::ScyllaLikeLedger;
@@ -20,15 +21,15 @@ async fn totals_apply_once_in_any_order_and_concurrently() {
     let post = LikeTarget::Post(Uuid::now_v7().to_string());
     let (me, you) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
 
-    assert_eq!(h.like_store.apply_total(&post, &me, 30).await.unwrap(), 30);
-    assert_eq!(h.like_store.apply_total(&post, &me, 30).await.unwrap(), 0, "a redelivery adds nothing");
-    assert_eq!(h.like_store.apply_total(&post, &me, 35).await.unwrap(), 5);
-    assert_eq!(h.like_store.apply_total(&post, &me, 30).await.unwrap(), 0, "a late, older total adds nothing");
+    assert_eq!(h.like_store.apply_total(&post, &me, 30).await.unwrap(), Some(30));
+    assert_eq!(h.like_store.apply_total(&post, &me, 30).await.unwrap(), Some(0), "a redelivery adds nothing");
+    assert_eq!(h.like_store.apply_total(&post, &me, 35).await.unwrap(), Some(5));
+    assert_eq!(h.like_store.apply_total(&post, &me, 30).await.unwrap(), Some(0), "a late, older total adds nothing");
 
     // The same events, delivered many times at once.
     let deliveries = (0..20).map(|i| {
         let (store, post, you) = (Arc::clone(&h.like_store), post.clone(), you.clone());
-        tokio::spawn(async move { store.apply_total(&post, &you, 10 + (i % 3)).await.unwrap() })
+        tokio::spawn(async move { store.apply_total(&post, &you, 10 + (i % 3)).await.unwrap().unwrap() })
     });
     let mut added = 0;
     for d in deliveries {
@@ -39,8 +40,8 @@ async fn totals_apply_once_in_any_order_and_concurrently() {
     let comment = LikeTarget::Comment(Uuid::now_v7().to_string());
     let targets = [post.clone(), comment.clone()];
     assert_eq!(h.like_store.counts(&targets).await.unwrap(), vec![47, 0]);
-    assert_eq!(h.like_store.mine(&me, &targets).await.unwrap(), vec![35, 0]);
-    assert_eq!(h.like_store.mine(&Uuid::now_v7().to_string(), &targets).await.unwrap(), vec![0, 0]);
+    assert_eq!(h.like_store.mine(&me, &targets).await.unwrap(), vec![Some(35), Some(0)]);
+    assert_eq!(h.like_store.mine(&Uuid::now_v7().to_string(), &targets).await.unwrap(), vec![Some(0), Some(0)]);
 }
 
 #[tokio::test]
@@ -135,7 +136,7 @@ async fn a_deleted_accounts_likes_are_forgotten_the_counts_kept() {
     let targets = [LikeTarget::Post(Uuid::now_v7().to_string()), LikeTarget::Comment(Uuid::now_v7().to_string())];
     for t in &targets {
         for (account, total) in [(&gone, 7), (&stays, 3)] {
-            h.like_store.apply_total(t, account, total).await.unwrap();
+            h.like_store.apply_total(t, account, total).await.unwrap().unwrap();
             ledger.record(t, account, "liker", total, 1_000_000).await.unwrap();
         }
     }
@@ -145,7 +146,7 @@ async fn a_deleted_accounts_likes_are_forgotten_the_counts_kept() {
 
     assert_eq!(ledger.erased_at(&gone).await.unwrap(), Some(1_800_000));
     assert_eq!(ledger.erased_at(&stays).await.unwrap(), None);
-    assert_eq!(h.like_store.mine(&gone, &targets).await.unwrap(), vec![0, 0]);
+    assert_eq!(h.like_store.mine(&gone, &targets).await.unwrap(), vec![Some(0), Some(0)]);
     assert_eq!(h.like_store.counts(&targets).await.unwrap(), vec![10, 10], "the points are kept");
     assert!(ledger.list_by_account(&gone, 10, None).await.unwrap().is_empty());
     assert_eq!(ledger.list_by_account(&stays, 10, None).await.unwrap().len(), 2);
@@ -184,4 +185,57 @@ async fn a_deleted_accounts_likes_are_forgotten_the_counts_kept() {
         .unwrap();
     let sum: i64 = rows.rows::<(i64,)>().unwrap().map(|r| r.unwrap().0).sum();
     assert_eq!(sum, 10, "the durable copy still sums to the count");
+}
+
+/// A target's likers expire from Redis 30 days after its last like (its count
+/// never does): an account is then unknown, not zero, until the stake path
+/// rehydrates them from Scylla — the next stake adds only the difference.
+#[tokio::test]
+async fn expired_likers_come_back_from_the_durable_copy() {
+    use fred::interfaces::KeysInterface;
+
+    let h = TestHarness::start().await;
+    let contact = test_support::containers::scylla_ready("engagement", concat!(env!("CARGO_MANIFEST_DIR"), "/migrations")).await;
+    let client = Arc::new(
+        ScyllaSessionBuilder::new(ScyllaConfig { contact_points: vec![contact], keyspace: None, ..ScyllaConfig::default() })
+            .build()
+            .await
+            .expect("scylla"),
+    );
+    let ledger = ScyllaLikeLedger::new(client);
+    let post = LikeTarget::Post(Uuid::now_v7().to_string());
+    let (a, b) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
+    for (account, total) in [(&a, 10), (&b, 4)] {
+        assert_eq!(likes::apply_total(h.like_store.as_ref(), &ledger, &post, account, total).await.unwrap(), total);
+        ledger.record(&post, account, "liker", total, 1_000_000).await.unwrap();
+    }
+    let likers = format!("engagement:{{{post}}}:likers");
+    let ttl: i64 = h.redis.inner.ttl(&likers).await.unwrap();
+    assert!(ttl > 29 * 24 * 3600, "the likers expire 30 days after the last like ({ttl} s)");
+
+    // Time passes: the likers expire, the count stays.
+    let _: i64 = h.redis.inner.del(&likers).await.unwrap();
+    let one = std::slice::from_ref(&post);
+    assert_eq!(h.like_store.mine(&a, one).await.unwrap(), vec![None], "unknown, not 0");
+    assert_eq!(h.like_store.apply_total(&post, &a, 15).await.unwrap(), None);
+
+    assert_eq!(likes::apply_total(h.like_store.as_ref(), &ledger, &post, &a, 15).await.unwrap(), 5, "only the difference");
+    ledger.record(&post, &a, "liker", 15, 2_000_000).await.unwrap();
+    assert_eq!(h.like_store.counts(one).await.unwrap(), vec![19]);
+    assert_eq!(h.like_store.mine(&b, one).await.unwrap(), vec![Some(4)], "every liker is back");
+    assert_eq!(h.like_store.mine(&Uuid::now_v7().to_string(), one).await.unwrap(), vec![Some(0)], "whole again");
+
+    // A deleted account whose row is still in the durable copy (an erasure
+    // racing the rehydration) is not loaded back.
+    let gone = Uuid::now_v7().to_string();
+    ledger.record(&post, &gone, "liker", 3, 1_000_000).await.unwrap();
+    ledger.mark_erased(&gone, 1_900_000).await.unwrap();
+    let _: i64 = h.redis.inner.del(&likers).await.unwrap();
+    likes::rehydrate(h.like_store.as_ref(), &ledger, &post).await.unwrap();
+    assert_eq!(h.like_store.mine(&gone, one).await.unwrap(), vec![Some(0)]);
+    assert_eq!(h.like_store.mine(&a, one).await.unwrap(), vec![Some(15)]);
+
+    // One rehydration at a time from the read path.
+    assert!(h.like_store.claim_rehydration(&post).await.unwrap());
+    assert!(!h.like_store.claim_rehydration(&post).await.unwrap());
 }

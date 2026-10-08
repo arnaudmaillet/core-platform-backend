@@ -36,6 +36,8 @@ pub struct TestHarness {
     pub query_bus:   Arc<InMemoryQueryBus>,
     /// The likes (#665) over the live Redis.
     pub like_store:  Arc<dyn engagement::application::port::LikeStore>,
+    /// The live Redis itself (to expire a key as time would).
+    pub redis:       redis_storage::RedisClient,
 }
 
 impl TestHarness {
@@ -55,7 +57,7 @@ impl TestHarness {
             .await
             .expect("integration: build engagement app");
 
-        Self { command_bus: app.command_bus, query_bus: app.query_bus, like_store: app.like_store }
+        Self { command_bus: app.command_bus, query_bus: app.query_bus, like_store: app.like_store, redis: app.redis }
     }
 
     /// Records a single view for `post`.

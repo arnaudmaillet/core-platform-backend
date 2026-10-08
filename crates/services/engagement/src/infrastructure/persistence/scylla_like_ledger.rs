@@ -146,6 +146,91 @@ impl LikeLedger for ScyllaLikeLedger {
         Ok(likes)
     }
 
+    async fn erased_among(&self, accounts: &[String]) -> Result<Vec<String>, EngagementError> {
+        // Anonymous likers and malformed ids are not accounts: never erased.
+        let ids: Vec<Uuid> = accounts.iter().filter_map(|a| Uuid::parse_str(a).ok()).collect();
+        let mut erased = Vec::new();
+        for chunk in ids.chunks(100) {
+            let stmt = self.statement("SELECT account_id FROM engagement.erased_accounts WHERE account_id IN ?", None);
+            let rows = self
+                .client
+                .session
+                .execute_unpaged(stmt, (chunk.to_vec(),))
+                .await
+                .map_err(scylla)?
+                .into_rows_result()
+                .map_err(|e| EngagementError::DomainViolation { field: "erased_accounts".into(), message: e.to_string() })?;
+            for row in rows
+                .rows::<(Uuid,)>()
+                .map_err(|e| EngagementError::DomainViolation { field: "erased_accounts".into(), message: e.to_string() })?
+            {
+                let (account,) =
+                    row.map_err(|e| EngagementError::DomainViolation { field: "erased_accounts".into(), message: e.to_string() })?;
+                erased.push(account.to_string());
+            }
+        }
+        Ok(erased)
+    }
+
+    async fn total_of(&self, target: &LikeTarget, account: &str) -> Result<Option<i64>, EngagementError> {
+        let account = account_uuid(account)?;
+        let stmt = self.statement(
+            "SELECT total FROM engagement.likes_by_target WHERE target_kind = ? AND target_id = ? AND account_id = ?",
+            None,
+        );
+        let rows = self
+            .client
+            .session
+            .execute_unpaged(stmt, (target.kind(), target.id(), account))
+            .await
+            .map_err(scylla)?
+            .into_rows_result()
+            .map_err(|e| EngagementError::DomainViolation { field: "likes_by_target".into(), message: e.to_string() })?;
+        let row = rows
+            .maybe_first_row::<(Option<i64>,)>()
+            .map_err(|e| EngagementError::DomainViolation { field: "likes_by_target".into(), message: e.to_string() })?;
+        Ok(row.and_then(|(total,)| total))
+    }
+
+    async fn likers_of(
+        &self,
+        target: &LikeTarget,
+        limit: i32,
+        after: Option<&str>,
+    ) -> Result<Vec<(String, i64)>, EngagementError> {
+        let result = match after {
+            Some(after) => {
+                let stmt = self.statement(
+                    "SELECT account_id, total FROM engagement.likes_by_target \
+                     WHERE target_kind = ? AND target_id = ? AND account_id > ? LIMIT ?",
+                    None,
+                );
+                self.client.session.execute_unpaged(stmt, (target.kind(), target.id(), account_uuid(after)?, limit)).await
+            }
+            None => {
+                let stmt = self.statement(
+                    "SELECT account_id, total FROM engagement.likes_by_target WHERE target_kind = ? AND target_id = ? LIMIT ?",
+                    None,
+                );
+                self.client.session.execute_unpaged(stmt, (target.kind(), target.id(), limit)).await
+            }
+        }
+        .map_err(scylla)?;
+        let rows = result
+            .into_rows_result()
+            .map_err(|e| EngagementError::DomainViolation { field: "likes_by_target".into(), message: e.to_string() })?;
+        let mut likers = Vec::new();
+        for row in rows
+            .rows::<(Uuid, Option<i64>)>()
+            .map_err(|e| EngagementError::DomainViolation { field: "likes_by_target".into(), message: e.to_string() })?
+        {
+            let (account, total) =
+                row.map_err(|e| EngagementError::DomainViolation { field: "likes_by_target".into(), message: e.to_string() })?;
+            likers.push((account.to_string(), total.unwrap_or(0)));
+        }
+        Ok(likers)
+    }
+
     async fn mark_erased(&self, account: &str, erased_at_micros: i64) -> Result<(), EngagementError> {
         let account = account_uuid(account)?;
         let stmt = self.statement(
