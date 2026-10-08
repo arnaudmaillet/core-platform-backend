@@ -68,12 +68,15 @@ points, the profile that liked last and when, paged by target (the token is the 
 
 **A deleted account's likes (GDPR Art. 17).** On `account.v1.events` `account_deleted` (group
 `engagement-account-erasure`), who liked goes and the counts stay: the points are kept, anonymously.
-`LikeEraser` first marks the account erased (`engagement.erased_accounts`, 30-day TTL, migration 0007),
-then for each target it liked removes its `:likers` entry and its `likes_by_target` row, and last
-deletes its `likes_by_account` partition. The Scylla deletes are stamped with the erasure's time, so a
-stake made before it and landing late cannot write the account back. The stake consumer drops a marked
-account's stakes, and re-checks after applying one (the erasure may have listed the targets before
-it). Re-running is harmless: the list is deleted last.
+`LikeEraser` first marks the account erased (`engagement.erased_accounts`, 30-day TTL, migration 0007,
+with the deletion's own time), then for each target it liked removes its `:likers` entry and, in one
+logged batch, swaps its `likes_by_target` row for an **anonymous** one with the same total and deletes
+its `likes_by_account` row — so the counts stay rebuildable from `likes_by_target`. The anonymous id is
+a UUIDv5 of the account, the target and the deletion's time: a replay (a redelivery, a batch that timed
+out but landed) rewrites the same row, and it never collides with an account id (v7). The Scylla writes
+are stamped with the erasure's time, so a stake made before it and landing late cannot write the
+account back. The stake consumer drops a marked account's stakes, and re-checks after applying one (the
+erasure may have listed the targets before it).
 
 > **Invariants** (and where enforced): a target's like count is the sum of its accounts' totals, and an
 > account's total only grows — both enforced atomically by the Lua script (a total no larger than the

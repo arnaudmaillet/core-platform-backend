@@ -2,19 +2,36 @@
 //! goes, the counts stay — the points are kept, anonymously.
 //!
 //! The account is first marked erased (the stake consumer then drops its late
-//! stakes), then each target it liked forgets it, in Redis and in Scylla, and
-//! last its own list. Scylla deletes are stamped with the erasure's time, so a
-//! stake made before it (always earlier) cannot write the account back.
-//! Re-running is harmless: the list is deleted last, so a failed pass is
-//! picked up where it stopped.
+//! stakes), then each target it liked forgets it: its Redis entry goes, and in
+//! Scylla its row becomes an anonymous one with the same total (so the counts
+//! stay rebuildable from the durable copy) while its own list entry goes, both
+//! at once. Scylla writes are stamped with the erasure's time, so a stake made
+//! before it (always earlier) cannot write the account back. Re-running is
+//! harmless: a forgotten target has left the list, and the anonymous row's id
+//! depends only on the erasure ([`anonymous_liker`]), so a replay rewrites it
+//! rather than adding a second one.
 
 use std::sync::Arc;
 
-use crate::application::port::{LikeLedger, LikeStore};
+use uuid::Uuid;
+
+use crate::application::port::{ForgottenLike, LikeLedger, LikeStore};
+use crate::domain::value_object::LikeTarget;
 use crate::error::EngagementError;
 
 /// Targets forgotten per round.
 const PAGE: i32 = 500;
+
+/// The namespace of anonymous liker ids (UUIDv5; real account ids are v7, so
+/// the two never collide).
+const ANONYMOUS_LIKERS: Uuid = Uuid::from_u128(0x6c1b_9f3e_2d4a_4e8b_9a07_51c3_e2f6_0d18);
+
+/// The anonymous liker that takes `account`'s place on `target`: the same for
+/// every replay of one erasure (keyed by the deletion's time), and not
+/// derivable from the account id alone.
+pub fn anonymous_liker(account: &str, target: &LikeTarget, erased_at_micros: i64) -> Uuid {
+    Uuid::new_v5(&ANONYMOUS_LIKERS, format!("{account}|{target}|{erased_at_micros}").as_bytes())
+}
 
 pub struct LikeEraser {
     pub store:  Arc<dyn LikeStore>,
@@ -22,21 +39,31 @@ pub struct LikeEraser {
 }
 
 impl LikeEraser {
-    /// Erases `account`'s likes as of `at_micros`; returns the targets it
-    /// was forgotten on.
-    pub async fn erase(&self, account: &str, at_micros: i64) -> Result<usize, EngagementError> {
-        self.ledger.mark_erased(account).await?;
+    /// Erases `account`, deleted at `erased_at_micros` (the deletion's own
+    /// time, the same on every replay), with Scylla writes stamped
+    /// `at_micros` (now: later than any of its stakes); returns the targets
+    /// it was forgotten on.
+    pub async fn erase(&self, account: &str, erased_at_micros: i64, at_micros: i64) -> Result<usize, EngagementError> {
+        self.ledger.mark_erased(account, erased_at_micros).await?;
         let (mut forgotten, mut after) = (0, None);
         loop {
             let page = self.ledger.list_by_account(account, PAGE, after.as_ref()).await?;
-            let targets: Vec<_> = page.into_iter().map(|like| like.target).collect();
-            if targets.is_empty() {
+            let likes: Vec<_> = page
+                .into_iter()
+                .map(|like| ForgottenLike {
+                    anonymous_id: anonymous_liker(account, &like.target, erased_at_micros),
+                    target:       like.target,
+                    total:        like.total,
+                })
+                .collect();
+            if likes.is_empty() {
                 break;
             }
+            let targets: Vec<_> = likes.iter().map(|l| l.target.clone()).collect();
             self.store.forget(account, &targets).await?;
-            self.ledger.forget(account, &targets, at_micros).await?;
-            forgotten += targets.len();
-            if targets.len() < PAGE as usize {
+            self.ledger.forget(account, &likes, at_micros).await?;
+            forgotten += likes.len();
+            if likes.len() < PAGE as usize {
                 break;
             }
             after = targets.last().cloned();
@@ -48,7 +75,7 @@ impl LikeEraser {
 
 #[cfg(test)]
 pub(crate) mod fakes {
-    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::collections::{BTreeMap, HashMap};
     use std::sync::Mutex;
 
     use async_trait::async_trait;
@@ -58,13 +85,15 @@ pub(crate) mod fakes {
     use crate::application::port::AccountLike;
     use crate::domain::value_object::LikeTarget;
 
-    /// Redis and Scylla in one: per target, each account's total and the sum.
+    /// Redis and Scylla in one: per target, each account's total and the sum;
+    /// the durable copy by account and by target.
     #[derive(Default)]
     pub struct Likes {
-        pub likers: Mutex<HashMap<LikeTarget, HashMap<String, i64>>>,
-        pub counts: Mutex<HashMap<LikeTarget, i64>>,
-        pub rows:   Mutex<BTreeMap<(String, String, String), i64>>,
-        pub erased: Mutex<HashSet<String>>,
+        pub likers:    Mutex<HashMap<LikeTarget, HashMap<String, i64>>>,
+        pub counts:    Mutex<HashMap<LikeTarget, i64>>,
+        pub rows:      Mutex<BTreeMap<(String, String, String), i64>>,
+        pub by_target: Mutex<HashMap<LikeTarget, HashMap<String, i64>>>,
+        pub erased:    Mutex<HashMap<String, i64>>,
     }
 
     fn key(t: &LikeTarget) -> (String, String) {
@@ -105,6 +134,7 @@ pub(crate) mod fakes {
         async fn record(&self, target: &LikeTarget, account: &str, _: &str, total: i64, _: i64) -> Result<(), EngagementError> {
             let (kind, id) = key(target);
             self.rows.lock().unwrap().insert((account.to_owned(), kind, id), total);
+            self.by_target.lock().unwrap().entry(target.clone()).or_default().insert(account.to_owned(), total);
             Ok(())
         }
         async fn list_by_account(
@@ -129,16 +159,23 @@ pub(crate) mod fakes {
                 })
                 .collect())
         }
-        async fn mark_erased(&self, account: &str) -> Result<(), EngagementError> {
-            self.erased.lock().unwrap().insert(account.to_owned());
+        async fn mark_erased(&self, account: &str, erased_at: i64) -> Result<(), EngagementError> {
+            self.erased.lock().unwrap().insert(account.to_owned(), erased_at);
             Ok(())
         }
-        async fn is_erased(&self, account: &str) -> Result<bool, EngagementError> {
-            Ok(self.erased.lock().unwrap().contains(account))
+        async fn erased_at(&self, account: &str) -> Result<Option<i64>, EngagementError> {
+            Ok(self.erased.lock().unwrap().get(account).copied())
         }
-        /// The per-target copy is not modeled: the account's list stands for
-        /// both, and goes last.
-        async fn forget(&self, _: &str, _: &[LikeTarget], _: i64) -> Result<(), EngagementError> {
+        async fn forget(&self, account: &str, likes: &[ForgottenLike], _: i64) -> Result<(), EngagementError> {
+            let mut by_target = self.by_target.lock().unwrap();
+            let mut rows = self.rows.lock().unwrap();
+            for like in likes {
+                let likers = by_target.entry(like.target.clone()).or_default();
+                likers.remove(account);
+                likers.insert(like.anonymous_id.to_string(), like.total);
+                let (kind, id) = key(&like.target);
+                rows.remove(&(account.to_owned(), kind, id));
+            }
             Ok(())
         }
         async fn forget_account(&self, account: &str, _: i64) -> Result<(), EngagementError> {
@@ -166,15 +203,26 @@ mod tests {
         }
         let eraser = LikeEraser { store: likes.clone(), ledger: likes.clone() };
 
-        assert_eq!(eraser.erase("gone", 10).await.unwrap(), 1_201, "every page");
-        assert!(likes.is_erased("gone").await.unwrap());
+        assert_eq!(eraser.erase("gone", 7, 10).await.unwrap(), 1_201, "every page");
+        assert_eq!(likes.erased_at("gone").await.unwrap(), Some(7));
         assert_eq!(likes.mine("gone", &targets).await.unwrap(), vec![0; 1_201]);
         assert_eq!(likes.counts(&targets).await.unwrap(), vec![5; 1_201], "the points are kept");
         assert_eq!(likes.mine("stays", &targets[..1]).await.unwrap(), vec![2]);
         assert!(likes.list_by_account("gone", 10, None).await.unwrap().is_empty());
         assert_eq!(likes.list_by_account("stays", 10, None).await.unwrap().len(), 10);
+        // The durable copy still sums to the count, without the account.
+        let by_target = likes.by_target.lock().unwrap().clone();
+        assert!(by_target.values().all(|l| !l.contains_key("gone") && l.values().sum::<i64>() == 5));
 
         // A redelivered deletion finds nothing left.
-        assert_eq!(eraser.erase("gone", 11).await.unwrap(), 0);
+        assert_eq!(eraser.erase("gone", 7, 11).await.unwrap(), 0);
+
+        // A replay of a target's forget (a batch that timed out but landed)
+        // rewrites the same anonymous row.
+        let t = &targets[0];
+        let again = ForgottenLike { target: t.clone(), total: 3, anonymous_id: anonymous_liker("gone", t, 7) };
+        LikeLedger::forget(likes.as_ref(), "gone", &[again], 12).await.unwrap();
+        assert_eq!(likes.by_target.lock().unwrap()[t].values().sum::<i64>(), 5, "no second anonymous row");
+        assert_ne!(anonymous_liker("gone", t, 7), anonymous_liker("gone", t, 8), "keyed by the erasure");
     }
 }

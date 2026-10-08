@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 0cf6cd20681c9634fb7e6cb00d651d767bce1579f4e068747df7a13c45ad1908
+  source_sha256: 29dfc76cec134bb4de0aad935e79325301aa4105f0bcb66483dd90f6dfc34033
   translated_at: 2026-10-08
   status: complete
 ---
@@ -84,12 +84,15 @@ cible, `kind:id`). Elle lit Scylla, donc nécessite le chemin Kafka ; sans lui l
 **Les likes d'un compte supprimé (RGPD art. 17).** Sur `account.v1.events` `account_deleted` (groupe
 `engagement-account-erasure`), qui a liké disparaît et les compteurs restent : les points sont gardés,
 anonymement. `LikeEraser` marque d'abord le compte comme effacé (`engagement.erased_accounts`, TTL de
-30 jours, migration 0007), puis pour chaque cible likée retire son entrée `:likers` et sa ligne
-`likes_by_target`, et supprime en dernier sa partition `likes_by_account`. Les suppressions Scylla
-portent l'heure de l'effacement, si bien qu'une mise faite avant lui et arrivée en retard ne peut pas
-réécrire le compte. Le consommateur des mises ignore les mises d'un compte marqué, et revérifie après en
-avoir appliqué une (l'effacement a pu lister les cibles avant elle). Le relancer est sans effet : la
-liste est supprimée en dernier.
+30 jours, migration 0007, avec l'heure de la suppression), puis pour chaque cible likée retire son
+entrée `:likers` et, dans un même batch logged, remplace sa ligne `likes_by_target` par une ligne
+**anonyme** de même total et supprime sa ligne `likes_by_account` — les compteurs restent ainsi
+reconstructibles depuis `likes_by_target`. L'id anonyme est un UUIDv5 du compte, de la cible et de
+l'heure de la suppression : un rejeu (re-livraison, batch expiré mais appliqué) réécrit la même ligne,
+et il ne collisionne jamais avec un id de compte (v7). Les écritures Scylla portent l'heure de
+l'effacement, si bien qu'une mise faite avant lui et arrivée en retard ne peut pas réécrire le compte.
+Le consommateur des mises ignore les mises d'un compte marqué, et revérifie après en avoir appliqué une
+(l'effacement a pu lister les cibles avant elle).
 
 > **Invariants** (et où ils sont imposés) : le compteur de likes d'une cible est la somme des totaux de
 > ses comptes, et le total d'un compte ne fait que croître — tous deux imposés atomiquement par le script

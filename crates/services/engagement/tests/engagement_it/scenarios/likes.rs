@@ -7,8 +7,8 @@ use std::sync::Arc;
 use scylla_storage::{ScyllaConfig, ScyllaSessionBuilder};
 use uuid::Uuid;
 
-use engagement::application::erasure::LikeEraser;
-use engagement::application::port::LikeLedger;
+use engagement::application::erasure::{anonymous_liker, LikeEraser};
+use engagement::application::port::{ForgottenLike, LikeLedger};
 use engagement::domain::value_object::LikeTarget;
 use engagement::infrastructure::persistence::ScyllaLikeLedger;
 
@@ -141,10 +141,10 @@ async fn a_deleted_accounts_likes_are_forgotten_the_counts_kept() {
     }
 
     let eraser = LikeEraser { store: Arc::clone(&h.like_store), ledger: ledger.clone() };
-    assert_eq!(eraser.erase(&gone, 2_000_000).await.unwrap(), 2);
+    assert_eq!(eraser.erase(&gone, 1_800_000, 2_000_000).await.unwrap(), 2);
 
-    assert!(ledger.is_erased(&gone).await.unwrap());
-    assert!(!ledger.is_erased(&stays).await.unwrap());
+    assert_eq!(ledger.erased_at(&gone).await.unwrap(), Some(1_800_000));
+    assert_eq!(ledger.erased_at(&stays).await.unwrap(), None);
     assert_eq!(h.like_store.mine(&gone, &targets).await.unwrap(), vec![0, 0]);
     assert_eq!(h.like_store.counts(&targets).await.unwrap(), vec![10, 10], "the points are kept");
     assert!(ledger.list_by_account(&gone, 10, None).await.unwrap().is_empty());
@@ -163,6 +163,25 @@ async fn a_deleted_accounts_likes_are_forgotten_the_counts_kept() {
         .unwrap()
         .into_rows_result()
         .unwrap();
-    let likers: Vec<(Uuid,)> = rows.rows::<(Uuid,)>().unwrap().map(|r| r.unwrap()).collect();
-    assert_eq!(likers, vec![(Uuid::parse_str(&stays).unwrap(),)], "only who stays");
+    let mut likers: Vec<Uuid> = rows.rows::<(Uuid,)>().unwrap().map(|r| r.unwrap().0).collect();
+    likers.sort();
+    let mut expected = vec![Uuid::parse_str(&stays).unwrap(), anonymous_liker(&gone, &targets[0], 1_800_000)];
+    expected.sort();
+    assert_eq!(likers, expected, "who stays, and the deleted account's points under an anonymous id");
+
+    // Forgetting again (a replayed batch) rewrites the same anonymous row.
+    let again = ForgottenLike { target: targets[0].clone(), total: 7, anonymous_id: anonymous_liker(&gone, &targets[0], 1_800_000) };
+    ledger.forget(&gone, &[again], 2_100_000).await.unwrap();
+    let rows = client
+        .session
+        .execute_unpaged(
+            "SELECT total FROM engagement.likes_by_target WHERE target_kind = ? AND target_id = ?",
+            (targets[0].kind(), targets[0].id()),
+        )
+        .await
+        .unwrap()
+        .into_rows_result()
+        .unwrap();
+    let sum: i64 = rows.rows::<(i64,)>().unwrap().map(|r| r.unwrap().0).sum();
+    assert_eq!(sum, 10, "the durable copy still sums to the count");
 }

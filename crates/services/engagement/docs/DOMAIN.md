@@ -99,7 +99,8 @@ counts per post's answer (`BatchGetLikeVisibility`, cached 60 s).
 **Export.** account's GDPR export pages `ListLikesByAccount` (mesh only) into `likes.json`.
 
 **Erasure.** On `account_deleted`, `LikeEraser` marks the account erased, forgets it on each target it
-liked (Redis entry, Scylla row) and deletes its list; the counts stay.
+liked (Redis entry gone; Scylla row swapped for an anonymous one with the same total, so the counts
+stay rebuildable) and deletes its list; the counts stay.
 
 ---
 

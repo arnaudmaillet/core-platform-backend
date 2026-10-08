@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: d2592f1dd273e3a949ba9d416d5fc512e57d17b08704cd4df816f9f3450cdba6
+  source_sha256: 936b8a0adc33d66e55680cc22aa197b6b6fa451637ccd018090a17e96a1ea57f
   translated_at: 2026-10-08
   status: complete
 ---
@@ -113,7 +113,8 @@ compteurs masqués selon la réponse de post (`BatchGetLikeVisibility`, en cache
 **Export.** L'export RGPD d'account parcourt `ListLikesByAccount` (mesh uniquement) vers `likes.json`.
 
 **Effacement.** Sur `account_deleted`, `LikeEraser` marque le compte comme effacé, l'oublie sur chaque
-cible likée (entrée Redis, ligne Scylla) et supprime sa liste ; les compteurs restent.
+cible likée (entrée Redis retirée ; ligne Scylla remplacée par une ligne anonyme de même total, les
+compteurs restant reconstructibles) et supprime sa liste ; les compteurs restent.
 
 ---
 

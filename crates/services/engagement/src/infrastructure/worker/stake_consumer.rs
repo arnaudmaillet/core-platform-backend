@@ -16,7 +16,8 @@ use transport::kafka::consumer::builder::KafkaConsumerBuilder;
 use transport::kafka::consumer::{run_consumer, ProcessOutcome, RetryPolicy};
 use transport::kafka::producer::KafkaProducerHandle;
 
-use crate::application::port::{LikeLedger, LikeStore};
+use crate::application::erasure::anonymous_liker;
+use crate::application::port::{ForgottenLike, LikeLedger, LikeStore};
 use crate::domain::value_object::LikeTarget;
 use crate::error::EngagementError;
 use crate::infrastructure::worker::build_dlq_producer;
@@ -150,16 +151,16 @@ async fn apply_stake(
     total: i64,
     at_micros: i64,
 ) -> Result<(), EngagementError> {
-    if ledger.is_erased(account).await? {
+    if ledger.erased_at(account).await?.is_some() {
         tracing::info!(target = %target, "stake of a deleted account dropped");
         return Ok(());
     }
     likes.apply_total(target, account, total).await?;
     ledger.record(target, account, profile, total, at_micros).await?;
-    if ledger.is_erased(account).await? {
-        let targets = [target.clone()];
-        likes.forget(account, &targets).await?;
-        ledger.forget(account, &targets, chrono::Utc::now().timestamp_micros()).await?;
+    if let Some(erased_at) = ledger.erased_at(account).await? {
+        likes.forget(account, std::slice::from_ref(target)).await?;
+        let like = ForgottenLike { target: target.clone(), total, anonymous_id: anonymous_liker(account, target, erased_at) };
+        ledger.forget(account, &[like], chrono::Utc::now().timestamp_micros()).await?;
     }
     Ok(())
 }
@@ -212,7 +213,7 @@ mod tests {
         let likes = Likes::default();
         let post = LikeTarget::Post("p1".into());
         apply_stake(&likes, &likes, &post, "a", "liker", 4, 1).await.unwrap();
-        likes.mark_erased("gone").await.unwrap();
+        likes.mark_erased("gone", 1).await.unwrap();
         apply_stake(&likes, &likes, &post, "gone", "liker", 9, 1).await.unwrap();
         assert_eq!(likes.counts(std::slice::from_ref(&post)).await.unwrap(), vec![4]);
         assert_eq!(likes.mine("gone", &[post]).await.unwrap(), vec![0]);

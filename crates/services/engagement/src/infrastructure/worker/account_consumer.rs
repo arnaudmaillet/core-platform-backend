@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use transport::kafka::config::client::KafkaClientConfig;
 use transport::kafka::config::consumer::{AutoOffsetReset, ConsumerConfig};
@@ -23,14 +24,17 @@ pub struct AccountEvent {
     #[serde(rename = "type")]
     kind:       String,
     #[serde(default)]
-    account_id: String,
+    account_id:  String,
+    #[serde(default)]
+    occurred_at: Option<DateTime<Utc>>,
 }
 
 /// What an event asks of the likes.
 #[derive(Debug, PartialEq, Eq)]
 enum Outcome {
     Skip,
-    Erase(String),
+    /// The account, and the deletion's own time (the same on every replay).
+    Erase(String, i64),
     Poison(String),
 }
 
@@ -38,8 +42,11 @@ fn outcome(event: &AccountEvent) -> Outcome {
     if event.kind != "account_deleted" {
         return Outcome::Skip;
     }
+    let Some(at) = event.occurred_at else {
+        return Outcome::Poison("account_deleted without occurred_at".into());
+    };
     match uuid::Uuid::parse_str(&event.account_id) {
-        Ok(account) => Outcome::Erase(account.to_string()),
+        Ok(account) => Outcome::Erase(account.to_string(), at.timestamp_micros()),
         Err(_) => Outcome::Poison(format!("account_deleted with a bad account_id {:?}", event.account_id)),
     }
 }
@@ -88,8 +95,8 @@ impl AccountConsumer {
                 match outcome(event) {
                     Outcome::Skip => ProcessOutcome::Done,
                     Outcome::Poison(reason) => ProcessOutcome::Reject(reason),
-                    Outcome::Erase(account) => {
-                        let erased = worker.eraser.erase(&account, chrono::Utc::now().timestamp_micros()).await;
+                    Outcome::Erase(account, erased_at) => {
+                        let erased = worker.eraser.erase(&account, erased_at, Utc::now().timestamp_micros()).await;
                         if let Ok(targets) = &erased {
                             tracing::info!(targets, "a deleted account's likes erased");
                         }
@@ -106,7 +113,6 @@ impl AccountConsumer {
 #[cfg(test)]
 mod tests {
     use account::domain::event::{AccountDeleted, AccountSuspended, DomainEvent as AccountDomainEvent};
-    use chrono::Utc;
     use uuid::Uuid;
 
     use super::*;
@@ -119,13 +125,14 @@ mod tests {
     #[test]
     fn account_deleted_erases_the_likes_other_events_skip() {
         let id = account::domain::value_object::AccountId::new();
+        let at = Utc::now();
         let deleted = wire(AccountDomainEvent::AccountDeleted(AccountDeleted {
             account_id: id,
             deleted_by: None,
-            occurred_at: Utc::now(),
+            occurred_at: at,
             correlation_id: Uuid::now_v7(),
         }));
-        assert_eq!(outcome(&deleted), Outcome::Erase(id.to_string()));
+        assert_eq!(outcome(&deleted), Outcome::Erase(id.to_string(), at.timestamp_micros()));
         let suspended = wire(AccountDomainEvent::AccountSuspended(AccountSuspended {
             account_id: id,
             reason: "spam".into(),
@@ -133,7 +140,8 @@ mod tests {
             correlation_id: Uuid::now_v7(),
         }));
         assert_eq!(outcome(&suspended), Outcome::Skip);
-        let bad: AccountEvent = serde_json::from_str(r#"{"type":"account_deleted","account_id":"nope"}"#).unwrap();
+        let bad: AccountEvent =
+            serde_json::from_str(r#"{"type":"account_deleted","account_id":"nope","occurred_at":"2026-10-08T00:00:00Z"}"#).unwrap();
         assert!(matches!(outcome(&bad), Outcome::Poison(_)));
     }
 }
