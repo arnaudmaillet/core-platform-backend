@@ -136,6 +136,58 @@ where
         Ok(Response::new(proto::ListSupervisionsResponse { supervisions: views.into_iter().map(supervision_to_proto).collect() }))
     }
 
+    /// A supervisor sets its teen's limits (#670 part 2). Edge: the caller's account.
+    pub async fn set_supervision_limits(
+        &self,
+        request: Request<proto::SetSupervisionLimitsRequest>,
+    ) -> Result<Response<proto::SupervisionLimitsView>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let limits = limits_from_proto(req.limits.unwrap_or_default())?;
+        let record = self
+            .supervisions()?
+            .set_limits(&req.account_id, &req.teen_account_id, limits, Utc::now())
+            .await
+            .map_err(account_error_to_status)?;
+        Ok(Response::new(limits_view(Some(record))))
+    }
+
+    /// A teen's limits, for the teen or a supervisor (#670 part 2). Edge: the
+    /// caller's account.
+    pub async fn get_supervision_limits(
+        &self,
+        request: Request<proto::GetSupervisionLimitsRequest>,
+    ) -> Result<Response<proto::SupervisionLimitsView>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let record = self
+            .supervisions()?
+            .limits(&req.account_id, &req.teen_account_id)
+            .await
+            .map_err(account_error_to_status)?;
+        Ok(Response::new(limits_view(record)))
+    }
+
+    /// The app's time report (#670 part 2). Edge: the caller's account.
+    pub async fn report_screen_time(
+        &self,
+        request: Request<proto::ReportScreenTimeRequest>,
+    ) -> Result<Response<proto::ScreenTimeView>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let minutes = u16::try_from(req.minutes).map_err(|_| Status::invalid_argument("minutes"))?;
+        let time = self
+            .supervisions()?
+            .report_time(&req.account_id, minutes, &req.timezone, Utc::now())
+            .await
+            .map_err(account_error_to_status)?;
+        Ok(Response::new(proto::ScreenTimeView {
+            used_minutes:  u32::try_from(time.used_minutes).unwrap_or_default(),
+            limit_minutes: time.limit_minutes.map(u32::from).unwrap_or_default(),
+            reached:       time.reached,
+        }))
+    }
+
     /// Ends one of the caller's supervisions (#670). Edge: the caller's account.
     pub async fn end_supervision(
         &self,
@@ -907,6 +959,58 @@ pub const ERROR_CODE_METADATA: &str = "x-error-code";
 /// A handler's own error, mapped like a bus error (status + `ACC-xxxx`).
 pub fn account_error_to_status(err: crate::error::AccountError) -> Status {
     cqrs_error_to_status(cqrs::error::CqrsError::from_handler(err))
+}
+
+fn floor_from_proto(value: i32) -> Result<Option<crate::domain::supervision::AudienceFloor>, Status> {
+    use crate::domain::supervision::AudienceFloor;
+    match proto::AudienceFloor::try_from(value) {
+        Ok(proto::AudienceFloor::Unspecified) => Ok(None),
+        Ok(proto::AudienceFloor::Followers) => Ok(Some(AudienceFloor::Followers)),
+        Ok(proto::AudienceFloor::Mutuals) => Ok(Some(AudienceFloor::Mutuals)),
+        Ok(proto::AudienceFloor::NoOne) => Ok(Some(AudienceFloor::NoOne)),
+        Err(_) => Err(Status::invalid_argument("unknown audience floor")),
+    }
+}
+
+fn floor_to_proto(floor: Option<crate::domain::supervision::AudienceFloor>) -> i32 {
+    use crate::domain::supervision::AudienceFloor;
+    (match floor {
+        None => proto::AudienceFloor::Unspecified,
+        Some(AudienceFloor::Followers) => proto::AudienceFloor::Followers,
+        Some(AudienceFloor::Mutuals) => proto::AudienceFloor::Mutuals,
+        Some(AudienceFloor::NoOne) => proto::AudienceFloor::NoOne,
+    }) as i32
+}
+
+fn limits_from_proto(l: proto::SupervisionLimits) -> Result<crate::domain::supervision::SupervisionLimits, Status> {
+    Ok(crate::domain::supervision::SupervisionLimits {
+        private_account:    l.private_account,
+        messages:           floor_from_proto(l.messages)?,
+        comments:           floor_from_proto(l.comments)?,
+        hidden_from_search: l.hidden_from_search,
+        daily_minutes:      match l.daily_minutes {
+            0 => None,
+            m => Some(u16::try_from(m).map_err(|_| Status::invalid_argument("daily_minutes"))?),
+        },
+    })
+}
+
+fn limits_view(record: Option<crate::domain::supervision::LimitsRecord>) -> proto::SupervisionLimitsView {
+    match record {
+        None => proto::SupervisionLimitsView::default(),
+        Some(r) => proto::SupervisionLimitsView {
+            set: true,
+            limits: Some(proto::SupervisionLimits {
+                private_account:    r.limits.private_account,
+                messages:           floor_to_proto(r.limits.messages),
+                comments:           floor_to_proto(r.limits.comments),
+                hidden_from_search: r.limits.hidden_from_search,
+                daily_minutes:      r.limits.daily_minutes.map(u32::from).unwrap_or_default(),
+            }),
+            set_by_account_id: r.set_by.to_string(),
+            set_at: Some(dt_to_ts(r.set_at)),
+        },
+    }
 }
 
 fn supervision_to_proto(view: crate::application::command::SupervisionView) -> proto::SupervisionView {

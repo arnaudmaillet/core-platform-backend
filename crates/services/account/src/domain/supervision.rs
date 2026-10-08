@@ -178,6 +178,87 @@ impl SupervisionEnd {
     }
 }
 
+/// Shortest and longest daily time limit, in minutes.
+pub const MIN_DAILY_MINUTES: u16 = 15;
+pub const MAX_DAILY_MINUTES: u16 = 24 * 60;
+/// Most minutes one usage report may add (the app reports often).
+pub const MAX_REPORTED_MINUTES: u16 = 15;
+
+/// The least strict audience a supervisor allows (for messages, comments):
+/// the teen may pick it or anything stricter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AudienceFloor {
+    Followers,
+    Mutuals,
+    NoOne,
+}
+
+impl AudienceFloor {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Followers => "followers",
+            Self::Mutuals => "mutuals",
+            Self::NoOne => "no_one",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "followers" => Some(Self::Followers),
+            "mutuals" => Some(Self::Mutuals),
+            "no_one" => Some(Self::NoOne),
+            _ => None,
+        }
+    }
+}
+
+/// What a teen's supervisors set (#670 part 2): one shared set per teen —
+/// either supervisor edits it, the last change applies. Each is a floor:
+/// the teen may only be stricter.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SupervisionLimits {
+    /// The teen's profiles stay private.
+    pub private_account:    bool,
+    /// Who may message the teen, at the loosest.
+    pub messages:           Option<AudienceFloor>,
+    /// Who may comment on the teen's posts, at the loosest.
+    pub comments:           Option<AudienceFloor>,
+    /// Hidden from handle search, suggestions and contact matching (a shared
+    /// QR code or link still works).
+    pub hidden_from_search: bool,
+    /// Daily time on the app, all devices together.
+    pub daily_minutes:      Option<u16>,
+}
+
+impl SupervisionLimits {
+    pub fn validate(&self) -> Result<(), AccountError> {
+        match self.daily_minutes {
+            Some(m) if !(MIN_DAILY_MINUTES..=MAX_DAILY_MINUTES).contains(&m) => Err(AccountError::DomainViolation {
+                field:   "daily_minutes".into(),
+                message: format!("a daily limit is {MIN_DAILY_MINUTES}–{MAX_DAILY_MINUTES} minutes"),
+            }),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// The limits in force, and who set them when.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LimitsRecord {
+    pub limits: SupervisionLimits,
+    pub set_by: AccountId,
+    pub set_at: DateTime<Utc>,
+}
+
+/// The teen's day for time counting: the date in their IANA zone (UTC when
+/// unknown or invalid).
+pub fn local_day(now: DateTime<Utc>, timezone: &str) -> chrono::NaiveDate {
+    match timezone.parse::<chrono_tz::Tz>() {
+        Ok(tz) => now.with_timezone(&tz).date_naive(),
+        Err(_) => now.date_naive(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,5 +309,18 @@ mod tests {
         assert!(matches!(invite.accept(id(), Some(AgeBracket::Adult), now), Err(AccountError::SupervisionRoleNotAllowed { .. })), "two adults");
         assert!(matches!(invite.accept(parent, Some(AgeBracket::Teen13To15), now), Err(AccountError::SelfSupervision)));
         assert!(matches!(invite.accept(id(), Some(AgeBracket::Teen13To15), now + INVITE_TTL), Err(AccountError::SupervisionInviteInvalid)), "expired");
+    }
+
+    #[test]
+    fn limits_are_floors_and_days_are_local() {
+        assert!(AudienceFloor::NoOne > AudienceFloor::Mutuals && AudienceFloor::Mutuals > AudienceFloor::Followers);
+        assert!(SupervisionLimits { daily_minutes: Some(60), ..Default::default() }.validate().is_ok());
+        for bad in [5, 24 * 60 + 1] {
+            assert!(SupervisionLimits { daily_minutes: Some(bad), ..Default::default() }.validate().is_err(), "{bad}");
+        }
+        // 23:30 UTC is already the next day in Paris (summer: UTC+2).
+        let late = DateTime::parse_from_rfc3339("2026-07-01T23:30:00Z").unwrap().with_timezone(&Utc);
+        assert_eq!(local_day(late, "Europe/Paris").to_string(), "2026-07-02");
+        assert_eq!(local_day(late, "not/a_zone").to_string(), "2026-07-01");
     }
 }

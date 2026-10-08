@@ -40,7 +40,7 @@ pub use password_changed::PasswordChanged;
 pub use phone_changed::PhoneChanged;
 pub use role_assigned::RoleAssigned;
 pub use role_revoked::RoleRevoked;
-pub use supervision::{SupervisionEnded, SupervisionStarted};
+pub use supervision::{SupervisionEnded, SupervisionLimitsCleared, SupervisionLimitsSet, SupervisionStarted};
 
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +73,8 @@ pub enum DomainEvent {
     DateOfBirthSet(DateOfBirthSet),
     SupervisionStarted(SupervisionStarted),
     SupervisionEnded(SupervisionEnded),
+    SupervisionLimitsSet(SupervisionLimitsSet),
+    SupervisionLimitsCleared(SupervisionLimitsCleared),
 }
 
 impl DomainEvent {
@@ -100,6 +102,8 @@ impl DomainEvent {
             Self::DateOfBirthSet(_)          => "account.date_of_birth_set",
             Self::SupervisionStarted(_)      => "account.supervision_started",
             Self::SupervisionEnded(_)        => "account.supervision_ended",
+            Self::SupervisionLimitsSet(_)    => "account.supervision_limits_set",
+            Self::SupervisionLimitsCleared(_) => "account.supervision_limits_cleared",
         }
     }
 }

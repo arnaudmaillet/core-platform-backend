@@ -12,6 +12,7 @@ dependencies = [
  "auth-context",
  "chat-api",
  "chrono",
+ "chrono-tz",
  "comment-api",
  "cqrs",
  "engagement-api",

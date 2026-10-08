@@ -197,4 +197,22 @@ service AccountService {
     // may; the other is told) and returns those left. ACC-3005 when there is
     // none.
     rpc EndSupervision(EndSupervisionRequest) returns (ListSupervisionsResponse);
+
+    // Part 2: limits. One shared set per teen; either supervisor sets it (the
+    // last change applies) and the teen may only be stricter (profile locks
+    // the settings). Lifted when the teen's last supervision ends — the
+    // settings keep their values, unlocked.
+
+    // A supervisor sets its teen's limits. ACC-3005 when the caller does not
+    // supervise `teen_account_id`; ACC-9001 a daily limit outside 15–1440.
+    rpc SetSupervisionLimits(SetSupervisionLimitsRequest) returns (SupervisionLimitsView);
+
+    // A teen's limits, for the teen (`teen_account_id` empty) or one of its
+    // supervisors. ACC-3005 for anyone else.
+    rpc GetSupervisionLimits(GetSupervisionLimitsRequest) returns (SupervisionLimitsView);
+
+    // The app reports its time on the app (at most 15 minutes per report)
+    // and learns whether today's limit is reached — all devices together,
+    // the day in the given IANA zone. Counted only under a daily limit.
+    rpc ReportScreenTime(ReportScreenTimeRequest) returns (ScreenTimeView);
 }

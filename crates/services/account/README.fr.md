@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 4aa9fbde2a8692a3d6d3750fd60928b93ec13571195361e0ab5bf72cd8226b68
+  source_sha256: 3cb2f044a90fe3932b39115009d21ca3f5af2af18798434828b61e023663c0da
   translated_at: 2026-10-08
   status: complete
 ---
@@ -163,6 +163,9 @@ service AccountService {
   rpc AcceptSupervisionInvite (AcceptSupervisionInviteRequest) returns (SupervisionView);
   rpc ListSupervisions (ListSupervisionsRequest) returns (ListSupervisionsResponse);
   rpc EndSupervision (EndSupervisionRequest) returns (ListSupervisionsResponse);
+  rpc SetSupervisionLimits (SetSupervisionLimitsRequest) returns (SupervisionLimitsView);
+  rpc GetSupervisionLimits (GetSupervisionLimitsRequest) returns (SupervisionLimitsView);
+  rpc ReportScreenTime (ReportScreenTimeRequest) returns (ScreenTimeView);
   rpc UpdateConsents (UpdateConsentsRequest) returns (GdprRecordView);         // GDPR Art. 7 consents + history
   rpc ListAccountsByStatus (ListAccountsByStatusRequest) returns (ListAccountsByStatusResponse);
 }
@@ -221,8 +224,25 @@ majorité se lit en joignant la ligne `accounts` de l'ado, sur ce même shard), 
 `supervisions_by_supervisor` sur le shard du superviseur — écrit ado d'abord, idempotent, une entrée
 d'index périmée supprimée à la lecture. Chaque début et fin est publié (`SupervisionStarted` /
 `SupervisionEnded { ended_by: by_teen | by_supervisor | came_of_age | account_deleted }`, `account_id` =
-l'ado) avec les ids de profil des deux côtés, pour que chacun puisse être prévenu. Les limites et ce que
-voit un superviseur viennent avec les parties 2 et 3. Edge : le compte de l'appelant.
+l'ado) avec les ids de profil des deux côtés, pour que chacun puisse être prévenu. Edge : le compte de
+l'appelant.
+
+**Limites de supervision (#670 partie 2).** Un jeu **partagé** par ado (`supervision_limits`, migration
+0011, sur le shard de l'ado) : l'un ou l'autre superviseur le pose avec
+`SetSupervisionLimits(account_id, teen_account_id, limits)` et la dernière modification s'applique
+(`set_by`, `set_at` gardés). Chaque limite est un **plancher** que l'ado ne peut que rendre plus strict :
+`private_account` ; l'audience la plus large pour `messages` / `comments` (`followers` < `mutuals` <
+`no_one`) ; `hidden_from_search` (recherche par pseudo, suggestions, contacts — un QR code ou un lien
+partagé fonctionne toujours) ; `daily_minutes` (15 à 1440, sinon `ACC-9001`). Pas son superviseur ⇒
+`ACC-3005`. L'ado et chaque superviseur les lisent avec `GetSupervisionLimits`. Chaque changement est
+publié (`SupervisionLimitsSet`, avec les ids de profil de l'ado) : profile resserre les réglages de
+l'ado jusqu'aux planchers et refuse de les assouplir (partie 2b). Quand la **dernière** supervision de
+l'ado prend fin (par l'un ou l'autre côté, à 18 ans, à l'effacement), les limites sont levées
+(`SupervisionLimitsCleared`) : les réglages gardent leurs valeurs, déverrouillés. **Temps d'écran :**
+l'app déclare son usage avec `ReportScreenTime(account_id, minutes ≤ 15, timezone)` et apprend le total
+du jour sur tous les appareils et si la limite est atteinte (elle affiche alors l'écran de pause ; le
+serveur ne coupe pas les requêtes). Seul un ado avec une limite quotidienne est compté (`screen_time`,
+par compte et jour local, gardé 4 semaines).
 
 **Export de données RGPD (#653, art. 15/20).** `RequestDataExport` marque l'export en attente ; la
 **passe d'export** (`ExportDueData`) construit alors, pour chaque compte en attente, un ZIP de fichiers
@@ -289,7 +309,7 @@ Les codes stables vont de `ACC-1xxx` (lifecycle) à `ACC-9xxx` (identifiers), vi
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet`, `SupervisionStarted`, `SupervisionEnded` (#670 ; `account_id` = l'ado) | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet`, `SupervisionStarted`, `SupervisionEnded`, `SupervisionLimitsSet`, `SupervisionLimitsCleared` (#670 ; `account_id` = l'ado) | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
 
 **Consomme :** rien — `account` est un producteur d'événements pur.
 

@@ -78,3 +78,13 @@ enum SupervisionRole {
     // A teen aged 13 to 17.
     SUPERVISION_ROLE_TEEN        = 2;
 }
+
+// The loosest audience a supervisor allows for messages or comments (#670):
+// the teen may pick it or anything stricter.
+enum AudienceFloor {
+    // No floor.
+    AUDIENCE_FLOOR_UNSPECIFIED = 0;
+    AUDIENCE_FLOOR_FOLLOWERS   = 1;
+    AUDIENCE_FLOOR_MUTUALS     = 2;
+    AUDIENCE_FLOOR_NO_ONE      = 3;
+}

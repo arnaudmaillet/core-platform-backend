@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 
-use crate::domain::supervision::{InviteCode, Supervision, SupervisionInvite};
+use crate::domain::supervision::{InviteCode, LimitsRecord, Supervision, SupervisionInvite};
 use crate::domain::value_object::{AccountId, AgeBracket};
 use crate::error::AccountError;
 
@@ -54,6 +54,19 @@ pub trait SupervisionStore: Send + Sync + 'static {
 
     /// The supervisions whose teen is 18 on `today` (up to `limit`).
     async fn came_of_age(&self, today: NaiveDate, limit: i64) -> Result<Vec<Supervision>, AccountError>;
+
+    /// A teen's limits (on the teen's shard), if any.
+    async fn limits(&self, teen: &AccountId) -> Result<Option<LimitsRecord>, AccountError>;
+
+    /// Sets a teen's limits (replacing the previous ones: one shared set).
+    async fn put_limits(&self, teen: &AccountId, record: &LimitsRecord) -> Result<(), AccountError>;
+
+    /// Lifts a teen's limits; `false` when there were none.
+    async fn clear_limits(&self, teen: &AccountId) -> Result<bool, AccountError>;
+
+    /// Adds `minutes` to `account`'s time on `day` (its local day); returns
+    /// the day's total.
+    async fn add_usage(&self, account: &AccountId, day: NaiveDate, minutes: i32) -> Result<i32, AccountError>;
 
     /// Drops the invites expired at `now`; returns how many.
     async fn purge_expired_invites(&self, now: DateTime<Utc>) -> Result<u64, AccountError>;
