@@ -1,17 +1,19 @@
 //! What likes land on, over the mesh: post (`GetPost`), comment
 //! (`GetComment`), and whether the one who likes may see it (social-graph
 //! `CheckAccess`). Any failure but NOT_FOUND is `WAL-6001` (fail closed).
+//! What they came to, for the settlement: engagement's `GetLikePositions`.
 
 use async_trait::async_trait;
 use tonic::transport::Channel;
 use tonic::Code;
 
 use comment_api::comment_service_client::CommentServiceClient;
+use engagement_api::engagement_service_client::EngagementServiceClient;
 use post_api::post_service_client::PostServiceClient;
 use social_graph_api::social_graph_service_client::SocialGraphServiceClient;
 
-use crate::application::port::{AudienceCheck, TargetDirectory, TargetInfo};
-use crate::domain::StakeTarget;
+use crate::application::port::{AudienceCheck, LikePositions, TargetDirectory, TargetInfo};
+use crate::domain::{AccountId, Observed, StakeTarget};
 use crate::error::WalletError;
 
 pub struct GrpcTargetDirectory {
@@ -95,5 +97,59 @@ impl AudienceCheck for GrpcAudienceCheck {
         Ok(answer.targets.iter().any(|t| {
             t.target_profile_id == author_profile_id && t.access == social_graph_api::ContentAccess::Visible as i32
         }))
+    }
+}
+
+pub struct GrpcLikePositions {
+    engagement: EngagementServiceClient<Channel>,
+}
+
+impl GrpcLikePositions {
+    /// `channel` must carry request and connect timeouts.
+    pub fn new(channel: Channel) -> Self {
+        Self { engagement: EngagementServiceClient::new(channel) }
+    }
+}
+
+fn like_target(target: &StakeTarget) -> engagement_api::LikeTarget {
+    use engagement_api::like_target::Target;
+    engagement_api::LikeTarget {
+        target: Some(match target {
+            StakeTarget::Post(id) => Target::PostId(id.clone()),
+            StakeTarget::Comment(id) => Target::CommentId(id.clone()),
+        }),
+    }
+}
+
+#[async_trait]
+impl LikePositions for GrpcLikePositions {
+    async fn positions(&self, account: &AccountId, targets: &[StakeTarget]) -> Result<Vec<Observed>, WalletError> {
+        let answer = self
+            .engagement
+            .clone()
+            .get_like_positions(engagement_api::GetLikePositionsRequest {
+                account_id: account.as_uuid().to_string(),
+                targets:    targets.iter().map(like_target).collect(),
+            })
+            .await
+            .map_err(unavailable("engagement"))?
+            .into_inner();
+        Ok(answer
+            .positions
+            .into_iter()
+            .map(|p| Observed { total: p.total, count_on_arrival: p.count_on_arrival, count_now: p.count_now })
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stake_target_is_engagements_like_target() {
+        use engagement_api::like_target::Target;
+        assert_eq!(like_target(&StakeTarget::Post("p".into())).target, Some(Target::PostId("p".into())));
+        assert_eq!(like_target(&StakeTarget::Comment("c".into())).target, Some(Target::CommentId("c".into())));
     }
 }

@@ -14,6 +14,7 @@ wallet-api  = { workspace = true }
 post-api    = { workspace = true }
 comment-api = { workspace = true }
 social-graph-api = { workspace = true }   # CheckAccess: a like needs the content visible
+engagement-api   = { workspace = true }   # GetLikePositions: what a stake came to (settlement)
 
 # ── Shared platform infrastructure ────────────────────────────────────────────
 error            = { workspace = true }

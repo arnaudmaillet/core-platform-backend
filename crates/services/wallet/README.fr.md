@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: e02189bfaad81a0c49d31f715b5c97164ae38f0ce80befba1b42540e8ac5a889
+  source_sha256: beaf4a8f4a453190b9862fd60ddf66f8ddd45ff09e7a988c97a172973f18a115
   translated_at: 2026-10-08
   status: complete
 ---
@@ -126,6 +126,22 @@ cible (la notification « X a liké ton post » part une seule fois). Les évén
 purgés après 7 jours. Sans `KAFKA_BROKERS` le service **ne démarre pas** (sauf
 `WALLET_ALLOW_LOG_PUBLISHER=true`, en local) : une mauvaise config ne perd jamais de likes en silence.
 
+**Règlement des mises (#665 partie 4, mode shadow).** Une **position** — les mises d'un compte sur un
+post ou un commentaire, sa ligne `stakes` — se règle **une seule fois, un jour après sa première mise**
+(`WALLET_SETTLEMENT_DELAY_SECS`). Le **settler** (toutes les `WALLET_SETTLEMENT_SECS`, tous les shards)
+prend en bail les positions échues comme l'outbox (`settle_claimed_until`, `FOR UPDATE SKIP LOCKED`,
+5 min), demande à engagement ce qu'est devenue chaque cible (`GetLikePositions` : le compteur de la cible
+juste avant le premier like du compte, et maintenant) et écrit une ligne dans **`settlements`**
+(migration 0005) avec les points de la position, les compteurs, sa **précocité** (la part des points des
+autres arrivée après lui) et un **pré-score** = précocité × √(points / 250) — modèle `shadow-v0`, la
+position marquée réglée dans la même transaction. **Aucune gem n'est créée** : c'est la phase 2 de la
+charte économique (dev/economy dans le dépôt iOS), les scores enregistrés d'abord pour calibrer ;
+l'enveloppe journalière (le résultat du jour et la part de chaque position) vient ensuite. Les points
+misés après le règlement d'une position ne sont pas réglés à nouveau (v0). Un compte pour lequel
+engagement ne peut pas répondre reste en bail et est réessayé à sa fin. Sans
+`WALLET_ENGAGEMENT_GRPC_ENDPOINT`, rien ne se règle. Les règlements partent avec le compte à
+l'effacement.
+
 > **Invariants** (et où ils sont tenus) : soldes ≥ 0 (`CHECK`) ; chaque solde = Σ des deltas de son
 > registre (même transaction, verrou de ligne ; vérifié en test d'intégration) ; un mouvement par
 > clé rattachée (`UNIQUE`) ; une réclamation par intervalle et un pack à la fois (verrou + règle du
@@ -162,6 +178,7 @@ purgés après 7 jours. Sans `KAFKA_BROKERS` le service **ne démarre pas** (sau
 | l'app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack` | solde, réclamation et pack indisponibles ; le reste de l'app fonctionne |
 | geo-discovery | `SpendGems` | déblocages de pays refusés (fail-closed) ; la carte fonctionne |
 | post, comment, social-graph (en aval) | `GetPost`, `GetComment`, `CheckAccess` | likes refusés (`WAL-6001`, renvoyés par l'app) |
+| engagement (en aval) | `GetLikePositions` | les règlements attendent (réessayés après le bail) |
 
 > **Chemin critique ?** Non — le fil, les posts et le chat ne l'appellent pas.
 
@@ -265,6 +282,9 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_POST_GRPC_ENDPOINT` · `WALLET_COMMENT_GRPC_ENDPOINT` | `http://localhost:50056` · `:50057` | adresses mesh de post et comment (là où tombent les likes) |
 | `WALLET_SOCIAL_GRAPH_GRPC_ENDPOINT` | `http://localhost:50053` | adresse mesh de social-graph (le lecteur peut-il voir le contenu) |
 | `WALLET_OUTBOX_DRAIN_SECS` | `5` | fréquence du drainer de l'outbox |
+| `WALLET_ENGAGEMENT_GRPC_ENDPOINT` | non défini | adresse mesh d'engagement (p. ex. `http://engagement:50058`) : le règlement des mises. Non défini → rien ne se règle |
+| `WALLET_SETTLEMENT_DELAY_SECS` | `86400` | délai entre la première mise d'une position et son règlement |
+| `WALLET_SETTLEMENT_SECS` · `WALLET_SETTLEMENT_BATCH` | `60` · `500` | fréquence du settler, et positions par passage |
 | `WALLET_ALLOW_LOG_PUBLISHER` | non défini | `true` : démarrer sans `KAFKA_BROKERS`, en journalisant les événements (local seulement) |
 
 Une valeur illisible ou négative garde le défaut.
@@ -283,7 +303,8 @@ du jeton edge (edge client), OTel.
 ## 🚀 Déploiement, migrations & retour arrière &nbsp;·&nbsp; OPS
 
 Migrations : `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.sql` (`ref_id`),
-`0003_create_stakes.sql` (`stakes`, l'index de l'heure), `0004_create_outbox.sql` (`wallet_outbox`), appliquées par `migrator wallet` (init
+`0003_create_stakes.sql` (`stakes`, l'index de l'heure), `0004_create_outbox.sql` (`wallet_outbox`),
+`0005_create_settlements.sql` (`settlements` ; `stakes.settled_at` / `settle_claimed_until`), appliquées par `migrator wallet` (init
 container) avant le binaire. Infra (dépôt ECR, manifests, `wallet-postgres`, route d'ingress,
 NetworkPolicy) : core-platform-infra#41 — le binaire rejoint `FLEET_BINS` dès que son dépôt ECR
 existe. Retour arrière : le binaire est sans état ; le schéma est additif.
@@ -315,4 +336,6 @@ cargo test -p wallet --features integration-wallet     # Postgres : concurrence,
 3. Les likes sont des points : `Stake` (cette partie) ; puis les compteurs de likes, les
    notifications, le classement des pays et les centres d'intérêt passent à `StakeCommitted` ; les
    réactions ont disparu, et l'export RGPD lit les likes d'un compte.
-4. Règlement des mises (gems gagnés).
+4. Règlement des mises (gems gagnés), en mode shadow d'abord : engagement garde l'arrivée de chaque
+   likeur (S1), le settler note les positions sans créer de gems (S2, cette partie), puis l'enveloppe
+   journalière (S3) ; la création de gems et le pool créateurs après calibration.

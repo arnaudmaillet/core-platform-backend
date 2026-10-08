@@ -16,8 +16,8 @@ use crate::application::port::{
 };
 use crate::domain::event::{StakeCommitted, WalletEvent};
 use crate::domain::{
-    AccountId, ClaimDecision, ClaimPolicy, Currency, IdempotencyKey, PackDecision, StakeAsk, StakeDecision,
-    StakePackPolicy, StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
+    AccountId, ClaimDecision, ClaimPolicy, Currency, DuePosition, IdempotencyKey, PackDecision, Settlement, StakeAsk,
+    StakeDecision, StakePackPolicy, StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
 
@@ -580,6 +580,11 @@ impl WalletStore for PgWalletStore {
             .map_err(storage)?;
         // Unpublished announcements still go out (their likes counted);
         // published ones are the drainer's to prune.
+        sqlx::query("DELETE FROM settlements WHERE account_id = $1")
+            .bind(account.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(storage)?;
         sqlx::query("DELETE FROM stakes WHERE account_id = $1")
             .bind(account.as_uuid())
             .execute(&mut *tx)
@@ -594,5 +599,83 @@ impl WalletStore for PgWalletStore {
             > 0;
         tx.commit().await.map_err(storage)?;
         Ok(erased)
+    }
+
+    #[instrument(name = "wallet.settlement.claim_due", skip(self))]
+    async fn claim_due_positions(
+        &self,
+        limit: i64,
+        due_before: DateTime<Utc>,
+        now: DateTime<Utc>,
+        lease_until: DateTime<Utc>,
+    ) -> Result<Vec<DuePosition>, WalletError> {
+        let mut due = Vec::new();
+        for pool in self.tx.all_pools() {
+            let rows: Vec<(Uuid, String, String, i64, DateTime<Utc>)> = sqlx::query_as(
+                "UPDATE stakes SET settle_claimed_until = $4 WHERE (account_id, target_kind, target_id) IN ( \
+                   SELECT account_id, target_kind, target_id FROM stakes \
+                   WHERE settled_at IS NULL AND first_at <= $2 \
+                     AND (settle_claimed_until IS NULL OR settle_claimed_until < $3) \
+                   ORDER BY first_at LIMIT $1 FOR UPDATE SKIP LOCKED) \
+                 RETURNING account_id, target_kind, target_id, total, first_at",
+            )
+            .bind(limit)
+            .bind(due_before)
+            .bind(now)
+            .bind(lease_until)
+            .fetch_all(pool)
+            .await
+            .map_err(storage)?;
+            for (account, kind, id, total, first_at) in rows {
+                // A row the service cannot read is left unsettled, never guessed.
+                let target = match kind.as_str() {
+                    "post" => StakeTarget::Post(id),
+                    "comment" => StakeTarget::Comment(id),
+                    _ => continue,
+                };
+                due.push(DuePosition { account: AccountId::from_uuid(account), target, points: total, first_at });
+            }
+        }
+        due.sort_by_key(|p| p.first_at);
+        Ok(due)
+    }
+
+    #[instrument(name = "wallet.settlement.record", skip(self, settlement))]
+    async fn record_settlement(&self, settlement: &Settlement) -> Result<(), WalletError> {
+        let account = settlement.account.as_uuid();
+        let mut tx = self.pool(&settlement.account)?.begin().await.map_err(storage)?;
+        sqlx::query(
+            "INSERT INTO settlements (account_id, target_kind, target_id, points, first_at, settled_at, \
+               count_on_arrival, count_at_settlement, earliness, pre_score, model) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             ON CONFLICT (account_id, target_kind, target_id) DO NOTHING",
+        )
+        .bind(account)
+        .bind(settlement.target.kind())
+        .bind(settlement.target.id())
+        .bind(settlement.points)
+        .bind(settlement.first_at)
+        .bind(settlement.settled_at)
+        .bind(settlement.count_on_arrival)
+        .bind(settlement.count_at_settlement)
+        .bind(settlement.earliness)
+        .bind(settlement.pre_score)
+        .bind(settlement.model)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage)?;
+        sqlx::query(
+            "UPDATE stakes SET settled_at = $4, settle_claimed_until = NULL \
+             WHERE account_id = $1 AND target_kind = $2 AND target_id = $3 AND settled_at IS NULL",
+        )
+        .bind(account)
+        .bind(settlement.target.kind())
+        .bind(settlement.target.id())
+        .bind(settlement.settled_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage)?;
+        tx.commit().await.map_err(storage)?;
+        Ok(())
     }
 }

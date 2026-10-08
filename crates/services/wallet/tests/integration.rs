@@ -310,3 +310,67 @@ async fn a_stake_and_its_announcement_are_written_together() {
     assert!(mine(store.claim_unpublished(10_000, much_later, much_later).await.unwrap()).is_empty(), "published");
     assert!(store.prune_outbox(Utc::now() + chrono::TimeDelta::days(1)).await.unwrap() >= 1);
 }
+
+/// Stake settlement (#665, shadow mode): a due position is leased to one
+/// settler at a time, settles once, and goes with the account.
+#[tokio::test]
+async fn due_positions_are_leased_to_one_settler_and_settle_once() {
+    use chrono::TimeDelta;
+    use wallet::domain::{Observed, SettlementPolicy};
+
+    let pool = pool().await;
+    let store = store(&pool);
+    let account = AccountId::from_uuid(Uuid::now_v7());
+    fund(&pool, &store, &account, 500).await;
+    let targets = [StakeTarget::Post(format!("post-{}", Uuid::now_v7())), StakeTarget::Comment(format!("c-{}", Uuid::now_v7()))];
+    for target in &targets {
+        let key = IdempotencyKey::for_operation(Operation::Stake, &Uuid::now_v7().to_string()).unwrap();
+        store
+            .stake(&account, &key, target, StakeAsk::Points(20), &announcement(), &StakePolicy::default(), &StakePackPolicy::default(), 0, Utc::now())
+            .await
+            .unwrap();
+    }
+    let now = Utc::now() + TimeDelta::hours(25);
+    let mine = |due: Vec<wallet::domain::DuePosition>| due.into_iter().filter(|p| p.account == account).collect::<Vec<_>>();
+
+    // Two settlers at once: each position goes to exactly one of them.
+    let (a, b) = tokio::join!(
+        store.claim_due_positions(10_000, now - TimeDelta::hours(24), now, now + TimeDelta::minutes(5)),
+        store.claim_due_positions(10_000, now - TimeDelta::hours(24), now, now + TimeDelta::minutes(5)),
+    );
+    let (a, b) = (mine(a.unwrap()), mine(b.unwrap()));
+    assert_eq!(a.len() + b.len(), 2, "both positions claimed, each once");
+    let first = a.into_iter().chain(b).find(|p| p.target == targets[0]).unwrap();
+    assert_eq!(first.points, 20);
+
+    let policy = SettlementPolicy::default();
+    let observed = Observed { total: 20, count_on_arrival: Some(5), count_now: 45 };
+    store.record_settlement(&policy.settle(first.clone(), observed, now)).await.unwrap();
+    // A second settlement of the same position keeps the first.
+    let again = Observed { total: 20, count_on_arrival: Some(5), count_now: 999 };
+    store.record_settlement(&policy.settle(first, again, now)).await.unwrap();
+    let (count, earliness): (i64, Option<f64>) = sqlx::query_as(
+        "SELECT count_at_settlement, earliness FROM settlements WHERE account_id = $1 AND target_id = $2",
+    )
+    .bind(account.as_uuid())
+    .bind(targets[0].id())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((count, earliness), (45, Some(20.0 / 25.0)));
+
+    // Once the lease ends, only the unsettled position comes back.
+    let later = now + TimeDelta::minutes(10);
+    let back = mine(store.claim_due_positions(10_000, later - TimeDelta::hours(24), later, later + TimeDelta::minutes(5)).await.unwrap());
+    assert_eq!(back.iter().map(|p| p.target.clone()).collect::<Vec<_>>(), vec![targets[1].clone()]);
+    // A position whose first stake is not a day old is not due.
+    assert!(mine(store.claim_due_positions(10_000, Utc::now() - TimeDelta::hours(24), later, later).await.unwrap()).is_empty());
+
+    store.erase(&account).await.unwrap();
+    let (left,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM settlements WHERE account_id = $1")
+        .bind(account.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0, "settlements go with the account");
+}
