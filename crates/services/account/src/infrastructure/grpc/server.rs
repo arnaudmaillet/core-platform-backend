@@ -300,4 +300,25 @@ where
     ) -> Result<Response<proto::ListSupervisionsResponse>, Status> {
         self.end_supervision(request).await
     }
+
+    async fn set_supervision_limits(
+        &self,
+        request: Request<proto::SetSupervisionLimitsRequest>,
+    ) -> Result<Response<proto::SupervisionLimitsView>, Status> {
+        self.set_supervision_limits(request).await
+    }
+
+    async fn get_supervision_limits(
+        &self,
+        request: Request<proto::GetSupervisionLimitsRequest>,
+    ) -> Result<Response<proto::SupervisionLimitsView>, Status> {
+        self.get_supervision_limits(request).await
+    }
+
+    async fn report_screen_time(
+        &self,
+        request: Request<proto::ReportScreenTimeRequest>,
+    ) -> Result<Response<proto::ScreenTimeView>, Status> {
+        self.report_screen_time(request).await
+    }
 }

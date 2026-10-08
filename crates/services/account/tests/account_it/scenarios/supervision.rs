@@ -214,3 +214,49 @@ async fn one_code_pairs_one_acceptor_and_guessing_is_capped() {
         Err(AccountError::SupervisionAttemptsExceeded)
     ));
 }
+
+/// #670 part 2 over Postgres: a supervisor sets the teen's limits, the teen
+/// reads them, time counts across reports up to the limit, and the limits go
+/// with the last supervisor.
+#[tokio::test]
+async fn limits_and_screen_time_over_postgres() {
+    use account::domain::supervision::{AudienceFloor, SupervisionLimits};
+
+    let h = TestHarness::start().await;
+    let supervisions = Supervisions::new(
+        Arc::new(PgSupervisionStore::new(TransactionManager::new(h.pool.clone()))),
+        Arc::new(RepoAccountAges(Arc::clone(&h.repository))),
+        Arc::new(Profiles),
+        Arc::new(Published::default()),
+    );
+    let (parent, teen) = (account(&h, 44).await, account(&h, 14).await);
+    pair(&supervisions, &parent, &teen).await.unwrap();
+
+    let limits = SupervisionLimits {
+        private_account: true,
+        messages: Some(AudienceFloor::NoOne),
+        comments: None,
+        hidden_from_search: true,
+        daily_minutes: Some(20),
+    };
+    supervisions.set_limits(&parent, &teen, limits.clone(), Utc::now()).await.unwrap();
+    let mine = supervisions.limits(&teen, "").await.unwrap().expect("set");
+    assert_eq!(mine.limits, limits);
+    assert_eq!(mine.set_by.to_string(), parent);
+
+    let first = supervisions.report_time(&teen, 15, "Europe/Paris", Utc::now()).await.unwrap();
+    assert_eq!((first.used_minutes, first.reached), (15, false));
+    let second = supervisions.report_time(&teen, 5, "Europe/Paris", Utc::now()).await.unwrap();
+    assert_eq!((second.used_minutes, second.limit_minutes, second.reached), (20, Some(20), true));
+    // An unsupervised account's time is not kept.
+    assert_eq!(supervisions.report_time(&parent, 5, "UTC", Utc::now()).await.unwrap().limit_minutes, None);
+    let (rows,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM screen_time WHERE account_id = $1")
+        .bind(Uuid::parse_str(&parent).unwrap())
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+
+    supervisions.end(&parent, &teen, Utc::now()).await.unwrap();
+    assert!(supervisions.limits(&teen, "").await.unwrap().is_none(), "lifted with the last supervisor");
+}

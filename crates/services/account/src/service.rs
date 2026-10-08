@@ -73,6 +73,9 @@ impl Service for AccountService {
         authenticated("/account.v1.AccountService/AcceptSupervisionInvite"),
         authenticated("/account.v1.AccountService/ListSupervisions"),
         authenticated("/account.v1.AccountService/EndSupervision"),
+        authenticated("/account.v1.AccountService/SetSupervisionLimits"),
+        authenticated("/account.v1.AccountService/GetSupervisionLimits"),
+        authenticated("/account.v1.AccountService/ReportScreenTime"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

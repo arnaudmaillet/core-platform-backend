@@ -51,6 +51,7 @@ serde        = { workspace = true }
 uuid         = { workspace = true }
 chrono       = { workspace = true }
 rand         = { workspace = true }   # supervision invite codes (#670)
+chrono-tz    = { workspace = true }   # a supervised teen's local day (#670)
 
 # ── Error handling ────────────────────────────────────────────────────────────
 thiserror    = { workspace = true }

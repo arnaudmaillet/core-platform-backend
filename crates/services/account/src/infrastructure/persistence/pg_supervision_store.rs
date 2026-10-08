@@ -10,7 +10,9 @@ use postgres_storage::{StorageError, TransactionManager};
 use tracing::instrument;
 
 use crate::application::port::{AccountAges, AccountRepository, Linked, SupervisionStore};
-use crate::domain::supervision::{InviteCode, Supervision, SupervisionInvite, SupervisionRole};
+use crate::domain::supervision::{
+    AudienceFloor, InviteCode, LimitsRecord, Supervision, SupervisionInvite, SupervisionLimits, SupervisionRole,
+};
 use crate::domain::value_object::{AccountId, AgeBracket};
 use crate::error::AccountError;
 
@@ -260,6 +262,83 @@ impl SupervisionStore for PgSupervisionStore {
         Ok(due)
     }
 
+    #[instrument(name = "account.supervision.limits", skip(self), fields(teen = %teen))]
+    async fn limits(&self, teen: &AccountId) -> Result<Option<LimitsRecord>, AccountError> {
+        type Row = (bool, Option<String>, Option<String>, bool, Option<i16>, uuid::Uuid, DateTime<Utc>);
+        let row: Option<Row> = sqlx::query_as(
+            "SELECT private_account, messages, comments, hidden_from_search, daily_minutes, set_by, set_at \
+             FROM supervision_limits WHERE teen_id = $1",
+        )
+        .bind(teen.as_uuid())
+        .fetch_optional(self.pool(teen)?)
+        .await
+        .map_err(storage)?;
+        Ok(row.map(|(private_account, messages, comments, hidden_from_search, daily_minutes, set_by, set_at)| LimitsRecord {
+            limits: SupervisionLimits {
+                private_account,
+                messages: messages.as_deref().and_then(AudienceFloor::parse),
+                comments: comments.as_deref().and_then(AudienceFloor::parse),
+                hidden_from_search,
+                daily_minutes: daily_minutes.and_then(|m| u16::try_from(m).ok()),
+            },
+            set_by: AccountId::from_uuid(set_by),
+            set_at,
+        }))
+    }
+
+    #[instrument(name = "account.supervision.put_limits", skip(self, record), fields(teen = %teen))]
+    async fn put_limits(&self, teen: &AccountId, record: &LimitsRecord) -> Result<(), AccountError> {
+        let l = &record.limits;
+        sqlx::query(
+            "INSERT INTO supervision_limits \
+             (teen_id, private_account, messages, comments, hidden_from_search, daily_minutes, set_by, set_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (teen_id) DO UPDATE SET private_account = EXCLUDED.private_account, \
+               messages = EXCLUDED.messages, comments = EXCLUDED.comments, \
+               hidden_from_search = EXCLUDED.hidden_from_search, daily_minutes = EXCLUDED.daily_minutes, \
+               set_by = EXCLUDED.set_by, set_at = EXCLUDED.set_at",
+        )
+        .bind(teen.as_uuid())
+        .bind(l.private_account)
+        .bind(l.messages.map(AudienceFloor::as_str))
+        .bind(l.comments.map(AudienceFloor::as_str))
+        .bind(l.hidden_from_search)
+        .bind(l.daily_minutes.map(|m| m as i16))
+        .bind(record.set_by.as_uuid())
+        .bind(record.set_at)
+        .execute(self.pool(teen)?)
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    #[instrument(name = "account.supervision.clear_limits", skip(self), fields(teen = %teen))]
+    async fn clear_limits(&self, teen: &AccountId) -> Result<bool, AccountError> {
+        let cleared = sqlx::query("DELETE FROM supervision_limits WHERE teen_id = $1")
+            .bind(teen.as_uuid())
+            .execute(self.pool(teen)?)
+            .await
+            .map_err(storage)?
+            .rows_affected();
+        Ok(cleared > 0)
+    }
+
+    #[instrument(name = "account.supervision.add_usage", skip(self))]
+    async fn add_usage(&self, account: &AccountId, day: NaiveDate, minutes: i32) -> Result<i32, AccountError> {
+        let (total,): (i32,) = sqlx::query_as(
+            "INSERT INTO screen_time AS t (account_id, day, minutes) VALUES ($1, $2, $3) \
+             ON CONFLICT (account_id, day) DO UPDATE SET minutes = t.minutes + EXCLUDED.minutes \
+             RETURNING minutes",
+        )
+        .bind(account.as_uuid())
+        .bind(day)
+        .bind(minutes)
+        .fetch_one(self.pool(account)?)
+        .await
+        .map_err(storage)?;
+        Ok(total)
+    }
+
     #[instrument(name = "account.supervision.purge_invites", skip(self))]
     async fn purge_expired_invites(&self, now: DateTime<Utc>) -> Result<u64, AccountError> {
         let mut purged = 0;
@@ -270,6 +349,12 @@ impl SupervisionStore for PgSupervisionStore {
                 .await
                 .map_err(storage)?
                 .rows_affected();
+            // Screen time is kept four weeks (the supervisor's view, part 3).
+            sqlx::query("DELETE FROM screen_time WHERE day < $1")
+                .bind((now - chrono::Duration::days(28)).date_naive())
+                .execute(pool)
+                .await
+                .map_err(storage)?;
             // Failure counts outlive their hour by a day at most.
             sqlx::query("DELETE FROM supervision_accept_failures WHERE hour < $1")
                 .bind(now - chrono::Duration::days(1))

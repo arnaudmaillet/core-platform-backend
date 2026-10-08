@@ -12,10 +12,12 @@ use uuid::Uuid;
 use crate::application::port::{
     AccountAges, DirectoryProfile, EventPublisher, Linked, ProfileDirectory, SupervisionStore,
 };
-use crate::domain::event::{DomainEvent, SupervisionEnded, SupervisionStarted};
+use crate::domain::event::{
+    DomainEvent, SupervisionEnded, SupervisionLimitsCleared, SupervisionLimitsSet, SupervisionStarted,
+};
 use crate::domain::supervision::{
-    InviteCode, Supervision, SupervisionEnd, SupervisionInvite, SupervisionRole, MAX_FAILED_ACCEPTS_PER_HOUR,
-    MAX_SUPERVISORS,
+    local_day, InviteCode, LimitsRecord, Supervision, SupervisionEnd, SupervisionInvite, SupervisionLimits,
+    SupervisionRole, MAX_FAILED_ACCEPTS_PER_HOUR, MAX_REPORTED_MINUTES, MAX_SUPERVISORS,
 };
 use crate::domain::value_object::AccountId;
 use crate::error::AccountError;
@@ -32,6 +34,16 @@ pub struct SupervisionView {
     pub since:    DateTime<Utc>,
     /// The other side's active profiles, to show who it is.
     pub profiles: Vec<DirectoryProfile>,
+}
+
+/// A teen's time today against their limit (#670 part 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenTime {
+    pub used_minutes:  i32,
+    /// `None`: no daily limit.
+    pub limit_minutes: Option<u16>,
+    /// The app shows the pause screen.
+    pub reached:       bool,
 }
 
 pub struct Supervisions {
@@ -173,6 +185,70 @@ impl Supervisions {
         Ok(())
     }
 
+    /// A supervisor sets its teen's limits (#670 part 2): one shared set,
+    /// replacing the previous one; published so profile applies and locks them.
+    pub async fn set_limits(
+        &self,
+        supervisor: &str,
+        teen: &str,
+        limits: SupervisionLimits,
+        now: DateTime<Utc>,
+    ) -> Result<LimitsRecord, AccountError> {
+        let supervisor = AccountId::try_from(supervisor)?;
+        let teen = AccountId::try_from(teen).map_err(|_| AccountError::SupervisionNotFound)?;
+        if self.find(&teen, &supervisor).await?.is_none() {
+            return Err(AccountError::SupervisionNotFound);
+        }
+        limits.validate()?;
+        let record = LimitsRecord { limits, set_by: supervisor, set_at: now };
+        self.store.put_limits(&teen, &record).await?;
+        let l = &record.limits;
+        self.publisher
+            .publish(&DomainEvent::SupervisionLimitsSet(SupervisionLimitsSet {
+                account_id: teen,
+                set_by: supervisor,
+                private_account: l.private_account,
+                messages: l.messages.map(|a| a.as_str().to_owned()),
+                comments: l.comments.map(|a| a.as_str().to_owned()),
+                hidden_from_search: l.hidden_from_search,
+                daily_minutes: l.daily_minutes,
+                teen_profile_ids: ids(&self.profiles.profiles_of(&teen).await?),
+                occurred_at: now,
+                correlation_id: Uuid::now_v7(),
+            }))
+            .await?;
+        Ok(record)
+    }
+
+    /// A teen's limits, read by the teen themselves or one of their
+    /// supervisors (`teen` empty: the caller's own). `None`: no limits.
+    pub async fn limits(&self, account: &str, teen: &str) -> Result<Option<LimitsRecord>, AccountError> {
+        let account = AccountId::try_from(account)?;
+        let teen = if teen.is_empty() { account } else { AccountId::try_from(teen).map_err(|_| AccountError::SupervisionNotFound)? };
+        if teen != account && self.find(&teen, &account).await?.is_none() {
+            return Err(AccountError::SupervisionNotFound);
+        }
+        self.store.limits(&teen).await
+    }
+
+    /// The app reports `minutes` more of use (at most 15 at a time) and learns
+    /// whether the day's limit is reached. Only a teen with a daily limit is
+    /// counted; the day is local to `timezone` (UTC when invalid).
+    pub async fn report_time(&self, account: &str, minutes: u16, timezone: &str, now: DateTime<Utc>) -> Result<ScreenTime, AccountError> {
+        let account = AccountId::try_from(account)?;
+        if minutes > MAX_REPORTED_MINUTES {
+            return Err(AccountError::DomainViolation {
+                field:   "minutes".into(),
+                message: format!("a report adds at most {MAX_REPORTED_MINUTES} minutes"),
+            });
+        }
+        let Some(limit) = self.store.limits(&account).await?.and_then(|r| r.limits.daily_minutes) else {
+            return Ok(ScreenTime { used_minutes: 0, limit_minutes: None, reached: false });
+        };
+        let used = self.store.add_usage(&account, local_day(now, timezone), i32::from(minutes)).await?;
+        Ok(ScreenTime { used_minutes: used, limit_minutes: Some(limit), reached: used >= i32::from(limit) })
+    }
+
     async fn find(&self, teen: &AccountId, supervisor: &AccountId) -> Result<Option<Supervision>, AccountError> {
         Ok(self.store.supervisors_of(teen).await?.into_iter().find(|l| l.supervisor == *supervisor))
     }
@@ -193,6 +269,19 @@ impl Supervisions {
             }))
             .await?;
         self.store.unlink(&link.teen, &link.supervisor).await?;
+        // The teen's last supervisor gone: their limits are lifted (the
+        // settings keep their values, unlocked).
+        if self.store.supervisors_of(&link.teen).await?.is_empty() && self.store.limits(&link.teen).await?.is_some() {
+            self.publisher
+                .publish(&DomainEvent::SupervisionLimitsCleared(SupervisionLimitsCleared {
+                    account_id: link.teen,
+                    teen_profile_ids: ids(&teen_profiles),
+                    occurred_at: now,
+                    correlation_id: Uuid::now_v7(),
+                }))
+                .await?;
+            self.store.clear_limits(&link.teen).await?;
+        }
         Ok(())
     }
 
@@ -224,6 +313,8 @@ mod tests {
     struct Store {
         invites: Mutex<HashMap<String, SupervisionInvite>>,
         claims:  Mutex<HashMap<String, AccountId>>,
+        limits:  Mutex<HashMap<AccountId, LimitsRecord>>,
+        usage:   Mutex<HashMap<(AccountId, NaiveDate), i32>>,
         failures: Mutex<HashMap<(AccountId, DateTime<Utc>), i64>>,
         links:   Mutex<Vec<Supervision>>,
         /// Teens who are 18 on any day asked.
@@ -249,6 +340,22 @@ mod tests {
             }
             let mut claims = self.claims.lock().unwrap();
             Ok(*claims.entry(code.as_str().to_owned()).or_insert(*acceptor) == *acceptor)
+        }
+        async fn limits(&self, teen: &AccountId) -> Result<Option<LimitsRecord>, AccountError> {
+            Ok(self.limits.lock().unwrap().get(teen).cloned())
+        }
+        async fn put_limits(&self, teen: &AccountId, record: &LimitsRecord) -> Result<(), AccountError> {
+            self.limits.lock().unwrap().insert(*teen, record.clone());
+            Ok(())
+        }
+        async fn clear_limits(&self, teen: &AccountId) -> Result<bool, AccountError> {
+            Ok(self.limits.lock().unwrap().remove(teen).is_some())
+        }
+        async fn add_usage(&self, account: &AccountId, day: NaiveDate, minutes: i32) -> Result<i32, AccountError> {
+            let mut usage = self.usage.lock().unwrap();
+            let total = usage.entry((*account, day)).or_insert(0);
+            *total += minutes;
+            Ok(*total)
         }
         async fn failed_accepts(&self, account: &AccountId, hour: DateTime<Utc>) -> Result<i64, AccountError> {
             Ok(self.failures.lock().unwrap().get(&(*account, hour)).copied().unwrap_or(0))
@@ -508,5 +615,58 @@ mod tests {
             w.handler.accept(&guesser.to_string(), fresh.code.as_str(), Utc::now()).await,
             Err(AccountError::SupervisionAttemptsExceeded)
         ), "even a right code, past the cap");
+    }
+
+    /// #670 part 2: a supervisor sets one shared set of limits; the teen and
+    /// any supervisor read it; a stranger does not; the app counts time only
+    /// under a daily limit; the last supervisor leaving lifts the limits.
+    #[tokio::test]
+    async fn limits_are_set_by_a_supervisor_read_by_both_and_lifted_with_the_last() {
+        use crate::domain::supervision::AudienceFloor;
+
+        let w = world();
+        let (mum, dad, teen) = (w.account(AgeBracket::Adult), w.account(AgeBracket::Adult), w.account(AgeBracket::Teen13To15));
+        w.pair(mum, teen).await.unwrap();
+        w.pair(dad, teen).await.unwrap();
+        let stranger = w.account(AgeBracket::Adult);
+
+        // No limit yet: time is not counted.
+        let free = w.handler.report_time(&teen.to_string(), 5, "Europe/Paris", Utc::now()).await.unwrap();
+        assert_eq!((free.used_minutes, free.limit_minutes, free.reached), (0, None, false));
+
+        let limits = SupervisionLimits {
+            private_account: true,
+            messages: Some(AudienceFloor::Mutuals),
+            comments: Some(AudienceFloor::Followers),
+            hidden_from_search: true,
+            daily_minutes: Some(30),
+        };
+        assert!(matches!(
+            w.handler.set_limits(&stranger.to_string(), &teen.to_string(), limits.clone(), Utc::now()).await,
+            Err(AccountError::SupervisionNotFound)
+        ));
+        assert!(w.handler.set_limits(&mum.to_string(), &teen.to_string(), SupervisionLimits { daily_minutes: Some(5), ..Default::default() }, Utc::now()).await.is_err());
+        w.handler.set_limits(&mum.to_string(), &teen.to_string(), limits.clone(), Utc::now()).await.unwrap();
+
+        // One shared set: dad reads mum's, the teen reads it too.
+        let seen = w.handler.limits(&dad.to_string(), &teen.to_string()).await.unwrap().unwrap();
+        assert_eq!((seen.limits.clone(), seen.set_by), (limits.clone(), mum));
+        assert_eq!(w.handler.limits(&teen.to_string(), "").await.unwrap().unwrap().limits, limits);
+        assert!(w.handler.limits(&stranger.to_string(), &teen.to_string()).await.is_err());
+
+        // Time counts towards the limit, all devices together.
+        assert!(!w.handler.report_time(&teen.to_string(), 15, "Europe/Paris", Utc::now()).await.unwrap().reached);
+        let full = w.handler.report_time(&teen.to_string(), 15, "Europe/Paris", Utc::now()).await.unwrap();
+        assert_eq!((full.used_minutes, full.limit_minutes, full.reached), (30, Some(30), true));
+        assert!(w.handler.report_time(&teen.to_string(), 60, "UTC", Utc::now()).await.is_err(), "15 at a time");
+
+        // Mum leaves: dad still supervises, limits stay; dad leaves: lifted.
+        w.handler.end(&mum.to_string(), &teen.to_string(), Utc::now()).await.unwrap();
+        assert!(w.handler.limits(&teen.to_string(), "").await.unwrap().is_some());
+        w.handler.end(&teen.to_string(), &dad.to_string(), Utc::now()).await.unwrap();
+        assert!(w.handler.limits(&teen.to_string(), "").await.unwrap().is_none());
+        let kinds: Vec<_> = w.published.0.lock().unwrap().iter().map(|e| e.event_type()).collect();
+        assert_eq!(kinds.iter().filter(|k| **k == "account.supervision_limits_set").count(), 1);
+        assert_eq!(kinds.last(), Some(&"account.supervision_limits_cleared"));
     }
 }

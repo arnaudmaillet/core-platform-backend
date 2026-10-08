@@ -42,5 +42,7 @@ pub(crate) fn event_key(event: &DomainEvent) -> AccountId {
         DomainEvent::DateOfBirthSet(e) => e.account_id,
         DomainEvent::SupervisionStarted(e) => e.account_id,
         DomainEvent::SupervisionEnded(e) => e.account_id,
+        DomainEvent::SupervisionLimitsSet(e) => e.account_id,
+        DomainEvent::SupervisionLimitsCleared(e) => e.account_id,
     }
 }

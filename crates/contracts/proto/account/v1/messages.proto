@@ -348,3 +348,55 @@ message EndSupervisionRequest {
     string account_id       = 1;
     string other_account_id = 2;
 }
+
+message SupervisionLimits {
+    // The teen's profiles stay private.
+    bool          private_account    = 1;
+    // The loosest audience allowed for messages / comments.
+    AudienceFloor messages           = 2;
+    AudienceFloor comments           = 3;
+    // Hidden from handle search, suggestions and contact matching (a shared
+    // QR code or link still works).
+    bool          hidden_from_search = 4;
+    // Daily time on the app, 15–1440 minutes; 0: no daily limit.
+    uint32        daily_minutes      = 5;
+}
+
+message SupervisionLimitsView {
+    // false: no limits (the other fields are empty).
+    bool                      set               = 1;
+    SupervisionLimits         limits            = 2;
+    // The supervisor who made the last change.
+    string                    set_by_account_id = 3;
+    google.protobuf.Timestamp set_at            = 4;
+}
+
+message SetSupervisionLimitsRequest {
+    // The supervisor.
+    string            account_id      = 1;
+    string            teen_account_id = 2;
+    SupervisionLimits limits          = 3;
+}
+
+message GetSupervisionLimitsRequest {
+    string account_id      = 1;
+    // Empty: the caller's own (a teen).
+    string teen_account_id = 2;
+}
+
+message ReportScreenTimeRequest {
+    string account_id = 1;
+    // Minutes of use since the last report, 1–15.
+    uint32 minutes    = 2;
+    // The device's IANA zone (e.g. "Europe/Paris"): the day counted.
+    string timezone   = 3;
+}
+
+message ScreenTimeView {
+    // Today, all devices together.
+    uint32 used_minutes  = 1;
+    // 0: no daily limit.
+    uint32 limit_minutes = 2;
+    // Show the pause screen.
+    bool   reached       = 3;
+}

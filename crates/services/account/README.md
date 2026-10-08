@@ -150,6 +150,9 @@ service AccountService {
   rpc AcceptSupervisionInvite (AcceptSupervisionInviteRequest) returns (SupervisionView);
   rpc ListSupervisions (ListSupervisionsRequest) returns (ListSupervisionsResponse);
   rpc EndSupervision (EndSupervisionRequest) returns (ListSupervisionsResponse);
+  rpc SetSupervisionLimits (SetSupervisionLimitsRequest) returns (SupervisionLimitsView);
+  rpc GetSupervisionLimits (GetSupervisionLimitsRequest) returns (SupervisionLimitsView);
+  rpc ReportScreenTime (ReportScreenTimeRequest) returns (ScreenTimeView);
 }
 ```
 
@@ -201,7 +204,23 @@ coming of age joins the teen's `accounts` row there), with `supervisions_by_supe
 supervisor's shard — written teen-first, idempotent, a stale index entry dropped on read. Every start
 and end is published (`SupervisionStarted` / `SupervisionEnded { ended_by: by_teen | by_supervisor |
 came_of_age | account_deleted }`, `account_id` = the teen) with both sides' profile ids, so each side can
-be told. Limits and what a supervisor sees come with parts 2 and 3. Edge: the caller's account.
+be told. Edge: the caller's account.
+
+**Supervision limits (#670 part 2).** One **shared** set per teen (`supervision_limits`, migration
+0011, on the teen's shard): either supervisor sets it with `SetSupervisionLimits(account_id,
+teen_account_id, limits)` and the last change applies (`set_by`, `set_at` kept). Each limit is a
+**floor** the teen may only exceed in strictness: `private_account`; the loosest audience for
+`messages` / `comments` (`followers` < `mutuals` < `no_one`); `hidden_from_search` (handle search,
+suggestions, contact matching — a shared QR code or link still works); `daily_minutes` (15–1440,
+else `ACC-9001`). Not their supervisor ⇒ `ACC-3005`. The teen and each supervisor read them with
+`GetSupervisionLimits`. Every change is published (`SupervisionLimitsSet`, with the teen's profile
+ids): profile tightens the teen's settings to the floors and refuses loosening them (part 2b). When
+the teen's **last** supervision ends (by either side, at 18, on erasure) the limits are lifted
+(`SupervisionLimitsCleared`): the settings keep their values, unlocked. **Screen time:** the app
+reports its use with `ReportScreenTime(account_id, minutes ≤ 15, timezone)` and learns today's total
+across devices and whether the limit is reached (it then shows the pause screen; the server does not
+cut requests). Only a teen with a daily limit is counted (`screen_time`, per account and local day,
+kept 4 weeks).
 
 **GDPR data export (#653, Art. 15/20).** `RequestDataExport` marks the export pending; the **export
 pass** (`ExportDueData`) then builds, per pending account, a ZIP of JSON files — the holder's own
@@ -265,7 +284,7 @@ Stable codes are `ACC-1xxx` (lifecycle) … `ACC-9xxx` (identifiers), via the sh
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet`, `SupervisionStarted`, `SupervisionEnded` (#670; `account_id` = the teen) | `account_id` | `profile` (suspend/deactivate/delete → mask; activate → restore) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet`, `SupervisionStarted`, `SupervisionEnded`, `SupervisionLimitsSet`, `SupervisionLimitsCleared` (#670; `account_id` = the teen) | `account_id` | `profile` (suspend/deactivate/delete → mask; activate → restore) |
 
 **Consumes:** none — `account` is a pure event producer.
 
