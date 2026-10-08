@@ -73,6 +73,8 @@ pub struct PostIndexerWorker<SI, CS, TR, PS> {
     pin_store:           Arc<PS>,
     group_id:            String,
     card_cache_threshold: f64,
+    /// The country ladder's post counts (#665), when wired.
+    country_activity:    Option<(Arc<dyn crate::application::port::CountryActivityStore>, &'static crate::domain::country_atlas::CountryAtlas)>,
 }
 
 impl PostIndexerWorker<RedisGeoSpatialIndex, RedisCardStore, ScyllaTileRepository, RedisPinStore> {
@@ -94,7 +96,20 @@ impl PostIndexerWorker<RedisGeoSpatialIndex, RedisCardStore, ScyllaTileRepositor
             pin_store,
             group_id: group_id.into(),
             card_cache_threshold,
+            country_activity: None,
         }
+    }
+}
+
+impl<SI, CS, TR, PS> PostIndexerWorker<SI, CS, TR, PS> {
+    /// Counts each indexed post for the country it was published in (#665).
+    pub fn with_country_activity(
+        mut self,
+        activity: Arc<dyn crate::application::port::CountryActivityStore>,
+        atlas: &'static crate::domain::country_atlas::CountryAtlas,
+    ) -> Self {
+        self.country_activity = Some((activity, atlas));
+        self
     }
 }
 
@@ -191,6 +206,17 @@ where
             author_tier:       event.author_tier,
         };
 
-        handler.handle(Envelope::new(Uuid::now_v7(), cmd)).await
+        handler.handle(Envelope::new(Uuid::now_v7(), cmd)).await?;
+
+        // The country ladder (#665): one more post where it was published (at
+        // sea or off every border: nowhere) — once per post, whatever the
+        // redeliveries or re-announcements.
+        if let Some((activity, atlas)) = &self.country_activity {
+            let day = chrono::DateTime::from_timestamp_millis(event.published_at_ms).map(|at| at.date_naive());
+            if let (Some(country), Some(day)) = (atlas.country_at(lat, lng), day) {
+                activity.add(country, day, 0, 1, &format!("p:{}", event.post_id)).await?;
+            }
+        }
+        Ok(())
     }
 }

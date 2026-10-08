@@ -36,7 +36,7 @@ producer's `DOMAIN.md §8`.
 | `post.v1.events` | `post` | `timeline`, `search`, `realtime` |
 | `comment.created` | `comment` | `notification`, `engagement` |
 | `comment.deleted` | `comment` | `engagement` |
-| `engagement.reactions` | `engagement` | `counter`, `notification`, `timeline`, `engagement` |
+| `engagement.reactions` | `engagement` | `counter`, `notification`, `timeline`, `geo-discovery`, `engagement` |
 | `social-graph.followed` | `social-graph` | `notification`, `timeline` |
 | `social-graph.unfollowed` | `social-graph` | `timeline` |
 | `social-graph.blocked` | `social-graph` | — *(orphan — see below)* |

@@ -56,7 +56,7 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&app.query_bus),
         Arc::clone(&app.country_access),
         app.trusted_proxy_hops,
-    ));
+    ).with_standings(Arc::clone(&app.standings)));
 
     tracing::info!(addr = %addr, "geo-discovery gRPC server listening");
 

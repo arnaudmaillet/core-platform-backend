@@ -96,6 +96,8 @@ pub struct TestHarness {
     pub tiles:       ScyllaTileRepository,
     /// The authors' location sharing, written as the profile-events worker does.
     pub location:    geo_discovery::infrastructure::persistence::ScyllaLocationSettingsStore,
+    /// The country ladder (#665), over the real Redis activity store.
+    pub standings:   Arc<geo_discovery::application::country_standings::CountryStandings>,
 }
 
 impl TestHarness {
@@ -134,6 +136,7 @@ impl TestHarness {
             query_bus: app.query_bus,
             gate,
             country_access: app.country_access,
+            standings: app.standings,
             tiles,
         }
     }

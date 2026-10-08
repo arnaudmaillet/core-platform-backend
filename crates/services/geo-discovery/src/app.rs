@@ -24,15 +24,20 @@ use crate::application::command::{
     UpdateViralityWithTilesCommand, UpdateViralityWithTilesHandler,
 };
 use crate::application::country_access::ResolveCountryAccess;
-use crate::application::port::{AudienceGate, CountryGrantStore, GeoIp, LocationSettingsStore};
+use crate::application::country_standings::CountryStandings;
+use crate::domain::country_standing::UnlockPricing;
+use crate::application::port::{AudienceGate, CountryActivityStore, CountryGrantStore, GeoIp, LocationSettingsStore};
 use crate::domain::country_atlas::CountryAtlas;
 use crate::application::query::get_geo_timeline::{GetGeoTimelineHandler, GetGeoTimelineQuery};
 use crate::application::query::query_tile::{QueryTileHandler, QueryTileQuery};
 use crate::config::GeoDiscoveryConfig;
-use crate::infrastructure::cache::{RedisCardStore, RedisCountryGrantStore, RedisGeoSpatialIndex, RedisPinStore};
+use crate::infrastructure::cache::{
+    RedisCardStore, RedisCountryActivity, RedisCountryGrantStore, RedisGeoSpatialIndex, RedisPinStore,
+};
 use crate::infrastructure::persistence::{ScyllaLocationSettingsStore, ScyllaTileRepository};
 use crate::infrastructure::worker::{
-    LocationSettingsWorker, PostIndexerWorker, ScoreUpdaterWorker, TilePrunerWorker, VisibilityWorker,
+    CountryLikesWorker, LocationSettingsWorker, PostIndexerWorker, ScoreUpdaterWorker, TilePrunerWorker,
+    VisibilityWorker,
 };
 
 /// Storage/transport endpoints the graph is wired against.
@@ -64,6 +69,8 @@ pub struct App {
     pub redis:       RedisClient,
     /// Country access from location (`GetCountryAccess`).
     pub country_access: Arc<ResolveCountryAccess>,
+    /// The country ladder (`GetCountryStandings`, #665).
+    pub standings: Arc<CountryStandings>,
     pub trusted_proxy_hops: usize,
 }
 
@@ -90,6 +97,14 @@ impl App {
         let location: Arc<dyn LocationSettingsStore> =
             Arc::new(ScyllaLocationSettingsStore::new(Arc::clone(&scylla_client)));
         let country_access = Arc::new(ResolveCountryAccess { geo_ip, grants: Arc::clone(&grants), atlas });
+        let activity: Arc<dyn CountryActivityStore> = Arc::new(RedisCountryActivity::new(redis_client.clone()));
+        let standings = Arc::new(CountryStandings::new(
+            Arc::clone(&activity),
+            atlas,
+            UnlockPricing::default(),
+            cfg.standings_window_days,
+            std::time::Duration::from_secs(cfg.standings_cache_secs),
+        ));
 
         let command_bus = Arc::new(
             CommandBusBuilder::new()
@@ -148,6 +163,17 @@ impl App {
                     cfg.post_indexer_group_id.clone(),
                     cfg.card_cache_threshold,
                 )
+                .with_country_activity(Arc::clone(&activity), atlas)
+                .run(),
+            );
+            tokio::spawn(
+                CountryLikesWorker::new(
+                    kafka_config.clone(),
+                    Arc::clone(&tile_repository),
+                    Arc::clone(&activity),
+                    atlas,
+                    cfg.country_likes_group_id.clone(),
+                )
                 .run(),
             );
             tokio::spawn(
@@ -195,6 +221,7 @@ impl App {
             scylla: scylla_client,
             redis: redis_client,
             country_access,
+            standings,
             trusted_proxy_hops: cfg.trusted_proxy_hops,
         })
     }

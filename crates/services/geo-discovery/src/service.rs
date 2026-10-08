@@ -43,6 +43,8 @@ impl Service for GeoDiscoveryService {
         public_read("/geo_discovery.v1.GeoDiscoveryService/GetGeoTimeline"),
         // Members and guests; the principal is the token's.
         public_read("/geo_discovery.v1.GeoDiscoveryService/GetCountryAccess"),
+        // The country ladder: aggregates, the same for every reader (#665).
+        public_read("/geo_discovery.v1.GeoDiscoveryService/GetCountryStandings"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -74,7 +76,8 @@ impl Service for GeoDiscoveryService {
             Arc::clone(&self.app.query_bus),
             Arc::clone(&self.app.country_access),
             self.app.trusted_proxy_hops,
-        );
+        )
+        .with_standings(Arc::clone(&self.app.standings));
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
             .build_v1()?;

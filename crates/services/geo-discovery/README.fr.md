@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 5b338c7d5ed0311690ebe7048be24d07589f3edd171d2a66b556e4c3516749a3
-  translated_at: 2026-10-05
+  source_sha256: 0d89877d45fe47bbb0c31cfa0635c952214e80394cf23e6c6fc14cc3b80e0628
+  translated_at: 2026-10-08
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -20,7 +20,7 @@ i18n:
 > | **Palier (Tier)** | **TIER-1** — surface de lecture seule ; dégradable vers ScyllaDB |
 > | **Binaire déployable** | `crates/apps/geo-discovery-server` (crate bibliothèque : `crates/services/geo-discovery`) |
 > | **Bases de données** | Redis (index ZSET + projections pin & carte msgpack) · ScyllaDB keyspace `geo_discovery` |
-> | **Asynchrone** | ne publie rien · consomme `post.published` / `post.deleted` / `moderation.v1.events` / `engagement.score_updated` / `profile.tier_changed` |
+> | **Asynchrone** | ne publie rien · consomme `post.published` / `post.deleted` / `moderation.v1.events` / `engagement.score_updated` / `profile.tier_changed` / `engagement.reactions` (le classement des pays) |
 > | **Appelants amont** | `<TODO: BFF / clients carte>` |
 > | **Dépendances aval** | Redis, ScyllaDB, Kafka |
 > | **SLO** | requête de tuile p99 **< 50 ms** à l'échelle continentale |
@@ -141,6 +141,7 @@ service GeoDiscoveryService {
   rpc QueryTile      (QueryTileRequest)      returns (QueryTileResponse);      // Radar (panoramique) : pins légers
   rpc GetGeoTimeline (GetGeoTimelineRequest) returns (GetGeoTimelineResponse); // Focus (tap) : cartes complètes
   rpc GetCountryAccess (GetCountryAccessRequest) returns (GetCountryAccessResponse); // country access from location
+  rpc GetCountryStandings (GetCountryStandingsRequest) returns (GetCountryStandingsResponse); // le classement des pays (#665)
 }
 message QueryTileRequest  { Viewport viewport = 1; int32 zoom_level = 2; string guest_principal = 3; } // zoom ∈ [0,15]; 3 = mesh only
 message QueryTileResponse { reserved 1; repeated RadarPin pins = 3; int32 tile_count = 2; } // le champ 1 était `cards`
@@ -191,6 +192,14 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > frontières Natural Earth de l'app iOS, pour que le serveur et l'appareil placent un post dans le même
 > pays (un point à ~2 km d'une frontière ou d'une côte compte pour ce pays).
 >
+> **Le classement des pays (#665).** `GetCountryStandings` (edge `public_read` : des agrégats, les
+> mêmes pour tout lecteur) renvoie chaque pays que la carte dessine, classé par les **likes des posts
+> publiés là-bas sur les 30 derniers jours** (`GEO_STANDINGS_WINDOW_DAYS` ; égalités départagées par le
+> code pays), avec ses posts et le prix pour le débloquer — **50 gems** pour les rangs 1–10, **30** pour
+> 11–30, **15** au-delà. Calculé depuis les compteurs Redis par jour au plus une fois par minute
+> (`GEO_STANDINGS_CACHE_SECS`). La gratuité du pays d'origine et les déblocages eux-mêmes arrivent avec
+> le filtre de la carte des membres (partie suivante de #665).
+>
 > **Contrat de sérialisation :** `AuthorTier` est basé sur 0 **avec** un défaut sûr `UNSPECIFIED=0`
 > (= Standard) ; `STANDARD=1, PREMIUM=2, VIP=3`. Rendu du badge : `author_tier` → badge statique ;
 > `is_friend`/`is_following` sont délibérément **absents** (résolus côté client depuis le graphe social de
@@ -232,6 +241,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 |---|---|---|---|
 | `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
 | `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | suppression de la carte : suppression → définitive ; `remove_content` / `visibility_limit` / `age_gate` sur un post → masqué ; une réversion plus récente → restauré (gardé par version ; événements au niveau de l'acteur et autres ignorés) | DLQ `{topic}.dlq` |
+| `engagement.reactions` | `geo-discovery-country-likes` | le classement des pays (#665) : chaque cœur (+1, −1 quand il est retiré ou changé) compté pour le pays du post où il tombe (la position de sa carte, `data/countries.json`), au jour UTC de la réaction → Redis `sg:geo:cact:{YYYYMMDD}` (`l:{CC}`) ; un post hors carte, en mer ou au-delà de la rétention de sa carte ne compte nulle part ; autres types ignorés. L'indexation d'un `post.published` ajoute `p:{CC}` de même. **Idempotent** (le classement fixe le prix des déblocages) : chaque comptage est un script Lua avec un marqueur `SET NX` dans le slot du hash du jour — une réaction identifiée par post, auteur, heure et sens (gardée 48 h, au-delà de toute relivraison), un post par son id (gardé avec son jour, donc un `post.published` réannoncé ne compte pas non plus) | DLQ `{topic}.dlq` |
 | `profile.v1.events` | `geo-discovery-location-settings` | partage de localisation des auteurs (#657) depuis `ProfileLocationSettingsChanged` → `geo_discovery.location_settings` ; chaque requête de carte l'applique pour tout lecteur sauf l'auteur (mesh compris) : les pins et cartes d'un **fantôme** quittent la carte ; ceux d'un auteur au **niveau ville** n'apparaissent qu'à la bande R5, au centre de la cellule R5, et ses cartes indiquent la cellule R7 de la ville ; un auteur dont l'**audience** est abonnés / mutuels ne reste que sur la carte d'un lecteur qui le suit / lui est mutuel (`follows` / `mutual` de `CheckAccess`, dans le même appel groupé) — jamais celle du mesh (NEARBY ne lit pour personne) ni d'un lecteur anonyme. Autres événements profile ignorés | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |
@@ -312,6 +322,9 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_GEOIP_PRIVATE_NETWORK_COUNTRY` | Non | — | Ce que vaut une adresse client privée/loopback : un code ISO, ou `*` = la déclaration de l'appareil. **Flotte locale uniquement** — jamais dans un env déployé. |
 | `GEO_TRUSTED_PROXY_HOPS` | Non | `GRPC_TRUSTED_PROXY_HOPS`, sinon `1` | Proxys qui ajoutent à `X-Forwarded-For` (l'ALB) ; l'adresse client est à autant d'entrées depuis la droite. Non défini = le `GRPC_TRUSTED_PROXY_HOPS` de toute la flotte. |
 | `GEO_COUNTRY_GRANT_TTL_SECS` | Non | `43200` | Durée d'ouverture d'un pays accordé sans nouvelle confirmation (12 h). |
+| `GEO_COUNTRY_LIKES_GROUP_ID` | Non | `geo-discovery-country-likes` | groupe Kafka du consumer des likes du classement des pays (`engagement.reactions`). |
+| `GEO_STANDINGS_WINDOW_DAYS` | Non | `30` | Jours de likes que le classement des pays prend en compte. |
+| `GEO_STANDINGS_CACHE_SECS` | Non | `60` | Durée pendant laquelle un classement calculé est servi. |
 
 > Aucun flag de feature de compilation. `build.rs` compile `proto/geo_discovery/v1/*.proto`. Profils
 > ScyllaDB : Strict (`LocalQuorum`) pour les mutations, Fast (`LocalOne` + spéculatif) pour les lectures.

@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-1** — query-only read surface; degradable to ScyllaDB |
 > | **Deployable** | `crates/apps/geo-discovery-server` (library crate: `crates/services/geo-discovery`) |
 > | **Datastores** | Redis (ZSET index + msgpack pin & card projections) · ScyllaDB keyspace `geo_discovery` |
-> | **Async** | publishes nothing · consumes `post.published` / `post.deleted` / `moderation.v1.events` / `engagement.score_updated` / `profile.tier_changed` |
+> | **Async** | publishes nothing · consumes `post.published` / `post.deleted` / `moderation.v1.events` / `engagement.score_updated` / `profile.tier_changed` / `engagement.reactions` (the country ladder) |
 > | **Upstream callers** | `<TODO: BFF / map clients>` |
 > | **Downstream deps** | Redis, ScyllaDB, Kafka |
 > | **SLO** | tile query p99 **< 50 ms** at continental scale |
@@ -128,6 +128,7 @@ service GeoDiscoveryService {
   rpc QueryTile      (QueryTileRequest)      returns (QueryTileResponse);      // Radar (pan): lean pins
   rpc GetGeoTimeline (GetGeoTimelineRequest) returns (GetGeoTimelineResponse); // Focus (tap): full cards
   rpc GetCountryAccess (GetCountryAccessRequest) returns (GetCountryAccessResponse); // country access from location
+  rpc GetCountryStandings (GetCountryStandingsRequest) returns (GetCountryStandingsResponse); // the country ladder (#665)
 }
 message QueryTileRequest  { Viewport viewport = 1; int32 zoom_level = 2; string guest_principal = 3; } // zoom ∈ [0,15]; 3 = mesh only
 message QueryTileResponse { reserved 1; repeated RadarPin pins = 3; int32 tile_count = 2; } // field 1 was `cards`
@@ -175,6 +176,13 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > borders, so the server and the device put a post in the same country (a point within ~2 km of a
 > border or coast counts for that country).
 >
+> **The country ladder (#665).** `GetCountryStandings` (edge `public_read`: aggregates, the same for
+> every reader) returns every country the map draws, ranked by the **likes on posts published there
+> over the last 30 days** (`GEO_STANDINGS_WINDOW_DAYS`; ties by country code), with its posts and the
+> price of unlocking it — **50 gems** for ranks 1–10, **30** for 11–30, **15** beyond. Computed from the
+> per-day Redis counts at most once a minute (`GEO_STANDINGS_CACHE_SECS`). The home country's free
+> price and the unlocks themselves come with the member map filter (next part of #665).
+>
 > **Wire contract:** `AuthorTier` is 0-based **with** an `UNSPECIFIED=0` safe default (= Standard);
 > `STANDARD=1, PREMIUM=2, VIP=3`. Badge rendering: `author_tier` → static badge; `is_friend`/`is_following`
 > are deliberately **absent** (resolved client-side from the session social graph). `author_handle` /
@@ -216,6 +224,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 | `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
 | `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | map suppression: delete → permanent; `remove_content` / `visibility_limit` / `age_gate` on a post → hidden; a newer reversal → restored (version-guarded; actor-level and other events skipped) | DLQ `{topic}.dlq` |
 | `profile.v1.events` | `geo-discovery-location-settings` | authors' location sharing (#657) from `ProfileLocationSettingsChanged` → `geo_discovery.location_settings`; every map query applies it for any reader but the author (the mesh included): a **ghost**'s pins and cards leave the map; a **city-level** author's pins show only at the R5 band at the R5 cell centre, and their cards name the city's R7 cell; an author whose **audience** is followers / mutuals stays only on the map of a reader who follows / is mutual with them (`CheckAccess` `follows` / `mutual`, in the same bulk call) — never the mesh's (NEARBY reads for no one) nor an anonymous reader's. Other profile events skipped | DLQ `{topic}.dlq` |
+| `engagement.reactions` | `geo-discovery-country-likes` | the country ladder (#665): each heart (+1, −1 when removed or changed) counted for the country of the post it lands on (its map card's location, `data/countries.json`), on the reaction's UTC day → Redis `sg:geo:cact:{YYYYMMDD}` (`l:{CC}`); a post off the map, at sea or past its card's retention counts nowhere; other kinds skipped. Indexing a `post.published` adds `p:{CC}` likewise. **Idempotent** (the ladder prices unlocks): each count is one Lua script with a `SET NX` marker in the day's hash slot — a reaction keyed by post, reactor, time and direction (remembered 48 h, past any redelivery), a post by its id (remembered with its day, so a re-announced `post.published` counts nothing more either) | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |
 
@@ -292,6 +301,9 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_GEOIP_PRIVATE_NETWORK_COUNTRY` | No | — | What a private/loopback client address resolves to: an ISO code, or `*` = the device's claim. **Local fleet only** — never in a deployed env. |
 | `GEO_TRUSTED_PROXY_HOPS` | No | `GRPC_TRUSTED_PROXY_HOPS`, else `1` | Proxies appending to `X-Forwarded-For` (the ALB); the client address is that many entries from the right. Unset = the fleet-wide `GRPC_TRUSTED_PROXY_HOPS`. |
 | `GEO_COUNTRY_GRANT_TTL_SECS` | No | `43200` | How long a granted country stays open without being confirmed again (12 h). |
+| `GEO_COUNTRY_LIKES_GROUP_ID` | No | `geo-discovery-country-likes` | Kafka group of the country ladder's likes consumer (`engagement.reactions`). |
+| `GEO_STANDINGS_WINDOW_DAYS` | No | `30` | Days of likes the country ladder ranks. |
+| `GEO_STANDINGS_CACHE_SECS` | No | `60` | How long a computed ladder is served. |
 
 > No compile-time feature flags. `build.rs` compiles `proto/geo_discovery/v1/*.proto`. ScyllaDB profiles:
 > Strict (`LocalQuorum`) for mutations, Fast (`LocalOne` + speculative) for reads.
