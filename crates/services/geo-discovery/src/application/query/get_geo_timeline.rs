@@ -3,9 +3,10 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 use uuid::Uuid;
 
-use crate::application::country_access::country_limit;
+use crate::application::country_access::{country_filter, CountryFilter};
 use crate::application::port::{
-    sharing_for_reader, visible_authors, AudienceGate, CardStore, CountryGrantStore, LocationSettingsStore,
+    sharing_for_reader, visible_authors, AudienceGate, CardStore, CountryGrantStore, CountryUnlockStore,
+    LocationSettingsStore,
     TileRepository,
 };
 use crate::domain::country_atlas::CountryAtlas;
@@ -43,6 +44,8 @@ pub struct GetGeoTimelineHandler<CS, TR> {
     pub tile_repository: Arc<TR>,
     pub audience:        Arc<dyn AudienceGate>,
     pub grants:          Arc<dyn CountryGrantStore>,
+    /// A member's countries (#665), for the member map filter.
+    pub unlocks:         Arc<dyn CountryUnlockStore>,
     pub atlas:           &'static CountryAtlas,
     /// The authors' location sharing (ghost, city level).
     pub location:        Arc<dyn LocationSettingsStore>,
@@ -64,8 +67,8 @@ where
         if post_ids.is_empty() {
             return Ok(GetGeoTimelineResult { cards: vec![] });
         }
-        let limit = country_limit(self.grants.as_ref(), &envelope.payload.scope).await?;
-        if limit == Some(None) {
+        let filter = country_filter(self.grants.as_ref(), self.unlocks.as_ref(), &envelope.payload.scope).await?;
+        if filter == CountryFilter::Nothing {
             return Ok(GetGeoTimelineResult { cards: vec![] });
         }
 
@@ -98,11 +101,12 @@ where
             }
         }
 
-        // ── Phase 2b: a guest's country. A card without a stored location
-        //   (indexed before it was kept) cannot be placed: left out.
-        if let Some(Some(country)) = limit {
+        // ── Phase 2b: a guest's country, a member's countries. A card without
+        //   a stored location (indexed before it was kept) cannot be placed:
+        //   left out.
+        if filter != CountryFilter::Open {
             cards.retain(|c| match (c.lat, c.lng) {
-                (Some(lat), Some(lng)) => self.atlas.contains(country, lat, lng),
+                (Some(lat), Some(lng)) => filter.admits(self.atlas, lat, lng),
                 _ => false,
             });
         }

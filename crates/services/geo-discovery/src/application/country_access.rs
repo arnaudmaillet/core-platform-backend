@@ -6,7 +6,7 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use crate::application::port::{CountryGrantStore, GeoIp};
+use crate::application::port::{CountryGrantStore, CountryUnlockStore, GeoIp};
 use crate::domain::country_atlas::CountryAtlas;
 use crate::domain::value_object::{decide, CountryAccessOutcome, CountryCode, MapScope};
 use crate::error::GeoDiscoveryError;
@@ -58,17 +58,48 @@ impl ResolveCountryAccess {
     }
 }
 
-/// The country a reader's map is limited to: `None` = no limit; `Some(None)` =
-/// nothing (a guest with no granted country); `Some(Some(c))` = only `c`.
-pub async fn country_limit(
-    grants: &dyn CountryGrantStore,
-    scope:  &MapScope,
-) -> Result<Option<Option<CountryCode>>, GeoDiscoveryError> {
-    match scope {
-        MapScope::All => Ok(None),
-        MapScope::Guest(principal) if principal.is_empty() => Ok(Some(None)),
-        MapScope::Guest(principal) => Ok(Some(grants.get(principal).await?)),
+/// Which posts a reader's map shows, by where they were published.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CountryFilter {
+    /// No country filter.
+    Open,
+    /// Nothing (a guest with no granted country).
+    Nothing,
+    /// Posts in these countries (a point near a border counts for both); at
+    /// sea too when `open_sea` (a member's map).
+    Only { countries: Vec<CountryCode>, open_sea: bool },
+}
+
+impl CountryFilter {
+    /// Whether a post at `(lat, lng)` is on the map.
+    pub fn admits(&self, atlas: &CountryAtlas, lat: f64, lng: f64) -> bool {
+        match self {
+            Self::Open => true,
+            Self::Nothing => false,
+            Self::Only { countries, open_sea } => {
+                countries.iter().any(|c| atlas.contains(*c, lat, lng))
+                    || (*open_sea && atlas.country_at(lat, lng).is_none())
+            }
+        }
     }
+}
+
+/// The country filter of a reader's map: a guest's granted country; a
+/// member's home and unlocked countries (#665); nothing else.
+pub async fn country_filter(
+    grants:  &dyn CountryGrantStore,
+    unlocks: &dyn CountryUnlockStore,
+    scope:   &MapScope,
+) -> Result<CountryFilter, GeoDiscoveryError> {
+    Ok(match scope {
+        MapScope::All => CountryFilter::Open,
+        MapScope::Guest(principal) if principal.is_empty() => CountryFilter::Nothing,
+        MapScope::Guest(principal) => match grants.get(principal).await? {
+            Some(country) => CountryFilter::Only { countries: vec![country], open_sea: false },
+            None => CountryFilter::Nothing,
+        },
+        MapScope::Member(account) => CountryFilter::Only { countries: unlocks.get(*account).await?.all(), open_sea: true },
+    })
 }
 
 #[cfg(test)]
@@ -79,6 +110,7 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
+    use crate::application::country_unlocks::fakes::MemUnlocks;
 
     #[derive(Default)]
     pub struct MemGrants(pub Mutex<HashMap<String, CountryCode>>);
@@ -125,7 +157,10 @@ mod tests {
         let es = CountryCode::try_from("ES").unwrap();
 
         assert_eq!(s.handle("guest:1", Some("fr"), ip("203.0.113.9")).await.unwrap(), CountryAccessOutcome::Granted(fr));
-        assert_eq!(country_limit(grants.as_ref(), &MapScope::Guest("guest:1".into())).await.unwrap(), Some(Some(fr)));
+        assert_eq!(
+            country_filter(grants.as_ref(), &MemUnlocks::default(), &MapScope::Guest("guest:1".into())).await.unwrap(),
+            CountryFilter::Only { countries: vec![fr], open_sea: false }
+        );
 
         // A French network backs Spain (neighbours): the new country replaces France.
         assert_eq!(s.handle("guest:1", Some("ES"), ip("203.0.113.9")).await.unwrap(), CountryAccessOutcome::Granted(es));
@@ -160,8 +195,27 @@ mod tests {
     #[tokio::test]
     async fn members_and_the_mesh_are_not_limited_an_anonymous_guest_sees_nothing() {
         let grants = MemGrants::default();
-        assert_eq!(country_limit(&grants, &MapScope::All).await.unwrap(), None);
-        assert_eq!(country_limit(&grants, &MapScope::Guest(String::new())).await.unwrap(), Some(None));
-        assert_eq!(country_limit(&grants, &MapScope::Guest("guest:9".into())).await.unwrap(), Some(None));
+        let unlocks = MemUnlocks::default();
+        assert_eq!(country_filter(&grants, &unlocks, &MapScope::All).await.unwrap(), CountryFilter::Open);
+        assert_eq!(country_filter(&grants, &unlocks, &MapScope::Guest(String::new())).await.unwrap(), CountryFilter::Nothing);
+        assert_eq!(country_filter(&grants, &unlocks, &MapScope::Guest("guest:9".into())).await.unwrap(), CountryFilter::Nothing);
+    }
+
+    /// #665: a member's map shows its home and unlocked countries, and the
+    /// sea; nothing else.
+    #[tokio::test]
+    async fn a_members_map_shows_its_countries_and_the_sea() {
+        let unlocks = MemUnlocks::default();
+        let me = uuid::Uuid::now_v7();
+        let fr = CountryCode::try_from("FR").unwrap();
+        let es = CountryCode::try_from("ES").unwrap();
+        unlocks.set_home_once(me, fr).await.unwrap();
+        unlocks.add(me, es, 15, chrono::Utc::now()).await.unwrap();
+        let filter = country_filter(&MemGrants::default(), &unlocks, &MapScope::Member(me)).await.unwrap();
+        let atlas = CountryAtlas::embedded();
+        assert!(filter.admits(atlas, 48.8566, 2.3522), "Paris: home");
+        assert!(filter.admits(atlas, 40.4168, -3.7038), "Madrid: unlocked");
+        assert!(!filter.admits(atlas, 52.52, 13.405), "Berlin: locked");
+        assert!(filter.admits(atlas, 45.0, -30.0), "mid-Atlantic: the sea");
     }
 }

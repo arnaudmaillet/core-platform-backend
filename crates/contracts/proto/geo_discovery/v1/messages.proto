@@ -143,3 +143,36 @@ message GetCountryStandingsResponse {
     repeated CountryStanding  standings   = 1;
     google.protobuf.Timestamp computed_at = 2;
 }
+
+// ── Country unlocks (#665) ────────────────────────────────────────────────────
+
+message GetCountryUnlocksRequest {
+    string account_id = 1;
+}
+
+message GetCountryUnlocksResponse {
+    // ISO 3166-1 alpha-2; empty when it could not be told yet.
+    string          home_country       = 1;
+    // Home included.
+    repeated string unlocked_countries = 2;
+    // The wallet's gems, so the shop's balance line is one read.
+    int64           gems               = 3;
+    // The member map filter is on: the map shows only these countries.
+    bool            filtering          = 4;
+}
+
+message UnlockCountryRequest {
+    string account_id     = 1;
+    string country_code   = 2;
+    // The price the app showed.
+    int64  expected_price = 3;
+}
+
+message UnlockCountryResponse {
+    UnlockCountryOutcome outcome            = 1;
+    // Home included.
+    repeated string      unlocked_countries = 2;
+    int64                gems               = 3;
+    // The country's current price.
+    int64                price_gems         = 4;
+}

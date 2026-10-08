@@ -129,6 +129,8 @@ service GeoDiscoveryService {
   rpc GetGeoTimeline (GetGeoTimelineRequest) returns (GetGeoTimelineResponse); // Focus (tap): full cards
   rpc GetCountryAccess (GetCountryAccessRequest) returns (GetCountryAccessResponse); // country access from location
   rpc GetCountryStandings (GetCountryStandingsRequest) returns (GetCountryStandingsResponse); // the country ladder (#665)
+  rpc GetCountryUnlocks (GetCountryUnlocksRequest) returns (GetCountryUnlocksResponse); // a member's countries (#665)
+  rpc UnlockCountry (UnlockCountryRequest) returns (UnlockCountryResponse);             // unlock one with gems (#665)
 }
 message QueryTileRequest  { Viewport viewport = 1; int32 zoom_level = 2; string guest_principal = 3; } // zoom ∈ [0,15]; 3 = mesh only
 message QueryTileResponse { reserved 1; repeated RadarPin pins = 3; int32 tile_count = 2; } // field 1 was `cards`
@@ -180,8 +182,27 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > every reader) returns every country the map draws, ranked by the **likes on posts published there
 > over the last 30 days** (`GEO_STANDINGS_WINDOW_DAYS`; ties by country code), with its posts and the
 > price of unlocking it — **50 gems** for ranks 1–10, **30** for 11–30, **15** beyond. Computed from the
-> per-day Redis counts at most once a minute (`GEO_STANDINGS_CACHE_SECS`). The home country's free
-> price and the unlocks themselves come with the member map filter (next part of #665).
+> per-day Redis counts at most once a minute (`GEO_STANDINGS_CACHE_SECS`). The home country is
+> free: a member's recorded home country costs **0** on the ladder they read.
+>
+> **Country unlocks (#665).** A member's countries live in `geo_discovery.country_unlocks` (one
+> partition per account: the **home country**, a static column set once with an LWT, and one row per
+> country unlocked). The home country is the account's `country_of_residence` (account
+> `GetAccountById`, mesh), else the network's country (GeoIP) at the first `GetCountryUnlocks`;
+> recorded for good. `GetCountryUnlocks` (edge `authenticated`, the caller's `account_id`) returns
+> the home country, every unlocked country (home included), the wallet's gems (wallet `GetWallet`,
+> mesh) and whether the member filter is on. `UnlockCountry(country_code, expected_price)` (edge
+> `authenticated`): an adult only (the token's `age` claim, fail-closed: **`GEO-3001`**
+> `PERMISSION_DENIED`); the home country or one unlocked before answers `ALREADY_UNLOCKED` (nothing
+> charged); a price other than the ladder's answers `PRICE_CHANGED` with the current one; else the
+> wallet's mesh-only `SpendGems` is asked for the gems, **keyed `country-<CC>`** — a country is
+> charged at most once, whatever the retries — answering `INSUFFICIENT_GEMS` (with the gems held) or
+> `UNLOCKED`. The wallet or account unreachable ⇒ **`GEO-6002`** (`UNAVAILABLE`, fail-closed).
+>
+> **The member map filter** (`GEO_COUNTRY_UNLOCKS_ENABLED`, **off** by default until the app's shop is
+> live): a member's `QueryTile` and `GetGeoTimeline` then show only posts in their home and unlocked
+> countries, **and at sea** (a post outside every border); a guest's map is unchanged, the mesh is
+> never filtered. One partition read per query (`Strict`: an unlock shows on the next read).
 >
 > **Wire contract:** `AuthorTier` is 0-based **with** an `UNSPECIFIED=0` safe default (= Standard);
 > `STANDARD=1, PREMIUM=2, VIP=3`. Badge rendering: `author_tier` → static badge; `is_friend`/`is_following`
@@ -224,7 +245,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 | `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
 | `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | map suppression: delete → permanent; `remove_content` / `visibility_limit` / `age_gate` on a post → hidden; a newer reversal → restored (version-guarded; actor-level and other events skipped) | DLQ `{topic}.dlq` |
 | `profile.v1.events` | `geo-discovery-location-settings` | authors' location sharing (#657) from `ProfileLocationSettingsChanged` → `geo_discovery.location_settings`; every map query applies it for any reader but the author (the mesh included): a **ghost**'s pins and cards leave the map; a **city-level** author's pins show only at the R5 band at the R5 cell centre, and their cards name the city's R7 cell; an author whose **audience** is followers / mutuals stays only on the map of a reader who follows / is mutual with them (`CheckAccess` `follows` / `mutual`, in the same bulk call) — never the mesh's (NEARBY reads for no one) nor an anonymous reader's. Other profile events skipped | DLQ `{topic}.dlq` |
-| `engagement.reactions` | `geo-discovery-country-likes` | the country ladder (#665): each heart (+1, −1 when removed or changed) counted for the country of the post it lands on (its map card's location, `data/countries.json`), on the reaction's UTC day → Redis `sg:geo:cact:{YYYYMMDD}` (`l:{CC}`); a post off the map, at sea or past its card's retention counts nowhere; other kinds skipped. Indexing a `post.published` adds `p:{CC}` likewise. **Idempotent** (the ladder prices unlocks): each count is one Lua script with a `SET NX` marker in the day's hash slot — a reaction keyed by post, reactor, time and direction (remembered 48 h, past any redelivery), a post by its id (remembered with its day, so a re-announced `post.published` counts nothing more either) | DLQ `{topic}.dlq` |
+| `engagement.reactions` | `geo-discovery-country-likes` | the country ladder (#665): each heart (+1, −1 when removed or changed) counted for the country of the post it lands on (its map card's location, `data/countries.json`), on the reaction's UTC day → Redis `sg:geo:cact:{YYYYMMDD:b}` (`l:{CC}`; 16 buckets per day by event, so a day's hearts never sit on one slot; a read sums them); a post off the map, at sea or past its card's retention counts nowhere; other kinds skipped. Indexing a `post.published` adds `p:{CC}` likewise. **Idempotent** (the ladder prices unlocks): each count is one Lua script with a `SET NX` marker in the day's hash slot — a reaction keyed by post, reactor, time and direction (remembered 48 h, past any redelivery), a post by its id (remembered with its day, so a re-announced `post.published` counts nothing more either) | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |
 
@@ -304,6 +325,10 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_COUNTRY_LIKES_GROUP_ID` | No | `geo-discovery-country-likes` | Kafka group of the country ladder's likes consumer (`engagement.reactions`). |
 | `GEO_STANDINGS_WINDOW_DAYS` | No | `30` | Days of likes the country ladder ranks. |
 | `GEO_STANDINGS_CACHE_SECS` | No | `60` | How long a computed ladder is served. |
+| `GEO_COUNTRY_UNLOCKS_ENABLED` | No | `false` | The member map filter (#665): members see only their home and unlocked countries (and the sea). |
+| `GEO_WALLET_GRPC_ENDPOINT` | No | `http://localhost:50072` | wallet's mesh address: the gems shown and spent by country unlocks. |
+| `GEO_ACCOUNT_GRPC_ENDPOINT` | No | `http://localhost:50059` | account's mesh address: a member's country of residence (home country). |
+| `GEO_UNLOCK_RPC_TIMEOUT_MS` · `GEO_UNLOCK_CONNECT_TIMEOUT_MS` | No | `1000` · `500` | Deadlines of those two peers. |
 
 > No compile-time feature flags. `build.rs` compiles `proto/geo_discovery/v1/*.proto`. ScyllaDB profiles:
 > Strict (`LocalQuorum`) for mutations, Fast (`LocalOne` + speculative) for reads.

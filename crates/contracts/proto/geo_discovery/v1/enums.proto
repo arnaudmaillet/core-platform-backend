@@ -50,3 +50,16 @@ enum CountryAccessOutcome {
     // The network's country is unknown: nothing could be verified.
     COUNTRY_ACCESS_OUTCOME_UNVERIFIABLE = 4;
 }
+
+// What became of an unlock (#665).
+enum UnlockCountryOutcome {
+    UNLOCK_COUNTRY_OUTCOME_UNSPECIFIED       = 0;
+    UNLOCK_COUNTRY_OUTCOME_UNLOCKED          = 1;
+    // The home country, or unlocked before: nothing charged.
+    UNLOCK_COUNTRY_OUTCOME_ALREADY_UNLOCKED  = 2;
+    // `price_gems` is what it costs, `gems` what the wallet holds.
+    UNLOCK_COUNTRY_OUTCOME_INSUFFICIENT_GEMS = 3;
+    // The rank moved since the app showed the price: `price_gems` is the new
+    // one. Nothing charged; ask again with it.
+    UNLOCK_COUNTRY_OUTCOME_PRICE_CHANGED     = 4;
+}

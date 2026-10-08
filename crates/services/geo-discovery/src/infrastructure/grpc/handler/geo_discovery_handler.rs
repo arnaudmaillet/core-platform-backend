@@ -7,6 +7,7 @@ use uuid::Uuid;
 use cqrs::{Envelope, QueryBus};
 
 use crate::application::country_access::ResolveCountryAccess;
+use crate::application::country_unlocks::{CountryUnlocking, UnlockOutcome};
 use crate::application::query::get_geo_timeline::GetGeoTimelineQuery;
 use crate::application::query::query_tile::QueryTileQuery;
 use crate::domain::value_object::{CountryAccessOutcome, MapScope, Viewer};
@@ -29,6 +30,9 @@ where
     trusted_proxy_hops: usize,
     /// The country ladder (#665); `None` answers UNAVAILABLE.
     standings:          Option<Arc<crate::application::country_standings::CountryStandings>>,
+    /// A member's countries and unlocks (#665); `None` answers UNAVAILABLE
+    /// and leaves members' maps open.
+    unlocking:          Option<Arc<CountryUnlocking>>,
 }
 
 impl<QB> GeoDiscoveryHandler<QB>
@@ -36,7 +40,22 @@ where
     QB: QueryBus + Send + Sync + 'static,
 {
     pub fn new(query_bus: QB, country_access: Arc<ResolveCountryAccess>, trusted_proxy_hops: usize) -> Self {
-        Self { query_bus, country_access, trusted_proxy_hops, standings: None }
+        Self { query_bus, country_access, trusted_proxy_hops, standings: None, unlocking: None }
+    }
+
+    /// Serves members' countries and unlocks, and applies the member map
+    /// filter when it is on (#665).
+    pub fn with_unlocking(mut self, unlocking: Arc<CountryUnlocking>) -> Self {
+        self.unlocking = Some(unlocking);
+        self
+    }
+
+    fn member_filtering(&self) -> bool {
+        self.unlocking.as_ref().is_some_and(|u| u.filtering)
+    }
+
+    fn unlocking(&self) -> Result<&CountryUnlocking, Status> {
+        self.unlocking.as_deref().ok_or_else(|| Status::unavailable("country unlocks are not configured"))
     }
 
     /// Serves the country ladder (#665).
@@ -57,7 +76,7 @@ where
         request: Request<proto::QueryTileRequest>,
     ) -> Result<Response<proto::QueryTileResponse>, Status> {
         let viewer   = viewer_of(&request);
-        let mut scope = scope_of(&request);
+        let mut scope = scope_of(&request, self.member_filtering());
         let req      = request.into_inner();
         // A mesh caller reading for a guest (timeline's NEARBY) gets that
         // guest's limit; on the edge the caller's own token decides.
@@ -97,7 +116,7 @@ where
         request: Request<proto::GetGeoTimelineRequest>,
     ) -> Result<Response<proto::GetGeoTimelineResponse>, Status> {
         let viewer = viewer_of(&request);
-        let scope = scope_of(&request);
+        let scope = scope_of(&request, self.member_filtering());
         let req = request.into_inner();
 
         // Parse the requested ids, skipping any that are not valid UUIDs rather
@@ -151,9 +170,14 @@ where
 
     async fn get_country_standings_inner(
         &self,
-        _request: Request<proto::GetCountryStandingsRequest>,
+        request: Request<proto::GetCountryStandingsRequest>,
     ) -> Result<Response<proto::GetCountryStandingsResponse>, Status> {
         let standings = self.standings.as_ref().ok_or_else(|| Status::unavailable("the country ladder is not configured"))?;
+        // A member's home country is free (as recorded; resolved by GetCountryUnlocks).
+        let home = match (member_account(&request), self.unlocking.as_ref()) {
+            (Some(account), Some(unlocking)) => unlocking.store.get(account).await.map_err(app_to_status)?.home,
+            _ => None,
+        };
         let ladder = standings.ladder(chrono::Utc::now()).await.map_err(app_to_status)?;
         Ok(Response::new(proto::GetCountryStandingsResponse {
             standings:   ladder
@@ -164,13 +188,63 @@ where
                     rank:         i32::try_from(s.rank).unwrap_or(i32::MAX),
                     likes:        s.likes,
                     posts:        s.posts,
-                    price_gems:   standings.pricing.price(s.rank, false),
+                    price_gems:   standings.pricing.price(s.rank, Some(s.country) == home),
                 })
                 .collect(),
             computed_at: Some(prost_types::Timestamp {
                 seconds: ladder.computed_at.timestamp(),
                 nanos:   i32::try_from(ladder.computed_at.timestamp_subsec_nanos()).unwrap_or(0),
             }),
+        }))
+    }
+}
+
+impl<QB> GeoDiscoveryHandler<QB>
+where
+    QB: QueryBus + Send + Sync + 'static,
+{
+    async fn get_country_unlocks_inner(
+        &self,
+        request: Request<proto::GetCountryUnlocksRequest>,
+    ) -> Result<Response<proto::GetCountryUnlocksResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let unlocking = self.unlocking()?;
+        let client_ip = client_ip(&request, self.trusted_proxy_hops);
+        let account = account_uuid(&request.get_ref().account_id)?;
+        let (countries, gems) = unlocking.view(account, client_ip).await.map_err(app_to_status)?;
+        Ok(Response::new(proto::GetCountryUnlocksResponse {
+            home_country:       countries.home.map(|c| c.to_string()).unwrap_or_default(),
+            unlocked_countries: countries.all().iter().map(ToString::to_string).collect(),
+            gems,
+            filtering:          unlocking.filtering,
+        }))
+    }
+
+    async fn unlock_country_inner(
+        &self,
+        request: Request<proto::UnlockCountryRequest>,
+    ) -> Result<Response<proto::UnlockCountryResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let unlocking = self.unlocking()?;
+        // Gems are spent by adults only (the edge token; fail-closed).
+        let adult = edge::principal(&request).is_some_and(|p| p.is_adult());
+        let client_ip = client_ip(&request, self.trusted_proxy_hops);
+        let req = request.into_inner();
+        let account = account_uuid(&req.account_id)?;
+        let reply = unlocking
+            .unlock(account, &req.country_code, req.expected_price, adult, client_ip, chrono::Utc::now())
+            .await
+            .map_err(app_to_status)?;
+        Ok(Response::new(proto::UnlockCountryResponse {
+            outcome:            match reply.outcome {
+                UnlockOutcome::Unlocked => proto::UnlockCountryOutcome::Unlocked,
+                UnlockOutcome::AlreadyUnlocked => proto::UnlockCountryOutcome::AlreadyUnlocked,
+                UnlockOutcome::InsufficientGems => proto::UnlockCountryOutcome::InsufficientGems,
+                UnlockOutcome::PriceChanged => proto::UnlockCountryOutcome::PriceChanged,
+            } as i32,
+            unlocked_countries: reply.countries.all().iter().map(ToString::to_string).collect(),
+            gems:               reply.gems,
+            price_gems:         reply.price,
         }))
     }
 }
@@ -209,6 +283,20 @@ where
     ) -> Result<Response<proto::GetCountryStandingsResponse>, Status> {
         self.get_country_standings_inner(request).await
     }
+
+    async fn get_country_unlocks(
+        &self,
+        request: Request<proto::GetCountryUnlocksRequest>,
+    ) -> Result<Response<proto::GetCountryUnlocksResponse>, Status> {
+        self.get_country_unlocks_inner(request).await
+    }
+
+    async fn unlock_country(
+        &self,
+        request: Request<proto::UnlockCountryRequest>,
+    ) -> Result<Response<proto::UnlockCountryResponse>, Status> {
+        self.unlock_country_inner(request).await
+    }
 }
 
 // ── Conversion helpers ────────────────────────────────────────────────────────
@@ -224,16 +312,32 @@ fn viewer_of<T>(request: &Request<T>) -> Viewer {
 }
 
 /// Which part of the map the caller may see: a guest session (or an anonymous
-/// caller) only its granted country; members and the mesh everything (v1).
-fn scope_of<T>(request: &Request<T>) -> MapScope {
+/// caller) only its granted country; a member its home and unlocked
+/// countries when the member filter is on (#665), else everything; the mesh
+/// everything.
+fn scope_of<T>(request: &Request<T>, member_filtering: bool) -> MapScope {
     match edge::viewer(request) {
         edge::Viewer::Internal => MapScope::All,
         edge::Viewer::Anonymous => MapScope::Guest(String::new()),
         edge::Viewer::Member { .. } => match edge::principal(request) {
             Some(p) if p.is_guest() => MapScope::Guest(p.account_id().to_owned()),
+            _ if member_filtering => match member_account(request) {
+                Some(account) => MapScope::Member(account),
+                // An account id that is not a uuid unlocks nothing.
+                None => MapScope::Guest(String::new()),
+            },
             _ => MapScope::All,
         },
     }
+}
+
+/// The member account behind an edge request (not a guest's).
+fn member_account<T>(request: &Request<T>) -> Option<Uuid> {
+    edge::principal(request).filter(|p| !p.is_guest()).and_then(|p| Uuid::parse_str(p.account_id()).ok())
+}
+
+fn account_uuid(account_id: &str) -> Result<Uuid, Status> {
+    Uuid::parse_str(account_id).map_err(|_| Status::invalid_argument("account_id must be an account id"))
 }
 
 /// The client's address behind the trusted proxies (see `transport::grpc::client_ip`).
@@ -246,6 +350,7 @@ fn app_to_status(err: crate::error::GeoDiscoveryError) -> Status {
     let msg = err.to_string();
     match err.http_status().as_u16() {
         422 | 400 => Status::failed_precondition(msg),
+        403 => Status::permission_denied(msg),
         503 | 502 => Status::unavailable(msg),
         _ => Status::internal(msg),
     }
@@ -339,6 +444,7 @@ mod tests {
 
     #[test]
     fn the_mesh_and_members_see_everything_guests_only_their_country() {
-        assert_eq!(scope_of(&Request::new(())), MapScope::All);
+        assert_eq!(scope_of(&Request::new(()), false), MapScope::All);
+        assert_eq!(scope_of(&Request::new(()), true), MapScope::All, "the mesh is never filtered");
     }
 }

@@ -59,7 +59,7 @@ impl CountryStandings {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
 
     use async_trait::async_trait;

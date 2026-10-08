@@ -20,16 +20,25 @@ const LIKE_MARKER_TTL_SECS: i64 = 48 * 3600;
 /// `post.published` counts nothing more either (posts are few).
 const POST_MARKER_TTL_SECS: i64 = DAY_TTL_SECS;
 
-/// `sg:geo:cact:{YYYYMMDD}` — one hash per UTC day: `l:{CC}` likes, `p:{CC}`
-/// posts. The braces are the cluster hash tag: the day's dedup markers share
-/// its slot, so one script touches both.
-fn day_key(day: NaiveDate) -> String {
-    format!("sg:geo:cact:{{{}}}", day.format("%Y%m%d"))
+/// A day's counts are spread over this many hashes (by event), so a day's
+/// hearts never all land on one cluster slot; a read sums them.
+const BUCKETS: u64 = 16;
+
+/// `sg:geo:cact:{YYYYMMDD:b}` — one hash per UTC day and bucket: `l:{CC}`
+/// likes, `p:{CC}` posts. The braces are the cluster hash tag: the event's
+/// dedup marker shares its slot, so one script touches both.
+fn day_key(day: NaiveDate, bucket: u64) -> String {
+    format!("sg:geo:cact:{{{}:{bucket}}}", day.format("%Y%m%d"))
 }
 
-/// `sg:geo:cact:{YYYYMMDD}:seen:{event}` — the event was counted that day.
-fn seen_key(day: NaiveDate, event: &str) -> String {
-    format!("{}:seen:{event}", day_key(day))
+/// `sg:geo:cact:{YYYYMMDD:b}:seen:{event}` — the event was counted that day.
+fn seen_key(day: NaiveDate, bucket: u64, event: &str) -> String {
+    format!("{}:seen:{event}", day_key(day, bucket))
+}
+
+/// The bucket an event counts in (FNV-1a: stable across processes).
+fn bucket_of(event: &str) -> u64 {
+    event.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)) % BUCKETS
 }
 
 /// Counts once: KEYS[1] the day's hash, KEYS[2] the event's marker; ARGV
@@ -74,7 +83,7 @@ impl CountryActivityStore for RedisCountryActivity {
             .inner
             .eval(
                 ADD_ONCE_SCRIPT,
-                vec![day_key(day), seen_key(day, event)],
+                vec![day_key(day, bucket_of(event)), seen_key(day, bucket_of(event), event)],
                 vec![
                     format!("l:{country}"),
                     likes.to_string(),
@@ -90,9 +99,9 @@ impl CountryActivityStore for RedisCountryActivity {
     }
 
     async fn totals(&self, days: &[NaiveDate]) -> Result<HashMap<CountryCode, CountryActivity>, GeoDiscoveryError> {
-        let reads = days.iter().map(|day| {
+        let reads = days.iter().flat_map(|day| (0..BUCKETS).map(move |bucket| (*day, bucket))).map(|(day, bucket)| {
             let client = self.client.clone();
-            async move { client.inner.hgetall::<HashMap<String, i64>, _>(day_key(*day)).await }
+            async move { client.inner.hgetall::<HashMap<String, i64>, _>(day_key(day, bucket)).await }
         });
         let mut totals: HashMap<CountryCode, CountryActivity> = HashMap::new();
         for fields in futures::future::try_join_all(reads).await.map_err(fred_err)? {
@@ -109,5 +118,20 @@ impl CountryActivityStore for RedisCountryActivity {
             }
         }
         Ok(totals)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_event_and_its_marker_share_a_slot_and_buckets_spread() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
+        let b = bucket_of("l:post:reactor:1:1");
+        assert!(seen_key(day, b, "x").starts_with(&day_key(day, b)), "same hash tag");
+        assert_eq!(day_key(day, 3), "sg:geo:cact:{20261008:3}");
+        let buckets: std::collections::HashSet<_> = (0..200).map(|i| bucket_of(&format!("p:{i}"))).collect();
+        assert!(buckets.len() > 8, "events spread over the buckets");
     }
 }

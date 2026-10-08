@@ -63,6 +63,10 @@ pub struct GeoDiscoveryConfig {
     pub standings_window_days:  u32,
     pub standings_cache_secs:   u64,
 
+    /// The member map filter (#665): members see only their home and
+    /// unlocked countries (and the sea). Off until the app's shop is live.
+    pub country_unlocks_enabled: bool,
+
     /// Proxies in front of the edge listener that append to `X-Forwarded-For`
     /// (the ALB: 1). The client address is that many entries from the right;
     /// anything further left is client-supplied and never trusted.
@@ -132,6 +136,10 @@ impl GeoDiscoveryConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(60),
+
+            country_unlocks_enabled: std::env::var("GEO_COUNTRY_UNLOCKS_ENABLED")
+                .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes"))
+                .unwrap_or(false),
 
             // One setting for the fleet: GEO_ overrides, else the runtime's
             // GRPC_TRUSTED_PROXY_HOPS (also used by per_ip rate limits), else 1.

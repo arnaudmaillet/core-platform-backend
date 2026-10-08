@@ -20,7 +20,8 @@ use geo_discovery::app::{App, Backends};
 use geo_discovery::application::command::{
     ApplyMapVisibilityCommand, IndexPostCommand, UpdateViralityWithTilesCommand,
 };
-use geo_discovery::application::port::AudienceGate;
+use geo_discovery::application::port::{AudienceGate, GemSpend, GemWallet, ResidenceDirectory};
+use geo_discovery::domain::value_object::CountryCode;
 use geo_discovery::application::query::get_geo_timeline::{GetGeoTimelineQuery, GetGeoTimelineResult};
 use geo_discovery::application::query::query_tile::{QueryTileQuery, QueryTileResult};
 use geo_discovery::config::GeoDiscoveryConfig;
@@ -44,6 +45,45 @@ const MIGRATIONS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
 /// Zoom 15 → H3 R9, whose virality floor is 0 — so the spatial filter, not a
 /// score threshold, governs what a query returns.
 pub const ZOOM_R9: i32 = 15;
+
+/// The wallet (#665): 100 gems per account unless set; a spend is keyed once.
+#[derive(Default)]
+pub struct ScriptedWallet {
+    pub gems:  Mutex<HashMap<Uuid, i64>>,
+    pub spent: Mutex<Vec<(Uuid, String, i64)>>,
+}
+
+#[async_trait::async_trait]
+impl GemWallet for ScriptedWallet {
+    async fn gems(&self, account: Uuid) -> Result<i64, GeoDiscoveryError> {
+        Ok(*self.gems.lock().unwrap().get(&account).unwrap_or(&100))
+    }
+    async fn spend_for_country(&self, account: Uuid, _: CountryCode, amount: i64, key: &str) -> Result<GemSpend, GeoDiscoveryError> {
+        let mut gems = self.gems.lock().unwrap();
+        let balance = gems.entry(account).or_insert(100);
+        let mut spent = self.spent.lock().unwrap();
+        if spent.iter().any(|(a, k, _)| *a == account && k == key) {
+            return Ok(GemSpend { spent: true, gems: *balance });
+        }
+        if *balance < amount {
+            return Ok(GemSpend { spent: false, gems: *balance });
+        }
+        *balance -= amount;
+        spent.push((account, key.to_owned(), amount));
+        Ok(GemSpend { spent: true, gems: *balance })
+    }
+}
+
+/// Accounts' countries of residence (#665).
+#[derive(Default)]
+pub struct ScriptedResidence(pub Mutex<HashMap<Uuid, CountryCode>>);
+
+#[async_trait::async_trait]
+impl ResidenceDirectory for ScriptedResidence {
+    async fn residence(&self, account: Uuid) -> Result<Option<CountryCode>, GeoDiscoveryError> {
+        Ok(self.0.lock().unwrap().get(&account).copied())
+    }
+}
 
 /// A scripted audience check: every author `Visible` unless set; can fail.
 #[derive(Default)]
@@ -98,6 +138,10 @@ pub struct TestHarness {
     pub location:    geo_discovery::infrastructure::persistence::ScyllaLocationSettingsStore,
     /// The country ladder (#665), over the real Redis activity store.
     pub standings:   Arc<geo_discovery::application::country_standings::CountryStandings>,
+    /// A member's countries and unlocks (#665), over the real Scylla store.
+    pub unlocking:   Arc<geo_discovery::application::country_unlocks::CountryUnlocking>,
+    pub wallet:      Arc<ScriptedWallet>,
+    pub residence:   Arc<ScriptedResidence>,
 }
 
 impl TestHarness {
@@ -108,6 +152,8 @@ impl TestHarness {
         let redis_endpoint = test_support::containers::redis_endpoint().await;
 
         let gate = Arc::new(ScriptedGate::default());
+        let wallet = Arc::new(ScriptedWallet::default());
+        let residence = Arc::new(ScriptedResidence::default());
         let backends = Backends {
             scylla: ScyllaConfig {
                 contact_points: vec![scylla_cp],
@@ -121,6 +167,8 @@ impl TestHarness {
                 None,
                 geo_discovery::infrastructure::geoip::PrivateNetworkCountry::AsClaimed,
             )),
+            wallet:    Arc::clone(&wallet) as _,
+            residence: Arc::clone(&residence) as _,
         };
 
         let app = App::build(GeoDiscoveryConfig::from_env(), backends)
@@ -137,6 +185,9 @@ impl TestHarness {
             gate,
             country_access: app.country_access,
             standings: app.standings,
+            unlocking: app.unlocking,
+            wallet,
+            residence,
             tiles,
         }
     }
