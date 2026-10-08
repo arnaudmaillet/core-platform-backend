@@ -163,6 +163,17 @@ mod tests {
         Setup { verifier, directory, account, seed }
     }
 
+    /// `n` six-digit codes the verifier refuses at `now`: none matches a step
+    /// it accepts (the current one or a skewed one), so a random seed never
+    /// turns a "wrong" guess into a valid code.
+    fn wrong_codes(seed: &TotpSecret, now: DateTime<Utc>, n: usize) -> Vec<String> {
+        (0u32..)
+            .map(|i| format!("{:06}", (i * 7919 + 13) % 1_000_000))
+            .filter(|code| seed.matching_step(code, now).is_none())
+            .take(n)
+            .collect()
+    }
+
     #[tokio::test]
     async fn a_totp_code_proves_once_per_step() {
         let s = setup();
@@ -189,12 +200,10 @@ mod tests {
     async fn too_many_wrong_codes_lock_even_the_right_one_out() {
         let s = setup();
         let now = Utc::now();
-        for wrong in ["000000", "zzzzz-zzzzz", "not a code", "111111", "222222"] {
-            let code = s.seed.code_at(step_of(now));
-            if wrong == code {
-                continue;
-            }
-            assert!(matches!(s.verifier.check(&s.account, wrong, now).await, Err(AuthError::MfaCodeInvalid)));
+        let mut wrong = wrong_codes(&s.seed, now, 3);
+        wrong.extend(["zzzzz-zzzzz".to_owned(), "not a code".to_owned()]);
+        for code in &wrong {
+            assert!(matches!(s.verifier.check(&s.account, code, now).await, Err(AuthError::MfaCodeInvalid)));
         }
         let locked = s.verifier.check(&s.account, &s.seed.code_at(step_of(now)), now).await.unwrap_err();
         assert!(matches!(locked, AuthError::MfaLocked { .. }), "{locked:?}");
@@ -208,9 +217,8 @@ mod tests {
         let verifier = Arc::new(s.verifier);
         let now = Utc::now();
         let right = s.seed.code_at(step_of(now));
-        let guesses: Vec<_> = (0..20u32)
-            .map(|i| format!("{:06}", (i * 7919 + 13) % 1_000_000))
-            .filter(|code| *code != right)
+        let guesses: Vec<_> = wrong_codes(&s.seed, now, 20)
+            .into_iter()
             .map(|code| {
                 let (verifier, account) = (Arc::clone(&verifier), s.account);
                 tokio::spawn(async move { verifier.check(&account, &code, now).await })
