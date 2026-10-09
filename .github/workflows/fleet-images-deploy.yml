@@ -1,13 +1,13 @@
 # .github/workflows/fleet-images-deploy.yml
 #
-# Build + push every fleet binary (21 services/workers + migrator +
+# Build + push every fleet binary (22 services/workers + migrator +
 # topic-provisioner) to ECR — one image per binary, one multi-arch manifest per
 # binary. Add a binary to FLEET_BINS below to ship a new one (see its comment).
 #
 # ── Shape: ONE build job per architecture, not one per (binary, arch) ─────────
-# The 23 binaries share almost the whole dependency graph AND the workspace
+# The 24 binaries share almost the whole dependency graph AND the workspace
 # crates (foundation / platform / storage / service). Compiling them in one
-# `cargo build` per arch compiles that shared graph ONCE instead of 23 times,
+# `cargo build` per arch compiles that shared graph ONCE instead of 24 times,
 # and keeps the run under GitHub's 20-concurrent-job cap (the previous 44-job
 # matrix ran in three waves). Compiled artifacts are cached runner-side with
 # Swatinem/rust-cache (GitHub Actions cache, free on this public repo), so a
@@ -80,6 +80,7 @@ env:
     account-server chat-server comment-server engagement-server
     geo-discovery-server notification-server post-server profile-server
     social-graph-server timeline-server
+    wallet-server
     migrator topic-provisioner
 
 jobs:
