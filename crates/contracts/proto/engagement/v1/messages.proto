@@ -119,3 +119,18 @@ message GetLikePositionsResponse {
     // In the request's order.
     repeated LikePosition positions = 1;
 }
+
+message ListLikesByProfileRequest {
+    string profile_id = 1;
+    // Default 30, capped at 100.
+    int32  limit      = 2;
+    // The `next_page_token` of the previous page (empty: the first).
+    string page_token = 3;
+}
+
+message ListLikesByProfileResponse {
+    // Newest posts first.
+    repeated string post_ids        = 1;
+    // Empty on the last page.
+    string          next_page_token = 2;
+}

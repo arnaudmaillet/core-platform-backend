@@ -13,6 +13,27 @@ pub trait AuthorWindowStore: Send + Sync + 'static {
     async fn get(&self, profile_id: &ProfileId) -> Result<Option<u32>, PostError>;
 
     async fn set(&self, profile_id: &ProfileId, window_days: Option<u32>) -> Result<(), PostError>;
+
+    /// Which of the author's tabs others see (#829); the defaults when never
+    /// set.
+    async fn tabs(&self, profile_id: &ProfileId) -> Result<AuthorTabs, PostError>;
+
+    /// The author's window and tab flags at once (`ProfileTabSettingsChanged`).
+    async fn set_tab_settings(&self, profile_id: &ProfileId, window_days: Option<u32>, tabs: AuthorTabs) -> Result<(), PostError>;
+}
+
+/// Which of an author's post tabs others see (#829): the owner always sees
+/// both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthorTabs {
+    pub show_reposts: bool,
+    pub show_places:  bool,
+}
+
+impl Default for AuthorTabs {
+    fn default() -> Self {
+        Self { show_reposts: true, show_places: true }
+    }
 }
 
 /// The oldest creation time a window of `days` shows at `now`.

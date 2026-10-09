@@ -6,6 +6,7 @@ mod dual_table_consistency;
 mod lifecycle_events;
 mod location_sharing;
 mod post_window;
+mod profile_tabs;
 mod recently_deleted;
 mod viewer_visibility;
 mod sound_reuse;

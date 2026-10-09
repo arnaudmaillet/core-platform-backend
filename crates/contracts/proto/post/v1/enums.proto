@@ -34,3 +34,14 @@ enum AudioKind {
     AUDIO_KIND_ORIGINAL_SOUND = 1;
     AUDIO_KIND_REUSED         = 2;
 }
+
+// Which of a profile's post tabs to list (#829).
+enum ProfilePostsTab {
+    // Every post.
+    PROFILE_POSTS_TAB_UNSPECIFIED = 0;
+    // Reposts: posts with a parent. Empty for anyone but the owner (and the
+    // mesh) when the owner hides the tab.
+    PROFILE_POSTS_TAB_REPOSTS     = 1;
+    // Posts with a place. Same rule.
+    PROFILE_POSTS_TAB_PLACES      = 2;
+}

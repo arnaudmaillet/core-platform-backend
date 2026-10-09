@@ -10,6 +10,7 @@ description = "Engagement microservice — likes (the wallet's stakes, #665) and
 [dependencies]
 engagement-api = { workspace = true }
 post-api       = { workspace = true }   # BatchGetLikeVisibility client (#809)
+social-graph-api = { workspace = true }   # CheckAccess: who may see a profile's Likes tab (#829)
 error          = { workspace = true }
 validate-core  = { workspace = true }
 validation     = { workspace = true }

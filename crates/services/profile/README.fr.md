@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: c8ef6bc31d89b40c6b927a0298f91e4957127769b66298967c63b94cd1e16c75
-  translated_at: 2026-10-08
+  source_sha256: 7b1d46875c4154b982a83c3f4ae88f8c61c6f2cf126a929b94f143f75bb772de
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -148,7 +148,7 @@ service ProfileService {
   rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // qui peut commenter / mentionner / écrire, téléchargements, compteurs de likes, remix et réutilisation du son original (#669 ; absent d'une requête ⇒ inchangé) ; les ados démarrent abonnés uniquement, sans téléchargement / remix / réutilisation du son
   rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse); // mode fantôme + précis / niveau ville + audience (tout le monde / abonnés / mutuels ; UNSPECIFIED la garde) + on_new_posts (une préférence stockée ; absent la garde), réservé au propriétaire sur la vue ; les ados démarrent fantômes, mutuels, sans localisation sur les nouveaux posts, et sont plafonnés à mutuels (une audience plus large est refusée, PRF-9001) ; geo-discovery et post l'appliquent (#657)
   rpc SetFeedSettings(SetFeedSettingsRequest) returns (CommandResponse); // #662 contenu sensible moins (par défaut) / standard + non_personalized (For You non classé par centres d'intérêt ; activé par défaut pour un titulaire de 13 à 17 ans, qui peut le couper), synchronisés entre appareils ; annoncés par ProfileFeedSettingsChanged (timeline applique la désactivation) ; réservé au propriétaire sur la vue
-  rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse); // #664 fenêtre de posts (tout / 6 mois / 1 mois / 3 jours ; post masque les posts plus anciens aux visiteurs) + visibilité des onglets j'aime / enregistrés / republications / lieux (stockée ; aucun onglet servi pour l'instant) ; partiel ; réservé au propriétaire sur la vue
+  rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse); // #664 fenêtre de posts (tout / 6 mois / 1 mois / 3 jours ; post masque les posts plus anciens aux visiteurs) + visibilité des onglets j'aime / enregistrés / republications / lieux (#829 : post sert Republications et Lieux, engagement J'aime, chacun vide pour tout autre que le propriétaire quand il est masqué ; Enregistrés n'a pas encore de liste serveur) ; partiel ; les réglages sont réservés au propriétaire sur la vue, mais chaque lecteur reçoit `ProfileView.visible_tabs` (un onglet masqué est omis, pas affiché vide)
   rpc SetCommentFilters(SetCommentFiltersRequest) returns (CommandResponse); // #660 mots masqués (≤ 200, normalisés) + filtre offensant (activé par défaut) ; réservé au propriétaire sur la vue ; comment les applique
   rpc SetDiscoverySettings(SetDiscoverySettingsRequest) returns (CommandResponse); // #661 statut d'activité, accusés de lecture, trouvable par téléphone / e-mail / recherche de handle / QR / suggestions (partiel ; réservé au propriétaire sur la vue) ; les ados démarrent introuvables par téléphone, e-mail, suggestions ; search applique by_handle_search ; `in_suggestions` ne peut être activé que si le jeton dit 18+ (PRF-9001 : un ado n'est jamais suggéré) ; social-graph le projette pour SuggestProfiles, account lit by_phone / by_email pour FindProfilesByContacts
   rpc SetAccountType(SetAccountTypeRequest) returns (CommandResponse); // #668 personnel / professionnel (créateur) / marque (entreprise) + la fiche de contact publique d'une marque ; un bot reste un bot ; créateur et entreprise réservés aux 18 ans et plus (un jeton 13–17 reçoit FAILED_PRECONDITION)

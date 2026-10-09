@@ -35,8 +35,8 @@ impl PostWindow {
 
 /// The profile's post history window and which profile tabs others see
 /// (#664). Stored as one JSON column; a profile without one has the defaults.
-/// post enforces the window; the tab flags are kept for the services that
-/// will serve those tabs (none exists server-side yet).
+/// post enforces the window and serves the Reposts and Places tabs,
+/// engagement the Likes tab (#829); Saved has no server list yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TabSettings {
@@ -53,7 +53,23 @@ impl Default for TabSettings {
     }
 }
 
+/// Which of a profile's tabs its owner shows to others (#829): told to every
+/// reader, so a visitor's app leaves a hidden tab out instead of showing it
+/// empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct VisibleTabs {
+    pub likes:   bool,
+    pub saved:   bool,
+    pub reposts: bool,
+    pub places:  bool,
+}
+
 impl TabSettings {
+    /// The tabs others see.
+    pub fn visible(&self) -> VisibleTabs {
+        VisibleTabs { likes: self.show_likes, saved: self.show_saved, reposts: self.show_reposts, places: self.show_places }
+    }
+
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
     }

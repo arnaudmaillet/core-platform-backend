@@ -52,6 +52,19 @@ message ProfileView {
     FeedSettings                    feed_settings        = 27;
     // A brand's public contact card (#668); unset for other kinds.
     BusinessInfo                    business_info        = 28;
+    // Everyone: which of the profile's tabs its owner shows (#829), so a
+    // visitor's app leaves a hidden tab out.
+    VisibleTabs                     visible_tabs         = 29;
+}
+
+// Which of a profile's tabs others see (#829). post serves the Reposts and
+// Places tabs (ListPostsByProfile `tab`) and engagement the Likes tab, each
+// empty for anyone but the owner when hidden; Saved has no server list yet.
+message VisibleTabs {
+    bool likes   = 1;
+    bool saved   = 2;
+    bool reposts = 3;
+    bool places  = 4;
 }
 
 message ProfileSummaryView {
@@ -268,8 +281,10 @@ message SetCommentFiltersRequest {
 
 // How far back others see the profile's posts and which tabs they see (#664).
 // Older posts are hidden from everyone but the owner, never deleted. Saved is
-// private by default. Only the window is enforced today (post); no likes,
-// saved, reposts or places tab is served yet.
+// private by default. post enforces the window and serves the Reposts and
+// Places tabs, engagement the Likes tab (#829): a hidden tab is empty for
+// anyone but the owner. Saved has no server list yet. Visitors read the flags
+// as ProfileView.visible_tabs.
 message TabSettings {
     PostWindow post_window  = 1;
     bool       show_likes   = 2;

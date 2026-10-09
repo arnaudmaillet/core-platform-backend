@@ -93,6 +93,27 @@ impl LikeLedger for ScyllaLikeLedger {
             None => self.client.session.batch(&batch, ((target.kind(), target.id(), account, total), by_account)).await,
         };
         result.map_err(|e| EngagementError::Scylla(ScyllaStorageError::from(e)))?;
+        // The profile's Likes tab (#829): which of the account's profiles
+        // liked it, and — for a post — the tab's own row. Same write time, so
+        // the account's erasure (stamped later) removes both for good; a
+        // retry rewrites them.
+        if !profile_id.is_empty() {
+            let add = self.statement(
+                "UPDATE engagement.likes_by_account SET profile_ids = profile_ids + ? \
+                 WHERE account_id = ? AND target_kind = ? AND target_id = ?",
+                Some(at_micros),
+            );
+            let profiles: Vec<&str> = vec![profile_id];
+            self.client.session.execute_unpaged(add, (profiles, account, target.kind(), target.id())).await.map_err(scylla)?;
+            if let LikeTarget::Post(post_id) = target {
+                let tab = self.statement(
+                    "INSERT INTO engagement.liked_posts_by_profile (profile_id, post_id, total, liked_at) VALUES (?, ?, ?, ?)",
+                    Some(at_micros),
+                );
+                let liked_at = CqlTimestamp(at_micros / 1_000);
+                self.client.session.execute_unpaged(tab, (profile_id, post_id.as_str(), total, liked_at)).await.map_err(scylla)?;
+            }
+        }
         Ok(())
     }
 
@@ -109,16 +130,17 @@ impl LikeLedger for ScyllaLikeLedger {
             total:       Option<i64>,
             profile_id:  Option<String>,
             liked_at:    Option<CqlTimestamp>,
+            profile_ids: Option<Vec<String>>,
         }
         let account = Uuid::parse_str(account)
             .map_err(|_| EngagementError::DomainViolation { field: "account_id".into(), message: account.to_owned() })?;
         let mut stmt = Statement::new(match after {
             Some(_) => {
-                "SELECT target_kind, target_id, total, profile_id, liked_at FROM engagement.likes_by_account \
+                "SELECT target_kind, target_id, total, profile_id, liked_at, profile_ids FROM engagement.likes_by_account \
                  WHERE account_id = ? AND (target_kind, target_id) > (?, ?) LIMIT ?"
             }
             None => {
-                "SELECT target_kind, target_id, total, profile_id, liked_at FROM engagement.likes_by_account \
+                "SELECT target_kind, target_id, total, profile_id, liked_at, profile_ids FROM engagement.likes_by_account \
                  WHERE account_id = ? LIMIT ?"
             }
         });
@@ -150,6 +172,7 @@ impl LikeLedger for ScyllaLikeLedger {
                     .liked_at
                     .and_then(|t| chrono::DateTime::from_timestamp_millis(t.0))
                     .unwrap_or_default(),
+                profile_ids: row.profile_ids.unwrap_or_default(),
             });
         }
         Ok(likes)
@@ -179,6 +202,39 @@ impl LikeLedger for ScyllaLikeLedger {
             }
         }
         Ok(erased)
+    }
+
+    async fn liked_posts_by_profile(
+        &self,
+        profile_id: &str,
+        limit: i32,
+        after: Option<&str>,
+    ) -> Result<Vec<String>, EngagementError> {
+        let result = match after {
+            Some(after) => {
+                let stmt = self.statement(
+                    "SELECT post_id FROM engagement.liked_posts_by_profile WHERE profile_id = ? AND post_id < ? LIMIT ?",
+                    None,
+                );
+                self.client.session.execute_unpaged(stmt, (profile_id, after, limit)).await
+            }
+            None => {
+                let stmt =
+                    self.statement("SELECT post_id FROM engagement.liked_posts_by_profile WHERE profile_id = ? LIMIT ?", None);
+                self.client.session.execute_unpaged(stmt, (profile_id, limit)).await
+            }
+        }
+        .map_err(scylla)?;
+        let rows = result
+            .into_rows_result()
+            .map_err(|e| EngagementError::DomainViolation { field: "liked_posts_by_profile".into(), message: e.to_string() })?;
+        rows.rows::<(String,)>()
+            .map_err(|e| EngagementError::DomainViolation { field: "liked_posts_by_profile".into(), message: e.to_string() })?
+            .map(|row| {
+                row.map(|(post,)| post)
+                    .map_err(|e| EngagementError::DomainViolation { field: "liked_posts_by_profile".into(), message: e.to_string() })
+            })
+            .collect()
     }
 
     async fn position_of(&self, target: &LikeTarget, account: &str) -> Result<Option<Position>, EngagementError> {
@@ -270,6 +326,24 @@ impl LikeLedger for ScyllaLikeLedger {
 
     async fn forget(&self, account: &str, likes: &[ForgottenLike], at_micros: i64) -> Result<(), EngagementError> {
         let account = account_uuid(account)?;
+        // The profiles' Likes-tab rows first: the account's own row, which
+        // names those profiles, goes in the batch below.
+        let tabs = likes.iter().flat_map(|like| {
+            let post = match &like.target {
+                LikeTarget::Post(id) => Some(id.as_str()),
+                LikeTarget::Comment(_) => None,
+            };
+            post.into_iter().flat_map(move |post| like.profile_ids.iter().map(move |profile| (profile.as_str(), post)))
+        });
+        let deletes = tabs.map(|(profile, post)| {
+            let stmt = self.statement(
+                "DELETE FROM engagement.liked_posts_by_profile WHERE profile_id = ? AND post_id = ?",
+                Some(at_micros),
+            );
+            let session = &self.client.session;
+            async move { session.execute_unpaged(stmt, (profile, post)).await }
+        });
+        futures::future::try_join_all(deletes).await.map_err(scylla)?;
         let forgets = likes.iter().map(|like| {
             let (t, total) = (&like.target, like.total);
             // One target's swap is atomic, and its anonymous id is the

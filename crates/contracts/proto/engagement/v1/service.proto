@@ -29,4 +29,11 @@ service EngagementService {
     // like count just before its first like, and the count now. Mesh only:
     // the wallet's stake settlement (#665).
     rpc GetLikePositions (GetLikePositionsRequest) returns (GetLikePositionsResponse);
+
+    // A profile's Likes tab (#829): the posts it liked, newest posts first.
+    // The owner always sees it; anyone else only when the owner shows the tab
+    // and may see the profile (a private profile they don't follow, a block):
+    // otherwise empty. Hydrate the posts through post, which withholds what
+    // the reader can't see.
+    rpc ListLikesByProfile (ListLikesByProfileRequest) returns (ListLikesByProfileResponse);
 }

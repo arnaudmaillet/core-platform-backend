@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./CONTEXT_MAP.md
-  source_sha256: 44ea16996702c81df3984f975486a58ec9060a30be1e8cbbd39e2f2fc56523c8
-  translated_at: 2026-10-08
+  source_sha256: 30378dac0b459fc0504e46d7fa2e9f3ccf74d504bb9c38b2356151cd2f2b9e8e
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`CONTEXT_MAP.md`](./CONTEXT_MAP.md) fait foi.
@@ -99,6 +99,7 @@ Oriente l'investissement. Consolidé depuis la ligne de classe de chaque Domain 
 | `auth` | `account` | Customer/Supplier | `SubjectLink` ↔ `AccountId` | résolution du sujet de session |
 | `wallet` | `engagement` | Customer/Supplier | `GetLikePositions` (mesh) | règlement des mises (#665) : la précocité de chaque position |
 | `account` | `wallet` | Customer/Supplier | `ExportWallet` / `ListStakePositions` / `ListWalletTransactions` (mesh) | le `wallet.json` de l'export RGPD (#665) |
+| `engagement` | `social-graph` | Customer/Supplier | `CheckAccess` (mesh) | qui peut voir l'onglet J'aime d'un profil (#829) |
 | `realtime` | `auth` | Conformist (verify-only) | vérification du token ES256 via `auth-context` au handshake | authentification des nouvelles connexions |
 | **tous les services** | `auth` | Shared Kernel / OHS | token edge vérifié en process via `auth-context` | tout appel authentifié |
 

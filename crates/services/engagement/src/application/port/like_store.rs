@@ -72,6 +72,8 @@ pub struct AccountLike {
     /// The profile that liked last.
     pub profile_id: String,
     pub liked_at:   DateTime<Utc>,
+    /// Every profile of the account that liked it (their Likes tabs, #829).
+    pub profile_ids: Vec<String>,
 }
 
 /// A deleted account's like on one target, as the durable copy keeps it:
@@ -83,6 +85,8 @@ pub struct ForgottenLike {
     /// Stable for a given erasure ([`crate::application::erasure::anonymous_liker`]):
     /// forgetting again rewrites the same row.
     pub anonymous_id: uuid::Uuid,
+    /// The account's profiles that liked it: their Likes-tab rows go too.
+    pub profile_ids:  Vec<String>,
 }
 
 /// The durable copy of the likes (Scylla), written by the stake consumer.
@@ -107,6 +111,15 @@ pub trait LikeLedger: Send + Sync + 'static {
         limit: i32,
         after: Option<&LikeTarget>,
     ) -> Result<Vec<AccountLike>, EngagementError>;
+
+    /// The posts `profile_id` liked (its Likes tab, #829), newest posts
+    /// first, up to `limit` after the post `after`.
+    async fn liked_posts_by_profile(
+        &self,
+        profile_id: &str,
+        limit: i32,
+        after: Option<&str>,
+    ) -> Result<Vec<String>, EngagementError>;
 
     /// `account`'s position on `target`, if it liked it.
     async fn position_of(&self, target: &LikeTarget, account: &str) -> Result<Option<Position>, EngagementError>;

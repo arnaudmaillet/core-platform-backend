@@ -49,6 +49,9 @@ impl Service for EngagementService {
         public_read("/engagement.v1.EngagementService/GetPostEngagement"),
         // Likes (#665): viewer-aware (hidden counts, the reader's own).
         public_read("/engagement.v1.EngagementService/BatchGetLikes"),
+        // A profile's Likes tab (#829): viewer-aware (the owner's flag, who
+        // may see the profile).
+        public_read("/engagement.v1.EngagementService/ListLikesByProfile"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -58,7 +61,7 @@ impl Service for EngagementService {
             kafka:  Some(KafkaClientConfig::from_env()),
         };
 
-        let app = App::build(backends, like_visibility_from_env()?)
+        let app = App::build(backends, like_visibility_from_env()?, profile_access_from_env()?)
             .await
             .map_err(|e| anyhow::anyhow!("engagement app build: {e}"))?;
 
@@ -82,6 +85,22 @@ impl Service for EngagementService {
         routes.add_service(EngagementServiceServer::new(handler));
         Ok(())
     }
+}
+
+/// Who may see a profile (#829), asked of social-graph at
+/// `ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` (lazily connected, 500 ms / 1 s
+/// deadlines). Unset: a Likes tab is the owner's only (fail closed).
+pub(crate) fn profile_access_from_env() -> anyhow::Result<Option<Arc<dyn crate::application::port::ProfileAccess>>> {
+    let Some(endpoint) = std::env::var("ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT").ok().filter(|v| !v.trim().is_empty()) else {
+        tracing::warn!("ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT unset: Likes tabs are their owners' only");
+        return Ok(None);
+    };
+    let channel = tonic::transport::Channel::from_shared(endpoint)
+        .map_err(|e| anyhow::anyhow!("invalid ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT: {e}"))?
+        .timeout(std::time::Duration::from_millis(500))
+        .connect_timeout(std::time::Duration::from_millis(1_000))
+        .connect_lazy();
+    Ok(Some(Arc::new(crate::infrastructure::client::GrpcProfileAccess::new(channel))))
 }
 
 /// Like counts withheld per their author's setting (#809), asked of post at

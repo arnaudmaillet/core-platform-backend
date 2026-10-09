@@ -168,6 +168,16 @@ post. A mesh `GetPost` marks such a post `outside_window`, so a service serving 
 window: search drops it from results from then on). Nothing is deleted. The window comes from profile's `ProfileTabSettingsChanged`, projected into
 `post.author_post_windows` by the author-settings consumer below.
 
+**Profile tabs (#829).** `ListPostsByProfile(tab)` lists every post (unspecified), the **Reposts** (posts
+with a parent) or the **Places** (posts with a place); `PostSummary` says which each post is (`is_repost`,
+`has_place`, kept in `posts_by_profile` at creation, migration 0014). A tab the owner hides
+(`ProfileTabSettingsChanged` `show_reposts` / `show_places`, projected beside the window) is **empty** for
+any client but the author; the author and the mesh see it whole. A hidden Reposts tab is not rebuilt from
+the full list either: reposts leave it for those readers. The Places tab, and `has_place`, follow the
+author's location sharing (#657) like the place itself: in ghost mode, or for a reader outside its
+location audience, the tab is empty and no post says it has a place. Posts from before migration 0014 read
+as neither.
+
 **Location sharing (#657). `PostView.location` is what the author shares with the reader: the
 post's own point for the author; for anyone else (the mesh included) the point by default, the
 centre of its H3 R5 cell (~87 km², the map's city band) at city level, and nothing in ghost mode.
@@ -223,7 +233,7 @@ caller's field is dropped before the query).
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `profile.v1.events` | `post-author-tier` | denormalize `ProfileTierChanged` into the `author_tiers` projection (`profile_id → tier`); read on the publish path to stamp `author_tier` onto published posts. Other event types commit as no-ops | DLQ `profile.v1.events.dlq` |
-| `profile.v1.events` | `post-author-location` | project `ProfileLocationSettingsChanged` into `author_location_settings` (`profile_id → ghost, city`), which `GetPost` applies to the location it shows anyone but the author, and `ProfileTabSettingsChanged` into `author_post_windows` (`profile_id → window_days`), which both reads apply. Starts from the earliest offset (a teen profile is created ghosted). Other event types commit as no-ops | DLQ `profile.v1.events.dlq` |
+| `profile.v1.events` | `post-author-location` | project `ProfileLocationSettingsChanged` into `author_location_settings` (`profile_id → ghost, city`), which `GetPost` applies to the location it shows anyone but the author, and `ProfileTabSettingsChanged` into `author_post_windows` (`profile_id → window_days, show_reposts, show_places`), which both reads apply. Starts from the earliest offset (a teen profile is created ghosted). Other event types commit as no-ops | DLQ `profile.v1.events.dlq` |
 | `moderation.v1.events` | `post-moderation` | record `enforcement_applied` / `enforcement_reversed` on a **post** as its moderation restriction (`remove_content` → Removed, `visibility_limit` → Limited, `age_gate` → AgeGated; reversal → None), version-guarded by moderation's per-subject `EnforcementVersion` so redelivery converges. Other entities, actor-level actions and other event types commit as no-ops | DLQ `moderation.v1.events.dlq` |
 
 > **Runtime contract:** the event is published after the durable dual-write. Downstream consumers own

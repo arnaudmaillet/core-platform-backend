@@ -25,17 +25,18 @@ use transport::kafka::config::client::KafkaClientConfig;
 use crate::application::command::record_share::{RecordShareCommand, RecordShareHandler};
 use crate::application::command::record_view::{RecordViewCommand, RecordViewHandler};
 use crate::application::erasure::LikeEraser;
-use crate::application::port::{LikeLedger, LikeStore, LikeVisibility, ScoreStore};
+use crate::application::port::{LikeLedger, LikeStore, LikeVisibility, ProfileAccess, ProfileTabs, ScoreStore};
 use crate::application::query::batch_get_likes::{BatchGetLikesHandler, BatchGetLikesQuery};
 use crate::application::query::get_like_positions::{GetLikePositionsHandler, GetLikePositionsQuery};
 use crate::application::query::get_post_engagement::{GetPostEngagementHandler, GetPostEngagementQuery};
 use crate::application::query::list_likes_by_account::{ListLikesByAccountHandler, ListLikesByAccountQuery};
-use crate::infrastructure::persistence::{ScyllaCounterLedger, ScyllaLikeLedger};
+use crate::application::query::list_likes_by_profile::{ListLikesByProfileHandler, ListLikesByProfileQuery};
+use crate::infrastructure::persistence::{ScyllaCounterLedger, ScyllaLikeLedger, ScyllaProfileTabs};
 use crate::infrastructure::scoring::redis_like_store::RedisLikeStore;
 use crate::infrastructure::scoring::redis_score_store::{DirtyPostTracker, RedisScoreStore};
 use crate::infrastructure::worker::{
     account_consumer::AccountConsumer, comment_consumer::CommentEventConsumer, counter_flush::CounterFlushWorker,
-    stake_consumer::StakeConsumer,
+    profile_consumer::ProfileConsumer, stake_consumer::StakeConsumer,
 };
 
 /// Storage/transport endpoints the graph is wired against.
@@ -65,10 +66,13 @@ pub struct App {
 impl App {
     /// Builds the Redis stores and CQRS buses; when Kafka is configured, also
     /// builds the ScyllaDB ledgers and spawns the workers. `likes`: who hides
-    /// like counts (#809, post); `None` withholds nothing.
+    /// like counts (#809, post); `None` withholds nothing. `access`: who may
+    /// see a profile (#829, social-graph); `None`: a Likes tab is the owner's
+    /// only.
     pub async fn build(
         backends: Backends,
         likes:    Option<Arc<dyn LikeVisibility>>,
+        access:   Option<Arc<dyn ProfileAccess>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let Backends { scylla, redis, kafka } = backends;
 
@@ -83,7 +87,8 @@ impl App {
             Some(_) => {
                 let scylla_client = Arc::new(ScyllaSessionBuilder::new(scylla).build().await?);
                 let like_ledger: Arc<dyn LikeLedger> = Arc::new(ScyllaLikeLedger::new(Arc::clone(&scylla_client)));
-                Some((Arc::new(ScyllaCounterLedger::new(scylla_client)), like_ledger))
+                let tabs: Arc<dyn ProfileTabs> = Arc::new(ScyllaProfileTabs::new(Arc::clone(&scylla_client)));
+                Some((Arc::new(ScyllaCounterLedger::new(scylla_client)), like_ledger, tabs))
             }
             None => None,
         };
@@ -99,28 +104,35 @@ impl App {
         let query_bus = Arc::new(
             QueryBusBuilder::new()
                 .register::<ListLikesByAccountQuery, _>(ListLikesByAccountHandler {
-                    ledger: ledgers.as_ref().map(|(_, likes)| Arc::clone(likes)),
+                    ledger: ledgers.as_ref().map(|(_, likes, _)| Arc::clone(likes)),
+                })?
+                .register::<ListLikesByProfileQuery, _>(ListLikesByProfileHandler {
+                    ledger: ledgers.as_ref().map(|(_, likes, _)| Arc::clone(likes)),
+                    tabs:   ledgers.as_ref().map(|(_, _, tabs)| Arc::clone(tabs)),
+                    access,
                 })?
                 .register::<GetLikePositionsQuery, _>(GetLikePositionsHandler {
                     like_store:  Arc::clone(&like_store),
-                    like_ledger: ledgers.as_ref().map(|(_, l)| Arc::clone(l)),
+                    like_ledger: ledgers.as_ref().map(|(_, l, _)| Arc::clone(l)),
                 })?
                 .register::<BatchGetLikesQuery, _>(BatchGetLikesHandler {
                     like_store:  Arc::clone(&like_store),
-                    like_ledger: ledgers.as_ref().map(|(_, l)| Arc::clone(l)),
+                    like_ledger: ledgers.as_ref().map(|(_, l, _)| Arc::clone(l)),
                     likes:       likes.clone(),
                 })?
                 .register::<GetPostEngagementQuery, _>(GetPostEngagementHandler {
                     score_store: Arc::clone(&score_store),
                     likes,
                     like_store:  Arc::clone(&like_store),
-                    like_ledger: ledgers.as_ref().map(|(_, l)| Arc::clone(l)),
+                    like_ledger: ledgers.as_ref().map(|(_, l, _)| Arc::clone(l)),
                 })?
                 .build(),
         );
 
         // ── Workers (Kafka path) ─────────────────────────────────────────────
-        if let (Some(kafka_client), Some((counters, like_ledger))) = (kafka, ledgers) {
+        if let (Some(kafka_client), Some((counters, like_ledger, tabs))) = (kafka, ledgers) {
+            // Which profiles show their Likes tab (#829).
+            tokio::spawn(ProfileConsumer::new(kafka_client.clone(), tabs, "engagement-profile-tabs").run());
             // Likes are points (#665): the wallet's stakes become the likes.
             tokio::spawn(
                 StakeConsumer::new(kafka_client.clone(), Arc::clone(&like_store), Arc::clone(&like_ledger), "engagement-stakes")

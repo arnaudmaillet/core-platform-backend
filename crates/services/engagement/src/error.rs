@@ -35,6 +35,11 @@ pub enum EngagementError {
     #[error("post is unavailable: {message}")]
     PostUnavailable { message: String },
 
+    /// social-graph could not say whether the reader may see a profile
+    /// (#829): its Likes tab is withheld (fail closed).
+    #[error("social-graph is unavailable: {message}")]
+    SocialGraphUnavailable { message: String },
+
     // ── ENG-9xxx: ID parsing / domain violations ──────────────────────────────
     #[error("invalid post ID: '{0}'")]
     InvalidPostId(String),
@@ -59,6 +64,7 @@ impl AppError for EngagementError {
             Self::LedgerUnavailable           => "ENG-5003",
 
             Self::PostUnavailable { .. }      => "ENG-6001",
+            Self::SocialGraphUnavailable { .. } => "ENG-6002",
 
             Self::InvalidPostId(_)            => "ENG-9001",
             Self::DomainViolation { .. }      => "ENG-9003",
@@ -79,7 +85,9 @@ impl AppError for EngagementError {
             Self::ScriptReturnInvalid
             | Self::CounterFlushFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
 
-            Self::LedgerUnavailable | Self::PostUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            Self::LedgerUnavailable | Self::PostUnavailable { .. } | Self::SocialGraphUnavailable { .. } => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
         }
     }
 
@@ -99,7 +107,7 @@ impl AppError for EngagementError {
             Self::InvalidPostId(_)
             | Self::InvalidLikeTarget { .. } => Severity::Low,
 
-            Self::PostUnavailable { .. } => Severity::Medium,
+            Self::PostUnavailable { .. } | Self::SocialGraphUnavailable { .. } => Severity::Medium,
         }
     }
 
@@ -107,7 +115,7 @@ impl AppError for EngagementError {
         match self {
             Self::Scylla(e) => e.is_retryable(),
             Self::Redis(e)  => e.is_retryable(),
-            Self::PostUnavailable { .. } => true,
+            Self::PostUnavailable { .. } | Self::SocialGraphUnavailable { .. } => true,
             _               => false,
         }
     }
@@ -128,7 +136,8 @@ impl AppError for EngagementError {
             | Self::ScriptReturnInvalid
             | Self::CounterFlushFailed { .. }
             | Self::LedgerUnavailable
-            | Self::PostUnavailable { .. } =>
+            | Self::PostUnavailable { .. }
+            | Self::SocialGraphUnavailable { .. } =>
                 "An internal error occurred. Please try again later.",
 
             Self::InvalidPostId(_)    => "The provided post ID is not valid.",

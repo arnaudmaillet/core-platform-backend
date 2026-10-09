@@ -10,7 +10,7 @@ pub mod reuse_registry;
 pub use audience_gate::{author_visible_to, check_mentions, AudienceGate};
 pub use author_location_store::AuthorLocationStore;
 pub use author_tier_store::AuthorTierStore;
-pub use author_window_store::{window_start, AuthorWindowStore};
+pub use author_window_store::{window_start, AuthorTabs, AuthorWindowStore};
 pub use event_publisher::EventPublisher;
 pub use recently_deleted::RecentlyDeleted;
 pub use reuse_registry::{ReuseDefaults, ReuseRegistry};

@@ -15,4 +15,7 @@ pub struct PostProfileRow {
     pub status:     i8,
     /// NULL until moderation first acts on the post (migration 0007).
     pub moderation_restriction: Option<i8>,
+    /// NULL for posts written before migration 0014: read as false.
+    pub is_repost: Option<bool>,
+    pub has_place: Option<bool>,
 }

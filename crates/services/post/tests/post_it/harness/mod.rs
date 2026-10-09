@@ -23,7 +23,7 @@ use post::application::command::apply_moderation::ApplyModerationCommand;
 use post::application::command::delete_post::DeletePostCommand;
 use post::application::command::publish_post::PublishPostCommand;
 use post::application::query::get_post::GetPostQuery;
-use post::application::query::list_posts_by_profile::ListPostsByProfileQuery;
+use post::application::query::list_posts_by_profile::{ListPostsByProfileQuery, ProfileTab};
 
 pub use post::application::port::PostSummary;
 pub use post::domain::aggregate::Post;
@@ -126,6 +126,17 @@ impl TestHarness {
     pub async fn create_at(&self, post_id: &str, profile_id: &str, lat: f64, lng: f64) {
         let mut cmd = create_command(post_id.to_owned(), profile_id.to_owned());
         cmd.location = Some((lat, lng));
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .expect("create_post");
+    }
+
+    /// Creates a repost of `parent_id` (#829), expecting success.
+    pub async fn create_repost(&self, post_id: &str, profile_id: &str, parent_id: &str) {
+        let mut cmd = create_command(post_id.to_owned(), profile_id.to_owned());
+        cmd.parent_id = Some(parent_id.to_owned());
+        cmd.root_id = Some(parent_id.to_owned());
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await
@@ -255,6 +266,11 @@ impl TestHarness {
 
     /// Lists a profile's posts as `viewer`, cleared for mature content or not.
     pub async fn list_rated(&self, profile_id: &str, viewer: Viewer, mature: bool) -> Vec<PostSummary> {
+        self.list_tab(profile_id, viewer, mature, ProfileTab::All).await
+    }
+
+    /// Lists one of a profile's post tabs (#829) as `viewer`.
+    pub async fn list_tab(&self, profile_id: &str, viewer: Viewer, mature: bool, tab: ProfileTab) -> Vec<PostSummary> {
         let (summaries, _next) = self
             .query_bus
             .dispatch(Envelope::new(
@@ -265,6 +281,7 @@ impl TestHarness {
                     page_token: None,
                     viewer,
                     mature,
+                    tab,
                 },
             ))
             .await

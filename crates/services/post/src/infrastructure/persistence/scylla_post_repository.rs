@@ -214,6 +214,8 @@ fn profile_row_to_summary(row: PostProfileRow) -> Result<PostSummary, PostError>
         status,
         moderation,
         created_at,
+        is_repost: row.is_repost.unwrap_or(false),
+        has_place: row.has_place.unwrap_or(false),
     })
 }
 
@@ -274,8 +276,8 @@ impl PostRepository for ScyllaPostRepository {
 
         let stmt_index = self.strict_stmt(
             "INSERT INTO post.posts_by_profile \
-             (profile_id, created_at, post_id, kind, status) \
-             VALUES (?, ?, ?, ?, ?)",
+             (profile_id, created_at, post_id, kind, status, is_repost, has_place) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         );
         self.client
             .session
@@ -287,6 +289,8 @@ impl PostRepository for ScyllaPostRepository {
                     post.id().as_uuid(),
                     post.kind().as_tinyint(),
                     post.status().as_tinyint(),
+                    post.parent_id().is_some(),
+                    post.location().is_some(),
                 ),
             )
             .await
@@ -446,7 +450,7 @@ impl PostRepository for ScyllaPostRepository {
 
         let rows: Vec<PostProfileRow> = if let Some(ref tok) = token {
             let stmt = self.fast_stmt(
-                "SELECT created_at, post_id, kind, status, moderation_restriction \
+                "SELECT created_at, post_id, kind, status, moderation_restriction, is_repost, has_place \
                  FROM post.posts_by_profile \
                  WHERE profile_id = ? AND created_at < ? LIMIT ?",
             );
@@ -466,7 +470,7 @@ impl PostRepository for ScyllaPostRepository {
                 .map_err(|e| row_err("list_by_profile:deser", e))?
         } else {
             let stmt = self.fast_stmt(
-                "SELECT created_at, post_id, kind, status, moderation_restriction \
+                "SELECT created_at, post_id, kind, status, moderation_restriction, is_repost, has_place \
                  FROM post.posts_by_profile \
                  WHERE profile_id = ? LIMIT ?",
             );

@@ -1,6 +1,7 @@
 pub mod account_consumer;
 pub mod comment_consumer;
 pub mod counter_flush;
+pub mod profile_consumer;
 pub mod stake_consumer;
 
 use transport::kafka::config::client::KafkaClientConfig;
