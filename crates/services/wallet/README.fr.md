@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: d0d384902e858f5bd2561f16c7cd835ccf2d07442936aaf30c41703163feb1a9
-  translated_at: 2026-10-08
+  source_sha256: 892513a5e7627c285ca44928246244720fed6e5767c5ac64dbc7b8a4e0ca400f
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -222,7 +222,11 @@ Tous sauf `SpendGems` sont sur l'edge (`authenticated`), liés au `account_id` d
 `ExportWallet` (le wallet lu **sans en ouvrir un** ; absent quand le compte n'en a jamais eu) et
 `ListStakePositions` (chaque position de mise avec son règlement et sa part d'enveloppe, paginée par
 cible, jeton `kind:id`, ≤ 500 par page) sont aussi réservés au mesh : l'export RGPD d'account (#653,
-#665).
+#665). **Les appelants mesh sont vérifiés (#852, `MESH_CALLER_GATE`) :** `SpendGems` n'accepte que
+**geo-discovery**, et le jeton edge de l'utilisateur qu'il transmet (`authorization`) doit désigner le
+propriétaire du compte, majeur ; les lectures d'export (et `ListWalletTransactions` sur le mesh)
+n'acceptent qu'**account** — le jeton de ServiceAccount de l'appelant, `x-mesh-token`. `off` tant que
+l'infra ne fournit pas les jetons (core-platform-infra#62).
 
 - `Wallet.gem_spending_restricted` (edge seulement) dit à l'app de masquer les dépenses de gems ;
   les conditions du pack sont renvoyées (`stake_pack_price`, `stake_pack_shots`, `points_per_shot`).

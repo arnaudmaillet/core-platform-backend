@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use jsonwebtoken::DecodingKey;
@@ -40,6 +41,10 @@ struct JwkKey {
 pub struct JwksClient {
     http: Client,
     url: String,
+    /// A bearer token file sent with each fetch, re-read every time (it may
+    /// rotate): the in-cluster API server's JWKS asks the caller's own
+    /// ServiceAccount token (#852).
+    bearer_file: Option<PathBuf>,
 }
 
 impl JwksClient {
@@ -62,7 +67,35 @@ impl JwksClient {
         Self {
             http,
             url: url.into(),
+            bearer_file: None,
         }
+    }
+
+    /// A client for a JWKS behind a private CA and a bearer token — the
+    /// in-cluster API server's `/openid/v1/jwks` (mesh caller identity,
+    /// #852): `ca_file` (PEM) is trusted on top of the system roots, and
+    /// `bearer_file` is read and sent with every fetch.
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::JwksUnavailable`] when the CA file cannot be read or
+    /// parsed, or the HTTP client cannot be built.
+    pub fn with_ca_and_bearer(
+        url: impl Into<String>,
+        timeout: Duration,
+        ca_file: Option<PathBuf>,
+        bearer_file: Option<PathBuf>,
+    ) -> Result<Self, AuthError> {
+        let mut builder = Client::builder().timeout(timeout).https_only(false);
+        if let Some(ca_file) = ca_file {
+            let pem = std::fs::read(&ca_file)
+                .map_err(|e| AuthError::JwksUnavailable(format!("JWKS CA file {}: {e}", ca_file.display())))?;
+            let ca = reqwest::Certificate::from_pem(&pem)
+                .map_err(|e| AuthError::JwksUnavailable(format!("JWKS CA file {}: {e}", ca_file.display())))?;
+            builder = builder.add_root_certificate(ca);
+        }
+        let http = builder.build().map_err(|e| AuthError::JwksUnavailable(format!("JWKS HTTP client: {e}")))?;
+        Ok(Self { http, url: url.into(), bearer_file })
     }
 
     /// Fetches the JWKS document and returns a map of `kid → DecodingKey`.
@@ -76,12 +109,17 @@ impl JwksClient {
     ///
     /// Returns [`AuthError::JwksUnavailable`] on any HTTP or parse failure.
     pub async fn fetch(&self) -> Result<HashMap<String, DecodingKey>, AuthError> {
-        let response = self
-            .http
-            .get(&self.url)
-            .send()
-            .await
-            .map_err(|e| AuthError::JwksUnavailable(e.to_string()))?;
+        let mut request = self.http.get(&self.url);
+        if let Some(bearer_file) = &self.bearer_file {
+            // Off the async worker: a filesystem read, however small.
+            let path = bearer_file.clone();
+            let token = tokio::task::spawn_blocking(move || std::fs::read_to_string(path))
+                .await
+                .map_err(|e| AuthError::JwksUnavailable(format!("JWKS bearer file: {e}")))?
+                .map_err(|e| AuthError::JwksUnavailable(format!("JWKS bearer file {}: {e}", bearer_file.display())))?;
+            request = request.bearer_auth(token.trim());
+        }
+        let response = request.send().await.map_err(|e| AuthError::JwksUnavailable(e.to_string()))?;
 
         let status = response.status();
         if !status.is_success() {

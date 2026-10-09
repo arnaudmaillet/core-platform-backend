@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: e9be7c889d9311567030b1309fce6994b9fdd65fe705fd91964066d65e588835
-  translated_at: 2026-06-25
+  source_sha256: 33c263a3493112bf931f62d6d67ff66348e54ed7b39b693f7273c1e0c95c049b
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -100,6 +100,26 @@ impl GrpcServerBuilder {
     pub fn build(self) -> Result<TracedGrpcServer, TransportError>;          // InboundTraceLayer + TrafficLayer pre-installed
 }
 ```
+
+### Identité des appelants mesh (`grpc::mesh`, #852)
+
+La NetworkPolicy est L4 : elle laisse un service atteindre un port, jamais une seule RPC. Une RPC
+sensible réservée au mesh (gems dépensées, signalements d'un membre, export d'un wallet) vérifie aussi
+**quel service** l'appelle :
+
+```rust
+// appelé : un des appelants prévus de la RPC (noms d'app ; un préfixe d'overlay correspond aussi)
+self.mesh.require(&request, "SpendGems", &["geo-discovery-server"]).await?;
+// appelant : son jeton de ServiceAccount projeté sur chaque appel (MESH_TOKEN_FILE)
+WalletServiceClient::with_interceptor(channel, MeshTokenInterceptor::from_env());
+```
+
+Le jeton est le jeton de ServiceAccount projeté par Kubernetes de l'appelant (audience
+`core-platform-mesh`), envoyé en `x-mesh-token` et vérifié contre l'émetteur du cluster
+(`auth_context::mesh`). Modes (`MeshGateMode`) : `off` (rien de vérifié), `log` (un mauvais appelant
+est journalisé, laissé passer), `enforce` (`PERMISSION_DENIED`) ; sans vérificateur, tout appelant est
+inconnu. `edge::StaffGate::verified` vérifie aussi le jeton edge d'un **utilisateur final** qu'un
+service transmet sur un appel mesh (le wallet vérifie qui dépense des gems).
 
 ### Kafka
 

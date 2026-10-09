@@ -48,9 +48,21 @@ pub struct ModerationServiceHandler {
     submit_report: Arc<SubmitReportHandler>,
     list_my_reports: Arc<ListMyReportsHandler>,
     list_my_appeals: Arc<ListMyAppealsHandler>,
+    /// Which services may call its mesh-only RPCs (#852); off by default.
+    mesh: transport::grpc::mesh::MeshCallerGate,
 }
 
+/// `ListReportsByReporter`'s only intended caller: account (family
+/// supervision, #670).
+const REPORTS_BY_REPORTER_CALLERS: &[&str] = &["account-server"];
+
 impl ModerationServiceHandler {
+    /// Checks its mesh-only RPCs' callers with `mesh` (#852).
+    pub fn with_mesh_gate(mut self, mesh: transport::grpc::mesh::MeshCallerGate) -> Self {
+        self.mesh = mesh;
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         screen: Arc<ScreenHandler>,
@@ -79,6 +91,7 @@ impl ModerationServiceHandler {
             submit_report,
             list_my_reports,
             list_my_appeals,
+            mesh: transport::grpc::mesh::MeshCallerGate::off(),
         }
     }
 
@@ -171,6 +184,7 @@ impl ModerationServiceHandler {
         &self,
         request: Request<proto::ListReportsByReporterRequest>,
     ) -> Result<Response<proto::ListMyReportsResponse>, Status> {
+        self.mesh.require(&request, "ListReportsByReporter", REPORTS_BY_REPORTER_CALLERS).await?;
         let req = request.into_inner();
         let reporter = ActorId::try_from(req.reporter_id.as_str())
             .map_err(|_| Status::invalid_argument("reporter_id must be an account id"))?;

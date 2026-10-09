@@ -202,6 +202,10 @@ All but `SpendGems` are on the edge (`authenticated`), bound to the caller's `ac
 `ExportWallet` (the wallet read **without opening one**; absent when the account never had one) and
 `ListStakePositions` (each stake position with its settlement and envelope share, paged by target,
 token `kind:id`, ≤ 500 a page) are mesh only too: account's GDPR export (#653, #665).
+**Mesh callers are checked (#852, `MESH_CALLER_GATE`):** `SpendGems` takes **geo-discovery** only, and
+the end user's edge token it forwards (`authorization`) must name the account's owner, an adult; the
+export reads (and `ListWalletTransactions` over the mesh) take **account** only — the caller's
+ServiceAccount token, `x-mesh-token`. `off` until the infra provides the tokens (core-platform-infra#62).
 
 - `Wallet.gem_spending_restricted` (edge only) tells the app to hide gem spends; the pack's terms
   are echoed (`stake_pack_price`, `stake_pack_shots`, `points_per_shot`).

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 00fec5027a59ad613bd4381fb22e152ff1fb9d476eb6b13b0a77a207047d857a
-  translated_at: 2026-10-08
+  source_sha256: af5770f5bd5c49bebb3f58e24e3b1de75ff91afe2e3411eaae64e27ebe2dde0e
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -201,7 +201,8 @@ rpc GetEnforcementState   (..) returns (..);   // edge : son propre état unique
 > politique edge) et **jamais le texte libre** (`reason` toujours vide). Il ne liste jamais un signalement `SELF_HARM`,
 > `CSAM` ou `NCII`, ni un signalement visant le contenu des `hidden_account_ids` (les superviseurs de l'ado, 10 au
 > plus) : un ado doit pouvoir signaler sans être vu. Les lignes écartées sont sautées lot par lot, la pagination
-> reste complète.
+> reste complète. Son seul appelant prévu, **account**, est vérifié sur le mesh (#852, `MESH_CALLER_GATE` : le jeton
+> de ServiceAccount de l'appelant, `x-mesh-token`).
 >
 > **Autorisation (exigence de déploiement) :** les RPC d'opérations mutatives (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) sont **privilégiées** — elles bannissent/suspendent/suppriment. Le service n'autorise pas lui-même l'appelant ; les RPC mutatives **doivent** être restreintes à des principaux modérateurs authentifiés en périphérie (autorisation gateway / contrôle de permission `auth-context`, ex. `moderation:decide`) avant exposition. `Screen`, `SubmitReport`, `ListMyReports`, `FileAppeal`, `ListMyAppeals`, `GetStatementOfReasons` et `GetEnforcementState` sont orientées appelant ; le reste est réservé aux modérateurs.
 

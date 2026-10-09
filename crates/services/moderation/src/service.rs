@@ -80,9 +80,11 @@ impl Service for ModerationService {
             kafka: Some(KafkaClientConfig::from_env()),
         };
 
-        let app = App::build(config, backends)
+        let mut app = App::build(config, backends)
             .await
             .map_err(|e| anyhow::anyhow!("moderation app build: {e}"))?;
+        // Its mesh-only reads check who calls them (#852).
+        app.handler = app.handler.with_mesh_gate(service_runtime::mesh_gate_from_env());
 
         // Plane A inbound integration: user reports + classifier signals.
         spawn_report_consumer(Arc::clone(&app.ingest_report));

@@ -25,6 +25,8 @@ use post_api::post_service_client::PostServiceClient;
 use profile_api::profile_service_client::ProfileServiceClient;
 use search_api::search_service_client::SearchServiceClient;
 use social_graph_api::social_graph_service_client::SocialGraphServiceClient;
+use tonic::service::interceptor::InterceptedService;
+use transport::grpc::mesh::MeshTokenInterceptor;
 use wallet_api::wallet_service_client::WalletServiceClient;
 
 /// Items per page when walking a listing.
@@ -112,7 +114,8 @@ pub struct MeshExportPeers {
     chat: ChatServiceClient<Channel>,
     media: MediaServiceClient<Channel>,
     search: SearchServiceClient<Channel>,
-    wallet: Option<WalletServiceClient<Channel>>,
+    /// Carries this pod's mesh token: the wallet checks who exports (#852).
+    wallet: Option<WalletServiceClient<InterceptedService<Channel, MeshTokenInterceptor>>>,
     profile_d: Descriptors,
     post_d: Descriptors,
     comment_d: Descriptors,
@@ -144,7 +147,12 @@ impl MeshExportPeers {
             chat: ChatServiceClient::new(channel(&endpoints.chat)?),
             media: MediaServiceClient::new(channel(&endpoints.media)?),
             search: SearchServiceClient::new(channel(&endpoints.search)?),
-            wallet: endpoints.wallet.as_deref().map(channel).transpose()?.map(WalletServiceClient::new),
+            wallet: endpoints
+                .wallet
+                .as_deref()
+                .map(channel)
+                .transpose()?
+                .map(|c| WalletServiceClient::with_interceptor(c, MeshTokenInterceptor::from_env())),
             profile_d: Descriptors::of(profile_api::FILE_DESCRIPTOR_SET)?,
             post_d: Descriptors::of(post_api::FILE_DESCRIPTOR_SET)?,
             comment_d: Descriptors::of(comment_api::FILE_DESCRIPTOR_SET)?,

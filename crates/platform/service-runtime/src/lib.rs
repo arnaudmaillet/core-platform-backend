@@ -323,6 +323,73 @@ pub fn staff_gate_from_env() -> edge::StaffGate {
     edge::StaffGate::new(spawn_edge_decoder(&auth))
 }
 
+/// The [`transport::grpc::mesh::MeshCallerGate`] (#852): which services may
+/// call a sensitive mesh-only RPC. `MESH_CALLER_GATE` = `off` (the default:
+/// nothing checked, a warning at boot) / `log` / `enforce`; the verifier comes
+/// from `MESH_JWKS_URL`, `MESH_TOKEN_ISSUER`, `MESH_TOKEN_AUDIENCE`
+/// (`core-platform-mesh`), with `MESH_JWKS_CA_FILE` / `MESH_JWKS_BEARER_FILE`
+/// for the in-cluster JWKS, and `MESH_NAMESPACE` to pin the callers'
+/// namespace — by default this pod's own (the mounted ServiceAccount's
+/// `namespace` file), so a same-named ServiceAccount elsewhere in the cluster
+/// never passes. `log` or `enforce` without a verifier: every caller is
+/// unknown (logged, or refused).
+pub fn mesh_gate_from_env() -> transport::grpc::mesh::MeshCallerGate {
+    use transport::grpc::mesh::{MeshCallerGate, MeshGateMode, MeshVerifier};
+
+    let var = |key: &str| std::env::var(key).ok().filter(|v| !v.trim().is_empty());
+    let mode = match var("MESH_CALLER_GATE") {
+        None => {
+            tracing::warn!("MESH_CALLER_GATE unset: mesh callers are not checked");
+            return MeshCallerGate::off();
+        }
+        Some(raw) => match MeshGateMode::parse(&raw) {
+            Some(MeshGateMode::Off) => return MeshCallerGate::off(),
+            Some(mode) => mode,
+            None => {
+                tracing::error!(value = %raw, "MESH_CALLER_GATE must be off, log or enforce: enforcing");
+                MeshGateMode::Enforce
+            }
+        },
+    };
+    let verifier = match (var("MESH_JWKS_URL"), var("MESH_TOKEN_ISSUER")) {
+        (Some(jwks_url), Some(issuer)) => {
+            let config = auth_context::mesh::MeshTokenConfig {
+                jwks_url,
+                issuer,
+                audience: var("MESH_TOKEN_AUDIENCE").unwrap_or_else(|| auth_context::mesh::MESH_AUDIENCE.to_owned()),
+                ca_file: var("MESH_JWKS_CA_FILE").map(Into::into),
+                bearer_file: var("MESH_JWKS_BEARER_FILE").map(Into::into),
+                refresh_interval: interval_from_env("MESH_JWKS_REFRESH_SECS", 300),
+                max_backoff: Duration::from_secs(60),
+                fetch_timeout: Duration::from_secs(10),
+                clock_skew: Duration::from_secs(5),
+            };
+            match auth_context::mesh::spawn_mesh_decoder(&config) {
+                Ok(decoder) => Some(decoder as std::sync::Arc<dyn MeshVerifier>),
+                Err(error) => {
+                    tracing::error!(%error, "mesh token verifier unavailable: every mesh caller is unknown");
+                    None
+                }
+            }
+        }
+        _ => {
+            tracing::error!("MESH_JWKS_URL / MESH_TOKEN_ISSUER unset: every mesh caller is unknown");
+            None
+        }
+    };
+    let namespace = var("MESH_NAMESPACE").or_else(|| {
+        std::fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+            .ok()
+            .map(|n| n.trim().to_owned())
+            .filter(|n| !n.is_empty())
+    });
+    if namespace.is_none() {
+        tracing::warn!("mesh callers' namespace unknown (MESH_NAMESPACE unset, no mounted namespace): any namespace passes");
+    }
+    tracing::info!(?mode, ?namespace, "mesh caller gate");
+    MeshCallerGate::new(mode, verifier, namespace)
+}
+
 /// Resolved client-edge settings — `None` when [`GRPC_EDGE_ADDR_ENV`] is unset.
 struct EdgeConfig {
     addr: SocketAddr,

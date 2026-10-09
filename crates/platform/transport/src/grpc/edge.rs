@@ -333,6 +333,23 @@ pub fn require_permission<T>(request: &tonic::Request<T>, permission: &str) -> R
 /// evidence (#837): minted by `auth` from the account's role.
 pub const VERIFICATION_REVIEW: &str = "verification:review";
 
+/// The token of an `authorization` value: `Bearer <token>`, the scheme
+/// case-insensitive; an empty token counts as absent.
+pub fn parse_bearer(value: &str) -> Option<String> {
+    let (scheme, token) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    let token = token.trim();
+    (!token.is_empty()).then(|| token.to_owned())
+}
+
+/// The bearer token a request carries (`authorization: Bearer …`) — e.g. the
+/// end user's edge token a service forwards on a mesh call (#852).
+pub fn bearer_token(metadata: &tonic::metadata::MetadataMap) -> Option<String> {
+    parse_bearer(metadata.get("authorization")?.to_str().ok()?)
+}
+
 /// Verifies a **staff** token carried on a **mesh** call (#837): staff tooling
 /// in the cluster sends the staff member's edge token as `authorization:
 /// Bearer …`, and the service checks it itself — staff RPCs stay off the
@@ -372,20 +389,22 @@ impl StaffGate {
     /// `UNAUTHENTICATED` without a valid token (or any verifier),
     /// `PERMISSION_DENIED` without the permission (a guest never has it).
     pub async fn require<T>(&self, request: &tonic::Request<T>, permission: &str) -> Result<EdgePrincipal, Status> {
-        let verifier = self.verifier.as_ref().ok_or_else(|| Status::unauthenticated("staff calls are not enabled"))?;
-        let token = request
-            .metadata()
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split_once(' '))
-            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
-            .map(|(_, token)| token.trim())
-            .filter(|t| !t.is_empty())
-            .ok_or_else(|| Status::unauthenticated("a staff token is required"))?;
-        let principal = verifier.verify(token).await.ok_or_else(|| Status::unauthenticated("invalid token"))?;
+        let principal = self.verified(request).await?;
         if !principal.has_permission(permission) {
             return Err(Status::permission_denied("missing permission"));
         }
+        Ok(principal)
+    }
+
+    /// The principal of the edge token `request` carries as `authorization:
+    /// Bearer …`, verified — also an **end user's** token a service forwards
+    /// on a mesh call so the callee checks the user itself (#852: the wallet
+    /// checks who spends gems). `UNAUTHENTICATED` without a valid token (or
+    /// any verifier).
+    pub async fn verified<T>(&self, request: &tonic::Request<T>) -> Result<EdgePrincipal, Status> {
+        let verifier = self.verifier.as_ref().ok_or_else(|| Status::unauthenticated("token checks are not enabled"))?;
+        let token = bearer_token(request.metadata()).ok_or_else(|| Status::unauthenticated("a token is required"))?;
+        let principal = verifier.verify(&token).await.ok_or_else(|| Status::unauthenticated("invalid token"))?;
         Ok(EdgePrincipal::new(Arc::new(principal)))
     }
 }

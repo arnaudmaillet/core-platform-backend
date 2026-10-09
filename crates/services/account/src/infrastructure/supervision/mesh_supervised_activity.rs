@@ -5,6 +5,8 @@ use chrono::{DateTime, Utc};
 use tonic::transport::{Channel, Endpoint};
 
 use moderation_api::moderation_service_client::ModerationServiceClient;
+use tonic::service::interceptor::InterceptedService;
+use transport::grpc::mesh::MeshTokenInterceptor;
 use social_graph_api::social_graph_service_client::SocialGraphServiceClient;
 
 use crate::application::port::{
@@ -20,7 +22,9 @@ use crate::error::AccountError;
 /// their privacy. Lazy channels with request deadlines.
 pub struct MeshSupervisedActivity {
     social:     SocialGraphServiceClient<Channel>,
-    moderation: ModerationServiceClient<Channel>,
+    /// Carries this pod's mesh token: moderation checks who lists a
+    /// member's reports (#852).
+    moderation: ModerationServiceClient<InterceptedService<Channel, MeshTokenInterceptor>>,
 }
 
 fn unavailable(service: &'static str) -> impl Fn(tonic::Status) -> AccountError {
@@ -38,7 +42,7 @@ impl MeshSupervisedActivity {
         };
         Ok(Self {
             social:     SocialGraphServiceClient::new(channel(social_graph_endpoint)?),
-            moderation: ModerationServiceClient::new(channel(moderation_endpoint)?),
+            moderation: ModerationServiceClient::with_interceptor(channel(moderation_endpoint)?, MeshTokenInterceptor::from_env()),
         })
     }
 }

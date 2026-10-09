@@ -18,12 +18,15 @@ pub struct GemSpend {
 #[async_trait]
 pub trait GemWallet: Send + Sync + 'static {
     async fn gems(&self, account: Uuid) -> Result<i64, GeoDiscoveryError>;
+    /// `end_user`: the spender's edge token, forwarded so the wallet checks
+    /// the spender itself (#852).
     async fn spend_for_country(
         &self,
         account: Uuid,
         country: CountryCode,
         amount: i64,
         key: &str,
+        end_user: Option<&str>,
     ) -> Result<GemSpend, GeoDiscoveryError>;
 }
 
