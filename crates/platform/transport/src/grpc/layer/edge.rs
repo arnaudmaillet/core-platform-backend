@@ -255,13 +255,7 @@ where
 /// Extracts the bearer token from `authorization` (scheme is case-insensitive;
 /// empty tokens count as absent).
 fn bearer_token(headers: &http::HeaderMap) -> Option<String> {
-    let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
-    let (scheme, token) = value.split_once(' ')?;
-    if !scheme.eq_ignore_ascii_case("bearer") {
-        return None;
-    }
-    let token = token.trim();
-    (!token.is_empty()).then(|| token.to_owned())
+    crate::grpc::edge::parse_bearer(headers.get(AUTHORIZATION)?.to_str().ok()?)
 }
 
 fn reject_attrs(route: &str, reason: &'static str) -> [KeyValue; 2] {

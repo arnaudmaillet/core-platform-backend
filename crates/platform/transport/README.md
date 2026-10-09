@@ -88,6 +88,25 @@ impl GrpcServerBuilder {
 }
 ```
 
+### Mesh caller identity (`grpc::mesh`, #852)
+
+The NetworkPolicy is L4: it lets a service reach a port, never one RPC. A sensitive mesh-only RPC
+(gems spent, someone's reports, a wallet export) also checks **which service** calls it:
+
+```rust
+// callee: one of the RPC's intended callers (app names; an overlay prefix matches too)
+self.mesh.require(&request, "SpendGems", &["geo-discovery-server"]).await?;
+// caller: its projected ServiceAccount token on every call (MESH_TOKEN_FILE)
+WalletServiceClient::with_interceptor(channel, MeshTokenInterceptor::from_env());
+```
+
+The token is the caller's Kubernetes projected ServiceAccount token (audience `core-platform-mesh`),
+sent as `x-mesh-token` and verified against the cluster's issuer (`auth_context::mesh`). Modes
+(`MeshGateMode`): `off` (nothing checked), `log` (a wrong caller is logged, let through), `enforce`
+(`PERMISSION_DENIED`); without a verifier, every caller is unknown. `edge::StaffGate::verified` also
+checks an **end user's** edge token a service forwards on a mesh call (the wallet checks who spends
+gems).
+
 ### Kafka
 
 ```rust

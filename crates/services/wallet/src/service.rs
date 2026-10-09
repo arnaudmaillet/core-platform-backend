@@ -78,7 +78,9 @@ impl Service for WalletService {
             publisher: build_publisher()?,
             positions,
         };
-        let app = App::build(pool.clone(), WalletConfig::from_env(), Some(deps));
+        let mut app = App::build(pool.clone(), WalletConfig::from_env(), Some(deps));
+        // Its mesh-only RPCs check who calls them, and SpendGems who spends (#852).
+        app.handler = app.handler.with_mesh_gate(service_runtime::mesh_gate_from_env(), service_runtime::staff_gate_from_env());
         spawn_outbox_drainer(Arc::clone(&app.wallets));
         if settles {
             spawn_settler(Arc::clone(&app.wallets));

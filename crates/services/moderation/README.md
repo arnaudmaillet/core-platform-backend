@@ -186,7 +186,8 @@ rpc GetEnforcementState   (..) returns (..);   // edge: own state only; DISCOURA
 > family supervision (account shows a teen's reports to their supervisor, #670): **mesh only** (not on the edge
 > policy) and **never the free text** (`reason` is always empty). It never lists a `SELF_HARM`, `CSAM` or `NCII`
 > report, nor one about content of the `hidden_account_ids` (the teen's supervisors, at most 10): a teen must be
-> able to report unseen. Hidden rows are skipped batch by batch, so paging stays whole.
+> able to report unseen. Hidden rows are skipped batch by batch, so paging stays whole. Its only intended caller,
+> **account**, is checked on the mesh (#852, `MESH_CALLER_GATE`: the caller's ServiceAccount token, `x-mesh-token`).
 >
 > **Authorization (deployment requirement):** the mutating ops RPCs (`DecideCase`, `AssignCase`, `OpenCase`, `ResolveAppeal`) are **privileged** — they ban/suspend/remove. The service does not self-authorize the caller; mutating RPCs **must** be restricted to authenticated reviewer principals at the edge (gateway authz / `auth-context` permission gate, e.g. `moderation:decide`) before exposure. `Screen`, `SubmitReport`, `ListMyReports`, `FileAppeal`, `ListMyAppeals`, `GetStatementOfReasons` and `GetEnforcementState` are caller-facing; the rest are reviewer-only.
 

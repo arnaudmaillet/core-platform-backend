@@ -5,6 +5,7 @@ pub mod edge;
 pub mod error;
 pub mod extractor;
 pub mod jwks;
+pub mod mesh;
 pub mod principal;
 
 pub use config::AuthContextConfig;

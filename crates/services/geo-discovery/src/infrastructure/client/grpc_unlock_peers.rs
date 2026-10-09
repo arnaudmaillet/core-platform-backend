@@ -8,6 +8,8 @@ use tonic::Code;
 use uuid::Uuid;
 
 use account_api::account_service_client::AccountServiceClient;
+use tonic::service::interceptor::InterceptedService;
+use transport::grpc::mesh::MeshTokenInterceptor;
 use wallet_api::wallet_service_client::WalletServiceClient;
 
 use crate::application::port::{GemSpend, GemWallet, ResidenceDirectory};
@@ -19,13 +21,15 @@ fn unavailable(service: &'static str) -> impl Fn(tonic::Status) -> GeoDiscoveryE
 }
 
 pub struct GrpcGemWallet {
-    wallet: WalletServiceClient<Channel>,
+    /// Every call carries this pod's mesh token (#852).
+    wallet: WalletServiceClient<InterceptedService<Channel, MeshTokenInterceptor>>,
 }
 
 impl GrpcGemWallet {
-    /// `channel` must carry request and connect timeouts.
+    /// `channel` must carry request and connect timeouts; the mesh token
+    /// comes from `MESH_TOKEN_FILE`.
     pub fn new(channel: Channel) -> Self {
-        Self { wallet: WalletServiceClient::new(channel) }
+        Self { wallet: WalletServiceClient::with_interceptor(channel, MeshTokenInterceptor::from_env()) }
     }
 }
 
@@ -48,17 +52,25 @@ impl GemWallet for GrpcGemWallet {
         country: CountryCode,
         amount: i64,
         key: &str,
+        end_user: Option<&str>,
     ) -> Result<GemSpend, GeoDiscoveryError> {
+        let mut request = tonic::Request::new(wallet_api::SpendGemsRequest {
+            account_id:      account.to_string(),
+            amount,
+            kind:            wallet_api::TransactionKind::CountryUnlock as i32,
+            ref_id:          country.to_string(),
+            idempotency_key: key.to_owned(),
+        });
+        // The spender's own token: the wallet checks who spends (#852).
+        if let Some(token) = end_user
+            && let Ok(value) = format!("Bearer {token}").parse()
+        {
+            request.metadata_mut().insert("authorization", value);
+        }
         let answer = self
             .wallet
             .clone()
-            .spend_gems(wallet_api::SpendGemsRequest {
-                account_id:      account.to_string(),
-                amount,
-                kind:            wallet_api::TransactionKind::CountryUnlock as i32,
-                ref_id:          country.to_string(),
-                idempotency_key: key.to_owned(),
-            })
+            .spend_gems(request)
             .await
             .map_err(unavailable("wallet"))?
             .into_inner();

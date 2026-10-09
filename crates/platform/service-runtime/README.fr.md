@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: df791f78fc71b13c4daaad25a2aff7baaef8385562ca6fc0a7ec445a2aeb53b5
-  translated_at: 2026-10-04
+  source_sha256: bdca5951f1b9abc2862027ff413d6fce0841c66fb246b7f8a1f92b3065a8dee1
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -128,6 +128,11 @@ Voir l'impl `Service` et le binaire en §API publique — c'est toute la surface
 | `HEALTH_PROBE_INTERVAL_SECS` | `10` | Readiness poll cadence |
 | `TRAFFIC_PRUNE_INTERVAL_SECS` | `60` | Rate-limiter memory-bounding cadence |
 | `GRPC_TRUSTED_PROXY_HOPS` | `1` | Proxys qui ajoutent à `X-Forwarded-For` avant les listeners (l'ALB) ; les limites `per_ip` utilisent l'entrée à autant de places depuis la droite. À augmenter si un proxy CDN/WAF est placé devant |
+| `MESH_CALLER_GATE` | non défini (`off`) | `mesh_gate_from_env()` (#852) : `off` / `log` / `enforce` — si une RPC mesh gardée vérifie le jeton de ServiceAccount de son appelant |
+| `MESH_JWKS_URL` · `MESH_TOKEN_ISSUER` · `MESH_TOKEN_AUDIENCE` | non défini · non défini · `core-platform-mesh` | où et comment les jetons mesh sont vérifiés (dans le cluster : `https://kubernetes.default.svc/openid/v1/jwks`) |
+| `MESH_JWKS_CA_FILE` · `MESH_JWKS_BEARER_FILE` | non défini | la CA du JWKS du cluster et le jeton bearer envoyé à chaque récupération |
+| `MESH_NAMESPACE` | le namespace du pod | les appelants doivent être dans ce namespace (par défaut : le `namespace` du ServiceAccount monté) |
+| `MESH_TOKEN_FILE` | non défini | côté appelant (`MeshTokenInterceptor::from_env`) : le jeton projeté du pod ; non défini → rien n'est envoyé |
 
 Les `*_GRPC_ADDR` + tuning par service vivent dans le README de chaque service. La télémétrie honore
 `RUST_LOG` / `OTEL_*` au boot ; les dials live sont ensuite pilotés par la section `[telemetry]`

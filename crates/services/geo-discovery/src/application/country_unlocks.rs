@@ -33,6 +33,15 @@ pub enum UnlockOutcome {
     PriceChanged,
 }
 
+/// Who asks for an unlock: whether they may spend gems (an adult, from the
+/// edge token), and that token, forwarded to the wallet so it checks the
+/// spender itself (#852).
+#[derive(Debug, Clone, Default)]
+pub struct Spender {
+    pub adult: bool,
+    pub token: Option<String>,
+}
+
 /// An unlock's answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnlockReply {
@@ -73,17 +82,17 @@ impl CountryUnlocking {
         Ok((countries, gems))
     }
 
-    /// Unlocks `country` at `expected_price`. `adult`: the caller may spend
+    /// Unlocks `country` at `expected_price` for `spender` — who may spend
     /// gems (from the edge token) — else `GEO-3001`.
     pub async fn unlock(
         &self,
         account: Uuid,
         country: &str,
         expected_price: i64,
-        adult: bool,
+        spender: &Spender,
         now: DateTime<Utc>,
     ) -> Result<UnlockReply, GeoDiscoveryError> {
-        if !adult {
+        if !spender.adult {
             return Err(GeoDiscoveryError::GemSpendingRestricted);
         }
         let country = CountryCode::try_from(country.trim())?;
@@ -108,7 +117,10 @@ impl CountryUnlocking {
                 price
             }
         };
-        let spend = self.wallet.spend_for_country(account, country, price, &format!("country-{country}")).await?;
+        let spend = self
+            .wallet
+            .spend_for_country(account, country, price, &format!("country-{country}"), spender.token.as_deref())
+            .await?;
         countries.pending.retain(|(c, _)| *c != country);
         if !spend.spent {
             self.store.clear_pending(account, country).await?;
@@ -190,7 +202,7 @@ pub(crate) mod fakes {
         async fn gems(&self, account: Uuid) -> Result<i64, GeoDiscoveryError> {
             Ok(*self.gems.lock().unwrap().get(&account).unwrap_or(&100))
         }
-        async fn spend_for_country(&self, account: Uuid, _: CountryCode, amount: i64, key: &str) -> Result<GemSpend, GeoDiscoveryError> {
+        async fn spend_for_country(&self, account: Uuid, _: CountryCode, amount: i64, key: &str, _: Option<&str>) -> Result<GemSpend, GeoDiscoveryError> {
             let mut gems = self.gems.lock().unwrap();
             let balance = gems.entry(account).or_insert(100);
             let mut spent = self.spent.lock().unwrap();
@@ -224,6 +236,10 @@ mod tests {
 
     use super::fakes::*;
     use super::*;
+
+    fn adult() -> Spender {
+        Spender { adult: true, token: Some("edge-token".into()) }
+    }
     use crate::application::country_standings::tests::MemActivity;
     use crate::application::port::CountryActivityStore;
     use crate::domain::country_standing::UnlockPricing;
@@ -284,15 +300,15 @@ mod tests {
         w.residence.0.lock().unwrap().insert(me, cc("FR"));
         let now = Utc::now();
         // A quiet country ranks past 30: 15 gems.
-        let refused = w.unlocking.unlock(me, "IS", 50, true, now).await.unwrap();
+        let refused = w.unlocking.unlock(me, "IS", 50, &adult(), now).await.unwrap();
         assert_eq!((refused.outcome, refused.price), (UnlockOutcome::PriceChanged, 15));
         assert!(refused.countries.pending.is_empty(), "nothing pending on a refused price");
-        let unlocked = w.unlocking.unlock(me, "IS", 15, true, now).await.unwrap();
+        let unlocked = w.unlocking.unlock(me, "IS", 15, &adult(), now).await.unwrap();
         assert_eq!((unlocked.outcome, unlocked.gems), (UnlockOutcome::Unlocked, 85));
         assert!(unlocked.countries.has(cc("IS")) && unlocked.countries.has(cc("FR")));
-        let again = w.unlocking.unlock(me, "IS", 15, true, now).await.unwrap();
+        let again = w.unlocking.unlock(me, "IS", 15, &adult(), now).await.unwrap();
         assert_eq!((again.outcome, again.gems), (UnlockOutcome::AlreadyUnlocked, 85));
-        let home = w.unlocking.unlock(me, "FR", 0, true, now).await.unwrap();
+        let home = w.unlocking.unlock(me, "FR", 0, &adult(), now).await.unwrap();
         assert_eq!(home.outcome, UnlockOutcome::AlreadyUnlocked, "home is free");
         assert_eq!(w.wallet.spent.lock().unwrap().len(), 1);
     }
@@ -305,11 +321,11 @@ mod tests {
         let w = world();
         let me = Uuid::now_v7();
         *w.store.1.lock().unwrap() = true;
-        assert!(w.unlocking.unlock(me, "JP", 15, true, Utc::now()).await.is_err());
+        assert!(w.unlocking.unlock(me, "JP", 15, &adult(), Utc::now()).await.is_err());
         assert_eq!(w.store.get(me).await.unwrap().pending, vec![(cc("JP"), 15)]);
         // Japan climbs to the top tier meanwhile.
         w.activity.add(cc("JP"), Utc::now().date_naive(), 99, 1, "jp").await.unwrap();
-        let settled = w.unlocking.unlock(me, "JP", 50, true, Utc::now()).await.unwrap();
+        let settled = w.unlocking.unlock(me, "JP", 50, &adult(), Utc::now()).await.unwrap();
         assert_eq!((settled.outcome, settled.price, settled.gems), (UnlockOutcome::Unlocked, 15, 85));
         assert_eq!(w.wallet.spent.lock().unwrap().len(), 1, "charged once");
         assert!(w.store.get(me).await.unwrap().pending.is_empty());
@@ -321,7 +337,7 @@ mod tests {
         let me = Uuid::now_v7();
         w.activity.add(cc("JP"), Utc::now().date_naive(), 10, 1, "jp").await.unwrap();
         w.wallet.gems.lock().unwrap().insert(me, 40);
-        let short = w.unlocking.unlock(me, "JP", 50, true, Utc::now()).await.unwrap();
+        let short = w.unlocking.unlock(me, "JP", 50, &adult(), Utc::now()).await.unwrap();
         assert_eq!((short.outcome, short.price, short.gems), (UnlockOutcome::InsufficientGems, 50, 40));
         assert!(!short.countries.has(cc("JP")));
         assert!(w.store.get(me).await.unwrap().pending.is_empty(), "an unpaid purchase is dropped");
@@ -331,10 +347,10 @@ mod tests {
     async fn minors_and_unknown_codes_are_refused() {
         let w = world();
         assert!(matches!(
-            w.unlocking.unlock(Uuid::now_v7(), "IS", 15, false, Utc::now()).await,
+            w.unlocking.unlock(Uuid::now_v7(), "IS", 15, &Spender::default(), Utc::now()).await,
             Err(GeoDiscoveryError::GemSpendingRestricted)
         ));
-        assert!(w.unlocking.unlock(Uuid::now_v7(), "ZZ", 15, true, Utc::now()).await.is_err());
+        assert!(w.unlocking.unlock(Uuid::now_v7(), "ZZ", 15, &adult(), Utc::now()).await.is_err());
         assert!(w.wallet.spent.lock().unwrap().is_empty());
     }
 }

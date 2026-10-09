@@ -7,7 +7,7 @@ use uuid::Uuid;
 use cqrs::{Envelope, QueryBus};
 
 use crate::application::country_access::ResolveCountryAccess;
-use crate::application::country_unlocks::{CountryUnlocking, UnlockOutcome};
+use crate::application::country_unlocks::{CountryUnlocking, Spender, UnlockOutcome};
 use crate::application::query::get_geo_timeline::GetGeoTimelineQuery;
 use crate::application::query::query_tile::QueryTileQuery;
 use crate::domain::value_object::{CountryAccessOutcome, MapScope, Viewer};
@@ -225,12 +225,16 @@ where
     ) -> Result<Response<proto::UnlockCountryResponse>, Status> {
         edge::require_account(&request, &request.get_ref().account_id)?;
         let unlocking = self.unlocking()?;
-        // Gems are spent by adults only (the edge token; fail-closed).
-        let adult = edge::principal(&request).is_some_and(|p| p.is_adult());
+        // Gems are spent by adults only (the edge token; fail-closed), and
+        // the token goes on to the wallet, which checks the spender too (#852).
+        let spender = Spender {
+            adult: edge::principal(&request).is_some_and(|p| p.is_adult()),
+            token: edge::bearer_token(request.metadata()),
+        };
         let req = request.into_inner();
         let account = account_uuid(&req.account_id)?;
         let reply = unlocking
-            .unlock(account, &req.country_code, req.expected_price, adult, chrono::Utc::now())
+            .unlock(account, &req.country_code, req.expected_price, &spender, chrono::Utc::now())
             .await
             .map_err(app_to_status)?;
         Ok(Response::new(proto::UnlockCountryResponse {
@@ -298,6 +302,7 @@ where
 }
 
 // ── Conversion helpers ────────────────────────────────────────────────────────
+
 
 /// The reader, from how the request arrived: the mesh is unfiltered; an
 /// anonymous client has no profiles.

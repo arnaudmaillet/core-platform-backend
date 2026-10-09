@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use error::AppError;
 use tonic::{Request, Response, Status};
 use transport::grpc::edge;
+use transport::grpc::mesh::{MeshCallerGate, MeshGateMode};
 
 use crate::application::port::{ClaimOutcome, PackOutcome, SettlementRecord, SpendOutcome, StakeOutcome, StakePositionRecord};
 use crate::application::wallets::StakeBatch;
@@ -23,11 +24,57 @@ pub const ERROR_CODE_METADATA: &str = "x-error-code";
 
 pub struct WalletServiceHandler {
     wallets: Arc<Wallets>,
+    /// Which services may call its mesh-only RPCs (#852); off by default.
+    mesh:    MeshCallerGate,
+    /// Verifies the end user's edge token a caller forwards with
+    /// `SpendGems` (#852): the wallet checks the spender itself.
+    users:   edge::StaffGate,
 }
 
+/// `SpendGems`'s only intended caller: geo-discovery (country unlocks).
+const SPEND_GEMS_CALLERS: &[&str] = &["geo-discovery-server"];
+
+/// The wallet's export reads' only intended caller: account (the GDPR export).
+const EXPORT_CALLERS: &[&str] = &["account-server"];
+
 impl WalletServiceHandler {
+    /// Checks its mesh callers with `mesh`, and `SpendGems`'s end user with
+    /// `users` (#852).
+    pub fn with_mesh_gate(mut self, mesh: MeshCallerGate, users: edge::StaffGate) -> Self {
+        self.mesh = mesh;
+        self.users = users;
+        self
+    }
+
+    /// Off unless the mesh gate is enforced (`log`: logged, let through):
+    /// the forwarded end-user token must name `account_id`'s owner, an
+    /// adult.
+    async fn check_spender<T>(&self, request: &Request<T>, account_id: &str) -> Result<(), Status> {
+        let mode = self.mesh.mode();
+        if mode == MeshGateMode::Off {
+            return Ok(());
+        }
+        let refused = match self.users.verified(request).await {
+            Ok(user) if user.account_id() != account_id => Some("the end user is not the spender".to_owned()),
+            Ok(user) if !user.is_adult() => Some("the end user may not spend gems".to_owned()),
+            Ok(_) => None,
+            Err(status) => Some(format!("no valid end-user token: {}", status.message())),
+        };
+        match refused {
+            None => Ok(()),
+            Some(reason) if mode == MeshGateMode::Log => {
+                tracing::warn!(%reason, "SpendGems end user refused (log mode: let through)");
+                Ok(())
+            }
+            Some(reason) => {
+                tracing::warn!(%reason, "SpendGems end user refused");
+                Err(Status::permission_denied("the gems' owner must ask, and be an adult"))
+            }
+        }
+    }
+
     pub fn new(wallets: Arc<Wallets>) -> Self {
-        Self { wallets }
+        Self { wallets, mesh: MeshCallerGate::off(), users: edge::StaffGate::deny_all() }
     }
 
     pub async fn get_wallet(&self, request: Request<proto::GetWalletRequest>) -> Result<Response<proto::Wallet>, Status> {
@@ -104,6 +151,8 @@ impl WalletServiceHandler {
         &self,
         request: Request<proto::SpendGemsRequest>,
     ) -> Result<Response<proto::SpendGemsResponse>, Status> {
+        self.mesh.require(&request, "SpendGems", SPEND_GEMS_CALLERS).await?;
+        self.check_spender(&request, &request.get_ref().account_id).await?;
         let req = request.into_inner();
         let kind = match proto::TransactionKind::try_from(req.kind) {
             Ok(proto::TransactionKind::CountryUnlock) => TransactionKind::CountryUnlock,
@@ -129,6 +178,7 @@ impl WalletServiceHandler {
         &self,
         request: Request<proto::ExportWalletRequest>,
     ) -> Result<Response<proto::ExportWalletResponse>, Status> {
+        self.mesh.require(&request, "ExportWallet", EXPORT_CALLERS).await?;
         let req = request.into_inner();
         let view = self.wallets.export(&req.account_id, Utc::now()).await.map_err(to_status)?;
         Ok(Response::new(proto::ExportWalletResponse { wallet: view.map(|v| self.wallet_to_proto(&v, false)) }))
@@ -140,6 +190,7 @@ impl WalletServiceHandler {
         &self,
         request: Request<proto::ListStakePositionsRequest>,
     ) -> Result<Response<proto::ListStakePositionsResponse>, Status> {
+        self.mesh.require(&request, "ListStakePositions", EXPORT_CALLERS).await?;
         let req = request.into_inner();
         let page = self
             .wallets
@@ -176,6 +227,10 @@ impl WalletServiceHandler {
         request: Request<proto::ListWalletTransactionsRequest>,
     ) -> Result<Response<proto::ListWalletTransactionsResponse>, Status> {
         edge::require_account(&request, &request.get_ref().account_id)?;
+        // Over the mesh, only account reads another's history (the export).
+        if matches!(edge::viewer(&request), edge::Viewer::Internal) {
+            self.mesh.require(&request, "ListWalletTransactions", EXPORT_CALLERS).await?;
+        }
         let req = request.into_inner();
         let currency = match proto::Currency::try_from(req.currency) {
             Ok(proto::Currency::Unspecified) => None,
@@ -436,6 +491,97 @@ mod tests {
         let spent = h.spend_gems(spend(proto::TransactionKind::CountryUnlock)).await.unwrap().into_inner();
         assert_eq!((spent.outcome, spent.gems), (proto::SpendGemsOutcome::Spent as i32, 85));
         assert_eq!(h.spend_gems(spend(proto::TransactionKind::Claim)).await.unwrap_err().code(), Code::InvalidArgument);
+    }
+
+    /// Mesh tokens `ns/name`; end-user tokens `<sub>|<age>`.
+    struct Tokens;
+
+    impl transport::grpc::mesh::MeshVerifier for Tokens {
+        fn verify<'a>(&'a self, token: &'a str) -> transport::grpc::mesh::MeshVerification<'a> {
+            Box::pin(async move {
+                let (namespace, name) = token.split_once('/').ok_or_else(|| "bad".to_owned())?;
+                Ok(auth_context::mesh::MeshCaller { namespace: namespace.into(), service_account: name.into() })
+            })
+        }
+    }
+
+    impl edge::StaffVerifier for Tokens {
+        fn verify<'a>(&'a self, token: &'a str) -> edge::StaffVerification<'a> {
+            Box::pin(async move {
+                let (sub, age) = token.split_once('|')?;
+                Some(principal_aged(sub, Some(age).filter(|a| !a.is_empty())).inner().clone())
+            })
+        }
+    }
+
+    fn gated(mode: MeshGateMode) -> WalletServiceHandler {
+        handler().with_mesh_gate(
+            MeshCallerGate::new(mode, Some(Arc::new(Tokens)), None),
+            edge::StaffGate::new(Arc::new(Tokens)),
+        )
+    }
+
+    fn mesh_call<T>(message: T, caller: Option<&str>, end_user: Option<&str>) -> Request<T> {
+        let mut request = Request::new(message);
+        if let Some(caller) = caller {
+            request.metadata_mut().insert(transport::grpc::mesh::MESH_TOKEN_HEADER, caller.parse().unwrap());
+        }
+        if let Some(user) = end_user {
+            request.metadata_mut().insert("authorization", format!("Bearer {user}").parse().unwrap());
+        }
+        request
+    }
+
+    /// #852: gems are spent by geo-discovery only, for the account's own
+    /// adult owner; the export reads are account's.
+    #[tokio::test]
+    async fn enforced_mesh_rpcs_take_their_intended_callers_only() {
+        let h = gated(MeshGateMode::Enforce);
+        let me = Uuid::now_v7().to_string();
+        let spend = || proto::SpendGemsRequest {
+            account_id:      me.clone(),
+            amount:          15,
+            kind:            proto::TransactionKind::CountryUnlock as i32,
+            ref_id:          "IT".into(),
+            idempotency_key: "country-IT".into(),
+        };
+        let adult = format!("{me}|18+");
+        let refused = [
+            (None, Some(adult.as_str())),
+            (Some("core/staging-account-server"), Some(adult.as_str())),
+            (Some("core/staging-geo-discovery-server"), None),
+            (Some("core/staging-geo-discovery-server"), Some("someone-else|18+")),
+            (Some("core/staging-geo-discovery-server"), Some(&*format!("{me}|13-17"))),
+        ];
+        for (caller, user) in refused {
+            let status = h.spend_gems(mesh_call(spend(), caller, user)).await.unwrap_err();
+            assert_eq!(status.code(), Code::PermissionDenied, "{caller:?} {user:?}");
+        }
+        let spent = h
+            .spend_gems(mesh_call(spend(), Some("core/staging-geo-discovery-server"), Some(&adult)))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(spent.outcome, proto::SpendGemsOutcome::Spent as i32);
+
+        let export = || proto::ExportWalletRequest { account_id: me.clone() };
+        assert_eq!(h.export_wallet(mesh_call(export(), Some("core/geo-discovery-server"), None)).await.unwrap_err().code(), Code::PermissionDenied);
+        assert!(h.export_wallet(mesh_call(export(), Some("core/account-server"), None)).await.is_ok());
+        let history = |caller| {
+            mesh_call(
+                proto::ListWalletTransactionsRequest { account_id: me.clone(), currency: 0, page_size: 0, page_token: String::new() },
+                caller,
+                None,
+            )
+        };
+        assert!(h.list_wallet_transactions(history(Some("core/geo-discovery-server"))).await.is_err());
+        assert!(h.list_wallet_transactions(history(Some("core/account-server"))).await.is_ok());
+        // The app reads its own history on the edge, with no mesh token.
+        assert!(h.list_wallet_transactions(as_caller(&me, history(None).into_inner())).await.is_ok());
+
+        // log mode lets everything through (the rollout's first step).
+        let logged = gated(MeshGateMode::Log);
+        assert!(logged.spend_gems(mesh_call(spend(), None, None)).await.is_ok());
     }
 
     #[tokio::test]

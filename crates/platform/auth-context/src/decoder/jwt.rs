@@ -149,7 +149,7 @@ where
 
 // ── Error mapping ─────────────────────────────────────────────────────────────
 
-fn map_jwt_error(e: jsonwebtoken::errors::Error) -> AuthError {
+pub(crate) fn map_jwt_error(e: jsonwebtoken::errors::Error) -> AuthError {
     use jsonwebtoken::errors::ErrorKind;
     match e.kind() {
         ErrorKind::ExpiredSignature => AuthError::TokenExpired,

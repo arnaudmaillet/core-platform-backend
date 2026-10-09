@@ -58,7 +58,7 @@ impl GemWallet for ScriptedWallet {
     async fn gems(&self, account: Uuid) -> Result<i64, GeoDiscoveryError> {
         Ok(*self.gems.lock().unwrap().get(&account).unwrap_or(&100))
     }
-    async fn spend_for_country(&self, account: Uuid, _: CountryCode, amount: i64, key: &str) -> Result<GemSpend, GeoDiscoveryError> {
+    async fn spend_for_country(&self, account: Uuid, _: CountryCode, amount: i64, key: &str, _: Option<&str>) -> Result<GemSpend, GeoDiscoveryError> {
         let mut gems = self.gems.lock().unwrap();
         let balance = gems.entry(account).or_insert(100);
         let mut spent = self.spent.lock().unwrap();
