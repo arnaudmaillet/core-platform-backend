@@ -54,6 +54,7 @@ impl LikeEraser {
                     anonymous_id: anonymous_liker(account, &like.target, erased_at_micros),
                     target:       like.target,
                     total:        like.total,
+                    profile_ids:  like.profile_ids,
                 })
                 .collect();
             if likes.is_empty() {
@@ -109,7 +110,7 @@ mod tests {
         // A replay of a target's forget (a batch that timed out but landed)
         // rewrites the same anonymous row.
         let t = &targets[0];
-        let again = ForgottenLike { target: t.clone(), total: 3, anonymous_id: anonymous_liker("gone", t, 7) };
+        let again = ForgottenLike { target: t.clone(), total: 3, anonymous_id: anonymous_liker("gone", t, 7), profile_ids: Vec::new() };
         LikeLedger::forget(likes.as_ref(), "gone", &[again], 12).await.unwrap();
         assert_eq!(likes.by_target.lock().unwrap()[t].values().sum::<i64>(), 5, "no second anonymous row");
         assert_ne!(anonymous_liker("gone", t, 7), anonymous_liker("gone", t, 8), "keyed by the erasure");

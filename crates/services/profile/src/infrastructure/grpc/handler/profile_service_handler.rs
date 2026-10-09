@@ -822,6 +822,12 @@ fn profile_view_to_proto(v: ProfileView) -> proto::ProfileView {
             }) as i32,
             non_personalized: f.non_personalized,
         }),
+        visible_tabs: v.visible_tabs.map(|t| proto::VisibleTabs {
+            likes:   t.likes,
+            saved:   t.saved,
+            reposts: t.reposts,
+            places:  t.places,
+        }),
         tab_settings: v.tab_settings.map(|t| proto::TabSettings {
             post_window: (match t.post_window {
                 crate::domain::value_object::PostWindow::All => proto::PostWindow::All,

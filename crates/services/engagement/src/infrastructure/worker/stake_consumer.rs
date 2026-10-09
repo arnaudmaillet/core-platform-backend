@@ -159,7 +159,12 @@ async fn apply_stake(
     ledger.record(target, account, profile, Position { total, arrival: applied.arrival }, at_micros).await?;
     if let Some(erased_at) = ledger.erased_at(account).await? {
         likes.forget(account, std::slice::from_ref(target)).await?;
-        let like = ForgottenLike { target: target.clone(), total, anonymous_id: anonymous_liker(account, target, erased_at) };
+        let like = ForgottenLike {
+            target: target.clone(),
+            total,
+            anonymous_id: anonymous_liker(account, target, erased_at),
+            profile_ids: (!profile.is_empty()).then(|| profile.to_owned()).into_iter().collect(),
+        };
         ledger.forget(account, &[like], chrono::Utc::now().timestamp_micros()).await?;
     }
     Ok(())

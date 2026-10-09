@@ -53,7 +53,7 @@ impl TestHarness {
             kafka:  None,
         };
 
-        let app = App::build(backends, None)
+        let app = App::build(backends, None, None)
             .await
             .expect("integration: build engagement app");
 

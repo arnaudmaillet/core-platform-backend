@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 491f607a49f221bbb278df04d7845d35b80f22191ca06f532e5adb729e835907
-  translated_at: 2026-10-08
+  source_sha256: 460ece38370f3d1857bb1e54489ff3aaadb58420652cfe7b9fc135af0f42f871
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -21,9 +21,9 @@ i18n:
 > | **Palier (Tier)** | **TIER-1** — colonne vertébrale d'interaction temps réel ; dégradable vers le ledger durable |
 > | **Binaire déployable** | `crates/apps/engagement-server` (crate bibliothèque : `crates/services/engagement`) |
 > | **Bases de données** | Redis (chemin chaud faisant autorité) · ScyllaDB keyspace `engagement` (copies durables) |
-> | **Asynchrone** | ne publie rien · consomme `wallet.v1.events` (likes), `account.v1.events` (effacement) et `comment.created` / `comment.deleted` |
+> | **Asynchrone** | ne publie rien · consomme `wallet.v1.events` (likes), `account.v1.events` (effacement), `profile.v1.events` (flag de l'onglet J'aime) et `comment.created` / `comment.deleted` |
 > | **Appelants amont** | `<TODO: passerelle>` |
-> | **Dépendances aval** | Redis, ScyllaDB, Kafka, `post` (compteurs de likes masqués) |
+> | **Dépendances aval** | Redis, ScyllaDB, Kafka, `post` (compteurs de likes masqués), `social-graph` (qui peut voir un onglet J'aime) |
 > | **SLO** | lecture de snapshot p99 ~0,3 ms (zéro Scylla sur le chemin de lecture) |
 
 ---
@@ -85,6 +85,19 @@ uniquement**, ≤ 100 cibles) donne la position sur chaque cible — `total`, `c
 `count_now` — depuis Redis, ou depuis Scylla quand les likers ont expiré. Le règlement du wallet en
 déduit la précocité d'un compte.
 
+**L'onglet J'aime d'un profil (#829).** `ListLikesByProfile(profile_id, limit, page_token)` (edge
+`public_read`, selon le lecteur) liste les posts que **ce profil** a likés — pas les autres profils de son
+compte —, les plus récents d'abord (Scylla `liked_posts_by_profile`, migration 0009, écrite par le
+consommateur des mises avec l'heure de la mise ; les ids de post sont des UUIDv7, leur texte se trie donc par
+date). Le propriétaire (un des profils du lecteur) et le mesh le voient toujours ; tout autre lecteur
+seulement si le propriétaire montre l'onglet (`profile.v1.events` `ProfileTabSettingsChanged` `show_likes`,
+groupe `engagement-profile-tabs`, gardé dans `profile_tabs`) **et** que `CheckAccess` de social-graph dit
+qu'il peut voir le profil (un profil privé qu'il ne suit pas, un blocage dans un sens ou l'autre) — sinon
+vide. Sans `ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT`, un onglet n'est visible que de son propriétaire. Le client
+hydrate les posts via post, qui retient ce que le lecteur ne peut pas voir. `likes_by_account.profile_ids`
+nomme chaque profil du compte qui a liké une cible, si bien que l'effacement d'un compte retire aussi la
+ligne de l'onglet de chaque profil.
+
 **Likers expirés.** Un hash de likers qui contient tous les likers porte `_complete` (posé au premier
 like de la cible, ou à la fin d'une réhydratation). Une fois expiré, un compte absent d'un nouveau hash
 est **inconnu**, pas zéro : le consommateur des mises réhydrate alors tout le hash depuis
@@ -143,6 +156,7 @@ Le consommateur des mises ignore les mises d'un compte marqué, et revérifie ap
 | Redis | chemin chaud faisant autorité | vues/partages et lectures échouent ; mises réessayées | **Dur** — `503 Unavailable` (backpressure vers les appelants) |
 | ScyllaDB | copies durables + compteurs | mises réessayées, le flush temporise ; `ListLikesByAccount` échoue | **Souple** — lectures Redis non affectées ; les copies rattrapent |
 | Kafka | likes + ingestion de commentaires | comptes de likes et de commentaires retardés | **Souple** — lectures non affectées |
+| `social-graph` (gRPC `CheckAccess`, #829) | si un lecteur peut voir un profil | les onglets J'aime des autres lecteurs échouent (`ENG-6002`, réessayé) | **Mode fermé** pour les onglets J'aime seulement |
 | `post` (gRPC `BatchGetLikeVisibility`, #809) | à qui est le post et si son auteur masque les compteurs de likes | likes retenus pour les non-auteurs | **Mode fermé** pour les likes seulement (vues/partages/commentaires non affectés) ; cache de 60 s |
 
 **Amont (rayon d'impact) :**
@@ -170,6 +184,7 @@ service EngagementService {
   rpc BatchGetLikes     (BatchGetLikesRequest)     returns (BatchGetLikesResponse); // likes (#665)
   rpc ListLikesByAccount (ListLikesByAccountRequest) returns (ListLikesByAccountResponse); // mesh only
   rpc GetLikePositions  (GetLikePositionsRequest)  returns (GetLikePositionsResponse);  // mesh only
+  rpc ListLikesByProfile (ListLikesByProfileRequest) returns (ListLikesByProfileResponse); // a profile's Likes tab
 }
 ```
 
@@ -214,7 +229,7 @@ pub trait CounterLedger: Send + Sync + 'static { /* apply_interaction_delta (flu
 | Range | Category |
 |---|---|
 | `ENG-5xxx` | worker / script Lua / ledger indisponible (`ENG-5003`) |
-| `ENG-6xxx` | pairs (`ENG-6001` : post indisponible, likes retenus) |
+| `ENG-6xxx` | pairs (`ENG-6001` : post indisponible, likes retenus ; `ENG-6002` : social-graph indisponible, un onglet J'aime retenu) |
 | `ENG-9xxx` | parsing d'id / violation de domaine / cible de like (`ENG-9004`) |
 
 `ENG-1001`, `ENG-2001`/`2002`, `ENG-3001` et `ENG-9002` appartenaient aux réactions pondérées ; ils sont
@@ -234,6 +249,7 @@ pays) lit directement `wallet.v1.events` du wallet.
 | `comment.created` / `comment.deleted` | `engagement-comment-consumer` | INCR/DECR du compteur de commentaires (Redis + Scylla) | DLQ `{topic}.dlq` |
 | `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665) : le total du compte sur un post ou un commentaire, idempotent et insensible à l'ordre (Lua Redis + Scylla) ; les mises d'un compte supprimé sont ignorées | DLQ `{topic}.dlq` |
 | `account.v1.events` | `engagement-account-erasure` | `account_deleted` → oublier qui a liké (les compteurs restent) ; autres événements ignorés | DLQ `{topic}.dlq` |
+| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → si le profil montre son onglet J'aime (#829) ; autres événements ignorés | DLQ `{topic}.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** les consommateurs des mises, des comptes et des commentaires tournent sous
 > `run_consumer` — commit manuel après succès, retry borné avec backoff + jitter, DLQ à l'épuisement /
@@ -295,6 +311,7 @@ async fn main() -> anyhow::Result<()> {
 |---|---|---|
 | `ENGAGEMENT_POST_GRPC_ENDPOINT` | non défini | adresse mesh de post (p. ex. `http://post:50056`) : les compteurs de likes masqués sont retenus (#809). Non défini → retenus pour personne |
 | `ENGAGEMENT_POST_RPC_TIMEOUT_MS` · `ENGAGEMENT_POST_CONNECT_TIMEOUT_MS` | `500` · `1000` | délais de cet appel |
+| `ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | non défini | adresse mesh de social-graph (p. ex. `http://social-graph:50053`) : qui peut voir l'onglet J'aime d'un profil (#829). Non défini → l'onglet n'est visible que de son propriétaire |
 
 ### Service + infrastructure héritée
 
@@ -318,7 +335,8 @@ async fn main() -> anyhow::Result<()> {
 - **Migrations :** `0001_create_keyspace.cql` → `0002_create_post_reactions_table.cql` →
   `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` →
   `0005_create_likes_tables.cql` → `0006_drop_reaction_tables.cql` →
-  `0007_create_erased_accounts_table.cql` → `0008_likes_by_target_first_count.cql` sur
+  `0007_create_erased_accounts_table.cql` → `0008_likes_by_target_first_count.cql` →
+  `0009_create_liked_posts_by_profile.cql` sur
   `engagement`, appliquées **avant** le premier démarrage. (Le commentaire de table de 0002 contenait un
   `;` ; le lanceur des suites d'intégration coupait dessus jusqu'à ce qu'il respecte les guillemets comme
   `apps/migrator` — la prod n'a jamais été touchée. C'est une virgule désormais — même schéma.)

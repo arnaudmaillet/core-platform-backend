@@ -141,6 +141,8 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("wallet.v1.events", "engagement"),
     // a deleted account's likes: who liked goes, the counts stay (#665)
     ("account.v1.events", "engagement"),
+    // whether each profile shows its Likes tab (#829)
+    ("profile.v1.events", "engagement"),
     // social-graph edges → timeline fan-out, profile tier ownership
     ("social-graph.followed", "timeline"),
     ("social-graph.unfollowed", "timeline"),

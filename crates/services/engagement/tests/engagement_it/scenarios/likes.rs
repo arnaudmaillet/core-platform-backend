@@ -176,7 +176,12 @@ async fn a_deleted_accounts_likes_are_forgotten_the_counts_kept() {
     assert_eq!(likers, expected, "who stays, and the deleted account's points under an anonymous id");
 
     // Forgetting again (a replayed batch) rewrites the same anonymous row.
-    let again = ForgottenLike { target: targets[0].clone(), total: 7, anonymous_id: anonymous_liker(&gone, &targets[0], 1_800_000) };
+    let again = ForgottenLike {
+        target: targets[0].clone(),
+        total: 7,
+        anonymous_id: anonymous_liker(&gone, &targets[0], 1_800_000),
+        profile_ids: Vec::new(),
+    };
     ledger.forget(&gone, &[again], 2_100_000).await.unwrap();
     let rows = client
         .session
@@ -291,4 +296,54 @@ async fn an_accounts_arrival_is_kept_with_its_total() {
     let legacy = Uuid::now_v7().to_string();
     let _: i64 = h.redis.inner.hset(&likers, (legacy.as_str(), "7")).await.unwrap();
     assert_eq!(h.like_store.positions(&legacy, one).await.unwrap(), vec![Some(Position { total: 7, arrival: None })]);
+}
+
+/// A profile's Likes tab (#829) over Scylla: the posts each profile liked,
+/// newest first, each profile its own; an account's erasure empties its
+/// profiles' tabs; the owner's flag defaults to shown.
+#[tokio::test]
+async fn each_profile_has_its_likes_tab_and_an_erasure_empties_it() {
+    use engagement::application::port::ProfileTabs;
+    use engagement::infrastructure::persistence::ScyllaProfileTabs;
+
+    let h = TestHarness::start().await;
+    let contact = test_support::containers::scylla_ready("engagement", concat!(env!("CARGO_MANIFEST_DIR"), "/migrations")).await;
+    let client = Arc::new(
+        ScyllaSessionBuilder::new(ScyllaConfig { contact_points: vec![contact], keyspace: None, ..ScyllaConfig::default() })
+            .build()
+            .await
+            .expect("scylla"),
+    );
+    let ledger = Arc::new(ScyllaLikeLedger::new(Arc::clone(&client)));
+    let account = Uuid::now_v7().to_string();
+    let (mine, other) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
+    let posts: Vec<String> = (0..3).map(|_| Uuid::now_v7().to_string()).collect();
+    for post in &posts {
+        ledger.record(&LikeTarget::Post(post.clone()), &account, &mine, pos(2), 1_000_000).await.unwrap();
+    }
+    // The account's other profile likes the first post too, and a comment.
+    ledger.record(&LikeTarget::Post(posts[0].clone()), &account, &other, pos(3), 1_100_000).await.unwrap();
+    ledger.record(&LikeTarget::Comment(Uuid::now_v7().to_string()), &account, &mine, pos(1), 1_000_000).await.unwrap();
+
+    let newest_first: Vec<String> = posts.iter().rev().cloned().collect();
+    assert_eq!(ledger.liked_posts_by_profile(&mine, 10, None).await.unwrap(), newest_first, "posts only, newest first");
+    assert_eq!(ledger.liked_posts_by_profile(&mine, 2, Some(&posts[2])).await.unwrap(), vec![posts[1].clone(), posts[0].clone()]);
+    assert_eq!(ledger.liked_posts_by_profile(&other, 10, None).await.unwrap(), vec![posts[0].clone()], "each profile its own");
+    let listed = ledger.list_by_account(&account, 10, None).await.unwrap();
+    let first = listed.iter().find(|l| l.target == LikeTarget::Post(posts[0].clone())).unwrap();
+    let mut profiles = first.profile_ids.clone();
+    profiles.sort();
+    let mut expected = vec![mine.clone(), other.clone()];
+    expected.sort();
+    assert_eq!(profiles, expected, "the account knows every profile that liked it");
+
+    let eraser = LikeEraser { store: Arc::clone(&h.like_store), ledger: ledger.clone() };
+    eraser.erase(&account, 1_900_000, 2_000_000).await.unwrap();
+    assert!(ledger.liked_posts_by_profile(&mine, 10, None).await.unwrap().is_empty());
+    assert!(ledger.liked_posts_by_profile(&other, 10, None).await.unwrap().is_empty());
+
+    let tabs = ScyllaProfileTabs::new(client);
+    assert!(tabs.shows_likes(&mine).await.unwrap(), "shown by default");
+    tabs.set_shows_likes(&mine, false).await.unwrap();
+    assert!(!tabs.shows_likes(&mine).await.unwrap());
 }

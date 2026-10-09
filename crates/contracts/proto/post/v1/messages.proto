@@ -91,6 +91,9 @@ message PostSummary {
     PostStatus status       = 3;
     int64      created_at_ms = 4;
     ModerationRestriction moderation = 5;
+    // A repost (it has a parent), and whether it carries a place (#829).
+    bool       is_repost    = 6;
+    bool       has_place    = 7;
 }
 
 message CommandResponse {
@@ -166,9 +169,11 @@ message GetPostRequest {
 }
 
 message ListPostsByProfileRequest {
-    string profile_id  = 1;
-    int32  limit       = 2;
-    string page_token  = 3;
+    string          profile_id  = 1;
+    int32           limit       = 2;
+    string          page_token  = 3;
+    // Unspecified: every post (#829).
+    ProfilePostsTab tab         = 4;
 }
 
 message ListPostsByProfileResponse {

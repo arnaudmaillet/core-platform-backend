@@ -9,6 +9,7 @@ use crate::application::port::{AccountLike, PostEngagementSnapshot};
 use crate::application::likes::LikePosition;
 use crate::application::query::batch_get_likes::BatchGetLikesQuery;
 use crate::application::query::get_like_positions::GetLikePositionsQuery;
+use crate::application::query::list_likes_by_profile::{LikedPosts, ListLikesByProfileQuery};
 use crate::application::query::get_post_engagement::{
     EngagementReader, GetPostEngagementQuery, LikeSummary, PostEngagement,
 };
@@ -158,6 +159,30 @@ where
         }))
     }
 
+    /// A profile's Likes tab (#829), as the reader may see it.
+    pub async fn list_likes_by_profile(
+        &self,
+        request: Request<proto::ListLikesByProfileRequest>,
+    ) -> Result<Response<proto::ListLikesByProfileResponse>, Status> {
+        let (reader, _) = reader_of(&request);
+        let req = request.into_inner();
+        let query = ListLikesByProfileQuery {
+            profile_id: req.profile_id,
+            limit:      req.limit,
+            after:      Some(req.page_token).filter(|t| !t.is_empty()),
+            reader,
+        };
+        let page: LikedPosts = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListLikesByProfileResponse {
+            post_ids:        page.post_ids,
+            next_page_token: page.next.unwrap_or_default(),
+        }))
+    }
+
     /// Mesh only (#653, #665): what an account liked, for the GDPR export.
     pub async fn list_likes_by_account(
         &self,
@@ -221,6 +246,13 @@ where
         request: Request<proto::GetLikePositionsRequest>,
     ) -> Result<Response<proto::GetLikePositionsResponse>, Status> {
         self.get_like_positions(request).await
+    }
+
+    async fn list_likes_by_profile(
+        &self,
+        request: Request<proto::ListLikesByProfileRequest>,
+    ) -> Result<Response<proto::ListLikesByProfileResponse>, Status> {
+        self.list_likes_by_profile(request).await
     }
 
     async fn record_view(

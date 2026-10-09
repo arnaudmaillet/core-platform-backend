@@ -16,7 +16,7 @@ use crate::application::port::PostSummary;
 use crate::application::query::{
     get_post::GetPostQuery,
     like_visibility::{GetLikeVisibilityQuery, LikeVisibility},
-    list_posts_by_profile::ListPostsByProfileQuery,
+    list_posts_by_profile::{ListPostsByProfileQuery, ProfileTab},
     list_recently_deleted::ListRecentlyDeletedQuery,
 };
 use crate::domain::aggregate::{Post, ReuseOverrides};
@@ -237,7 +237,14 @@ where
         let viewer = viewer_of(&request);
         let mature = mature_of(&request);
         let req    = request.into_inner();
+        let tab    = match proto::ProfilePostsTab::try_from(req.tab) {
+            Ok(proto::ProfilePostsTab::Reposts) => ProfileTab::Reposts,
+            Ok(proto::ProfilePostsTab::Places) => ProfileTab::Places,
+            Ok(proto::ProfilePostsTab::Unspecified) => ProfileTab::All,
+            Err(_) => return Err(Status::invalid_argument("unknown tab")),
+        };
         let query  = ListPostsByProfileQuery {
+            tab,
             mature,
             profile_id: req.profile_id,
             limit:      req.limit,
@@ -338,6 +345,8 @@ fn summary_to_proto(s: PostSummary) -> proto::PostSummary {
         status:       s.status.as_tinyint() as i32 + 1,
         moderation:   s.moderation.as_tinyint() as i32 + 1,
         created_at_ms: s.created_at.timestamp_millis(),
+        is_repost:    s.is_repost,
+        has_place:    s.has_place,
     }
 }
 

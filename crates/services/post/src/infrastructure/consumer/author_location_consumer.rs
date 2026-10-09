@@ -7,7 +7,7 @@ use error::AppError;
 use transport::kafka::consumer::{run_consumer, KafkaConsumerHandle, ProcessOutcome, RetryPolicy};
 use transport::kafka::producer::KafkaProducerHandle;
 
-use crate::application::port::{AuthorLocationStore, AuthorWindowStore, ReuseDefaults, ReuseRegistry};
+use crate::application::port::{AuthorLocationStore, AuthorTabs, AuthorWindowStore, ReuseDefaults, ReuseRegistry};
 use crate::domain::value_object::{LocationAudience, LocationSharing, ProfileId};
 
 /// Lenient read DTO for `profile.v1.events` (the internally-tagged
@@ -36,6 +36,11 @@ struct ProfileV1Event {
     allow_remix: Option<bool>,
     #[serde(default)]
     allow_sound_reuse: Option<bool>,
+    /// Tab visibility (#829); absent on older events ⇒ shown.
+    #[serde(default)]
+    show_reposts: Option<bool>,
+    #[serde(default)]
+    show_places: Option<bool>,
     /// Downloads and like counts (#809); absent on older events ⇒ allowed.
     #[serde(default)]
     allow_downloads: Option<bool>,
@@ -47,8 +52,9 @@ struct ProfileV1Event {
 enum Outcome {
     Skip,
     Record(ProfileId, LocationSharing),
-    /// The author's post window in days (`None`: every post).
-    Window(ProfileId, Option<u32>),
+    /// The author's post window in days (`None`: every post), and which of
+    /// its tabs others see (#829).
+    Window(ProfileId, Option<u32>, AuthorTabs),
     /// The author's remix / sound reuse defaults.
     Reuse(ProfileId, ReuseDefaults),
     Poison(String),
@@ -74,11 +80,15 @@ fn outcome(event: &ProfileV1Event) -> Outcome {
         });
     }
     if tab {
+        let tabs = AuthorTabs {
+            show_reposts: event.show_reposts.unwrap_or(true),
+            show_places:  event.show_places.unwrap_or(true),
+        };
         return match event.post_window.as_deref() {
-            Some("all") => Outcome::Window(profile_id, None),
-            Some("six_months") => Outcome::Window(profile_id, Some(183)),
-            Some("one_month") => Outcome::Window(profile_id, Some(30)),
-            Some("three_days") => Outcome::Window(profile_id, Some(3)),
+            Some("all") => Outcome::Window(profile_id, None, tabs),
+            Some("six_months") => Outcome::Window(profile_id, Some(183), tabs),
+            Some("one_month") => Outcome::Window(profile_id, Some(30), tabs),
+            Some("three_days") => Outcome::Window(profile_id, Some(3), tabs),
             other => Outcome::Poison(format!("post_window {other:?}")),
         };
     }
@@ -138,7 +148,7 @@ async fn process_event(
         Outcome::Skip => return ProcessOutcome::Done,
         Outcome::Poison(reason) => return ProcessOutcome::Reject(reason),
         Outcome::Record(profile_id, sharing) => store.set(&profile_id, sharing).await,
-        Outcome::Window(profile_id, days) => windows.set(&profile_id, days).await,
+        Outcome::Window(profile_id, days, tabs) => windows.set_tab_settings(&profile_id, days, tabs).await,
         Outcome::Reuse(profile_id, defaults) => reuse.set_defaults(&profile_id, defaults).await,
     };
     match written {
@@ -195,7 +205,21 @@ mod tests {
             show_places: true,
             occurred_at_ms: 1,
         });
-        assert_eq!(outcome(&event), Outcome::Window(ProfileId::try_from(id.as_str()).unwrap(), Some(30)));
+        assert_eq!(outcome(&event), Outcome::Window(ProfileId::try_from(id.as_str()).unwrap(), Some(30), AuthorTabs::default()));
+        // The owner hides the Reposts tab (#829).
+        let hidden = wire(ProfileEventWire::ProfileTabSettingsChanged {
+            profile_id: id.clone(),
+            post_window: "all".into(),
+            show_likes: true,
+            show_saved: false,
+            show_reposts: false,
+            show_places: true,
+            occurred_at_ms: 2,
+        });
+        assert_eq!(
+            outcome(&hidden),
+            Outcome::Window(ProfileId::try_from(id.as_str()).unwrap(), None, AuthorTabs { show_reposts: false, show_places: true })
+        );
     }
 
     #[test]

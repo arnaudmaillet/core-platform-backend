@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::value_object::{
     BusinessInfo, CommentFilters, DiscoverySettings, FeedSettings, InteractionSettings, LocationSettings, TabSettings,
+    VisibleTabs,
 };
 use crate::domain::aggregate::Profile;
 use crate::domain::entity::ProfileLink;
@@ -74,6 +75,10 @@ pub struct ProfileView {
     /// A brand's public contact card (#668), shown to everyone.
     #[serde(default)]
     pub business_info: Option<BusinessInfo>,
+    /// Everyone: which tabs the owner shows (#829); derived from
+    /// `tab_settings` for each reader, never cached on its own.
+    #[serde(skip)]
+    pub visible_tabs: Option<VisibleTabs>,
 }
 
 impl From<&Profile> for ProfileView {
@@ -107,6 +112,7 @@ impl From<&Profile> for ProfileView {
             tab_settings: Some(p.tab_settings()),
             feed_settings: Some(p.feed_settings()),
             business_info: p.business_info().cloned(),
+            visible_tabs: Some(p.tab_settings().visible()),
         }
     }
 }
@@ -122,6 +128,8 @@ impl ProfileView {
     /// details. A private profile still shows its header; its posts and lists
     /// are what privacy withholds.
     pub fn for_viewer(mut self, viewer: &Viewer) -> Option<Self> {
+        // Told to every reader before the owner-only settings are cleared.
+        self.visible_tabs = Some(self.tab_settings.unwrap_or_default().visible());
         if viewer.sees_everything_of(&self.account_id) {
             return Some(self);
         }
@@ -206,7 +214,21 @@ mod viewer_tests {
             tab_settings: None,
             feed_settings: None,
             business_info: None,
+            visible_tabs: None,
         }
+    }
+
+    /// #829: every reader is told which tabs the owner shows; the settings
+    /// themselves stay the owner's.
+    #[test]
+    fn every_reader_learns_the_visible_tabs() {
+        let mut owned = view(ProfileStatus::Active);
+        owned.tab_settings = Some(TabSettings { show_likes: false, show_places: false, ..TabSettings::default() });
+        let seen = owned.for_viewer(&Viewer::Account("someone-else".into())).expect("visible");
+        assert_eq!(seen.visible_tabs, Some(VisibleTabs { likes: false, saved: false, reposts: true, places: false }));
+        assert!(seen.tab_settings.is_none(), "the settings stay the owner's");
+        let defaults = view(ProfileStatus::Active).for_viewer(&Viewer::Account("someone-else".into())).unwrap();
+        assert_eq!(defaults.visible_tabs, Some(TabSettings::default().visible()), "no settings: the defaults");
     }
 
     #[test]

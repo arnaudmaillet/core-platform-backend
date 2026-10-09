@@ -143,6 +143,7 @@ impl App {
                     repository: Arc::clone(&repository),
                     audience,
                     windows:    Arc::clone(&author_window_store),
+                    locations:  Arc::clone(&author_location_store),
                 })?
                 .build(),
         );

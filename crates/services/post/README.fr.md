@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 7d7bda30381338d3923fc25e86dcb50a8d65ef4edffbe201e39a9524bb04b5e6
-  translated_at: 2026-10-06
+  source_sha256: 5e516f54c3ce2e1d3aba4173fb448190affe2064daa80515bfd642cab39db74a
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -186,6 +186,17 @@ search le retire des résultats à partir de là). Rien n'est supprimé. La fen�
 vient du `ProfileTabSettingsChanged` de profile, projeté dans `post.author_post_windows` par le consommateur
 des réglages d'auteur ci-dessous.
 
+**Onglets du profil (#829).** `ListPostsByProfile(tab)` liste tous les posts (non spécifié), les
+**Republications** (posts avec un parent) ou les **Lieux** (posts avec un lieu) ; `PostSummary` dit ce qu'est
+chaque post (`is_repost`, `has_place`, gardés dans `posts_by_profile` à la création, migration 0014). Un
+onglet que le propriétaire masque (`ProfileTabSettingsChanged` `show_reposts` / `show_places`, projetés à
+côté de la fenêtre) est **vide** pour tout client autre que l'auteur ; l'auteur et le mesh le voient en
+entier. Un onglet Republications masqué n'est pas non plus reconstruit depuis la liste complète : les
+republications en sortent pour ces lecteurs. L'onglet Lieux, et `has_place`, suivent le partage de
+localisation de l'auteur (#657) comme le lieu lui-même : en mode fantôme, ou pour un lecteur hors de son
+audience de localisation, l'onglet est vide et aucun post ne dit avoir un lieu. Les posts antérieurs à la
+migration 0014 ne sont lus ni comme l'un ni comme l'autre.
+
 **Partage de la localisation (#657). `PostView.location` est ce que l'auteur partage avec le
 lecteur : le point du post pour l'auteur ; pour tout autre (mesh compris), le point par défaut, le
 centre de sa cellule H3 R5 (~87 km², la bande « ville » de la carte) au niveau ville, et rien en
@@ -242,7 +253,7 @@ seulement et pour l'auteur du post seulement (le champ d'un appelant edge est é
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `profile.v1.events` | `post-author-tier` | dénormalise `ProfileTierChanged` dans la projection `author_tiers` (`profile_id → tier`) ; lue sur le chemin de publication pour estampiller `author_tier` sur les posts publiés. Les autres types committent en no-op | DLQ `profile.v1.events.dlq` |
-| `profile.v1.events` | `post-author-location` | projette `ProfileLocationSettingsChanged` dans `author_location_settings` (`profile_id → ghost, city`), que `GetPost` applique à la localisation montrée à tout autre que l'auteur, et `ProfileTabSettingsChanged` dans `author_post_windows` (`profile_id → window_days`), que les deux lectures appliquent. Démarre au plus ancien offset (un profil adolescent est créé en mode fantôme). Les autres types committent en no-op | DLQ `profile.v1.events.dlq` |
+| `profile.v1.events` | `post-author-location` | projette `ProfileLocationSettingsChanged` dans `author_location_settings` (`profile_id → ghost, city`), que `GetPost` applique à la localisation montrée à tout autre que l'auteur, et `ProfileTabSettingsChanged` dans `author_post_windows` (`profile_id → window_days, show_reposts, show_places`), que les deux lectures appliquent. Démarre au plus ancien offset (un profil adolescent est créé en mode fantôme). Les autres types committent en no-op | DLQ `profile.v1.events.dlq` |
 | `moderation.v1.events` | `post-moderation` | enregistre `enforcement_applied` / `enforcement_reversed` sur un **post** comme sa restriction de modération (`remove_content` → Removed, `visibility_limit` → Limited, `age_gate` → AgeGated ; réversion → None), gardé par l'`EnforcementVersion` par sujet de moderation pour que la redélivrance converge. Les autres entités, les actions au niveau de l'acteur et les autres types committent en no-op | DLQ `moderation.v1.events.dlq` |
 
 > **Contrat d'exécution :** l'événement est publié après le dual-write durable. Les consommateurs aval

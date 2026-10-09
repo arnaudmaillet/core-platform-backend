@@ -14,6 +14,10 @@ pub struct PostSummary {
     pub status:     PostStatus,
     pub moderation: ModerationRestriction,
     pub created_at: DateTime<Utc>,
+    /// A repost: it has a parent (#829, the Reposts tab).
+    pub is_repost:  bool,
+    /// It carries a place (#829, the Places tab).
+    pub has_place:  bool,
 }
 
 #[async_trait]

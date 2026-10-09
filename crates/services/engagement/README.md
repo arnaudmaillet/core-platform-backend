@@ -9,9 +9,9 @@
 > | **Tier** | **TIER-1** — real-time interaction backbone; degradable to durable ledger |
 > | **Deployable** | `crates/apps/engagement-server` (library crate: `crates/services/engagement`) |
 > | **Datastores** | Redis (authoritative hot path) · ScyllaDB keyspace `engagement` (durable copies) |
-> | **Async** | publishes nothing · consumes `wallet.v1.events` (likes), `account.v1.events` (erasure) and `comment.created` / `comment.deleted` |
+> | **Async** | publishes nothing · consumes `wallet.v1.events` (likes), `account.v1.events` (erasure), `profile.v1.events` (Likes-tab flag) and `comment.created` / `comment.deleted` |
 > | **Upstream callers** | `<TODO: gateway>` |
-> | **Downstream deps** | Redis, ScyllaDB, Kafka, `post` (hidden like counts) |
+> | **Downstream deps** | Redis, ScyllaDB, Kafka, `post` (hidden like counts), `social-graph` (who may see a Likes tab) |
 > | **SLO** | snapshot read p99 ~0.3 ms (zero Scylla on the read path) |
 
 ---
@@ -69,6 +69,17 @@ consumer records it in `likes_by_target.first_count` (migration 0008; never over
 `total`, `count_on_arrival`, `count_now` — from Redis, or from Scylla when the likers expired. The
 wallet's settlement scores how early an account came from it.
 
+**A profile's Likes tab (#829).** `ListLikesByProfile(profile_id, limit, page_token)` (edge `public_read`,
+viewer-aware) lists the posts **that profile** liked — not its account's other profiles — newest posts first
+(Scylla `liked_posts_by_profile`, migration 0009, written by the stake consumer with the stake's time; post
+ids are UUIDv7, so their text sorts by time). The owner (one of the reader's profiles) and the mesh always
+see it; anyone else only when the owner shows the tab (`profile.v1.events` `ProfileTabSettingsChanged`
+`show_likes`, group `engagement-profile-tabs`, kept in `profile_tabs`) **and** social-graph's `CheckAccess`
+says they may see the profile (a private profile they don't follow, a block either way) — otherwise empty.
+Without `ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` a tab is its owner's only. The client hydrates the posts
+through post, which withholds what the reader can't see. `likes_by_account.profile_ids` names every profile
+of the account that liked a target, so an account's erasure removes each profile's tab row too.
+
 **Expired likers.** A likers hash that holds every liker carries `_complete` (set on the target's first
 like, or when a rehydration finished). Once it expired, an account missing from a new one is
 **unknown**, not zero: the stake consumer then rehydrates the whole hash from `likes_by_target`
@@ -124,6 +135,7 @@ erasure may have listed the targets before it).
 | Redis | authoritative hot path | view/share commands and reads fail; stakes retried | **Hard** — `503 Unavailable` (backpressure to callers) |
 | ScyllaDB | durable copies + counters | stakes retried, flush backs off; `ListLikesByAccount` fails | **Soft** — Redis reads unaffected; copies catch up |
 | Kafka | likes + comment ingest | like and comment counts lag | **Soft** — reads unaffected |
+| `social-graph` (gRPC `CheckAccess`, #829) | whether a reader may see a profile | other readers' Likes tabs fail (`ENG-6002`, retried) | **Fail closed** for Likes tabs only |
 | `post` (gRPC `BatchGetLikeVisibility`, #809) | whose post it is and whether its author hides like counts | likes withheld from non-authors | **Fail closed** for likes only (views/shares/comments unaffected); 60 s cache |
 
 **Upstream (blast radius):**
@@ -150,6 +162,7 @@ service EngagementService {
   rpc BatchGetLikes     (BatchGetLikesRequest)     returns (BatchGetLikesResponse); // likes (#665)
   rpc ListLikesByAccount (ListLikesByAccountRequest) returns (ListLikesByAccountResponse); // mesh only
   rpc GetLikePositions  (GetLikePositionsRequest)  returns (GetLikePositionsResponse);  // mesh only
+  rpc ListLikesByProfile (ListLikesByProfileRequest) returns (ListLikesByProfileResponse); // a profile's Likes tab
 }
 ```
 
@@ -193,7 +206,7 @@ pub trait CounterLedger: Send + Sync + 'static { /* apply_interaction_delta (flu
 | Range | Category |
 |---|---|
 | `ENG-5xxx` | worker / Lua script / ledger unavailable (`ENG-5003`) |
-| `ENG-6xxx` | peers (`ENG-6001`: post unavailable, likes withheld) |
+| `ENG-6xxx` | peers (`ENG-6001`: post unavailable, likes withheld; `ENG-6002`: social-graph unavailable, a Likes tab withheld) |
 | `ENG-9xxx` | id parsing / domain violation / like target (`ENG-9004`) |
 
 `ENG-1001`, `ENG-2001`/`2002`, `ENG-3001` and `ENG-9002` belonged to the weighted reactions; they are
@@ -213,6 +226,7 @@ reads the wallet's `wallet.v1.events` directly.
 | `comment.created` / `comment.deleted` | `engagement-comment-consumer` | INCR/DECR comment counter (Redis + Scylla) | DLQ `{topic}.dlq` |
 | `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665): the account's total on a post or comment, idempotent and order-proof (Redis Lua + Scylla); a deleted account's stakes are dropped | DLQ `{topic}.dlq` |
 | `account.v1.events` | `engagement-account-erasure` | `account_deleted` → forget who liked (the counts stay); other events skipped | DLQ `{topic}.dlq` |
+| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → whether the profile shows its Likes tab (#829); other events skipped | DLQ `{topic}.dlq` |
 
 > **Runtime contract (mandatory):** the stake, account and comment consumers run under `run_consumer` — manual
 > commit after success, bounded retry with backoff + jitter, DLQ on exhaustion/poison. Totals are
@@ -273,6 +287,7 @@ async fn main() -> anyhow::Result<()> {
 |---|---|---|
 | `ENGAGEMENT_POST_GRPC_ENDPOINT` | unset | post's mesh address (e.g. `http://post:50056`): hidden like counts are withheld (#809). Unset → withheld from nobody |
 | `ENGAGEMENT_POST_RPC_TIMEOUT_MS` · `ENGAGEMENT_POST_CONNECT_TIMEOUT_MS` | `500` · `1000` | deadlines of that call |
+| `ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | unset | social-graph's mesh address (e.g. `http://social-graph:50053`): who may see a profile's Likes tab (#829). Unset → the tab is its owner's only |
 
 ### Service + inherited infrastructure
 
@@ -296,7 +311,8 @@ async fn main() -> anyhow::Result<()> {
 - **Migrations:** `0001_create_keyspace.cql` → `0002_create_post_reactions_table.cql` →
   `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` →
   `0005_create_likes_tables.cql` → `0006_drop_reaction_tables.cql` →
-  `0007_create_erased_accounts_table.cql` → `0008_likes_by_target_first_count.cql` against
+  `0007_create_erased_accounts_table.cql` → `0008_likes_by_target_first_count.cql` →
+  `0009_create_liked_posts_by_profile.cql` against
   `engagement`, applied **before** first start. (0002's table comment held a `;`; the integration
   suites' runner split on it until it became quote-aware like `apps/migrator` — prod never was affected.
   It is a comma now — same schema.)

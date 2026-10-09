@@ -43,5 +43,5 @@ pub use business_info::BusinessInfo;
 pub use comment_filters::CommentFilters;
 pub use discovery_settings::DiscoverySettings;
 pub use feed_settings::{FeedSettings, SensitiveContent};
-pub use tab_settings::{PostWindow, TabSettings};
+pub use tab_settings::{PostWindow, TabSettings, VisibleTabs};
 pub use location_settings::{LocationAudience, LocationPrecision, LocationSettings};

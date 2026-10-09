@@ -1,6 +1,6 @@
 //! In-memory likes for the application's tests.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -25,6 +25,10 @@ pub struct Likes {
     pub rows:      Mutex<BTreeMap<(String, String, String), i64>>,
     pub by_target: Mutex<HashMap<LikeTarget, HashMap<String, i64>>>,
     pub erased:    Mutex<HashMap<String, i64>>,
+    /// (account, `kind:id`) → the profiles that liked it.
+    pub profiles_of: Mutex<HashMap<(String, String), BTreeSet<String>>>,
+    /// (profile, post) → total: the Likes tabs.
+    pub profile_likes: Mutex<BTreeMap<(String, String), i64>>,
 }
 
 impl Likes {
@@ -136,7 +140,13 @@ impl LikeLedger for Likes {
             })
             .collect())
     }
-    async fn record(&self, target: &LikeTarget, account: &str, _: &str, position: Position, _: i64) -> Result<(), EngagementError> {
+    async fn record(&self, target: &LikeTarget, account: &str, profile: &str, position: Position, _: i64) -> Result<(), EngagementError> {
+        if !profile.is_empty() {
+            self.profiles_of.lock().unwrap().entry((account.to_owned(), target.to_string())).or_default().insert(profile.to_owned());
+            if let LikeTarget::Post(post) = target {
+                self.profile_likes.lock().unwrap().insert((profile.to_owned(), post.clone()), position.total);
+            }
+        }
         let (kind, id) = key(target);
         self.rows.lock().unwrap().insert((account.to_owned(), kind, id), position.total);
         self.by_target.lock().unwrap().entry(target.clone()).or_default().insert(account.to_owned(), position.total);
@@ -159,11 +169,16 @@ impl LikeLedger for Likes {
             .iter()
             .filter(|((a, kind, id), _)| a == account && after.as_ref().is_none_or(|k| (kind, id) > (&k.0, &k.1)))
             .take(limit as usize)
-            .map(|((_, kind, id), total)| AccountLike {
-                target:     LikeTarget::parse(kind, id).unwrap(),
-                total:      *total,
-                profile_id: "p".into(),
-                liked_at:   Utc::now(),
+            .map(|((a, kind, id), total)| {
+                let target = LikeTarget::parse(kind, id).unwrap();
+                let profile_ids = self
+                    .profiles_of
+                    .lock()
+                    .unwrap()
+                    .get(&(a.clone(), target.to_string()))
+                    .map(|p| p.iter().cloned().collect())
+                    .unwrap_or_default();
+                AccountLike { target, total: *total, profile_id: "p".into(), liked_at: Utc::now(), profile_ids }
             })
             .collect())
     }
@@ -174,7 +189,29 @@ impl LikeLedger for Likes {
     async fn erased_at(&self, account: &str) -> Result<Option<i64>, EngagementError> {
         Ok(self.erased.lock().unwrap().get(account).copied())
     }
+    async fn liked_posts_by_profile(&self, profile: &str, limit: i32, after: Option<&str>) -> Result<Vec<String>, EngagementError> {
+        Ok(self
+            .profile_likes
+            .lock()
+            .unwrap()
+            .keys()
+            .rev()
+            .filter(|(p, post)| p == profile && after.is_none_or(|after| post.as_str() < after))
+            .take(limit as usize)
+            .map(|(_, post)| post.clone())
+            .collect())
+    }
     async fn forget(&self, account: &str, likes: &[ForgottenLike], _: i64) -> Result<(), EngagementError> {
+        {
+            let mut tabs = self.profile_likes.lock().unwrap();
+            for like in likes {
+                if let LikeTarget::Post(post) = &like.target {
+                    for profile in &like.profile_ids {
+                        tabs.remove(&(profile.clone(), post.clone()));
+                    }
+                }
+            }
+        }
         let mut by_target = self.by_target.lock().unwrap();
         let mut rows = self.rows.lock().unwrap();
         for like in likes {

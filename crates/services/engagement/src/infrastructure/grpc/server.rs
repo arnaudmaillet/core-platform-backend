@@ -37,7 +37,7 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         kafka:  Some(KafkaClientConfig::from_env()),
     };
 
-    let app = App::build(backends, crate::service::like_visibility_from_env()?).await?;
+    let app = App::build(backends, crate::service::like_visibility_from_env()?, crate::service::profile_access_from_env()?).await?;
 
     // ── gRPC server ───────────────────────────────────────────────────────────
 
