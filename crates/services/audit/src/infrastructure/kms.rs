@@ -48,12 +48,15 @@ pub trait KmsCipher: Send + Sync + 'static {
 pub trait KmsSigner: Send + Sync + 'static {
     /// Sign `message` (the canonical checkpoint bytes) under `key_id`.
     async fn sign(&self, key_id: &str, message: &[u8]) -> Result<Vec<u8>, AuditError>;
-    /// Verify a signature over `message`. `Ok(false)` is a *valid answer* meaning
-    /// the signature does not match — an operator-level tampering signal — not a
-    /// transport fault (those are `Err`).
+    /// Verify a signature over `message`, made under `key_id` with `algorithm`
+    /// (the one recorded with the signature, #485: a rotated signing algorithm
+    /// must not fail the checkpoints signed before). `Ok(false)` is a *valid
+    /// answer* meaning the signature does not match — an operator-level tampering
+    /// signal — not a transport fault (those are `Err`).
     async fn verify(
         &self,
         key_id: &str,
+        algorithm: &str,
         message: &[u8],
         signature: &[u8],
     ) -> Result<bool, AuditError>;
@@ -74,6 +77,10 @@ pub struct KmsConfig {
     /// Asymmetric signing algorithm (KMS `SigningAlgorithm`); e.g.
     /// `ECDSA_SHA_256`.
     pub signing_algorithm: String,
+    /// Algorithms checkpoints signed earlier may carry (a rotation, #485), from
+    /// `AUDIT_KMS_ACCEPTED_SIGNING_ALGORITHMS`; `signing_algorithm` is always
+    /// accepted.
+    pub accepted_signing_algorithms: Vec<String>,
     pub request_timeout: Duration,
 }
 
@@ -282,6 +289,7 @@ impl KmsSigner for AwsKms {
     async fn verify(
         &self,
         key_id: &str,
+        algorithm: &str,
         message: &[u8],
         signature: &[u8],
     ) -> Result<bool, AuditError> {
@@ -290,7 +298,7 @@ impl KmsSigner for AwsKms {
             "Message": b64(message),
             "MessageType": "RAW",
             "Signature": b64(signature),
-            "SigningAlgorithm": self.signing_algorithm,
+            "SigningAlgorithm": algorithm,
         });
         match self.call("Verify", payload).await {
             Ok(resp) => {
@@ -331,6 +339,7 @@ impl KmsSigner for LocalCheckpointSigner {
     async fn verify(
         &self,
         _key_id: &str,
+        _algorithm: &str,
         message: &[u8],
         signature: &[u8],
     ) -> Result<bool, AuditError> {
@@ -356,7 +365,7 @@ mod tests {
     async fn local_signer_round_trips() {
         let signer = LocalCheckpointSigner::new([7u8; 32]);
         let sig = signer.sign("local", b"checkpoint-root").await.unwrap();
-        assert!(signer.verify("local", b"checkpoint-root", &sig).await.unwrap());
+        assert!(signer.verify("local", "HMAC_SHA_256", b"checkpoint-root", &sig).await.unwrap());
     }
 
     #[tokio::test]
@@ -364,7 +373,7 @@ mod tests {
         let signer = LocalCheckpointSigner::new([7u8; 32]);
         let sig = signer.sign("local", b"checkpoint-root").await.unwrap();
         // A forged root (operator rewrote the witness) fails verification.
-        assert!(!signer.verify("local", b"TAMPERED-root", &sig).await.unwrap());
+        assert!(!signer.verify("local", "HMAC_SHA_256", b"TAMPERED-root", &sig).await.unwrap());
     }
 
     #[tokio::test]
@@ -372,7 +381,7 @@ mod tests {
         let signer = LocalCheckpointSigner::new([7u8; 32]);
         let mut sig = signer.sign("local", b"root").await.unwrap();
         sig[0] ^= 0xff;
-        assert!(!signer.verify("local", b"root", &sig).await.unwrap());
+        assert!(!signer.verify("local", "HMAC_SHA_256", b"root", &sig).await.unwrap());
     }
 
     #[tokio::test]
@@ -380,6 +389,6 @@ mod tests {
         let signer = LocalCheckpointSigner::new([1u8; 32]);
         let other = LocalCheckpointSigner::new([2u8; 32]);
         let sig = signer.sign("local", b"root").await.unwrap();
-        assert!(!other.verify("local", b"root", &sig).await.unwrap());
+        assert!(!other.verify("local", "HMAC_SHA_256", b"root", &sig).await.unwrap());
     }
 }

@@ -44,6 +44,11 @@ pub struct AuditConfig {
     /// witness (issue #483); `None` keeps the Postgres-only anchor (local/dev).
     /// Enabled by `AUDIT_WITNESS_ENDPOINT`.
     pub witness: Option<ObjectLockConfig>,
+    /// `AUDIT_WITNESS_ALLOW_SHARED_PRINCIPAL=true` lets the witness share the
+    /// archive's endpoint and credentials or bucket — an acknowledged deferral
+    /// (local/dev, or a single-account deployment until the cross-account witness
+    /// exists, #485); otherwise the process refuses to start that way.
+    pub witness_allow_shared: bool,
     /// The local HMAC checkpoint-signing key, used when [`kms`](Self::kms) is not
     /// set. Keeps the signed-checkpoint path exercised in dev without a real KMS
     /// asymmetric key (not operator-proof — see the README).
@@ -72,10 +77,40 @@ impl AuditConfig {
             kek: kek_from_env(),
             kms: kms_from_env(),
             witness: witness_from_env(),
+            witness_allow_shared: std::env::var("AUDIT_WITNESS_ALLOW_SHARED_PRINCIPAL").is_ok_and(|v| v == "true"),
             checkpoint_signing_key: signing_key_from_env(),
             authz: authz_from_env(),
         }
     }
+}
+
+impl AuditConfig {
+    /// The witness must be a trust domain of its own (#485, the premise of #483):
+    /// see [`witness_independence`].
+    pub fn witness_independence(&self) -> Result<(), String> {
+        witness_independence(self.witness.as_ref(), &self.object_lock, self.witness_allow_shared)
+    }
+}
+
+/// A witness on the archive's endpoint with the archive's credentials (or its
+/// bucket) can be rewritten by whoever holds those, defeating the anchor (#485).
+/// Refused unless `allow_shared` (an acknowledged deferral).
+pub fn witness_independence(
+    witness: Option<&ObjectLockConfig>,
+    archive: &ObjectLockConfig,
+    allow_shared: bool,
+) -> Result<(), String> {
+    let Some(witness) = witness else { return Ok(()) };
+    let same_endpoint = witness.endpoint.trim_end_matches('/') == archive.endpoint.trim_end_matches('/');
+    let shared = same_endpoint && (witness.access_key == archive.access_key || witness.bucket == archive.bucket);
+    if shared && !allow_shared {
+        return Err(format!(
+            "the checkpoint witness shares the WORM archive's endpoint ({}) and its credentials or bucket: \
+             give AUDIT_WITNESS_* a separate account (or acknowledge the deferral with AUDIT_WITNESS_ALLOW_SHARED_PRINCIPAL=true)",
+            witness.endpoint
+        ));
+    }
+    Ok(())
 }
 
 /// Resolve caller verification — `Some` only when `AUDIT_JWKS_URL` is set.
@@ -106,6 +141,12 @@ fn kms_from_env() -> Option<KmsConfig> {
         dek_key_id: env_str("AUDIT_KMS_DEK_KEY_ID", "alias/audit-dek"),
         signing_key_id: env_str("AUDIT_KMS_SIGNING_KEY_ID", "alias/audit-checkpoint"),
         signing_algorithm: env_str("AUDIT_KMS_SIGNING_ALGORITHM", DEFAULT_KMS_SIGNING_ALGORITHM),
+        accepted_signing_algorithms: env_str("AUDIT_KMS_ACCEPTED_SIGNING_ALGORITHMS", "")
+            .split(',')
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .map(str::to_owned)
+            .collect(),
         request_timeout: Duration::from_millis(env_u64("AUDIT_KMS_TIMEOUT_MS", DEFAULT_KMS_TIMEOUT_MS)),
     })
 }
@@ -179,4 +220,29 @@ fn env_first(keys: &[&str], default: &str) -> String {
     keys.iter()
         .find_map(|k| std::env::var(k).ok())
         .unwrap_or_else(|| default.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store(endpoint: &str, bucket: &str, access_key: &str) -> ObjectLockConfig {
+        ObjectLockConfig { endpoint: endpoint.to_owned(), bucket: bucket.to_owned(), access_key: access_key.to_owned(), ..object_lock_from_env() }
+    }
+
+    /// #485: a witness on the archive's endpoint with its credentials (the old
+    /// defaults) or its bucket is refused; a separate account, or the local
+    /// escape hatch, is not.
+    #[test]
+    fn the_witness_must_be_its_own_trust_domain() {
+        let archive = store("http://localhost:9000", "audit-archive", "minioadmin");
+        let shared = store("http://localhost:9000/", "audit-witness", "minioadmin");
+        assert!(witness_independence(Some(&shared), &archive, false).is_err());
+        assert!(witness_independence(Some(&shared), &archive, true).is_ok());
+        let same_bucket = store("http://localhost:9000", "audit-archive", "other-key");
+        assert!(witness_independence(Some(&same_bucket), &archive, false).is_err());
+        let separate = store("https://witness.example", "audit-witness", "minioadmin");
+        assert!(witness_independence(Some(&separate), &archive, false).is_ok());
+        assert!(witness_independence(None, &archive, false).is_ok());
+    }
 }

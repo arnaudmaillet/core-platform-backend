@@ -20,10 +20,21 @@
 //!   No raw key material ever enters audit's env or memory; the `subject_keys`
 //!   schema is unchanged (the KMS ciphertext blob goes in `wrapped_dek`, no nonce).
 //!
-//! The composition root picks the custodian by config; the ingest path, the domain
-//! and the schema are untouched either way.
+//! The composition root picks the custodian by config; the ingest path and the
+//! domain are untouched either way.
+//!
+//! Switching custody (#485): each row records the custodian that wrapped it
+//! (`subject_keys.custodian`; a row from before that column is read by its shape —
+//! an AES-GCM wrap has a nonce, a KMS blob none). A row is unwrapped by **its**
+//! custodian when the cipher holds it as a reader, then re-wrapped under the
+//! configured one, so env KEK → KMS migrates row by row as subjects are sealed.
+//! Unwrapped DEKs are cached ([`DekCache`]) against the row's wrapped bytes: the
+//! row is still read on every seal (a crypto-shred is seen at once), but KMS is
+//! asked once per subject per process, not once per seal.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -114,6 +125,89 @@ impl KekCustodian for KmsKek {
     }
 }
 
+/// Who wrapped a stored DEK (#485).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Custodian {
+    /// The env KEK (AES-256-GCM, [`LocalKek`]).
+    Local,
+    /// KMS ([`KmsKek`]).
+    Kms,
+}
+
+impl Custodian {
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Kms => "kms",
+        }
+    }
+
+    /// The row's custodian: its tag, else its shape (an AES-GCM wrap carries a
+    /// nonce; a KMS blob carries its own and stores none).
+    fn of_row(tag: Option<&str>, nonce: &[u8]) -> Self {
+        match tag {
+            Some("local") => Self::Local,
+            Some("kms") => Self::Kms,
+            _ if nonce.is_empty() => Self::Kms,
+            _ => Self::Local,
+        }
+    }
+}
+
+/// Unwrapped DEKs, each kept with the wrapped bytes it came from: a hit needs the
+/// row read on this seal to hold the same bytes, so a crypto-shredded (deleted) or
+/// re-wrapped row is never served from memory. Entries expire after `ttl`, which
+/// bounds how long a DEK outlives its row in memory.
+/// A cached DEK: the wrapped bytes it came from, the DEK, when it was cached.
+type CachedDek = (Vec<u8>, [u8; KEY_LEN], Instant);
+
+pub struct DekCache {
+    entries: Mutex<HashMap<String, CachedDek>>,
+    ttl:     Duration,
+    cap:     usize,
+}
+
+impl DekCache {
+    pub fn new(ttl: Duration, cap: usize) -> Self {
+        Self { entries: Mutex::new(HashMap::new()), ttl, cap: cap.max(1) }
+    }
+
+    fn get(&self, key_ref: &str, wrapped: &[u8]) -> Option<[u8; KEY_LEN]> {
+        let mut entries = self.entries.lock().unwrap();
+        match entries.get(key_ref) {
+            Some((w, dek, at)) if w == wrapped && at.elapsed() < self.ttl => Some(*dek),
+            Some(_) => {
+                entries.remove(key_ref);
+                None
+            }
+            None => None,
+        }
+    }
+
+    fn put(&self, key_ref: &str, wrapped: Vec<u8>, dek: [u8; KEY_LEN]) {
+        let mut entries = self.entries.lock().unwrap();
+        if entries.len() >= self.cap {
+            let ttl = self.ttl;
+            entries.retain(|_, (_, _, at)| at.elapsed() < ttl);
+            if entries.len() >= self.cap {
+                entries.clear();
+            }
+        }
+        entries.insert(key_ref.to_owned(), (wrapped, dek, Instant::now()));
+    }
+
+    fn evict(&self, key_ref: &str) {
+        self.entries.lock().unwrap().remove(key_ref);
+    }
+}
+
+impl Default for DekCache {
+    /// Ten minutes, 10 000 subjects.
+    fn default() -> Self {
+        Self::new(Duration::from_secs(600), 10_000)
+    }
+}
+
 fn to_key(bytes: Vec<u8>) -> Result<[u8; KEY_LEN], AuditError> {
     bytes.try_into().map_err(|_| AuditError::DomainViolation {
         field: "dek".to_owned(),
@@ -125,29 +219,67 @@ fn to_key(bytes: Vec<u8>) -> Result<[u8; KEY_LEN], AuditError> {
 /// once (a lost race keeps the winner's DEK — never overwrites an existing one, so
 /// prior ciphertexts stay decryptable), then the caller re-reads the canonical DEK.
 const UPSERT_DEK_SQL: &str = r#"
-INSERT INTO subject_keys (key_ref, created_at_ms, wrapped_dek, wrap_nonce)
-VALUES ($1, $2, $3, $4)
+INSERT INTO subject_keys (key_ref, created_at_ms, wrapped_dek, wrap_nonce, custodian)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (key_ref) DO UPDATE
-    SET wrapped_dek = EXCLUDED.wrapped_dek, wrap_nonce = EXCLUDED.wrap_nonce
+    SET wrapped_dek = EXCLUDED.wrapped_dek, wrap_nonce = EXCLUDED.wrap_nonce,
+        custodian = EXCLUDED.custodian
     WHERE subject_keys.wrapped_dek IS NULL
 "#;
 
-const FETCH_DEK_SQL: &str = "SELECT wrapped_dek, wrap_nonce FROM subject_keys WHERE key_ref = $1";
+const FETCH_DEK_SQL: &str =
+    "SELECT wrapped_dek, wrap_nonce, custodian FROM subject_keys WHERE key_ref = $1";
 
-/// `(wrapped_dek, wrap_nonce)` — both nullable (a row may pre-exist without a DEK).
-type WrappedDekRow = (Option<Vec<u8>>, Option<Vec<u8>>);
+/// Re-wraps a DEK under the configured custodian, only while the row still holds
+/// the wrap that was read (a racing re-wrap or shred wins).
+const REWRAP_DEK_SQL: &str = r#"
+UPDATE subject_keys SET wrapped_dek = $2, wrap_nonce = $3, custodian = $4
+WHERE key_ref = $1 AND wrapped_dek = $5
+"#;
+
+/// `(wrapped_dek, wrap_nonce, custodian)` — all nullable (a row may pre-exist
+/// without a DEK, or predate the custodian tag).
+type WrappedDekRow = (Option<Vec<u8>>, Option<Vec<u8>>, Option<String>);
 
 /// The envelope-encryption [`SubjectCipher`], generic over who holds the KEK. The
 /// DEK store + AEAD sealing are identical across deployments; only the
 /// [`KekCustodian`] differs (env KEK vs KMS).
 pub struct EnvelopeCipher {
     tx: TransactionManager,
+    /// The configured custodian: it wraps every new DEK and re-wraps the others.
+    custodian: Custodian,
     kek: Arc<dyn KekCustodian>,
+    /// Other custodians this cipher can still unwrap (a custody migration).
+    readers: HashMap<Custodian, Arc<dyn KekCustodian>>,
+    cache: DekCache,
 }
 
 impl EnvelopeCipher {
-    pub fn new(tx: TransactionManager, kek: Arc<dyn KekCustodian>) -> Self {
-        Self { tx, kek }
+    pub fn new(tx: TransactionManager, custodian: Custodian, kek: Arc<dyn KekCustodian>) -> Self {
+        Self { tx, custodian, kek, readers: HashMap::new(), cache: DekCache::default() }
+    }
+
+    /// Also unwraps rows `custodian` wrapped, re-wrapping them under the
+    /// configured custodian (#485).
+    pub fn reading(mut self, custodian: Custodian, kek: Arc<dyn KekCustodian>) -> Self {
+        if custodian != self.custodian {
+            self.readers.insert(custodian, kek);
+        }
+        self
+    }
+
+    fn unwrapper(&self, custodian: Custodian) -> Result<&Arc<dyn KekCustodian>, AuditError> {
+        if custodian == self.custodian {
+            return Ok(&self.kek);
+        }
+        self.readers.get(&custodian).ok_or_else(|| {
+            tracing::error!(
+                row = custodian.tag(),
+                configured = self.custodian.tag(),
+                "a subject DEK was wrapped by a custodian this cipher cannot read (#485): configure it as a reader"
+            );
+            AuditError::KeyVaultUnavailable
+        })
     }
 
     /// The per-subject key reference — all of a subject's PII shares one DEK, so a
@@ -167,34 +299,76 @@ impl EnvelopeCipher {
         sqlx::query(UPSERT_DEK_SQL)
             .bind(key_ref)
             .bind(Utc::now().timestamp_millis())
-            .bind(wrapped.wrapped)
-            .bind(wrapped.nonce)
+            .bind(&wrapped.wrapped)
+            .bind(&wrapped.nonce)
+            .bind(self.custodian.tag())
             .execute(self.tx.pool())
             .await
             .map_err(|_| AuditError::KeyVaultUnavailable)?;
-        // Re-read the canonical DEK (ours, or a racing writer's that won).
-        self.fetch_dek(key_ref)
-            .await?
-            .ok_or(AuditError::KeyVaultUnavailable)
+        // The canonical DEK: ours when our wrap is the one stored (no unwrap
+        // needed), else a racing writer's that won.
+        match self.read_row(key_ref).await? {
+            Some((stored, _, _)) if stored == wrapped.wrapped => {
+                self.cache.put(key_ref, stored, dek);
+                Ok(dek)
+            }
+            _ => self.fetch_dek(key_ref).await?.ok_or(AuditError::KeyVaultUnavailable),
+        }
     }
 
-    async fn fetch_dek(&self, key_ref: &str) -> Result<Option<[u8; KEY_LEN]>, AuditError> {
+    async fn read_row(&self, key_ref: &str) -> Result<Option<(Vec<u8>, Vec<u8>, Option<String>)>, AuditError> {
         let row: Option<WrappedDekRow> = sqlx::query_as(FETCH_DEK_SQL)
             .bind(key_ref)
             .fetch_optional(self.tx.pool())
             .await
             .map_err(|_| AuditError::KeyVaultUnavailable)?;
+        // The local custodian needs the nonce; KMS ignores it (and may have stored
+        // an empty one). Default to empty so a NULL nonce is fine.
+        Ok(row.and_then(|(wrapped, nonce, custodian)| Some((wrapped?, nonce.unwrap_or_default(), custodian))))
+    }
 
-        match row {
-            Some((Some(wrapped), nonce)) => {
-                // The local custodian needs the nonce; KMS ignores it (and may have
-                // stored an empty one). Default to empty so a NULL nonce is fine.
-                let nonce = nonce.unwrap_or_default();
-                let dek = self.kek.unwrap(&wrapped, &nonce).await?;
-                Ok(Some(dek))
+    async fn fetch_dek(&self, key_ref: &str) -> Result<Option<[u8; KEY_LEN]>, AuditError> {
+        // No row (shredded, or never minted), or a row without a wrapped DEK yet.
+        let Some((wrapped, nonce, tag)) = self.read_row(key_ref).await? else {
+            self.cache.evict(key_ref);
+            return Ok(None);
+        };
+        if let Some(dek) = self.cache.get(key_ref, &wrapped) {
+            return Ok(Some(dek));
+        }
+        let custodian = Custodian::of_row(tag.as_deref(), &nonce);
+        let dek = self.unwrapper(custodian)?.unwrap(&wrapped, &nonce).await?;
+        let stored = if custodian == self.custodian { wrapped } else { self.rewrap(key_ref, &dek, wrapped).await };
+        self.cache.put(key_ref, stored, dek);
+        Ok(Some(dek))
+    }
+
+    /// Re-wraps a DEK another custodian wrapped under the configured one (#485);
+    /// the wrapped bytes the row now holds. Best-effort: on failure the row keeps
+    /// its old wrap and is migrated at a later seal.
+    async fn rewrap(&self, key_ref: &str, dek: &[u8; KEY_LEN], old: Vec<u8>) -> Vec<u8> {
+        let fresh = match self.kek.wrap(dek).await {
+            Ok(fresh) => fresh,
+            Err(error) => {
+                tracing::warn!(%error, "subject DEK re-wrap failed; kept its old custodian");
+                return old;
             }
-            // No row, or a row without a wrapped DEK yet (e.g. legacy/seed).
-            _ => Ok(None),
+        };
+        let updated = sqlx::query(REWRAP_DEK_SQL)
+            .bind(key_ref)
+            .bind(&fresh.wrapped)
+            .bind(&fresh.nonce)
+            .bind(self.custodian.tag())
+            .bind(&old)
+            .execute(self.tx.pool())
+            .await;
+        match updated {
+            Ok(done) if done.rows_affected() == 1 => fresh.wrapped,
+            Ok(_) => old, // a racing re-wrap or a shred got there first
+            Err(error) => {
+                tracing::warn!(%error, "subject DEK re-wrap not stored; kept its old custodian");
+                old
+            }
         }
     }
 
@@ -232,7 +406,7 @@ pub struct AesGcmSubjectCipher(EnvelopeCipher);
 
 impl AesGcmSubjectCipher {
     pub fn new(tx: TransactionManager, kek: [u8; KEY_LEN]) -> Self {
-        Self(EnvelopeCipher::new(tx, Arc::new(LocalKek::new(kek))))
+        Self(EnvelopeCipher::new(tx, Custodian::Local, Arc::new(LocalKek::new(kek))))
     }
 }
 
@@ -254,7 +428,13 @@ pub struct KmsSubjectCipher(EnvelopeCipher);
 
 impl KmsSubjectCipher {
     pub fn new(tx: TransactionManager, kms: Arc<dyn KmsCipher>, key_id: String) -> Self {
-        Self(EnvelopeCipher::new(tx, Arc::new(KmsKek::new(kms, key_id))))
+        Self(EnvelopeCipher::new(tx, Custodian::Kms, Arc::new(KmsKek::new(kms, key_id))))
+    }
+
+    /// Also reads the DEKs the env KEK wrapped before custody moved to KMS, and
+    /// re-wraps each under KMS at its subject's next seal (#485).
+    pub fn reading_local(self, kek: [u8; KEY_LEN]) -> Self {
+        Self(self.0.reading(Custodian::Local, Arc::new(LocalKek::new(kek))))
     }
 }
 

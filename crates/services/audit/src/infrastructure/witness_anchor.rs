@@ -238,6 +238,10 @@ pub struct WitnessCheckpointAnchor {
     signer: Arc<dyn KmsSigner>,
     signing_key_id: String,
     signing_algorithm: String,
+    /// The algorithms a witness entry may have been signed with (#485): the
+    /// current one, plus those it replaced. An entry recorded under another is
+    /// a divergence.
+    accepted_algorithms: Vec<String>,
     witness: Arc<dyn Witness>,
     /// Optional convenience index; never the authority. A failure here is logged,
     /// not fatal — the witness copy is what matters.
@@ -254,11 +258,23 @@ impl WitnessCheckpointAnchor {
     ) -> Self {
         Self {
             signer,
+            accepted_algorithms: vec![signing_algorithm.clone()],
             signing_key_id,
             signing_algorithm,
             witness,
             pg_index,
         }
+    }
+
+    /// Also accepts entries signed with these algorithms (a rotation, #485):
+    /// signing keeps the configured one.
+    pub fn accepting(mut self, algorithms: impl IntoIterator<Item = String>) -> Self {
+        for algorithm in algorithms {
+            if !self.accepted_algorithms.contains(&algorithm) {
+                self.accepted_algorithms.push(algorithm);
+            }
+        }
+        self
     }
 }
 
@@ -309,9 +325,18 @@ impl CheckpointAnchor for WitnessCheckpointAnchor {
         //
         // A witness entry whose signature does not validate is operator-level
         // tampering, not an availability fault — surface it as divergence.
+        //
+        // The algorithm is the one the entry records (#485: rotating the signing
+        // algorithm must not fail what was signed before), but only one this
+        // anchor accepts — an operator cannot pick a weaker one, and the key
+        // stays pinned whatever the entry says.
+        if !self.accepted_algorithms.contains(&signed.algorithm) {
+            tracing::error!(algorithm = %signed.algorithm, "witness entry signed with an algorithm this anchor does not accept");
+            return Err(AuditError::CheckpointVerificationFailed);
+        }
         if !self
             .signer
-            .verify(&self.signing_key_id, &message, &signature)
+            .verify(&self.signing_key_id, &signed.algorithm, &message, &signature)
             .await?
         {
             return Err(AuditError::CheckpointVerificationFailed);
@@ -427,6 +452,7 @@ mod tests {
         async fn verify(
             &self,
             key_id: &str,
+            _algorithm: &str,
             _message: &[u8],
             signature: &[u8],
         ) -> Result<bool, AuditError> {
@@ -484,6 +510,7 @@ mod tests {
         async fn verify(
             &self,
             _key_id: &str,
+            _algorithm: &str,
             _message: &[u8],
             _signature: &[u8],
         ) -> Result<bool, AuditError> {
@@ -503,10 +530,11 @@ mod tests {
             .await
             .unwrap();
 
+        // The entry's own algorithm (HMAC_SHA_256), so the check reaches the signer.
         let a = WitnessCheckpointAnchor::new(
             Arc::new(UnavailableSigner),
             "genuine-key".to_owned(),
-            "ECDSA_SHA_256".to_owned(),
+            "HMAC_SHA_256".to_owned(),
             Arc::clone(&witness) as Arc<dyn Witness>,
             None,
         );
@@ -516,5 +544,56 @@ mod tests {
             matches!(err, AuditError::AnchorWitnessUnavailable),
             "a verify outage must be 'couldn't check', not a divergence/tamper signal"
         );
+    }
+
+    /// A signer that records the algorithm each verification is asked for.
+    #[derive(Default)]
+    struct RecordingSigner {
+        verified_with: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl KmsSigner for RecordingSigner {
+        async fn sign(&self, key_id: &str, _message: &[u8]) -> Result<Vec<u8>, AuditError> {
+            Ok(sig_for(key_id))
+        }
+        async fn verify(
+            &self,
+            key_id: &str,
+            algorithm: &str,
+            _message: &[u8],
+            signature: &[u8],
+        ) -> Result<bool, AuditError> {
+            self.verified_with.lock().unwrap().push(algorithm.to_owned());
+            Ok(signature == sig_for(key_id))
+        }
+    }
+
+    /// #485: an entry is verified with the algorithm it records — a rotated
+    /// signing algorithm does not fail what was signed before — but only one
+    /// the anchor accepts.
+    #[tokio::test]
+    async fn a_rotated_signing_algorithm_verifies_entries_signed_before_only_when_accepted() {
+        let witness = Arc::new(InMemoryWitness::default());
+        let signer = Arc::new(RecordingSigner::default());
+        let anchor_with = |algorithm: &str| {
+            WitnessCheckpointAnchor::new(
+                Arc::clone(&signer) as Arc<dyn KmsSigner>,
+                "kms-key".to_owned(),
+                algorithm.to_owned(),
+                Arc::clone(&witness) as Arc<dyn Witness>,
+                None,
+            )
+        };
+        anchor_with("RSASSA_PSS_SHA_256").anchor(&checkpoint()).await.unwrap();
+
+        // Rotated, the old algorithm not listed: the old entry is refused.
+        let err = anchor_with("ECDSA_SHA_256").latest_anchored().await.unwrap_err();
+        assert!(matches!(err, AuditError::CheckpointVerificationFailed));
+
+        // Listed: it verifies, with the algorithm it was signed with.
+        let rotated = anchor_with("ECDSA_SHA_256").accepting(["RSASSA_PSS_SHA_256".to_owned()]);
+        assert!(rotated.latest_anchored().await.unwrap().is_some());
+        assert_eq!(signer.verified_with.lock().unwrap().as_slice(), ["RSASSA_PSS_SHA_256"]);
     }
 }
