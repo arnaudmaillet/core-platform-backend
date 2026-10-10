@@ -4,6 +4,10 @@
 //!   cluster slot (hash tag `{disc}`) so a script moves a post between them
 //!   atomically. Member `"{post_id}:{author_id}"`; score = `published_at_ms`
 //!   (recent, fresh) or the hot score.
+//! - `timeline:{disc}:tag:<tag>:recent` / `:hot` — the same two orders for the
+//!   posts carrying one hashtag (#830), on the same slot so the scripts that
+//!   move a post keep them in step; trimmed to the window and expiring a window
+//!   after the tag's last post.
 //! - `timeline:disc:post:<post_id>` — a HASH per post: `a` author, `t`
 //!   published_at_ms, `g` hashtags (space-separated), `p` popularity, `r`
 //!   restriction code, `v` moderation version, `x` deleted. It expires with the window (a decision recorded
@@ -45,6 +49,27 @@ fn member(post_id: &PostId, author_id: &AuthorId) -> String {
     format!("{post_id}:{author_id}")
 }
 
+/// A hashtag's `recent` and `hot` streams (#830).
+fn tag_keys(tag: &str) -> [String; 2] {
+    [format!("timeline:{{disc}}:tag:{tag}:recent"), format!("timeline:{{disc}}:tag:{tag}:hot")]
+}
+
+fn tag_stream_key(tag: &str, stream: DiscoveryStream) -> Option<String> {
+    let [recent, hot] = tag_keys(tag);
+    match stream {
+        DiscoveryStream::Recent => Some(recent),
+        DiscoveryStream::Hot => Some(hot),
+        DiscoveryStream::Fresh | DiscoveryStream::Nearby => None,
+    }
+}
+
+/// The pool's three streams, then each tag's two.
+fn keys_with_tags(tags: &[String]) -> Vec<String> {
+    let mut keys = vec![RECENT_KEY.to_owned(), FRESH_KEY.to_owned(), HOT_KEY.to_owned()];
+    keys.extend(tags.iter().flat_map(|t| tag_keys(t)));
+    keys
+}
+
 fn stream_key(stream: DiscoveryStream) -> Option<&'static str> {
     match stream {
         DiscoveryStream::Recent => Some(RECENT_KEY),
@@ -75,15 +100,15 @@ for i = 1, 3 do if not r[i] then r[i] = '' end end
 return r
 "#;
 
-/// Records a popularity on a known post; returns `[a, t, r, x]`, or `[]` when
-/// the post is unknown.
+/// Records a popularity on a known post; returns `[a, t, r, x, g]`, or `[]`
+/// when the post is unknown.
 ///
 /// KEYS[1] = meta · ARGV = popularity
 const META_POPULARITY: &str = r#"
 if redis.call('EXISTS', KEYS[1]) == 0 then return {} end
 redis.call('HSET', KEYS[1], 'p', ARGV[1])
-local r = redis.call('HMGET', KEYS[1], 'a', 't', 'r', 'x')
-for i = 1, 4 do if not r[i] then r[i] = '' end end
+local r = redis.call('HMGET', KEYS[1], 'a', 't', 'r', 'x', 'g')
+for i = 1, 5 do if not r[i] then r[i] = '' end end
 return r
 "#;
 
@@ -100,23 +125,39 @@ if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[3]) en
 return 1
 "#;
 
-/// Records a deletion; returns the author ('' when unknown).
+/// Records a deletion; returns `[author, hashtags]` ('' when unknown).
 ///
 /// KEYS[1] = meta · ARGV = ttl_secs
 const META_DELETED: &str = r#"
 redis.call('HSET', KEYS[1], 'x', '1')
 if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
-return redis.call('HGET', KEYS[1], 'a') or ''
+local r = redis.call('HMGET', KEYS[1], 'a', 'g')
+for i = 1, 2 do if not r[i] then r[i] = '' end end
+return r
 "#;
 
 /// Indexes a post, then evicts what aged out of the window or overflows the cap.
+/// Each of its hashtags' streams (KEYS 4.., in pairs) gets it too, is trimmed
+/// to the window and expires a window after its last post (#830).
 ///
-/// KEYS = recent, fresh, hot
+/// KEYS = recent, fresh, hot, then (tag recent, tag hot) per hashtag
 /// ARGV = member, published_at_ms, hot score ('' = no popularity yet),
-///        cutoff_ms, cap, trim batch
+///        cutoff_ms, cap, trim batch, window_secs
 const POOL_ADD: &str = r#"
 local recent, fresh, hot = KEYS[1], KEYS[2], KEYS[3]
 local m = ARGV[1]
+for i = 4, #KEYS, 2 do
+    local trecent, thot = KEYS[i], KEYS[i + 1]
+    redis.call('ZADD', trecent, ARGV[2], m)
+    if ARGV[3] ~= '' then redis.call('ZADD', thot, ARGV[3], m) end
+    local aged = redis.call('ZRANGEBYSCORE', trecent, '-inf', '(' .. ARGV[4], 'LIMIT', 0, tonumber(ARGV[6]))
+    for _, e in ipairs(aged) do
+        redis.call('ZREM', trecent, e)
+        redis.call('ZREM', thot, e)
+    end
+    redis.call('EXPIRE', trecent, ARGV[7])
+    redis.call('EXPIRE', thot, ARGV[7])
+end
 redis.call('ZADD', recent, ARGV[2], m)
 if ARGV[3] ~= '' then
     redis.call('ZREM', fresh, m)
@@ -141,8 +182,10 @@ return #evict
 
 /// Moves a pooled post to `hot` at a new score (popularity > 0), or only
 /// re-scores it there (popularity 0). Posts no longer in `recent` are left out.
+/// Its hashtags' `hot` streams follow (#830).
 ///
-/// KEYS = recent, fresh, hot · ARGV = member, hot score, promote ('1'/'0')
+/// KEYS = recent, fresh, hot, then (tag recent, tag hot) per hashtag
+/// ARGV = member, hot score, promote ('1'/'0')
 const POOL_SCORE: &str = r#"
 if not redis.call('ZSCORE', KEYS[1], ARGV[1]) then return 0 end
 if ARGV[3] == '1' then
@@ -151,12 +194,21 @@ if ARGV[3] == '1' then
 else
     redis.call('ZADD', KEYS[3], 'XX', ARGV[2], ARGV[1])
 end
+for i = 4, #KEYS, 2 do
+    if redis.call('ZSCORE', KEYS[i], ARGV[1]) then
+        if ARGV[3] == '1' then
+            redis.call('ZADD', KEYS[i + 1], ARGV[2], ARGV[1])
+        else
+            redis.call('ZADD', KEYS[i + 1], 'XX', ARGV[2], ARGV[1])
+        end
+    end
+end
 return 1
 "#;
 
-/// KEYS = recent, fresh, hot · ARGV = member
+/// KEYS = recent, fresh, hot, then the hashtags' streams · ARGV = member
 const POOL_REMOVE: &str = r#"
-for i = 1, 3 do redis.call('ZREM', KEYS[i], ARGV[1]) end
+for i = 1, #KEYS do redis.call('ZREM', KEYS[i], ARGV[1]) end
 return 1
 "#;
 
@@ -181,10 +233,6 @@ impl RedisDiscoveryPool {
         Self { client, window_secs: window_secs.max(1), cap: cap.max(1), gravity_secs }
     }
 
-    fn pool_keys() -> Vec<String> {
-        vec![RECENT_KEY.to_owned(), FRESH_KEY.to_owned(), HOT_KEY.to_owned()]
-    }
-
     /// Seconds left before a post published at `published_at_ms` leaves the
     /// window, or `None` once it has.
     fn remaining_secs(&self, published_at_ms: i64) -> Option<u64> {
@@ -198,6 +246,7 @@ impl RedisDiscoveryPool {
         author_id:       &AuthorId,
         published_at_ms: i64,
         popularity:      f64,
+        tags:            &[String],
     ) -> Result<(), TimelineError> {
         let hot = if popularity > 0.0 {
             hot_score(popularity, published_at_ms, self.gravity_secs).to_string()
@@ -210,7 +259,7 @@ impl RedisDiscoveryPool {
             .inner
             .eval(
                 POOL_ADD,
-                Self::pool_keys(),
+                keys_with_tags(tags),
                 vec![
                     member(post_id, author_id),
                     published_at_ms.to_string(),
@@ -218,6 +267,7 @@ impl RedisDiscoveryPool {
                     cutoff.to_string(),
                     self.cap.to_string(),
                     TRIM_BATCH.to_string(),
+                    self.window_secs.to_string(),
                 ],
             )
             .await
@@ -225,15 +275,20 @@ impl RedisDiscoveryPool {
         Ok(())
     }
 
-    async fn unindex(&self, post_id: &PostId, author_id: &AuthorId) -> Result<(), TimelineError> {
+    async fn unindex(&self, post_id: &PostId, author_id: &AuthorId, tags: &[String]) -> Result<(), TimelineError> {
         let _: i64 = self
             .client
             .inner
-            .eval(POOL_REMOVE, Self::pool_keys(), vec![member(post_id, author_id)])
+            .eval(POOL_REMOVE, keys_with_tags(tags), vec![member(post_id, author_id)])
             .await
             .map_err(fred_err)?;
         Ok(())
     }
+}
+
+/// The meta's space-separated hashtags.
+fn split_tags(field: &str) -> Vec<String> {
+    field.split(' ').filter(|t| !t.is_empty()).map(str::to_owned).collect()
 }
 
 fn parse_meta(post_id: PostId, fields: &[Option<String>]) -> DiscoveryMeta {
@@ -278,7 +333,7 @@ impl DiscoveryPool for RedisDiscoveryPool {
         if !x.is_empty() || restriction.hides() {
             return Ok(());
         }
-        self.index(post_id, author_id, published_at_ms, p.parse().unwrap_or(0.0)).await
+        self.index(post_id, author_id, published_at_ms, p.parse().unwrap_or(0.0), tags).await
     }
 
     async fn record_popularity(&self, post_id: &PostId, popularity: f64) -> Result<(), TimelineError> {
@@ -291,9 +346,10 @@ impl DiscoveryPool for RedisDiscoveryPool {
             .eval(META_POPULARITY, vec![meta_key(post_id)], vec![popularity.to_string()])
             .await
             .map_err(fred_err)?;
-        let [a, t, r, x] = state.as_slice() else {
+        let [a, t, r, x, g] = state.as_slice() else {
             return Ok(()); // unknown post
         };
+        let tags = split_tags(g);
         let (Ok(author_id), Ok(published_at_ms)) = (AuthorId::try_from(a.as_str()), t.parse::<i64>()) else {
             return Ok(()); // a tombstone: the publication was not seen
         };
@@ -308,7 +364,7 @@ impl DiscoveryPool for RedisDiscoveryPool {
             .inner
             .eval(
                 POOL_SCORE,
-                Self::pool_keys(),
+                keys_with_tags(&tags),
                 vec![member(post_id, &author_id), score.to_string(), promote.to_owned()],
             )
             .await
@@ -336,29 +392,32 @@ impl DiscoveryPool for RedisDiscoveryPool {
             return Ok(()); // a newer decision is recorded
         }
         let meta = self.meta(std::slice::from_ref(post_id)).await?.remove(post_id);
-        let Some(DiscoveryMeta { author_id: Some(author_id), published_at_ms: Some(published_at_ms), popularity, deleted, .. }) = meta else {
+        let Some(DiscoveryMeta { author_id: Some(author_id), published_at_ms: Some(published_at_ms), popularity, deleted, tags, .. }) = meta else {
             return Ok(()); // tombstone only: the publication will read it
         };
         if restriction.hides() {
-            return self.unindex(post_id, &author_id).await;
+            return self.unindex(post_id, &author_id, &tags).await;
         }
         if deleted || self.remaining_secs(published_at_ms).is_none() {
             return Ok(());
         }
         // Lifted (or age-gated, which stays pooled and is filtered at read):
         // back in the indices.
-        self.index(post_id, &author_id, published_at_ms, popularity).await
+        self.index(post_id, &author_id, published_at_ms, popularity, &tags).await
     }
 
     async fn record_deleted(&self, post_id: &PostId) -> Result<(), TimelineError> {
-        let author: String = self
+        let state: Vec<String> = self
             .client
             .inner
             .eval(META_DELETED, vec![meta_key(post_id)], vec![self.window_secs.to_string()])
             .await
             .map_err(fred_err)?;
+        let [author, tags] = state.as_slice() else {
+            return Err(TimelineError::ScriptReturnInvalid { context: "discovery meta_deleted" });
+        };
         match AuthorId::try_from(author.as_str()) {
-            Ok(author_id) => self.unindex(post_id, &author_id).await,
+            Ok(author_id) => self.unindex(post_id, &author_id, &split_tags(tags)).await,
             Err(_) => Ok(()), // never indexed
         }
     }
@@ -366,17 +425,22 @@ impl DiscoveryPool for RedisDiscoveryPool {
     async fn range(
         &self,
         stream: DiscoveryStream,
+        tag:    Option<&str>,
         after:  Option<&StreamPosition>,
         count:  usize,
     ) -> Result<Vec<PoolEntry>, TimelineError> {
-        let Some(key) = stream_key(stream) else {
+        let key = match tag {
+            Some(tag) => tag_stream_key(tag, stream),
+            None => stream_key(stream).map(str::to_owned),
+        };
+        let Some(key) = key else {
             return Ok(Vec::new());
         };
         let max = after.map_or_else(|| "+inf".to_owned(), |p| p.score.to_string());
         let raw: Vec<String> = self
             .client
             .inner
-            .eval(RANGE, vec![key.to_owned()], vec![max, (count + TIE_SLACK).to_string()])
+            .eval(RANGE, vec![key], vec![max, (count + TIE_SLACK).to_string()])
             .await
             .map_err(fred_err)?;
         if !raw.len().is_multiple_of(2) {

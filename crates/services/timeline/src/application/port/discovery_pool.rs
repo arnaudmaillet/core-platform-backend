@@ -55,10 +55,12 @@ pub trait DiscoveryPool: Send + Sync + 'static {
     async fn record_deleted(&self, post_id: &PostId) -> Result<(), TimelineError>;
 
     /// Up to `count` entries of `stream` strictly after `after` (from the top
-    /// when `None`), in stream order.
+    /// when `None`), in stream order. With a `tag` (normalized), the stream of
+    /// the posts carrying it (#830: `Recent` and `Hot` only; others are empty).
     async fn range(
         &self,
         stream: DiscoveryStream,
+        tag:    Option<&str>,
         after:  Option<&StreamPosition>,
         count:  usize,
     ) -> Result<Vec<PoolEntry>, TimelineError>;

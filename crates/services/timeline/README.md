@@ -127,7 +127,7 @@ rpc GetDiscoveryFeed(GetDiscoveryFeedRequest) returns (GetDiscoveryFeedResponse)
 
 message GetDiscoveryFeedRequest  { DiscoveryRanking ranking=1; string region=2; optional double lat=3;
                                    optional double lng=4; ContentLevel content_level=5; string page_token=6; int32 limit=7;
-                                   string profile_id=8; bool non_personalized=9; }
+                                   string profile_id=8; bool non_personalized=9; string hashtag=10; }
 message GetDiscoveryFeedResponse { repeated FeedItem items=1; string next_page_token=2; string region_applied=3;
                                    ContentLevel content_level_applied=4; bool personalized=5; }
 
@@ -147,6 +147,12 @@ message InterestsResponse { repeated Interest interests=1; }             // Inte
 A feed that needs no follow graph: For You for guests and members (#673, B3), ranked for a member by its
 interest tags unless it opted out (#662).
 
+- **A hashtag's posts (#830).** `hashtag` narrows `TRENDING` (same hot score) and `RECENT` to the posts
+  whose caption carries it, normalized as captions are (`#` optional, case-insensitive); another ranking
+  fails `FAILED_PRECONDITION`. The pool keeps per-tag streams `timeline:{disc}:tag:<tag>:recent|hot` on
+  the pool's slot, written by the same scripts (publication, popularity, restriction, deletion), trimmed
+  to the window and expiring a window after the tag's last post. Same filters and paging as the rest of
+  the feed; a tag unused for 3 days pages empty.
 - **Pool** (Redis, `timeline:{disc}:recent|fresh|hot` + a `timeline:disc:post:<id>` hash per post): posts
   published in the last `TIMELINE_DISCOVERY_WINDOW_SECS` (72 h), capped at `TIMELINE_DISCOVERY_POOL_CAP`. Fed
   by one consumer (`timeline-discovery`) on `post.v1.events` (published with the caption's hashtags /
