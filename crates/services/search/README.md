@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-1** — high-visibility discovery surface, but **derived and fail-open**: not in any synchronous write path; an outage degrades discovery, it never blocks a write/publish/login |
 > | **Deployable** | `crates/apps/search-server` (library crate: `crates/services/search`) |
 > | **Datastores** | OpenSearch cluster — indices `profiles`, `posts`, `hashtags` (each behind read/write aliases). **No** Postgres / Scylla / Redis of its own |
-> | **Async** | publishes **nothing** · consumes `post.v1.events`, `profile.v1.events`, `moderation.v1.events` (+ a derived hashtag stream) (Kafka) |
+> | **Async** | publishes **nothing** · consumes `post.v1.events`, `profile.v1.events`, `moderation.v1.events` (Kafka); hashtag documents derived from the post documents every minute (#831) |
 > | **Upstream callers** | gateway / BFF (the `Search` / `Suggest` query path) |
 > | **Downstream deps** | OpenSearch, Kafka. Source-of-record stores belong to `post` / `profile` — search calls **no** service on the query path |
 > | **SLO** | `<TODO>` avail · `Search` p99 `< <TODO ~150> ms` · ingestion lag `< <TODO ~5> s` |
@@ -96,6 +96,17 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS where it
 
 The synchronous surface is deliberately **read-only**: `Search` (federated, filterable by entity type, cursor-paginated), `Suggest`/autocomplete (prefix), and `MultiSearch` (fan-out + merge). **There is no write/index RPC** — ingestion is Kafka-only — and search **publishes no events** (it is a terminal read-model).
 
+**Hashtags (#831)** have no event of their own: every `SEARCH_HASHTAG_REFRESH_SECS` (60) a refresh
+aggregates the searchable post documents' `hashtags` (the same exclusions as a search: moderation,
+owner, discovery, post window) — the 5 000 most used tags, each with its total and its posts of the last
+24 hours and 7 days — and keeps one `hashtags` document per tag: `post_count`, a volume `popularity`
+(`ln(1+total) + ln(1+week)`, Search's POPULARITY and Suggest rank by it) and a velocity `trending`
+(`3 × day + rest of week`; 0 for a tag unused this week). Only changed tags are written; a tag no longer
+used loses its document, so deleting, hiding or windowing a post lowers its tags' counts at the next
+refresh. Suggest ranks a matching tag by popularity alone, a profile by its match. `ListTrendingHashtags`
+(edge `public_read`) answers the tags with `trending > 0`, most first. Each pod refreshes; writes are
+version-guarded (a strictly increasing revision per refresh), so pods racing only rewrite the same data.
+
 **Recent searches (#663)** are the one thing search stores *for* a profile, so every device shows the same list:
 - `RecordRecentSearch` — the app calls it when a search is submitted or a result is tapped, not on keystrokes.
 - `ListRecentSearches`, `DeleteRecentSearch` (case-insensitive), `ClearSearchHistory`.
@@ -142,7 +153,6 @@ Every fault implements `error::AppError` with a stable `SCH-XXXX` code, mapped t
 | `post.v1.events` | `search-post-indexer` | index/update/delete posts (content hydrated via `GetPost`) | DLQ `post.v1.events.dlq` |
 | `profile.v1.events` | `search-profile-indexer` | index/update/delete profiles (content hydrated via `GetProfileById`); owner masking → **owner** visibility flag; `ProfileTabSettingsChanged` → the author's post window | DLQ `profile.v1.events.dlq` |
 | `moderation.v1.events` | `search-moderation-indexer` | flip the **moderation** visibility flag on hide; restore on reversal, and for a **post** re-hydrate it (`GetPost`, content version = its `updated_at`), so a post dropped during the takedown — or restored under it and never re-announced (#663) — comes back. While `post` still reads it removed/limited: `SCH-8004`, retried | DLQ `moderation.v1.events.dlq` |
-| `<hashtag stream>` | `search-post-indexer` | maintain the hashtag index (derived from post events) | DLQ `<...>.dlq` |
 
 > **Dual visibility authorities:** a document is searchable only when **both** flags permit it — `searchable = moderation_searchable AND owner_searchable`. The two are independent fields, each with its own version guard, written by different streams (`moderation.v1.events` vs a profile owner-masking event). Neither authority can override the other: a profile owner restoring their own visibility cannot lift a platform moderation hide, and vice-versa. A **third authority**, `discoverable` (#661), carries the profile's own "findable by search" choice (`by_handle_search` on `ProfileDiscoverySettingsChanged`); masking and moderation leave it alone. Its two fields were added to the existing indices in place: `ensure_indices` puts the common properties on every start, an additive `_mapping` update (no reindex). A missing flag counts as visible. An **age-gated** post (moderation `age_gate`) is out of search for everyone: search has no per-reader content level, so mature content stays away from 13–17 and guests the conservative way (RESTRICTED by default, as the discovery feeds).
 
@@ -208,6 +218,7 @@ async fn main() -> anyhow::Result<()> {
 | `SEARCH_POST_GRPC_ENDPOINT` | No | `http://localhost:50056` | `post` endpoint for the ingestion content hydrator |
 | `SEARCH_HYDRATE_RPC_TIMEOUT_MS` | No | `5000` | per-request deadline on hydration RPCs — a hung call would otherwise stall the consumer's partition |
 | `SEARCH_HYDRATE_CONNECT_TIMEOUT_MS` | No | `2000` | connect deadline when dialing the `post` / `profile` channels |
+| `SEARCH_HASHTAG_REFRESH_SECS` | No | `60` | how often the hashtag documents are refreshed from the post documents (#831) |
 | `SEARCH_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Yes** (prod) | `http://localhost:50053` | `social-graph` endpoint for the query-path audience filter (`CheckAccess`); unreachable → client results degrade to hashtags only |
 | `SEARCH_AUDIENCE_RPC_TIMEOUT_MS` / `SEARCH_AUDIENCE_CONNECT_TIMEOUT_MS` | No | `500` / `500` | deadlines on that call (it runs inside the user's request) |
 

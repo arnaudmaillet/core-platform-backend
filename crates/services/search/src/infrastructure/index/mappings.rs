@@ -66,7 +66,7 @@ pub(super) fn common_properties() -> Value {
 }
 
 /// Merge the common fields with a kind's own matchable/display fields.
-fn properties_for(kind: EntityKind) -> Value {
+pub(super) fn properties_for(kind: EntityKind) -> Value {
     let mut props = common_properties();
     let specific = match kind {
         EntityKind::Profile => json!({
@@ -99,7 +99,9 @@ fn properties_for(kind: EntityKind) -> Value {
                     "prefix": { "type": "text", "analyzer": "autocomplete", "search_analyzer": "folding" }
                 }
             },
-            "post_count": { "type": "long" }
+            "post_count": { "type": "long" },
+            // Velocity (#831): the trending hashtags' order.
+            "trending":   { "type": "double" }
         }),
     };
     merge(&mut props, specific);

@@ -36,6 +36,12 @@ service SearchService {
     // positional, 1:1 with the requests).
     rpc MultiSearch(MultiSearchRequest) returns (MultiSearchResponse);
 
+    // The hashtags rising now (#831): ranked by recent use (the last day's
+    // posts weigh three times the rest of the week's), a tag unused this week
+    // left out however large. Derived every minute from the searchable posts,
+    // like HashtagHit.post_count. Global; per region later.
+    rpc ListTrendingHashtags(ListTrendingHashtagsRequest) returns (ListTrendingHashtagsResponse);
+
     // ── Recent searches (#663) ──────────────────────────────────────────────
     // A profile's recent searches, kept server-side so every device shows the
     // same list: the newest 50, none older than 90 days. The app records a

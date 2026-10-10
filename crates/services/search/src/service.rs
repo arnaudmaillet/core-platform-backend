@@ -54,6 +54,8 @@ impl Service for SearchService {
         public_read("/search.v1.SearchService/Search"),
         public_read("/search.v1.SearchService/Suggest"),
         public_read("/search.v1.SearchService/MultiSearch"),
+        // Aggregates, the same for every reader (#831).
+        public_read("/search.v1.SearchService/ListTrendingHashtags"),
         authenticated("/search.v1.SearchService/RecordRecentSearch"),
         authenticated("/search.v1.SearchService/ListRecentSearches"),
         authenticated("/search.v1.SearchService/DeleteRecentSearch"),
@@ -70,6 +72,8 @@ impl Service for SearchService {
         spawn_post_consumer(Arc::clone(&app.projection), Arc::clone(&app.hydrator));
         spawn_profile_consumer(Arc::clone(&app.projection), Arc::clone(&app.hydrator));
         spawn_moderation_consumer(Arc::clone(&app.projection), Arc::clone(&app.hydrator));
+        // The hashtags' own documents (#831), refreshed from the post documents.
+        spawn_hashtag_refresh(Arc::clone(&app.hashtags));
 
         Ok(Self { app })
     }
@@ -91,6 +95,24 @@ impl Service for SearchService {
         routes.add_service(SearchServiceServer::new(self.app.handler));
         Ok(())
     }
+}
+
+/// Refreshes the hashtag documents every `SEARCH_HASHTAG_REFRESH_SECS` (60 by
+/// default) for the life of the process. A failed refresh is logged and
+/// retried at the next tick.
+fn spawn_hashtag_refresh(refresh: Arc<crate::application::hashtags::HashtagRefresh>) {
+    let secs = std::env::var("SEARCH_HASHTAG_REFRESH_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(60u64);
+    tokio::spawn(async move {
+        let mut ticks = tokio::time::interval(std::time::Duration::from_secs(secs.max(1)));
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticks.tick().await;
+            match refresh.run_once(chrono::Utc::now()).await {
+                Ok(report) => tracing::debug!(written = report.written, removed = report.removed, "hashtags refreshed"),
+                Err(error) => tracing::warn!(%error, "hashtag refresh failed; retrying at the next tick"),
+            }
+        }
+    });
 }
 
 /// Spawns the supervised post-indexing consumer, rebuilding its Kafka handles and

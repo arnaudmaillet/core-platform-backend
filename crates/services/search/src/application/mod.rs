@@ -15,6 +15,7 @@
 //! tests.
 
 pub mod command;
+pub mod hashtags;
 pub mod port;
 pub mod query;
 pub mod reindex;

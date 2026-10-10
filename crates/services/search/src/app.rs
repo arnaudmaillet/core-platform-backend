@@ -27,6 +27,8 @@ pub struct App {
     pub projection: Arc<ProjectionHandler>,
     pub hydrator: Arc<dyn SourceHydrator>,
     pub index: Arc<OpenSearchIndex>,
+    /// The hashtags' own documents (#831), refreshed periodically.
+    pub hashtags: Arc<crate::application::hashtags::HashtagRefresh>,
 }
 
 impl App {
@@ -82,13 +84,19 @@ impl App {
             .connect_lazy();
         let audience: Arc<dyn AudienceGate> = Arc::new(GrpcAudienceGate::new(social_graph));
 
+        let hashtags = Arc::new(crate::application::hashtags::HashtagRefresh::new(
+            Arc::clone(&index_port),
+            Arc::clone(&index) as Arc<dyn crate::application::port::HashtagStats>,
+        ));
         let handler = App::compose(index_port, audience)
-            .with_recent(Arc::clone(&index) as Arc<dyn crate::application::port::RecentSearches>);
+            .with_recent(Arc::clone(&index) as Arc<dyn crate::application::port::RecentSearches>)
+            .with_hashtags(Arc::clone(&index) as Arc<dyn crate::application::port::HashtagStats>);
         Ok(App {
             handler,
             projection,
             hydrator,
             index,
+            hashtags,
         })
     }
 }

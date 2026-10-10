@@ -33,6 +33,8 @@ pub struct SearchServiceHandler {
     audience: Arc<dyn AudienceGate>,
     /// Each profile's recent searches (#663); `None` ⇒ UNAVAILABLE.
     recent: Option<Arc<dyn RecentSearches>>,
+    /// The hashtags' own data (#831); `None` ⇒ no trending hashtags.
+    hashtags: Option<Arc<dyn crate::application::port::HashtagStats>>,
 }
 
 impl SearchServiceHandler {
@@ -41,7 +43,33 @@ impl SearchServiceHandler {
         suggest: Arc<SuggestHandler>,
         audience: Arc<dyn AudienceGate>,
     ) -> Self {
-        Self { search, suggest, audience, recent: None }
+        Self { search, suggest, audience, recent: None, hashtags: None }
+    }
+
+    /// With the hashtags' own data (#831).
+    pub fn with_hashtags(mut self, hashtags: Arc<dyn crate::application::port::HashtagStats>) -> Self {
+        self.hashtags = Some(hashtags);
+        self
+    }
+
+    pub async fn list_trending_hashtags(
+        &self,
+        request: Request<proto::ListTrendingHashtagsRequest>,
+    ) -> Result<Response<proto::ListTrendingHashtagsResponse>, Status> {
+        let limit = match request.into_inner().limit {
+            n if n <= 0 => 20,
+            n => n.min(50) as usize,
+        };
+        let tags = match &self.hashtags {
+            Some(hashtags) => hashtags.trending(limit).await.map_err(to_status)?,
+            None => Vec::new(),
+        };
+        Ok(Response::new(proto::ListTrendingHashtagsResponse {
+            hashtags: tags
+                .into_iter()
+                .map(|t| proto::HashtagHit { tag: t.tag, post_count: t.post_count })
+                .collect(),
+        }))
     }
 
     /// With the recent-searches store (#663).
