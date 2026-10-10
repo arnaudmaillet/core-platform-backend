@@ -517,17 +517,20 @@ where
         let query = crate::application::query::SuggestProfilesQuery {
             profile_id: req.profile_id,
             limit:      if req.limit > 0 { req.limit } else { 20 },
+            page_token: Some(req.page_token).filter(|t| !t.is_empty()),
         };
-        let suggestions: Vec<crate::application::query::Suggestion> = self
+        let page: crate::application::query::SuggestionPage = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
         Ok(Response::new(proto::SuggestProfilesResponse {
-            profiles: suggestions
+            profiles:        page
+                .suggestions
                 .into_iter()
                 .map(|s| proto::SuggestedProfile { profile_id: s.profile_id.as_str(), mutual_count: s.mutual_count })
                 .collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
         }))
     }
 
