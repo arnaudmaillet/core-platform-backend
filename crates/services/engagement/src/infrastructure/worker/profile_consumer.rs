@@ -1,6 +1,7 @@
 //! `profile.v1.events` → engagement (#829): `ProfileTabSettingsChanged` says
-//! whether the profile shows its Likes tab to others; `ProfileDeleted` (#873)
-//! drops the profile's flags and its Likes tab, as of the deletion. Other
+//! whether the profile shows its Likes and Saved tabs (#872) to others;
+//! `ProfileDeleted` (#873) drops the profile's flags, its Likes tab and its
+//! saves, as of the deletion. Other
 //! profile events are skipped. Last writer wins (per-profile order from the
 //! topic key), so a redelivery is harmless.
 
@@ -13,7 +14,7 @@ use transport::kafka::consumer::builder::KafkaConsumerBuilder;
 use transport::kafka::consumer::{run_consumer, ProcessOutcome, RetryPolicy};
 use transport::kafka::producer::KafkaProducerHandle;
 
-use crate::application::port::ProfileTabs;
+use crate::application::port::{ProfileTabs, SavedPosts, TabFlags};
 use crate::infrastructure::worker::build_dlq_producer;
 
 const TOPIC: &str = "profile.v1.events";
@@ -29,13 +30,15 @@ pub struct ProfileEvent {
     #[serde(default)]
     show_likes: Option<bool>,
     #[serde(default)]
+    show_saved: Option<bool>,
+    #[serde(default)]
     occurred_at_ms: i64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum Outcome {
     Skip,
-    ShowLikes(String, bool),
+    Tabs(String, TabFlags),
     /// The profile and the deletion's time (µs).
     Deleted(String, i64),
     Poison(String),
@@ -54,19 +57,30 @@ fn outcome(event: &ProfileEvent) -> Outcome {
         }
         return Outcome::Deleted(event.profile_id.clone(), event.occurred_at_ms.saturating_mul(1_000));
     }
-    // Absent on an older event: shown (the default).
-    Outcome::ShowLikes(event.profile_id.clone(), event.show_likes.unwrap_or(true))
+    // Absent on an older event: the default.
+    let defaults = TabFlags::default();
+    let flags = TabFlags {
+        likes: event.show_likes.unwrap_or(defaults.likes),
+        saved: event.show_saved.unwrap_or(defaults.saved),
+    };
+    Outcome::Tabs(event.profile_id.clone(), flags)
 }
 
 pub struct ProfileConsumer {
     kafka_config: KafkaClientConfig,
     tabs:         Arc<dyn ProfileTabs>,
+    saves:        Arc<dyn SavedPosts>,
     group_id:     String,
 }
 
 impl ProfileConsumer {
-    pub fn new(kafka_config: KafkaClientConfig, tabs: Arc<dyn ProfileTabs>, group_id: impl Into<String>) -> Self {
-        Self { kafka_config, tabs, group_id: group_id.into() }
+    pub fn new(
+        kafka_config: KafkaClientConfig,
+        tabs: Arc<dyn ProfileTabs>,
+        saves: Arc<dyn SavedPosts>,
+        group_id: impl Into<String>,
+    ) -> Self {
+        Self { kafka_config, tabs, saves, group_id: group_id.into() }
     }
 
     pub async fn run(self) {
@@ -102,11 +116,13 @@ impl ProfileConsumer {
                 match outcome(event) {
                     Outcome::Skip => ProcessOutcome::Done,
                     Outcome::Poison(reason) => ProcessOutcome::Reject(reason),
-                    Outcome::ShowLikes(profile, shown) => {
-                        ProcessOutcome::from_result(worker.tabs.set_shows_likes(&profile, shown).await)
-                    }
+                    Outcome::Tabs(profile, flags) => ProcessOutcome::from_result(worker.tabs.set_tabs(&profile, flags).await),
                     Outcome::Deleted(profile, at_micros) => {
-                        ProcessOutcome::from_result(worker.tabs.forget(&profile, at_micros).await)
+                        let forgotten = match worker.tabs.forget(&profile, at_micros).await {
+                            Ok(()) => worker.saves.forget_profile(&profile, at_micros).await,
+                            Err(e) => Err(e),
+                        };
+                        ProcessOutcome::from_result(forgotten)
                     }
                 }
             })
@@ -121,15 +137,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_likes_flag_is_read_from_the_tab_settings_and_others_skip() {
+    fn the_tab_flags_are_read_from_the_tab_settings_and_others_skip() {
         let hidden: ProfileEvent = serde_json::from_str(
             r#"{"type":"ProfileTabSettingsChanged","profile_id":"p1","post_window":"all","show_likes":false,
                 "show_saved":false,"show_reposts":true,"show_places":true,"occurred_at_ms":1}"#,
         )
         .unwrap();
-        assert_eq!(outcome(&hidden), Outcome::ShowLikes("p1".into(), false));
+        assert_eq!(outcome(&hidden), Outcome::Tabs("p1".into(), TabFlags { likes: false, saved: false }));
+        let saved: ProfileEvent =
+            serde_json::from_str(r#"{"type":"ProfileTabSettingsChanged","profile_id":"p1","show_saved":true}"#).unwrap();
+        assert_eq!(outcome(&saved), Outcome::Tabs("p1".into(), TabFlags { likes: true, saved: true }));
         let older: ProfileEvent = serde_json::from_str(r#"{"type":"ProfileTabSettingsChanged","profile_id":"p1"}"#).unwrap();
-        assert_eq!(outcome(&older), Outcome::ShowLikes("p1".into(), true));
+        assert_eq!(outcome(&older), Outcome::Tabs("p1".into(), TabFlags::default()));
         let other: ProfileEvent = serde_json::from_str(r#"{"type":"ProfileUpdated","profile_id":"p1"}"#).unwrap();
         assert_eq!(outcome(&other), Outcome::Skip);
         let bad: ProfileEvent = serde_json::from_str(r#"{"type":"ProfileTabSettingsChanged","profile_id":""}"#).unwrap();

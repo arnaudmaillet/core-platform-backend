@@ -36,4 +36,17 @@ service EngagementService {
     // otherwise empty. Hydrate the posts through post, which withholds what
     // the reader can't see.
     rpc ListLikesByProfile (ListLikesByProfileRequest) returns (ListLikesByProfileResponse);
+    // Saves a post for one of the caller's profiles (#872), private by
+    // default. Idempotent: saving a saved post keeps its first save time.
+    rpc SavePost (SavePostRequest) returns (SavePostResponse);
+    // Unsaves it. Idempotent: unsaving what isn't saved is a no-op.
+    rpc UnsavePost (UnsavePostRequest) returns (UnsavePostResponse);
+    // A profile's Saved tab (#872): the posts it saved, most recently saved
+    // first. The owner always sees it; anyone else only when the owner shows
+    // the tab (hidden by default) and may see the profile, and then only the
+    // posts whose authors they may see: otherwise empty.
+    rpc ListSavedPosts (ListSavedPostsRequest) returns (ListSavedPostsResponse);
+    // What an account saved, with each post's profile, paged. Mesh only
+    // (never on the edge): the GDPR data export (#872).
+    rpc ListSavedPostsByAccount (ListSavedPostsByAccountRequest) returns (ListSavedPostsByAccountResponse);
 }

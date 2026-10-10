@@ -1,6 +1,6 @@
 //! `account.v1.events` → engagement: `account_deleted` erases the account's
-//! likes (#665, GDPR Art. 17) — who liked goes, the counts stay. Other
-//! account events are skipped.
+//! likes (#665, GDPR Art. 17) — who liked goes, the counts stay — and its
+//! saved posts (#872). Other account events are skipped.
 
 use std::sync::Arc;
 
@@ -13,6 +13,7 @@ use transport::kafka::consumer::{run_consumer, ProcessOutcome, RetryPolicy};
 use transport::kafka::producer::KafkaProducerHandle;
 
 use crate::application::erasure::LikeEraser;
+use crate::application::port::SavedPosts;
 use crate::infrastructure::worker::build_dlq_producer;
 
 const TOPIC: &str = "account.v1.events";
@@ -54,12 +55,18 @@ fn outcome(event: &AccountEvent) -> Outcome {
 pub struct AccountConsumer {
     kafka_config: KafkaClientConfig,
     eraser:       LikeEraser,
+    saves:        Arc<dyn SavedPosts>,
     group_id:     String,
 }
 
 impl AccountConsumer {
-    pub fn new(kafka_config: KafkaClientConfig, eraser: LikeEraser, group_id: impl Into<String>) -> Self {
-        Self { kafka_config, eraser, group_id: group_id.into() }
+    pub fn new(
+        kafka_config: KafkaClientConfig,
+        eraser: LikeEraser,
+        saves: Arc<dyn SavedPosts>,
+        group_id: impl Into<String>,
+    ) -> Self {
+        Self { kafka_config, eraser, saves, group_id: group_id.into() }
     }
 
     pub async fn run(self) {
@@ -96,11 +103,16 @@ impl AccountConsumer {
                     Outcome::Skip => ProcessOutcome::Done,
                     Outcome::Poison(reason) => ProcessOutcome::Reject(reason),
                     Outcome::Erase(account, erased_at) => {
-                        let erased = worker.eraser.erase(&account, erased_at, Utc::now().timestamp_micros()).await;
-                        if let Ok(targets) = &erased {
-                            tracing::info!(targets, "a deleted account's likes erased");
-                        }
-                        ProcessOutcome::from_result(erased.map(|_| ()))
+                        let now = Utc::now().timestamp_micros();
+                        let erased = match worker.eraser.erase(&account, erased_at, now).await {
+                            Ok(targets) => {
+                                tracing::info!(targets, "a deleted account's likes erased");
+                                // Its saves (#872): every profile's.
+                                worker.saves.forget_account(&account, now).await
+                            }
+                            Err(e) => Err(e),
+                        };
+                        ProcessOutcome::from_result(erased)
                     }
                 }
             })

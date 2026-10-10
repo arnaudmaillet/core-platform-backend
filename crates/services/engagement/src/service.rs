@@ -13,7 +13,7 @@ use cqrs::query::InMemoryQueryBus;
 use redis_storage::RedisConfig;
 use scylla_storage::ScyllaConfig;
 use service_runtime::{HealthProbe, InfraRegistry, Service};
-use service_runtime::edge::public_read;
+use service_runtime::edge::{authenticated, public_read};
 use service_runtime::EdgePolicy;
 use tonic::service::RoutesBuilder;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -52,6 +52,11 @@ impl Service for EngagementService {
         // A profile's Likes tab (#829): viewer-aware (the owner's flag, who
         // may see the profile).
         public_read("/engagement.v1.EngagementService/ListLikesByProfile"),
+        // Saved posts (#872): a member's, the account and profile bound to
+        // the token (guests refused); a profile's Saved tab, viewer-aware.
+        authenticated("/engagement.v1.EngagementService/SavePost"),
+        authenticated("/engagement.v1.EngagementService/UnsavePost"),
+        public_read("/engagement.v1.EngagementService/ListSavedPosts"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -127,15 +132,26 @@ pub(crate) fn like_visibility_from_env() -> anyhow::Result<Option<Arc<dyn crate:
 mod tests {
     use super::*;
 
-    /// An account's likes are the GDPR export's (#653, #665), its positions
-    /// the settlement's: never on the edge.
+    /// An account's likes and saves are the GDPR export's (#653, #665,
+    /// #872), its positions the settlement's: never on the edge.
     #[test]
     fn listing_by_account_is_mesh_only() {
         for method in [
             "/engagement.v1.EngagementService/ListLikesByAccount",
             "/engagement.v1.EngagementService/GetLikePositions",
+            "/engagement.v1.EngagementService/ListSavedPostsByAccount",
         ] {
             assert!(EngagementService::EDGE_POLICY.iter().all(|rule| rule.method != method), "{method}");
+        }
+    }
+
+    /// A save is a member's (#872): guests and anonymous callers never reach
+    /// it on the edge.
+    #[test]
+    fn saving_needs_a_member() {
+        for method in ["/engagement.v1.EngagementService/SavePost", "/engagement.v1.EngagementService/UnsavePost"] {
+            let rule = EngagementService::EDGE_POLICY.iter().find(|rule| rule.method == method).expect(method);
+            assert!(matches!(rule.access, service_runtime::edge::EdgeAccess::Authenticated), "{method}");
         }
     }
 }

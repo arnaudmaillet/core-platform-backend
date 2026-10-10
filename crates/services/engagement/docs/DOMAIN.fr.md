@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: eef49410c26637ee9ad1192c5d8f283588a1766ccef145c30bc3575ff38db33a
+  source_sha256: f59f84e7e4c8f44e29b47ff8a0201f4093b4c2e309700902f345e99d2634b0d7
   translated_at: 2026-10-10
   status: complete
 ---
@@ -99,6 +99,7 @@ export RGPD).
 | I3 | Les compteurs masqués n'atteignent que l'auteur et le mesh ; quand post ne peut pas répondre, ils sont retenus | application | `ENG-6001` (mode fermé) |
 | I4 | Seuls les posts et les commentaires peuvent être likés | `LikeTarget::parse` | `ENG-9004` |
 | I5 | Un compte supprimé n'est plus connu comme likeur nulle part ; les points qu'il a donnés restent dans les compteurs | `LikeEraser` ; suppressions Scylla à l'heure de l'effacement ; le consommateur des mises ignore ses mises tardives | — |
+| I6 | Un post enregistré est listé une fois, à sa première date d'enregistrement, jusqu'à son retrait ; un onglet Enregistrés n'est visible que de son propriétaire sauf s'il le montre | l'autorité `saves_by_account` ; règles des onglets de profil (`Tab::Saved` masqué par défaut) | — |
 
 ---
 
@@ -110,11 +111,18 @@ d'engagement applique le total du compte dans Redis, puis écrit la copie durabl
 **Lecture.** `GetPostEngagement` / `BatchGetLikes` lisent compteurs et likes dans Redis, en retenant les
 compteurs masqués selon la réponse de post (`BatchGetLikeVisibility`, en cache 60 s).
 
-**Export.** L'export RGPD d'account parcourt `ListLikesByAccount` (mesh uniquement) vers `likes.json`.
+**Enregistrement (#872).** `SavePost` écrit l'enregistrement dans `saves_by_account` (l'autorité) et
+l'onglet Enregistrés du profil en un seul batch logged, sauf s'il est déjà enregistré ; `UnsavePost`
+supprime les deux ; `ListSavedPosts` liste l'onglet en ne gardant que ce que l'autorité confirme, sous les
+règles des onglets de profil (masqué par défaut).
+
+**Export.** L'export RGPD d'account parcourt `ListLikesByAccount` et `ListSavedPostsByAccount` (mesh
+uniquement) vers `likes.json` et `saves.json`.
 
 **Effacement.** Sur `account_deleted`, `LikeEraser` marque le compte comme effacé, l'oublie sur chaque
 cible likée (entrée Redis retirée ; ligne Scylla remplacée par une ligne anonyme de même total, les
-compteurs restant reconstructibles) et supprime sa liste ; les compteurs restent.
+compteurs restant reconstructibles) et supprime sa liste ; les compteurs restent. Ses enregistrements
+partent aussi (ceux de chaque profil), comme ceux d'un profil supprimé seul (`ProfileDeleted`).
 
 ---
 
@@ -126,9 +134,9 @@ compteurs restant reconstructibles) et supprime sa liste ; les compteurs restent
 | `account` | amont | ACL | `account.v1.events` (`account_deleted`) | un compte supprimé reste connu comme likeur |
 | `comment` | amont | ACL | `comment.created` / `comment.deleted` | les compteurs de commentaires cassent |
 | `post` | amont | Customer/Supplier | gRPC `BatchGetLikeVisibility` | compteurs masqués retenus pour tous sauf le mesh |
-| `account` | aval | Open Host Service | gRPC `ListLikesByAccount` | l'export RGPD échoue (réessayé) |
-| `profile` | amont | ACL | `profile.v1.events` (`ProfileTabSettingsChanged`) | un onglet J'aime masqué s'affiche (#829) |
-| `social-graph` | amont | Customer/Supplier | gRPC `CheckAccess` | les onglets J'aime des autres lecteurs sont retenus (mode fermé) |
+| `account` | aval | Open Host Service | gRPC `ListLikesByAccount`, `ListSavedPostsByAccount` | l'export RGPD échoue (réessayé) |
+| `profile` | amont | ACL | `profile.v1.events` (`ProfileTabSettingsChanged`, `ProfileDeleted`) | un onglet J'aime masqué s'affiche (#829), un onglet Enregistrés montré reste masqué (#872), les onglets d'un profil supprimé subsistent |
+| `social-graph` | amont | Customer/Supplier | gRPC `CheckAccess` | les onglets J'aime et Enregistrés des autres lecteurs sont retenus (mode fermé) |
 | `wallet` | aval | Open Host Service | gRPC `GetLikePositions` | le règlement des mises attend (réessayé) |
 
 ---

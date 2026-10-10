@@ -44,7 +44,7 @@ Drives investment. Rolled up from each Domain Card's class line.
 |---|---|---|---|---|
 | `account` | `account.v1.events` | `audit` | ACL | compliance evidence + GDPR Art. 17 crypto-shred loop |
 | `account` | `account.v1.events` | `profile` | ACL | persona provisioning |
-| `account` | `account.v1.events` (`account_deleted`) | `engagement` | ACL | erasure of who liked (#665; the counts stay) |
+| `account` | `account.v1.events` (`account_deleted`) | `engagement` | ACL | erasure of who liked (#665; the counts stay) and of the saved posts (#872) |
 | `auth` | `auth.v1.events` | `audit` | ACL | session-lifecycle evidence |
 | `profile` | `profile.v1.events` | `post` | ACL | author snapshots on posts |
 | `profile` | `profile.v1.events` | `search` | ACL | profile indexing |
@@ -87,7 +87,7 @@ Drives investment. Rolled up from each Domain Card's class line.
 | `auth` | `account` | Customer/Supplier | `SubjectLink` ↔ `AccountId` | session subject resolution |
 | `wallet` | `engagement` | Customer/Supplier | `GetLikePositions` (mesh) | stake settlement (#665): how early each position came |
 | `account` | `wallet` | Customer/Supplier | `ExportWallet` / `ListStakePositions` / `ListWalletTransactions` (mesh) | the GDPR export's `wallet.json` (#665) |
-| `engagement` | `social-graph` | Customer/Supplier | `CheckAccess` (mesh) | who may see a profile's Likes tab (#829) |
+| `engagement` | `social-graph` | Customer/Supplier | `CheckAccess` (mesh) | who may see a profile's Likes and Saved tabs (#829, #872) |
 | `realtime` | `auth` | Conformist (verify-only) | `auth-context` ES256 token verify at handshake | new connection authentication |
 | **all services** | `auth` | Shared Kernel / OHS | edge token verified in-process via `auth-context` | every authenticated call |
 

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./CONTEXT_MAP.md
-  source_sha256: 30378dac0b459fc0504e46d7fa2e9f3ccf74d504bb9c38b2356151cd2f2b9e8e
+  source_sha256: 86ec93cfedc249e0b2411551a0e162fb7f5dfcb359be7ee52e8f42a42d007564
   translated_at: 2026-10-10
   status: complete
 ---
@@ -56,7 +56,7 @@ Oriente l'investissement. Consolidé depuis la ligne de classe de chaque Domain 
 |---|---|---|---|---|
 | `account` | `account.v1.events` | `audit` | ACL | preuve de conformité + boucle de crypto-shred RGPD Art. 17 |
 | `account` | `account.v1.events` | `profile` | ACL | provisionnement du persona |
-| `account` | `account.v1.events` (`account_deleted`) | `engagement` | ACL | effacement de qui a liké (#665 ; les compteurs restent) |
+| `account` | `account.v1.events` (`account_deleted`) | `engagement` | ACL | effacement de qui a liké (#665 ; les compteurs restent) et des posts enregistrés (#872) |
 | `auth` | `auth.v1.events` | `audit` | ACL | preuve du cycle de vie des sessions |
 | `profile` | `profile.v1.events` | `post` | ACL | instantanés d'auteur sur les posts |
 | `profile` | `profile.v1.events` | `search` | ACL | indexation des profils |
@@ -99,7 +99,7 @@ Oriente l'investissement. Consolidé depuis la ligne de classe de chaque Domain 
 | `auth` | `account` | Customer/Supplier | `SubjectLink` ↔ `AccountId` | résolution du sujet de session |
 | `wallet` | `engagement` | Customer/Supplier | `GetLikePositions` (mesh) | règlement des mises (#665) : la précocité de chaque position |
 | `account` | `wallet` | Customer/Supplier | `ExportWallet` / `ListStakePositions` / `ListWalletTransactions` (mesh) | le `wallet.json` de l'export RGPD (#665) |
-| `engagement` | `social-graph` | Customer/Supplier | `CheckAccess` (mesh) | qui peut voir l'onglet J'aime d'un profil (#829) |
+| `engagement` | `social-graph` | Customer/Supplier | `CheckAccess` (mesh) | qui peut voir les onglets J'aime et Enregistrés d'un profil (#829, #872) |
 | `realtime` | `auth` | Conformist (verify-only) | vérification du token ES256 via `auth-context` au handshake | authentification des nouvelles connexions |
 | **tous les services** | `auth` | Shared Kernel / OHS | token edge vérifié en process via `auth-context` | tout appel authentifié |
 

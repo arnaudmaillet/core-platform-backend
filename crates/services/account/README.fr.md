@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: db52f042fa2c108d3b5d8fe1f579bfc050c804af6586c36a4e35d55ea180386e
-  translated_at: 2026-10-08
+  source_sha256: 6358b6fd206d861121556b3232246ac600510cb1e94e9ae41a6b8bd94137d8ac
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -284,7 +284,8 @@ commentaires (`ListCommentsByAuthor`), recherches récentes
 canal via le `GetFormerMemberHistory` mesh de chat, ses propres messages et ceux des autres en placeholders
 `{"from": "another member"}` — « directe » est le type de la conversation, jamais la taille de ses membres ;
 les groupes quittés (#656, `left_at_ms`) sont inclus, jusqu'au départ, sans leurs membres) ; pour le compte, ses
-likes (`ListLikesByAccount` d'engagement, #665 : un like est un point, celui du compte), son wallet
+likes (`ListLikesByAccount` d'engagement, #665 : un like est un point, celui du compte), ses posts
+enregistrés (`saves.json` : `ListSavedPostsByAccount` d'engagement, mesh uniquement, #872), son wallet
 (`wallet.json` : `ExportWallet` du wallet, mesh uniquement — lu sans en ouvrir un —, toutes les pages
 de `ListWalletTransactions`, et `ListStakePositions`, chaque mise avec son règlement ; sans
 `ACCOUNT_WALLET_GRPC_ENDPOINT` l'archive part sans lui, avec un log) et ses médias
