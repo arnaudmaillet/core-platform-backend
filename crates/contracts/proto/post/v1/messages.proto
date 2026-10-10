@@ -114,9 +114,17 @@ message CreatePostRequest {
     // follows the author's profile default.
     optional bool           allow_remix       = 9;
     optional bool           allow_sound_reuse = 10;
+    // Optional, client-generated, one per post and reused on every retry
+    // (8–64 characters: letters, digits, `-`, `_`; PST-9006 otherwise). A
+    // repeated key from the same profile, within 24 hours, creates nothing and
+    // answers the post the first call created. While that first call is still
+    // in flight a repeat fails ABORTED (PST-1010): retry it. Empty: no
+    // deduplication.
+    string                  idempotency_key   = 11;
 }
 
 message CreatePostResponse {
+    // The created post; on a repeated idempotency key, the first call's.
     string post_id    = 1;
     string profile_id = 2;
 }

@@ -123,6 +123,7 @@ impl Service for PostService {
         let handler = PostServiceHandler::new(
             Arc::clone(&self.app.command_bus),
             Arc::clone(&self.app.query_bus),
+            Arc::clone(&self.app.creator),
         );
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)

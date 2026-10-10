@@ -42,6 +42,12 @@ pub enum PostError {
     #[error("profile {profile_id} does not allow this mention")]
     MentionNotAllowed { profile_id: String },
 
+    /// A CreatePost with this idempotency key is still being written (#876):
+    /// the retry may not create a second post, and has no post id to answer
+    /// yet. Retryable — the next attempt finds the first call's post.
+    #[error("a CreatePost with this idempotency key is in flight")]
+    CreateInFlight,
+
     #[error("carousel requires at least 2 items")]
     CarouselTooFewItems,
 
@@ -72,6 +78,9 @@ pub enum PostError {
     #[error("invalid audio ID: {0}")]
     InvalidAudioId(String),
 
+    #[error("idempotency key must be 8 to 64 letters, digits, '-' or '_'")]
+    InvalidIdempotencyKey,
+
     #[error("attachments JSON corrupted for post {post_id}: {reason}")]
     AttachmentsCorrupted { post_id: String, reason: String },
 
@@ -98,6 +107,7 @@ impl AppError for PostError {
             Self::RestoreWindowExpired { .. } => "PST-1007",
             Self::SoundReuseNotAllowed { .. } => "PST-1008",
             Self::MentionNotAllowed { .. }    => "PST-1009",
+            Self::CreateInFlight              => "PST-1010",
             Self::CarouselTooFewItems         => "PST-2001",
             Self::CarouselTooManyItems { .. } => "PST-2002",
             Self::CarouselVideoTooLong { .. } => "PST-2003",
@@ -110,6 +120,7 @@ impl AppError for PostError {
             Self::AttachmentsCorrupted { .. } => "PST-9003",
             Self::DomainViolation { .. }      => "PST-9004",
             Self::InvalidAudioId(_)           => "PST-9005",
+            Self::InvalidIdempotencyKey       => "PST-9006",
             Self::AccessCheckUnavailable { .. } => "PST-5001",
         }
     }
@@ -121,7 +132,8 @@ impl AppError for PostError {
             Self::PostNotFound { .. }         => StatusCode::NOT_FOUND,
             Self::PostAlreadyPublished { .. }
             | Self::PostAlreadyDeleted { .. }
-            | Self::PostNotDeleted { .. }      => StatusCode::CONFLICT,
+            | Self::PostNotDeleted { .. }
+            | Self::CreateInFlight             => StatusCode::CONFLICT,
             Self::RestoreWindowExpired { .. }  => StatusCode::GONE,
             Self::AuthorMismatch { .. }
             | Self::SoundReuseNotAllowed { .. }
@@ -137,6 +149,7 @@ impl AppError for PostError {
             | Self::InvalidPostId(_)
             | Self::InvalidProfileId(_)
             | Self::InvalidAudioId(_)
+            | Self::InvalidIdempotencyKey
             | Self::DomainViolation { .. }    => StatusCode::UNPROCESSABLE_ENTITY,
             Self::AttachmentsCorrupted { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::AccessCheckUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
@@ -158,7 +171,8 @@ impl AppError for PostError {
     fn is_retryable(&self) -> bool {
         match self {
             Self::Storage(e) => e.is_retryable(),
-            Self::AccessCheckUnavailable { .. } => true,
+            Self::AccessCheckUnavailable { .. }
+            | Self::CreateInFlight => true,
             _                => false,
         }
     }
@@ -199,6 +213,7 @@ impl AppError for PostError {
             Self::RestoreWindowExpired { .. }   => "This post was deleted more than 30 days ago and can no longer be restored.",
             Self::SoundReuseNotAllowed { .. }   => "The creator of this sound does not allow it to be reused.",
             Self::MentionNotAllowed { .. }      => "Someone you mentioned doesn't allow mentions from you.",
+            Self::CreateInFlight                => "Your post is still being created. Please try again.",
             Self::AuthorMismatch { .. }         => "You are not authorised to modify this post.",
             Self::CarouselTooFewItems           => "A carousel must contain at least 2 items.",
             Self::CarouselTooManyItems { .. }   => "A carousel can contain at most 10 items.",
@@ -210,6 +225,7 @@ impl AppError for PostError {
             Self::InvalidPostId(_)              => "The provided post ID is not valid.",
             Self::InvalidProfileId(_)           => "The provided profile ID is not valid.",
             Self::InvalidAudioId(_)             => "The provided audio ID is not valid.",
+            Self::InvalidIdempotencyKey         => "This request key is not valid.",
             Self::DomainViolation { .. }        => "A domain constraint was violated.",
             Self::Validation(e)                 => e.user_facing_message(),
         }
