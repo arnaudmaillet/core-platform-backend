@@ -45,7 +45,7 @@ pub struct AuditConfig {
     /// Enabled by `AUDIT_WITNESS_ENDPOINT`.
     pub witness: Option<ObjectLockConfig>,
     /// `AUDIT_WITNESS_ALLOW_SHARED_PRINCIPAL=true` lets the witness share the
-    /// archive's endpoint and credentials or bucket — an acknowledged deferral
+    /// archive's access key or bucket — an acknowledged deferral
     /// (local/dev, or a single-account deployment until the cross-account witness
     /// exists, #485); otherwise the process refuses to start that way.
     pub witness_allow_shared: bool,
@@ -92,8 +92,10 @@ impl AuditConfig {
     }
 }
 
-/// A witness on the archive's endpoint with the archive's credentials (or its
-/// bucket) can be rewritten by whoever holds those, defeating the anchor (#485).
+/// A witness sharing the archive's access key (the same principal) or its bucket
+/// can be rewritten by whoever holds the archive, defeating the anchor (#485).
+/// Endpoints are not compared: on AWS every account shares the S3 endpoint, and
+/// one bucket is reachable under several endpoint spellings.
 /// Refused unless `allow_shared` (an acknowledged deferral).
 pub fn witness_independence(
     witness: Option<&ObjectLockConfig>,
@@ -101,14 +103,13 @@ pub fn witness_independence(
     allow_shared: bool,
 ) -> Result<(), String> {
     let Some(witness) = witness else { return Ok(()) };
-    let same_endpoint = witness.endpoint.trim_end_matches('/') == archive.endpoint.trim_end_matches('/');
-    let shared = same_endpoint && (witness.access_key == archive.access_key || witness.bucket == archive.bucket);
+    let shared = witness.access_key == archive.access_key || witness.bucket == archive.bucket;
     if shared && !allow_shared {
-        return Err(format!(
-            "the checkpoint witness shares the WORM archive's endpoint ({}) and its credentials or bucket: \
-             give AUDIT_WITNESS_* a separate account (or acknowledge the deferral with AUDIT_WITNESS_ALLOW_SHARED_PRINCIPAL=true)",
-            witness.endpoint
-        ));
+        return Err(
+            "the checkpoint witness shares the WORM archive's access key or bucket: give AUDIT_WITNESS_* \
+             a separate account (or acknowledge the deferral with AUDIT_WITNESS_ALLOW_SHARED_PRINCIPAL=true)"
+                .to_owned(),
+        );
     }
     Ok(())
 }
@@ -230,18 +231,18 @@ mod tests {
         ObjectLockConfig { endpoint: endpoint.to_owned(), bucket: bucket.to_owned(), access_key: access_key.to_owned(), ..object_lock_from_env() }
     }
 
-    /// #485: a witness on the archive's endpoint with its credentials (the old
-    /// defaults) or its bucket is refused; a separate account, or the local
-    /// escape hatch, is not.
+    /// #485: a witness with the archive's access key (the old defaults) or its
+    /// bucket is refused, whatever the endpoint; a separate account, or the
+    /// acknowledged deferral, is not.
     #[test]
     fn the_witness_must_be_its_own_trust_domain() {
-        let archive = store("http://localhost:9000", "audit-archive", "minioadmin");
-        let shared = store("http://localhost:9000/", "audit-witness", "minioadmin");
-        assert!(witness_independence(Some(&shared), &archive, false).is_err());
-        assert!(witness_independence(Some(&shared), &archive, true).is_ok());
-        let same_bucket = store("http://localhost:9000", "audit-archive", "other-key");
+        let archive = store("https://s3.us-east-1.amazonaws.com", "audit-archive", "minioadmin");
+        let same_key = store("https://witness.example", "audit-witness", "minioadmin");
+        assert!(witness_independence(Some(&same_key), &archive, false).is_err());
+        assert!(witness_independence(Some(&same_key), &archive, true).is_ok());
+        let same_bucket = store("https://s3.amazonaws.com", "audit-archive", "other-key");
         assert!(witness_independence(Some(&same_bucket), &archive, false).is_err());
-        let separate = store("https://witness.example", "audit-witness", "minioadmin");
+        let separate = store("https://s3.us-east-1.amazonaws.com", "audit-witness", "other-key");
         assert!(witness_independence(Some(&separate), &archive, false).is_ok());
         assert!(witness_independence(None, &archive, false).is_ok());
     }

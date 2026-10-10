@@ -33,7 +33,7 @@
 //! asked once per subject per process, not once per seal.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -172,8 +172,14 @@ impl DekCache {
         Self { entries: Mutex::new(HashMap::new()), ttl, cap: cap.max(1) }
     }
 
+    /// A poisoned lock still holds a consistent map (no operation here panics
+    /// midway), so it is used as is rather than panicking the seal path.
+    fn entries(&self) -> MutexGuard<'_, HashMap<String, CachedDek>> {
+        self.entries.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn get(&self, key_ref: &str, wrapped: &[u8]) -> Option<[u8; KEY_LEN]> {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries();
         match entries.get(key_ref) {
             Some((w, dek, at)) if w == wrapped && at.elapsed() < self.ttl => Some(*dek),
             Some(_) => {
@@ -185,7 +191,7 @@ impl DekCache {
     }
 
     fn put(&self, key_ref: &str, wrapped: Vec<u8>, dek: [u8; KEY_LEN]) {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries();
         if entries.len() >= self.cap {
             let ttl = self.ttl;
             entries.retain(|_, (_, _, at)| at.elapsed() < ttl);
@@ -197,7 +203,7 @@ impl DekCache {
     }
 
     fn evict(&self, key_ref: &str) {
-        self.entries.lock().unwrap().remove(key_ref);
+        self.entries().remove(key_ref);
     }
 }
 
