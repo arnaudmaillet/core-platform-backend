@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 7b1d46875c4154b982a83c3f4ae88f8c61c6f2cf126a929b94f143f75bb772de
+  source_sha256: 6eadf11db36fb5af5a7605d0de1b538215eb29fb62393439c45ca6c77a684e36
   translated_at: 2026-10-10
   status: complete
 ---
@@ -302,6 +302,7 @@ async fn main() -> anyhow::Result<()> {
 | `PROFILE_GRPC_ADDR` | No | `0.0.0.0:50052` | gRPC bind address. |
 | `PROFILE_MEDIA_GRPC_ENDPOINT` | No | — | endpoint mesh de media : vérifie les documents privés d'une demande de vérification (#777). Non définie : les demandes ne prennent que des liens. |
 | `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS` | No | `500` / `1000` | délais de cet appel. |
+| `PROFILE_BACKFILL_TAB_SETTINGS` | No | non défini | `1`/`true`/`yes` : au démarrage, ré-annonce une fois les réglages d'onglets non par défaut de chaque profil (`ProfileTabSettingsChanged`, #873), pour les consommateurs démarrés après que ces événements ont quitté la rétention de `profile.v1.events` (engagement, post). Chaque réplica le lance, à chaque démarrage (les répétitions sont sans effet, le dernier écrit l'emporte) : à définir le temps d'un déploiement, au premier déploiement, puis à retirer ; lancé pendant que des propriétaires modifient leurs réglages, une ancienne valeur ré-annoncée peut arriver après une plus récente. |
 
 > Le réglage complet `SCYLLA_*` / `REDIS_*` / `KAFKA_*` est documenté dans les crates partagés
 > storage/transport. Les profils de TTL `[cache]` sont consommés depuis `infrastructure.toml`, pas via env.

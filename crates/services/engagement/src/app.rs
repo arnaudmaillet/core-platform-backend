@@ -66,9 +66,9 @@ pub struct App {
 impl App {
     /// Builds the Redis stores and CQRS buses; when Kafka is configured, also
     /// builds the ScyllaDB ledgers and spawns the workers. `likes`: who hides
-    /// like counts (#809, post); `None` withholds nothing. `access`: who may
-    /// see a profile (#829, social-graph); `None`: a Likes tab is the owner's
-    /// only.
+    /// like counts (#809, post) and whose each post is; `None` withholds
+    /// nothing, and a Likes tab is then the owner's only. `access`: who may
+    /// see a profile (#829, social-graph); `None`: likewise.
     pub async fn build(
         backends: Backends,
         likes:    Option<Arc<dyn LikeVisibility>>,
@@ -110,6 +110,7 @@ impl App {
                     ledger: ledgers.as_ref().map(|(_, likes, _)| Arc::clone(likes)),
                     tabs:   ledgers.as_ref().map(|(_, _, tabs)| Arc::clone(tabs)),
                     access,
+                    posts:  likes.clone(),
                 })?
                 .register::<GetLikePositionsQuery, _>(GetLikePositionsHandler {
                     like_store:  Arc::clone(&like_store),

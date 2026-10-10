@@ -365,3 +365,46 @@ async fn an_interaction_limit_is_set_kept_by_other_changes_and_cleared() {
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), clear)).await.expect("clear");
     assert_eq!(h.get_by_id(&profile.id).await.unwrap().interaction.limit, None);
 }
+
+/// The one-off tab settings backfill (#873): every profile whose tab
+/// settings differ from the defaults is announced again, the others not.
+#[tokio::test]
+async fn the_backfill_reannounces_non_default_tab_settings_only() {
+    use std::sync::{Arc, Mutex};
+
+    use profile::application::backfill::backfill_tab_settings;
+    use profile::application::command::SetTabSettingsCommand;
+    use profile::application::port::EventPublisher;
+    use profile::domain::event::DomainEvent;
+    use profile::error::ProfileError;
+
+    /// The profiles whose tab settings were announced.
+    #[derive(Default)]
+    struct Announced(Mutex<Vec<String>>);
+
+    #[async_trait::async_trait]
+    impl EventPublisher for Announced {
+        async fn publish(&self, event: &DomainEvent) -> Result<(), ProfileError> {
+            if let DomainEvent::TabSettingsChanged(e) = event {
+                self.0.lock().unwrap().push(e.profile_id.to_string());
+            }
+            Ok(())
+        }
+    }
+
+    let h = TestHarness::start().await;
+    let (hidden, plain) = (harness::random_handle(), harness::random_handle());
+    h.create(&harness::random_account_id(), &hidden, "Hides likes").await;
+    h.create(&harness::random_account_id(), &plain, "Defaults").await;
+    let hidden_id = h.get_by_handle(&hidden).await.unwrap().id;
+    let plain_id = h.get_by_handle(&plain).await.unwrap().id;
+    let cmd = SetTabSettingsCommand { profile_id: hidden_id.clone(), show_likes: Some(false), ..Default::default() };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("set");
+
+    let announced = Arc::new(Announced::default());
+    let publisher: Arc<dyn EventPublisher> = announced.clone();
+    backfill_tab_settings(&h.repository, &publisher, chrono::Utc::now()).await.expect("backfill");
+    let ids = announced.0.lock().unwrap().clone();
+    assert!(ids.contains(&hidden_id), "the profile hiding its Likes tab is announced");
+    assert!(!ids.contains(&plain_id), "defaults are not");
+}

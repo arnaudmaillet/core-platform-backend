@@ -71,14 +71,18 @@ wallet's settlement scores how early an account came from it.
 
 **A profile's Likes tab (#829).** `ListLikesByProfile(profile_id, limit, page_token)` (edge `public_read`,
 viewer-aware) lists the posts **that profile** liked — not its account's other profiles — newest posts first
-(Scylla `liked_posts_by_profile`, migration 0009, written by the stake consumer with the stake's time; post
-ids are UUIDv7, so their text sorts by time). The owner (one of the reader's profiles) and the mesh always
+(Scylla `liked_posts_by_profile`, migration 0009, written by the stake consumer in the stake's one logged
+batch, with the stake's time; post ids are UUIDv7, so their text sorts by time). The owner (one of the reader's profiles) and the mesh always
 see it; anyone else only when the owner shows the tab (`profile.v1.events` `ProfileTabSettingsChanged`
 `show_likes`, group `engagement-profile-tabs`, kept in `profile_tabs`) **and** social-graph's `CheckAccess`
 says they may see the profile (a private profile they don't follow, a block either way) — otherwise empty.
-Without `ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` a tab is its owner's only. The client hydrates the posts
-through post, which withholds what the reader can't see. `likes_by_account.profile_ids` names every profile
-of the account that liked a target, so an account's erasure removes each profile's tab row too.
+For them each page keeps only the posts whose authors they may see too (#873: post's
+`BatchGetLikeVisibility` names the authors, one `CheckAccess` checks them), so not even the id of a post
+they couldn't open reaches them; a filtered page can be shorter than `limit`, and `next_page_token` still
+follows the page read. Without `ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` or `ENGAGEMENT_POST_GRPC_ENDPOINT` a
+tab is its owner's only. `likes_by_account.profile_ids` names every profile of the account that liked a
+target, so an account's erasure removes each profile's tab row too; a profile's own deletion
+(`ProfileDeleted`, #873) drops its tab and its flags as of the deletion.
 
 **Expired likers.** A likers hash that holds every liker carries `_complete` (set on the target's first
 like, or when a rehydration finished). Once it expired, an account missing from a new one is
@@ -135,7 +139,7 @@ erasure may have listed the targets before it).
 | Redis | authoritative hot path | view/share commands and reads fail; stakes retried | **Hard** — `503 Unavailable` (backpressure to callers) |
 | ScyllaDB | durable copies + counters | stakes retried, flush backs off; `ListLikesByAccount` fails | **Soft** — Redis reads unaffected; copies catch up |
 | Kafka | likes + comment ingest | like and comment counts lag | **Soft** — reads unaffected |
-| `social-graph` (gRPC `CheckAccess`, #829) | whether a reader may see a profile | other readers' Likes tabs fail (`ENG-6002`, retried) | **Fail closed** for Likes tabs only |
+| `social-graph` (gRPC `CheckAccess`, #829) | whether a reader may see a profile (and a Likes-tab page's authors, #873) | other readers' Likes tabs fail (`ENG-6002`, retried) | **Fail closed** for Likes tabs only |
 | `post` (gRPC `BatchGetLikeVisibility`, #809) | whose post it is and whether its author hides like counts | likes withheld from non-authors | **Fail closed** for likes only (views/shares/comments unaffected); 60 s cache |
 
 **Upstream (blast radius):**
@@ -226,7 +230,7 @@ reads the wallet's `wallet.v1.events` directly.
 | `comment.created` / `comment.deleted` | `engagement-comment-consumer` | INCR/DECR comment counter (Redis + Scylla) | DLQ `{topic}.dlq` |
 | `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665): the account's total on a post or comment, idempotent and order-proof (Redis Lua + Scylla); a deleted account's stakes are dropped | DLQ `{topic}.dlq` |
 | `account.v1.events` | `engagement-account-erasure` | `account_deleted` → forget who liked (the counts stay); other events skipped | DLQ `{topic}.dlq` |
-| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → whether the profile shows its Likes tab (#829); other events skipped | DLQ `{topic}.dlq` |
+| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → whether the profile shows its Likes tab (#829); `ProfileDeleted` → its tab and flags go, as of the deletion (#873); other events skipped | DLQ `{topic}.dlq` |
 
 > **Runtime contract (mandatory):** the stake, account and comment consumers run under `run_consumer` — manual
 > commit after success, bounded retry with backoff + jitter, DLQ on exhaustion/poison. Totals are
@@ -285,7 +289,7 @@ async fn main() -> anyhow::Result<()> {
 
 | Variable | Default | Description |
 |---|---|---|
-| `ENGAGEMENT_POST_GRPC_ENDPOINT` | unset | post's mesh address (e.g. `http://post:50056`): hidden like counts are withheld (#809). Unset → withheld from nobody |
+| `ENGAGEMENT_POST_GRPC_ENDPOINT` | unset | post's mesh address (e.g. `http://post:50056`): hidden like counts are withheld (#809), and whose each post is (other readers' Likes tabs, #873). Unset → withheld from nobody, a Likes tab its owner's only |
 | `ENGAGEMENT_POST_RPC_TIMEOUT_MS` · `ENGAGEMENT_POST_CONNECT_TIMEOUT_MS` | `500` · `1000` | deadlines of that call |
 | `ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | unset | social-graph's mesh address (e.g. `http://social-graph:50053`): who may see a profile's Likes tab (#829). Unset → the tab is its owner's only |
 

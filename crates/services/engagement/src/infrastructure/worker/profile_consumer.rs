@@ -1,7 +1,8 @@
 //! `profile.v1.events` → engagement (#829): `ProfileTabSettingsChanged` says
-//! whether the profile shows its Likes tab to others. Other profile events
-//! are skipped. Last writer wins (per-profile order from the topic key), so a
-//! redelivery is harmless.
+//! whether the profile shows its Likes tab to others; `ProfileDeleted` (#873)
+//! drops the profile's flags and its Likes tab, as of the deletion. Other
+//! profile events are skipped. Last writer wins (per-profile order from the
+//! topic key), so a redelivery is harmless.
 
 use std::sync::Arc;
 
@@ -27,21 +28,31 @@ pub struct ProfileEvent {
     profile_id: String,
     #[serde(default)]
     show_likes: Option<bool>,
+    #[serde(default)]
+    occurred_at_ms: i64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum Outcome {
     Skip,
     ShowLikes(String, bool),
+    /// The profile and the deletion's time (µs).
+    Deleted(String, i64),
     Poison(String),
 }
 
 fn outcome(event: &ProfileEvent) -> Outcome {
-    if event.kind != "ProfileTabSettingsChanged" {
+    if !matches!(event.kind.as_str(), "ProfileTabSettingsChanged" | "ProfileDeleted") {
         return Outcome::Skip;
     }
     if event.profile_id.is_empty() || event.profile_id.len() > 64 {
-        return Outcome::Poison(format!("ProfileTabSettingsChanged with profile_id {:?}", event.profile_id));
+        return Outcome::Poison(format!("{} with profile_id {:?}", event.kind, event.profile_id));
+    }
+    if event.kind == "ProfileDeleted" {
+        if event.occurred_at_ms <= 0 {
+            return Outcome::Poison(format!("ProfileDeleted without occurred_at_ms for {}", event.profile_id));
+        }
+        return Outcome::Deleted(event.profile_id.clone(), event.occurred_at_ms.saturating_mul(1_000));
     }
     // Absent on an older event: shown (the default).
     Outcome::ShowLikes(event.profile_id.clone(), event.show_likes.unwrap_or(true))
@@ -94,6 +105,9 @@ impl ProfileConsumer {
                     Outcome::ShowLikes(profile, shown) => {
                         ProcessOutcome::from_result(worker.tabs.set_shows_likes(&profile, shown).await)
                     }
+                    Outcome::Deleted(profile, at_micros) => {
+                        ProcessOutcome::from_result(worker.tabs.forget(&profile, at_micros).await)
+                    }
                 }
             })
         })
@@ -120,5 +134,14 @@ mod tests {
         assert_eq!(outcome(&other), Outcome::Skip);
         let bad: ProfileEvent = serde_json::from_str(r#"{"type":"ProfileTabSettingsChanged","profile_id":""}"#).unwrap();
         assert!(matches!(outcome(&bad), Outcome::Poison(_)));
+    }
+
+    #[test]
+    fn a_deleted_profile_is_forgotten_as_of_its_deletion() {
+        let deleted: ProfileEvent =
+            serde_json::from_str(r#"{"type":"ProfileDeleted","profile_id":"p1","occurred_at_ms":1700000000123}"#).unwrap();
+        assert_eq!(outcome(&deleted), Outcome::Deleted("p1".into(), 1_700_000_000_123_000));
+        let untimed: ProfileEvent = serde_json::from_str(r#"{"type":"ProfileDeleted","profile_id":"p1"}"#).unwrap();
+        assert!(matches!(outcome(&untimed), Outcome::Poison(_)));
     }
 }

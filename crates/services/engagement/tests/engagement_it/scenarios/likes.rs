@@ -347,3 +347,36 @@ async fn each_profile_has_its_likes_tab_and_an_erasure_empties_it() {
     tabs.set_shows_likes(&mine, false).await.unwrap();
     assert!(!tabs.shows_likes(&mine).await.unwrap());
 }
+
+/// A deleted profile (#873): its Likes tab and its flags go as of the
+/// deletion, a stake landing late (stamped before) stays gone, and the
+/// account's other profiles keep theirs.
+#[tokio::test]
+async fn a_deleted_profiles_likes_tab_goes_as_of_its_deletion() {
+    use engagement::application::port::ProfileTabs;
+    use engagement::infrastructure::persistence::ScyllaProfileTabs;
+
+    let contact = test_support::containers::scylla_ready("engagement", concat!(env!("CARGO_MANIFEST_DIR"), "/migrations")).await;
+    let client = Arc::new(
+        ScyllaSessionBuilder::new(ScyllaConfig { contact_points: vec![contact], keyspace: None, ..ScyllaConfig::default() })
+            .build()
+            .await
+            .expect("scylla"),
+    );
+    let ledger = ScyllaLikeLedger::new(Arc::clone(&client));
+    let tabs = ScyllaProfileTabs::new(client);
+    let account = Uuid::now_v7().to_string();
+    let (gone, kept) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
+    let (post, late) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
+    ledger.record(&LikeTarget::Post(post.clone()), &account, &gone, pos(2), 1_000_000).await.unwrap();
+    ledger.record(&LikeTarget::Post(post.clone()), &account, &kept, pos(3), 1_100_000).await.unwrap();
+    tabs.set_shows_likes(&gone, false).await.unwrap();
+
+    // As of now: after the flag's write (stamped by the server).
+    tabs.forget(&gone, chrono::Utc::now().timestamp_micros()).await.unwrap();
+    ledger.record(&LikeTarget::Post(late.clone()), &account, &gone, pos(1), 1_500_000).await.unwrap();
+    assert!(ledger.liked_posts_by_profile(&gone, 10, None).await.unwrap().is_empty(), "late stakes included");
+    assert!(tabs.shows_likes(&gone).await.unwrap(), "its flag is forgotten");
+    assert_eq!(ledger.liked_posts_by_profile(&kept, 10, None).await.unwrap(), vec![post.clone()]);
+    assert_eq!(ledger.position_of(&LikeTarget::Post(post), &account).await.unwrap().map(|p| p.total), Some(3), "the like stays");
+}

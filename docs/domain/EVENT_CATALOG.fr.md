@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 83f2ef1ba9f2e744134f36ced4a8204c94ea580bea0e8c7950b7caf4bd30c761
+  source_sha256: 3b73b8b76ab69bbbd734450642ec38e10c9e02d24da14a9518755d956eb724b4
   translated_at: 2026-10-10
   status: complete
 ---
@@ -121,7 +121,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `handle_changed` | le @handle a changé | revendication de handle | `search` (ré-indexation), intégrations |
 | `profile_verified` | le badge de vérification a changé | vérification | `search`, intégrations |
 | `tier_changed` | le tier d'auteur a changé | recalcul de tier (depuis `social-graph`) | `geo-discovery` (pondération), `timeline` (push/pull) |
-| `profile_hidden` / `profile_restored` / `profile_deleted` | une transition de visibilité/cycle de vie | action propriétaire ou modération | read-models (démantèlement/restauration) ; `social-graph` (projection d'audience : masqué) |
+| `profile_hidden` / `profile_restored` / `profile_deleted` | une transition de visibilité/cycle de vie | action propriétaire ou modération | read-models (démantèlement/restauration) ; `social-graph` (projection d'audience : masqué) ; `engagement` (`deleted` → retire l'onglet J'aime du profil, #873) |
 | `profile_visibility_changed` | le propriétaire a rendu le profil privé ou public | `SetVisibility` | `social-graph` (projection d'audience : privé → contenu réservé aux abonnés, via `CheckAccess`) |
 | `profile_interaction_settings_changed` | le propriétaire a changé qui peut commenter / mentionner / écrire (tout le monde, abonnés, mutuels, personne), les téléchargements et les compteurs de likes | `SetInteractionSettings`, ou la création du profil d'un titulaire de 13 à 17 ans (défauts ados) | `social-graph` (projection lue par `CheckInteraction`, que comment appelle avant d'écrire) |
 | `profile_location_settings_changed` | le propriétaire a activé / désactivé le mode fantôme, ou changé la précision de localisation (précise / ville), son audience (`audience` : tout le monde / abonnés / mutuels, #657) ou la préférence des nouveaux posts (`on_new_posts`) | `SetLocationSettings`, ou la création du profil d'un titulaire de 13 à 17 ans (défaut ado : fantôme, mutuels, pas de localisation sur les nouveaux posts) | `geo-discovery` (projection appliquée à chaque surface de carte : les posts d'un fantôme quittent la carte des autres ; le niveau ville ne les montre qu'à la bande grossière, au centre de la cellule) |

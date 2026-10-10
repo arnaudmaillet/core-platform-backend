@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use scylla::observability::history::HistoryListener;
 use scylla::statement::batch::{Batch, BatchType};
 use scylla::statement::unprepared::Statement;
-use scylla::value::CqlTimestamp;
+use scylla::value::{CqlTimestamp, MaybeUnset};
 use scylla::DeserializeRow;
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
 use uuid::Uuid;
@@ -64,56 +64,52 @@ impl LikeLedger for ScyllaLikeLedger {
         let account = Uuid::parse_str(account)
             .map_err(|_| EngagementError::DomainViolation { field: "account_id".into(), message: account.to_owned() })?;
         let total = position.total;
-        // Both tables or neither (a logged batch), the stake's time as the
-        // write time: the newer total wins whatever the order.
+        // One logged batch, the stake's time as the write time: every row or
+        // none, and the newer total wins whatever the order. With a profile,
+        // the Likes tab (#829): which of the account's profiles liked it and
+        // — for a post — the tab's own row; the account's erasure (stamped
+        // later) removes them for good.
         let mut batch = Batch::new(BatchType::Logged);
         batch.set_execution_profile_handle(Some(
             self.client.profiles.get(ScyllaProfileKind::Strict).clone().into_handle_with_label("strict-batch".to_string()),
         ));
         batch.set_history_listener(Arc::clone(&self.client.history_listener) as Arc<dyn HistoryListener>);
         batch.set_timestamp(Some(at_micros));
-        // The arrival only when known: a null would delete one written before.
-        batch.append_statement(match position.arrival {
-            Some(_) => {
-                "INSERT INTO engagement.likes_by_target (target_kind, target_id, account_id, total, first_count) \
-                 VALUES (?, ?, ?, ?, ?)"
-            }
-            None => "INSERT INTO engagement.likes_by_target (target_kind, target_id, account_id, total) VALUES (?, ?, ?, ?)",
-        });
+        // The arrival only when known: unset leaves one written before (a
+        // null would delete it).
+        batch.append_statement(
+            "INSERT INTO engagement.likes_by_target (target_kind, target_id, account_id, total, first_count) \
+             VALUES (?, ?, ?, ?, ?)",
+        );
         batch.append_statement(
             "INSERT INTO engagement.likes_by_account (account_id, target_kind, target_id, total, profile_id, liked_at) \
              VALUES (?, ?, ?, ?, ?, ?)",
         );
+        let arrival = position.arrival.map_or(MaybeUnset::Unset, MaybeUnset::Set);
         let liked_at = CqlTimestamp(at_micros / 1_000);
+        let by_target = (target.kind(), target.id(), account, total, arrival);
         let by_account = (account, target.kind(), target.id(), total, profile_id, liked_at);
-        let result = match position.arrival {
-            Some(arrival) => {
-                self.client.session.batch(&batch, ((target.kind(), target.id(), account, total, arrival), by_account)).await
-            }
-            None => self.client.session.batch(&batch, ((target.kind(), target.id(), account, total), by_account)).await,
-        };
-        result.map_err(|e| EngagementError::Scylla(ScyllaStorageError::from(e)))?;
-        // The profile's Likes tab (#829): which of the account's profiles
-        // liked it, and — for a post — the tab's own row. Same write time, so
-        // the account's erasure (stamped later) removes both for good; a
-        // retry rewrites them.
-        if !profile_id.is_empty() {
-            let add = self.statement(
+        let session = &self.client.session;
+        let result = if profile_id.is_empty() {
+            session.batch(&batch, (by_target, by_account)).await
+        } else {
+            batch.append_statement(
                 "UPDATE engagement.likes_by_account SET profile_ids = profile_ids + ? \
                  WHERE account_id = ? AND target_kind = ? AND target_id = ?",
-                Some(at_micros),
             );
-            let profiles: Vec<&str> = vec![profile_id];
-            self.client.session.execute_unpaged(add, (profiles, account, target.kind(), target.id())).await.map_err(scylla)?;
-            if let LikeTarget::Post(post_id) = target {
-                let tab = self.statement(
-                    "INSERT INTO engagement.liked_posts_by_profile (profile_id, post_id, total, liked_at) VALUES (?, ?, ?, ?)",
-                    Some(at_micros),
-                );
-                let liked_at = CqlTimestamp(at_micros / 1_000);
-                self.client.session.execute_unpaged(tab, (profile_id, post_id.as_str(), total, liked_at)).await.map_err(scylla)?;
+            let profiles = (vec![profile_id], account, target.kind(), target.id());
+            match target {
+                LikeTarget::Post(post_id) => {
+                    batch.append_statement(
+                        "INSERT INTO engagement.liked_posts_by_profile (profile_id, post_id, total, liked_at) VALUES (?, ?, ?, ?)",
+                    );
+                    let tab = (profile_id, post_id.as_str(), total, liked_at);
+                    session.batch(&batch, (by_target, by_account, profiles, tab)).await
+                }
+                LikeTarget::Comment(_) => session.batch(&batch, (by_target, by_account, profiles)).await,
             }
-        }
+        };
+        result.map_err(scylla)?;
         Ok(())
     }
 
