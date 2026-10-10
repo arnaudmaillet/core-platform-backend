@@ -287,6 +287,20 @@ impl Harness {
         handler.handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now()).await
     }
 
+    /// A JPEG post-image ticket by `owner` under the idempotency key `key`
+    /// (#876). Its own owner keeps the shared one's listing undisturbed.
+    pub async fn issue_keyed(&self, owner: OwnerId, size: u64, key: &str) -> Result<IssueUploadTicketOutcome, MediaError> {
+        let cmd = IssueUploadTicketCommand {
+            owner_id: owner,
+            kind: MediaKind::PostImage,
+            declared_mime: MimeType::new("image/jpeg").unwrap(),
+            declared_size: size,
+            content_sha256: None,
+            idempotency_key: Some(key.to_owned()),
+        };
+        self.issue.handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now()).await
+    }
+
     /// Uploads bytes directly to the pre-signed URL (the client's role).
     pub async fn put_to_url(&self, url: &str, bytes: Vec<u8>) -> bool {
         self.http
@@ -347,7 +361,11 @@ impl Harness {
     }
 
     pub async fn delete(&self, asset_id: AssetId) -> Result<DeleteOutcome, MediaError> {
-        let cmd = DeleteAssetCommand { asset_id, owner_id: self.owner };
+        self.delete_as(self.owner, asset_id).await
+    }
+
+    pub async fn delete_as(&self, owner: OwnerId, asset_id: AssetId) -> Result<DeleteOutcome, MediaError> {
+        let cmd = DeleteAssetCommand { asset_id, owner_id: owner };
         self.delete.handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now()).await
     }
 

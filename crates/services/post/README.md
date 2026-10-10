@@ -203,12 +203,20 @@ caller's field is dropped before the query).
 | PST-1007 | `RestoreWindowExpired` (deleted more than 30 days ago) | 410 |
 | PST-1008 | `SoundReuseNotAllowed` (the sound's creator does not allow reuse) | 403 |
 | PST-1009 | `MentionNotAllowed` (a mentioned profile does not take mentions from the author, #656) | 403 |
+| PST-1010 | `CreateInFlight` (a CreatePost with this idempotency key is still being written, #876; retryable) | 409 → `ABORTED` |
 | PST-2001..2003 | carousel cardinality / video length | 422 |
 | PST-3001..3004 | thumbnail / MIME / CDN URL / dimensions | 422 |
 | PST-9001/9002 | invalid post/profile ID | 422 |
 | PST-9003 | `AttachmentsCorrupted` (JSON deser) | 500 |
 | PST-9004 | `DomainViolation` | 422 |
+| PST-9006 | `InvalidIdempotencyKey` (not 8–64 letters, digits, `-`, `_`) | 422 |
 | PST-5001 | `AccessCheckUnavailable` (social-graph `CheckAccess` did not answer; retryable) | 503 → `UNAVAILABLE` |
+
+**Idempotent create (#876).** `CreatePostRequest.idempotency_key` makes a retried CreatePost create
+nothing and answer the first call's `post_id`, for 24 hours, per author. The key lives in
+`post.create_keys`, written only by LWTs: claimed pending (60 s TTL) before any check, completed (24 h) as
+soon as the post is stored, released if the call fails before that. A repeat while the first call is still
+pending gets `PST-1010` (`ABORTED`): retry it.
 
 ---
 

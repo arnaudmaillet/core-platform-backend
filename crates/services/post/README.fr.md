@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 5e516f54c3ce2e1d3aba4173fb448190affe2064daa80515bfd642cab39db74a
+  source_sha256: b54d7336accdbe1e6dd76bb5190dcfe65d42ebe7f11376e171d30d4c556d7be1
   translated_at: 2026-10-10
   status: complete
 ---
@@ -222,12 +222,20 @@ seulement et pour l'auteur du post seulement (le champ d'un appelant edge est é
 | PST-1007 | `RestoreWindowExpired` (supprimé il y a plus de 30 jours) | 410 |
 | PST-1008 | `SoundReuseNotAllowed` (le créateur du son n'autorise pas sa réutilisation) | 403 |
 | PST-1009 | `MentionNotAllowed` (un profil mentionné n'accepte pas les mentions de l'auteur, #656) | 403 |
+| PST-1010 | `CreateInFlight` (un CreatePost avec cette clé d'idempotence est encore en cours d'écriture, #876 ; à réessayer) | 409 → `ABORTED` |
 | PST-2001..2003 | carousel cardinality / video length | 422 |
 | PST-3001..3004 | thumbnail / MIME / CDN URL / dimensions | 422 |
 | PST-9001/9002 | invalid post/profile ID | 422 |
 | PST-9003 | `AttachmentsCorrupted` (JSON deser) | 500 |
 | PST-9004 | `DomainViolation` | 422 |
+| PST-9006 | `InvalidIdempotencyKey` (pas 8 à 64 lettres, chiffres, `-`, `_`) | 422 |
 | PST-5001 | `AccessCheckUnavailable` (social-graph `CheckAccess` did not answer; retryable) | 503 → `UNAVAILABLE` |
+
+**Création idempotente (#876).** `CreatePostRequest.idempotency_key` fait qu'un CreatePost rejoué ne crée
+rien et renvoie le `post_id` du premier appel, pendant 24 heures, par auteur. La clé vit dans
+`post.create_keys`, écrite uniquement par des LWT : réservée en attente (TTL 60 s) avant toute
+vérification, complétée (24 h) dès que le post est stocké, libérée si l'appel échoue avant. Une répétition
+pendant que le premier appel est encore en attente reçoit `PST-1010` (`ABORTED`) : il faut réessayer.
 
 ---
 

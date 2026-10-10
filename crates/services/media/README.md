@@ -175,6 +175,13 @@ out.
 (`MED-1005`); resolve of a quarantined asset → `PERMISSION_DENIED` (`MED-7001`,
 451); delete under legal hold → `PERMISSION_DENIED` (`MED-7003`).
 
+**Upload idempotency keys (#876).** `IssueUploadTicketRequest.idempotency_key` (1–128 printable ASCII
+characters; `MED-1008` otherwise) is stored on the asset it reserves (`assets.upload_key`, unique per owner
+among live assets). A ticket retried under the same key reserves nothing and answers that asset: a fresh
+upload URL while it is still `PENDING`, no upload (`deduplicated`) once it is past `PENDING`. The same key
+for another kind, declared type or content fails `FAILED_PRECONDITION` (`MED-1007`). Deleting or aborting
+the asset frees its key.
+
 **Private documents (#777).** `MEDIA_KIND_PRIVATE_DOCUMENT` holds verification evidence (profile
 `RequestVerification`): JPEG, PNG, HEIC or PDF, ≤ 10 MiB, owned by the account like any asset. **Off by
 default** (`MEDIA_PRIVATE_DOCUMENTS_ENABLED`): until the deployment keeps `private/` out of the CDN's

@@ -4,7 +4,7 @@ use sqlx::types::Json;
 
 use crate::application::port::AssetRepository;
 use crate::domain::aggregate::Asset;
-use crate::domain::value_object::{AssetId, ContentHash, OwnerId};
+use crate::domain::value_object::{AssetId, ContentHash, OwnerId, UploadKey};
 use crate::error::MediaError;
 
 use super::storage_err;
@@ -56,6 +56,47 @@ impl AssetRepository for PgAssetRepository {
         .await
         .map_err(storage_err)?;
         Ok(())
+    }
+
+    async fn insert_keyed(&self, asset: &Asset, key: &UploadKey) -> Result<Option<AssetId>, MediaError> {
+        // The partial unique index (owner, key) over live assets arbitrates: a
+        // racing insert waits for the first to commit, then does nothing.
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO assets (id, owner_id, kind, state, content_hash, created_at, updated_at, doc, purge_after, upload_key)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+            ON CONFLICT (owner_id, upload_key) WHERE upload_key IS NOT NULL AND state <> 'deleted' DO NOTHING
+            "#,
+        )
+        .bind(asset.id().as_uuid())
+        .bind(asset.owner_id().as_uuid())
+        .bind(asset.kind().as_str())
+        .bind(asset.state().as_str())
+        .bind(asset.content_hash().map(|h| h.as_str().to_owned()))
+        .bind(asset.created_at())
+        .bind(asset.updated_at())
+        .bind(Json(asset))
+        .bind(asset.purge_after())
+        .bind(key.as_str())
+        .execute(self.tx.pool())
+        .await
+        .map_err(storage_err)?
+        .rows_affected();
+        if inserted == 1 {
+            return Ok(None);
+        }
+
+        let holder: Option<(uuid::Uuid,)> = sqlx::query_as(
+            "SELECT id FROM assets WHERE owner_id = $1 AND upload_key = $2 AND state <> 'deleted'",
+        )
+        .bind(asset.owner_id().as_uuid())
+        .bind(key.as_str())
+        .fetch_optional(self.tx.pool())
+        .await
+        .map_err(storage_err)?;
+        // Deleted between the conflict and this read: the key is free again,
+        // and the caller's retry reserves it.
+        holder.map(|(id,)| Some(AssetId::from_uuid(id))).ok_or(MediaError::ConcurrentModification)
     }
 
     async fn find_by_id(&self, id: &AssetId) -> Result<Option<Asset>, MediaError> {
