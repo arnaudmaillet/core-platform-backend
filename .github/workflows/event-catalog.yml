@@ -7,15 +7,10 @@ name: event-catalog
 # Regenerate locally with: tools/event-catalog/sync.sh --write
 #
 # Runs only when the registry, the catalog docs, or the tooling change, so it stays cheap.
+# On PRs it is called by ci.yml (#828), which decides from the changed paths.
 
 on:
-  pull_request:
-    paths:
-      - 'crates/contracts/event-topology/**'
-      - 'docs/domain/EVENT_CATALOG.md'
-      - 'docs/domain/EVENT_CATALOG.fr.md'
-      - 'tools/event-catalog/**'
-      - '.github/workflows/event-catalog.yml'
+  workflow_call:
   push:
     branches: [main, develop]
     paths:

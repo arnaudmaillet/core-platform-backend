@@ -100,7 +100,7 @@ Reference tables that are dense with identifiers stay English: a French engineer
 - Set the translation's `status: stale`. This keeps CI green **and** surfaces a ⚠️ banner to readers.
   It is an *acknowledged-debt* valve — drift is visible, never silent.
 
-**CI gate** (`.github/workflows/i18n-drift.yml`): on any PR touching a README, recomputes each
+**CI gate** (`.github/workflows/i18n-drift.yml`, called by `ci.yml` and reported in its `ci-ok` check — #828): on any PR touching a README, recomputes each
 `README.md` hash and compares it to the sibling `README.fr.md`'s `source_sha256`:
 - match → ✅ pass
 - mismatch + `status: complete` → ❌ **fail** ("update the translation or mark it stale")

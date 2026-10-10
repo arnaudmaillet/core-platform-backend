@@ -13,13 +13,12 @@ name: contracts
 # set, the push is skipped and this workflow is validation-only — it never fails
 # for lack of registry credentials.
 #
-# Only runs when proto (or this workflow) changes, so it stays cheap.
+# Only runs when proto (or this workflow) changes, so it stays cheap. On PRs it
+# is called by ci.yml (#828), which decides from the changed paths and reports
+# the result in its `ci-ok` check.
 
 on:
-  pull_request:
-    paths:
-      - "crates/contracts/proto/**"
-      - ".github/workflows/contracts.yml"
+  workflow_call:
   push:
     branches: [develop, main]
     paths:
