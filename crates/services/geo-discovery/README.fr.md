@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 2014959214e50f782e763ee5069cab7df9ff5086a1aa4d53b6c7b5a4ed235736
+  source_sha256: bd98c2bc7dce0dbd459d828e7a1a035541d65bad5831697de087eeffa0b43c68
   translated_at: 2026-10-10
   status: complete
 ---
@@ -81,7 +81,18 @@ READ (Focus):  GetGeoTimeline ─► card MGET ×M (1 RTT) → MapPostCard
 indexé), `sg:geo:card:{post_id}` (STRING, `MapPostCard` msgpack, `EX ttl` — projection Focus, filtrée par
 score), `sg:geo:hot_tiles` (ZSET, époque de dernier accès par tuile). **ScyllaDB :** `posts_by_tile` (TWCS, PK `(h3_index, resolution)` — composite
 pour éviter les shards urbains chauds), `map_post_cards` (LCS, PK `post_id` — lectures par point pures,
-une seule colonne de score mutable).
+une seule colonne de score mutable), `posts_by_country` (TWCS, PK `(country, day)` — chaque post rangé sous
+le pays où il a été publié, avec sa rétention de carte comme TTL, pour la page de lieu d'un pays, #833).
+
+**Pages de lieu (#833).** `ListPlacePosts` liste les posts d'un lieu page par page — tous ceux qu'il
+contient dans la rétention de la carte, pas le Top-K par tuile du radar : une cellule (`h3_cell` en
+R5/R7/R9, ou un `point` avec une échelle : CITY = R5, DISTRICT = R7, STREET = R9) depuis `posts_by_tile`,
+ou un `country_code` depuis `posts_by_country` (31 jours en arrière). `RECENT` pagine du plus récent au
+plus ancien après le dernier post ; `POPULAR` classe les 200 posts les plus récents du lieu par viralité
+(à égalité, le plus récent), puis continue avec les plus anciens du plus récent au plus ancien. Les cartes
+passent par le chemin Focus (`GetGeoTimeline`), donc une page est hydratée et filtrée de la même façon :
+le pays d'un invité, les pays d'un membre, les fantômes et les auteurs au niveau ville, l'audience du
+lecteur ; une page peut revenir incomplète avec un jeton.
 
 Trois scripts Lua atomiques pilotent le chemin chaud : `ZADD_TOPK` (cap par tuile, évince le plus bas au
 débordement), `ZADD_XX` (mise à jour seulement si le membre est présent — les posts évincés ne sont jamais
@@ -140,6 +151,7 @@ souples que le SLO de latence de requête.
 service GeoDiscoveryService {
   rpc QueryTile      (QueryTileRequest)      returns (QueryTileResponse);      // Radar (panoramique) : pins légers
   rpc GetGeoTimeline (GetGeoTimelineRequest) returns (GetGeoTimelineResponse); // Focus (tap) : cartes complètes
+  rpc ListPlacePosts (ListPlacePostsRequest) returns (ListPlacePostsResponse); // une page de lieu, paginée (#833)
   rpc GetCountryAccess (GetCountryAccessRequest) returns (GetCountryAccessResponse); // country access from location
   rpc GetCountryStandings (GetCountryStandingsRequest) returns (GetCountryStandingsResponse); // le classement des pays (#665)
   rpc GetCountryUnlocks (GetCountryUnlocksRequest) returns (GetCountryUnlocksResponse); // les pays d'un membre (#665)
@@ -367,7 +379,9 @@ async fn main() -> anyhow::Result<()> {
 
 - **Migrations :** `0001_create_keyspace.cql` → `0002_create_posts_by_tile_table.cql` →
   `0003_create_map_post_cards_table.cql` → `0004_add_author_tier_column.cql` →
-  `0005_add_caption_column.cql` sur `geo_discovery`, appliquées **avant** le premier démarrage.
+  `0005_add_caption_column.cql` … → `0010_create_posts_by_country.cql` (#833) sur `geo_discovery`,
+  appliquées **avant** le premier démarrage. Les posts indexés avant `0010` ne sont pas rangés par pays
+  (leur page pays ne les liste qu'une fois réannoncés) ; rien n'était en production à sa sortie.
 - **Pièges liés à l'état :** `GEO_DEFAULT_RETENTION_SECS` doit égaler le TTL de la table Scylla ; la clé de
   partition composite `(h3_index, resolution)` et le mapping zoom→résolution sont des contrats de lecture.
 - **Cold-start :** les workers rejouent depuis `earliest` ; les ZSETs Redis se repeuplent automatiquement.

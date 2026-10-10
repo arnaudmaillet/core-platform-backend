@@ -69,7 +69,18 @@ READ (Focus):  GetGeoTimeline ─► card MGET ×M (1 RTT) → MapPostCard
 `sg:geo:card:{post_id}` (STRING, msgpack `MapPostCard`, `EX ttl` — Focus projection, score-gated),
 `sg:geo:hot_tiles` (ZSET, last-access epoch per tile).
 **ScyllaDB:** `posts_by_tile` (TWCS, PK `(h3_index, resolution)` — composite to avoid hot urban shards),
-`map_post_cards` (LCS, PK `post_id` — pure point reads, single mutable score column).
+`map_post_cards` (LCS, PK `post_id` — pure point reads, single mutable score column),
+`posts_by_country` (TWCS, PK `(country, day)` — each post filed under the country it was published in,
+with its map retention as TTL, for the country place page, #833).
+
+**Place pages (#833).** `ListPlacePosts` lists a place's posts page by page — every post it holds
+within the map retention, not the radar's per-tile Top-K: a cell (`h3_cell` at R5/R7/R9, or a `point`
+with a scale: CITY = R5, DISTRICT = R7, STREET = R9) from `posts_by_tile`, or a `country_code` from
+`posts_by_country` (31 days back). `RECENT` pages newest first after the last post; `POPULAR` ranks
+the place's 200 newest posts by virality (ties to the newest), then carries on with the older ones
+newest first. Cards go through the Focus path (`GetGeoTimeline`), so a page is hydrated and gated the
+same way: a guest's country, a member's countries, ghosts and city-level authors, the reader's
+audience; a page can come back short with a token.
 
 Three atomic Lua scripts drive the hot path: `ZADD_TOPK` (cap per tile, evict lowest on overflow),
 `ZADD_XX` (update only if member present — evicted posts never re-inserted), `PRUNE_COLD_TILES` (evict
@@ -127,6 +138,7 @@ retention window, so ingest-lag SLOs are softer than the query-latency SLO.
 service GeoDiscoveryService {
   rpc QueryTile      (QueryTileRequest)      returns (QueryTileResponse);      // Radar (pan): lean pins
   rpc GetGeoTimeline (GetGeoTimelineRequest) returns (GetGeoTimelineResponse); // Focus (tap): full cards
+  rpc ListPlacePosts (ListPlacePostsRequest) returns (ListPlacePostsResponse); // a place page, paged (#833)
   rpc GetCountryAccess (GetCountryAccessRequest) returns (GetCountryAccessResponse); // country access from location
   rpc GetCountryStandings (GetCountryStandingsRequest) returns (GetCountryStandingsResponse); // the country ladder (#665)
   rpc GetCountryUnlocks (GetCountryUnlocksRequest) returns (GetCountryUnlocksResponse); // a member's countries (#665)
@@ -342,7 +354,9 @@ async fn main() -> anyhow::Result<()> {
 
 - **Migrations:** `0001_create_keyspace.cql` → `0002_create_posts_by_tile_table.cql` →
   `0003_create_map_post_cards_table.cql` → `0004_add_author_tier_column.cql` →
-  `0005_add_caption_column.cql` against `geo_discovery`, applied **before** first start.
+  `0005_add_caption_column.cql` … → `0010_create_posts_by_country.cql` (#833) against `geo_discovery`,
+  applied **before** first start. Posts indexed before `0010` are not filed by country (their country
+  page lists them only once re-announced); nothing was live when it shipped.
 - **Stateful gotchas:** `GEO_DEFAULT_RETENTION_SECS` must equal the Scylla table TTL; the composite
   `(h3_index, resolution)` partition key and zoom→resolution mapping are read contracts.
 - **Cold-start:** workers replay from `earliest`; Redis ZSETs repopulate automatically. Safe to roll.

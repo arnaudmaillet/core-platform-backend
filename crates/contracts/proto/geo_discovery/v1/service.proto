@@ -17,6 +17,12 @@ service GeoDiscoveryService {
     // path avoids.
     rpc GetGeoTimeline (GetGeoTimelineRequest) returns (GetGeoTimelineResponse);
 
+    // A place's posts, page by page (#833): the place page of a city or
+    // country marker, every post the place holds within the map's retention —
+    // not only the radar's per-tile Top-K. RECENT or POPULAR; the cards come
+    // with GetGeoTimeline's audience rules applied.
+    rpc ListPlacePosts (ListPlacePostsRequest) returns (ListPlacePostsResponse);
+
     // Country access from location: the device sends the country it derived
     // from its location (an ISO code, never a coordinate); the server grants it
     // only when the request's network (GeoIP) is in that country or a

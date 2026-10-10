@@ -33,6 +33,7 @@ use crate::application::port::{
 };
 use crate::domain::country_atlas::CountryAtlas;
 use crate::application::query::get_geo_timeline::{GetGeoTimelineHandler, GetGeoTimelineQuery};
+use crate::application::query::list_place_posts::{ListPlacePostsHandler, ListPlacePostsQuery};
 use crate::application::query::query_tile::{QueryTileHandler, QueryTileQuery};
 use crate::config::GeoDiscoveryConfig;
 use crate::infrastructure::cache::{
@@ -147,6 +148,16 @@ impl App {
                 .build(),
         );
 
+        // The Focus path, shared by GetGeoTimeline and the place pages (#833).
+        let focus = || GetGeoTimelineHandler {
+            card_store:      Arc::clone(&card_store),
+            tile_repository: Arc::clone(&tile_repository),
+            audience:        Arc::clone(&audience),
+            grants:          Arc::clone(&grants),
+            unlocks:         Arc::clone(&unlocks),
+            atlas,
+            location:        Arc::clone(&location),
+        };
         let query_bus = Arc::new(
             QueryBusBuilder::new()
                 // Radar (pan): Redis-only, returns lightweight pins.
@@ -160,14 +171,11 @@ impl App {
                     location:      Arc::clone(&location),
                 })?
                 // Focus (tap): hydrates full cards, Redis + ScyllaDB fallback.
-                .register::<GetGeoTimelineQuery, _>(GetGeoTimelineHandler {
-                    card_store:      Arc::clone(&card_store),
+                .register::<GetGeoTimelineQuery, _>(focus())?
+                // A place's posts, page by page (#833).
+                .register::<ListPlacePostsQuery, _>(ListPlacePostsHandler {
                     tile_repository: Arc::clone(&tile_repository),
-                    audience,
-                    grants,
-                    unlocks,
-                    atlas,
-                    location:        Arc::clone(&location),
+                    cards:           Arc::new(focus()),
                 })?
                 .build(),
         );

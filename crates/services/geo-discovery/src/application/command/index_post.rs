@@ -4,6 +4,7 @@ use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
 use crate::application::port::{CardStore, PinStore, SpatialIndex, TileRepository};
+use crate::domain::country_atlas::CountryAtlas;
 use crate::domain::entity::{MapPostCard, RadarPin};
 use crate::domain::value_object::{
     AuthorId, GeoCoordinate, H3Index, H3Resolution, PostId, RetentionTtl, Suppression,
@@ -130,13 +131,25 @@ where
         }
 
         // ── 1. ScyllaDB (durable, always first) ───────────────────────────────
-        let (r5, r7, r9, card_res) = tokio::join!(
+        // The country it was published in, for its place page (#833); at sea
+        // or off every border: none.
+        let country = CountryAtlas::embedded().country_at(cmd.lat, cmd.lng);
+        let by_country = async {
+            match country {
+                Some(country) => {
+                    self.tile_repository.insert_country_entry(country, &post_id, cmd.published_at_ms, ttl).await
+                }
+                None => Ok(()),
+            }
+        };
+        let (r5, r7, r9, card_res, country_res) = tokio::join!(
             self.tile_repository.insert_tile_entry(idx_r5, H3Resolution::R5, &post_id, cmd.published_at_ms, ttl),
             self.tile_repository.insert_tile_entry(idx_r7, H3Resolution::R7, &post_id, cmd.published_at_ms, ttl),
             self.tile_repository.insert_tile_entry(idx_r9, H3Resolution::R9, &post_id, cmd.published_at_ms, ttl),
             self.tile_repository.upsert_card(&card, ttl),
+            by_country,
         );
-        r5?; r7?; r9?; card_res?;
+        r5?; r7?; r9?; card_res?; country_res?;
 
         // ── 2. Redis spatial index (ZADDs with Top-K cap) ─────────────────────
         let (si5, si7, si9) = tokio::join!(

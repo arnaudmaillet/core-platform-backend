@@ -41,6 +41,8 @@ impl Service for GeoDiscoveryService {
     const EDGE_POLICY: EdgePolicy = &[
         public_read("/geo_discovery.v1.GeoDiscoveryService/QueryTile"),
         public_read("/geo_discovery.v1.GeoDiscoveryService/GetGeoTimeline"),
+        // A place page (#833): GetGeoTimeline's audience rules, viewer-aware.
+        public_read("/geo_discovery.v1.GeoDiscoveryService/ListPlacePosts"),
         // Members and guests; the principal is the token's.
         public_read("/geo_discovery.v1.GeoDiscoveryService/GetCountryAccess"),
         // The country ladder: aggregates, the same for every reader (#665).

@@ -11,3 +11,4 @@ mod country_scope;
 mod location_sharing;
 mod country_standings;
 mod country_unlocks;
+mod place_pages;

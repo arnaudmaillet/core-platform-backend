@@ -63,3 +63,26 @@ enum UnlockCountryOutcome {
     // one. Nothing charged; ask again with it.
     UNLOCK_COUNTRY_OUTCOME_PRICE_CHANGED     = 4;
 }
+
+// The order of a place page (#833).
+enum PlaceSort {
+    // RECENT.
+    PLACE_SORT_UNSPECIFIED = 0;
+    // Newest first.
+    PLACE_SORT_RECENT      = 1;
+    // By virality score (the map's popularity), ties to the newest.
+    PLACE_SORT_POPULAR     = 2;
+}
+
+// The size of the place around a point (#833): the H3 cell the map indexes
+// at that resolution.
+enum PlaceScale {
+    // CITY.
+    PLACE_SCALE_UNSPECIFIED = 0;
+    // An R5 cell (~250 km²): a city and its surroundings.
+    PLACE_SCALE_CITY        = 1;
+    // An R7 cell (~5 km²): a district.
+    PLACE_SCALE_DISTRICT    = 2;
+    // An R9 cell (~0.1 km²): a street.
+    PLACE_SCALE_STREET      = 3;
+}
