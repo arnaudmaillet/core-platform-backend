@@ -14,16 +14,23 @@
 # `*-api` crates' tonic codegen; cmake/zlib for the bundled librdkafka.
 # Debuginfo is disabled to keep the build inside the runner's disk budget
 # (the full-debug workspace target tree exceeds it).
+#
+# The PR gate (#828). Every PR to any branch runs this workflow, whatever it
+# touches, and gets one always-reporting check, `ci-ok`, that branch rules can
+# require: the path filtering lives in the `changes` job instead of the
+# trigger (a required check whose workflow is path-filtered out never
+# reports, and stays pending forever). `ci-ok` is green when every job the PR
+# needed passed, a skipped one counting as passed; red if any failed or was
+# cancelled. A new `integration` matrix entry is covered without touching the
+# rules.
+#
+# The contracts, i18n-drift and event-catalog checks run here on PRs, as
+# reusable workflows; those files keep their own push triggers (BSR publish,
+# drift and topology on develop/main).
 name: ci
 
 on:
   pull_request:
-    paths:
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/ci.yml'
-      - 'rust-toolchain.toml'
   push:
     branches: [develop]
     paths:
@@ -52,7 +59,44 @@ env:
   CARGO_HTTP_TIMEOUT: "60"
 
 jobs:
+  # Which checks this change needs. On a push the trigger's paths already
+  # filtered for Rust, and the other checks run from their own workflows.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust:     ${{ steps.filter.outputs.rust }}
+      proto:    ${{ steps.filter.outputs.proto }}
+      docs:     ${{ steps.filter.outputs.docs }}
+      topology: ${{ steps.filter.outputs.topology }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE:  ${{ github.event.pull_request.base.sha }}
+          HEAD:  ${{ github.sha }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            printf 'rust=true\nproto=false\ndocs=false\ntopology=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only "$BASE" "$HEAD")
+          printf '%s\n' "$files"
+          # A change to this workflow runs every check.
+          match() { printf '%s\n' "$files" | grep -qE "$1|^\.github/workflows/ci\.yml$" && echo true || echo false; }
+          {
+            echo "rust=$(match '^crates/|^Cargo\.(toml|lock)$|^rust-toolchain\.toml$')"
+            echo "proto=$(match '^crates/contracts/proto/|^\.github/workflows/contracts\.yml$')"
+            echo "docs=$(match '\.md$|^tools/i18n/|^\.github/workflows/i18n-drift\.yml$')"
+            echo "topology=$(match '^crates/contracts/event-topology/|^docs/domain/EVENT_CATALOG(\.fr)?\.md$|^tools/event-catalog/|^\.github/workflows/event-catalog\.yml$')"
+          } | tee -a "$GITHUB_OUTPUT"
+
   test:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -70,6 +114,8 @@ jobs:
         run: cargo test --workspace --locked --quiet
 
   clippy:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -100,6 +146,8 @@ jobs:
   # staging soak's eighteen findings. Public repo ⇒ runner minutes are free; the
   # matrix parallelizes so wall time ≈ the slowest (Scylla-backed) suite.
   integration:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -160,3 +208,38 @@ jobs:
       # there is no second image list to keep in sync here.
       - name: cargo test -p ${{ matrix.suite.pkg }} --features ${{ matrix.suite.feature }}
         run: cargo test -p ${{ matrix.suite.pkg }} --features ${{ matrix.suite.feature }} --locked
+
+  # ── The other PR checks, as reusable workflows ────────────────────────────
+  buf:
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.proto == 'true'
+    permissions:
+      contents: read
+      # buf-action posts a lint/breaking summary comment on the PR.
+      pull-requests: write
+    uses: ./.github/workflows/contracts.yml
+    secrets: inherit
+
+  drift:
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.docs == 'true'
+    uses: ./.github/workflows/i18n-drift.yml
+
+  topology:
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.topology == 'true'
+    uses: ./.github/workflows/event-catalog.yml
+
+  # ── The one required check ────────────────────────────────────────────────
+  ci-ok:
+    needs: [changes, test, clippy, integration, buf, drift, topology]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every needed job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          printf '%s' "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          printf '%s' "$NEEDS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' > /dev/null
