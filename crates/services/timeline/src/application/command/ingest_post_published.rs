@@ -130,7 +130,7 @@ where
                         audio_id = %aid_str,
                         post_id  = %post_id,
                         error    = %e,
-                        "invalid audio_id in post.published event — skipping audio index"
+                        "invalid audio_id in PostPublished event — skipping audio index"
                     );
                 }
             }

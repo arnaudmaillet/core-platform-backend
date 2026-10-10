@@ -251,7 +251,7 @@ impl TestHarness {
     }
 
     /// Indexes a post at `(lat, lng)` published at `published_at_ms` (a late
-    /// or repeated `post.published`).
+    /// or repeated `PostPublished`).
     pub async fn index_post_published_at(&self, lat: f64, lng: f64, published_at_ms: i64) -> Uuid {
         let post_uuid = Uuid::now_v7();
         let cmd = IndexPostCommand {

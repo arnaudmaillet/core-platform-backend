@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: 148912b8f98d84e0b3011554eb0580134eff92a9d42e0a9e216f459dfb9f3754
-  translated_at: 2026-06-29
+  source_sha256: b46e8c3635c963f067ae86ba9236a099db7c137b2811ba81ffaee0d49cc8fb1a
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -83,7 +83,7 @@ que l'index s'auto-élague.
 
 | Donnée copiée | Possédée par | Maintenue fraîche via | Tolérance d'obsolescence |
 |---|---|---|---|
-| Contenu/localisation du post | `post` | `post.published` / `post.deleted` | cohérence à terme |
+| Contenu/localisation du post | `post` | `post.v1.events` / `post.deleted` | cohérence à terme |
 | Viralité | `engagement` | `engagement.score_updated` | cohérence à terme |
 | Tier d'auteur | `profile` | `profile.tier_changed` | cohérence à terme |
 
@@ -105,7 +105,7 @@ que l'index s'auto-élague.
 
 > En ligne jusqu'à ce qu'un C4 corrigé soit régénéré depuis `docs/domain/`.
 
-**Maintenance de l'index.** Consommer `post.published` (ajouter carte), `post.deleted` (retirer),
+**Maintenance de l'index.** Consommer `PostPublished` (ajouter carte), `post.deleted` (retirer),
 `engagement.score_updated` (re-classer), `profile.tier_changed` (re-pondérer) → mettre à jour le ZSET
 Redis double-couche via Lua Top-K/XX/prune ; le TTL gère la rétention.
 
@@ -117,7 +117,7 @@ Redis seul. Un index dégradé retourne moins/des pins plus périmés (fail-open
 hydratées (légende, métadonnées auteur, palier) depuis Redis avec repli ScyllaDB — la lecture à froid que
 le chemin Radar évite délibérément.
 
-> **Contrat de payload (résolu).** `post.published` porte désormais `lat`/`lng`, `caption` et
+> **Contrat de payload (résolu).** `PostPublished` porte désormais `lat`/`lng`, `caption` et
 > `thumbnail_url` (localisation fournie par le client au `CreatePost`) ; les posts sans localisation ne
 > sont simplement pas géo-indexés. `author_handle` / `author_avatar_url` sont réservés sur la carte et
 > complétés depuis `profile.v1.events` (jointure séparée).
@@ -128,7 +128,7 @@ le chemin Radar évite délibérément.
 
 | Contexte voisin | Direction | Pattern | Mécanisme | Ce qui casse s'il change |
 |---|---|---|---|---|
-| `post` | amont | ACL | `post.published` / `post.deleted` | les cartes cessent d'apparaître/de se purger |
+| `post` | amont | ACL | `post.v1.events` / `post.deleted` | les cartes cessent d'apparaître/de se purger |
 | `engagement` | amont | ACL | `engagement.score_updated` | le classement devient périmé |
 | `profile` | amont | ACL | `profile.tier_changed` | la pondération par tier casse |
 | clients | aval | OHS | requête gRPC de viewport | la découverte sur carte casse |
@@ -150,7 +150,7 @@ le chemin Radar évite délibérément.
 |---|---|---|
 | Viewport H3 grid_disk + index spatial Top-K Redis double-couche (ZSET+cardinalité) | [`ADR-0010`](../../../../docs/adr/0010-geo-discovery-h3-grid-dual-layer-redis-topk.md) | Accepté |
 | Séparation de lecture Radar/Focus : `RadarPin` léger (panoramique Redis seul) vs `MapPostCard` hydratée (`GetGeoTimeline` au tap) | _inline — ce changement_ | Accepté |
-| Enrichissement de payload post→geo : `post.published` porte lat/lng + caption + miniature (localisation fournie par le client au `CreatePost`) | _résolu — ce changement_ | Accepté |
+| Enrichissement de payload post→geo : `PostPublished` porte lat/lng + caption + miniature (localisation fournie par le client au `CreatePost`) | _résolu — ce changement_ | Accepté |
 
 ---
 

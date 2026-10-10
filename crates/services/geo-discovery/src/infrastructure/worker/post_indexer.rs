@@ -13,11 +13,15 @@ use crate::infrastructure::cache::{RedisCardStore, RedisGeoSpatialIndex, RedisPi
 use crate::infrastructure::persistence::ScyllaTileRepository;
 use crate::infrastructure::worker::build_dlq_producer;
 
-const TOPIC: &str = "post.published";
+const TOPIC: &str = "post.v1.events";
 
-/// Kafka event schema for `post.published`.
+/// Kafka event schema for `post.v1.events` (#487) — services/post's
+/// internally-tagged `DomainEvent`: `{"type": "PostPublished"|"PostUpdated"|
+/// "PostDeleted", ...}`. Only `PostPublished` is indexed; the other variants
+/// commit without work (a deletion is handled from `post.deleted` by the
+/// visibility worker), so every field they lack is defaulted.
 ///
-/// Published by `services/post` when a post transitions to Published status.
+/// `PostPublished` is emitted when a post transitions to Published status.
 /// `services/post` only emits POST-owned data: it does not carry the author's
 /// display name or avatar (those are profile-owned and joined separately from
 /// `profile.v1.events`). This struct mirrors that contract — every field beyond
@@ -26,6 +30,9 @@ const TOPIC: &str = "post.published";
 /// being rejected to the DLQ.
 #[derive(Debug, Deserialize)]
 pub struct PostPublishedEvent {
+    /// The `DomainEvent` variant.
+    #[serde(rename = "type")]
+    pub event_type:      String,
     pub post_id:         String,
     /// Author identity. `services/post` emits this as `profile_id`; geo-discovery
     /// treats it as the author id for the card projection.
@@ -48,6 +55,7 @@ pub struct PostPublishedEvent {
     #[serde(default)]
     pub virality_score:  f64,
     /// Unix epoch milliseconds of the publication timestamp.
+    #[serde(default)]
     pub published_at_ms: i64,
     /// Optional retention override in seconds, counted from `published_at_ms`.
     /// Absent → 172 800 s (48 h).
@@ -59,8 +67,8 @@ pub struct PostPublishedEvent {
     pub author_tier:     u8,
 }
 
-/// Long-lived background worker that consumes `post.published` events and
-/// indexes each post into the spatial index and card store.
+/// Long-lived background worker that consumes `post.v1.events` and indexes
+/// each published post into the spatial index and card store.
 ///
 /// Delivery semantics: at-least-once (auto-commit enabled). All writes are
 /// idempotent (ZADD + cap Lua, ScyllaDB INSERT with no IF conditions), so
@@ -168,13 +176,17 @@ where
         use cqrs::{CommandHandler, Envelope};
         use uuid::Uuid;
 
+        if event.event_type != "PostPublished" {
+            return Ok(());
+        }
+
         // A post without a location is not a map post — skip spatial indexing.
         // lat/lng are emitted together by services/post, so a partial pair is
         // treated as "no location" rather than an error.
         let (Some(lat), Some(lng)) = (event.lat, event.lng) else {
             tracing::debug!(
                 post_id = %event.post_id,
-                "post.published carried no location — skipping geo indexing"
+                "PostPublished carried no location — skipping geo indexing"
             );
             return Ok(());
         };
@@ -191,7 +203,7 @@ where
             post_id:           event.post_id.clone(),
             // services/post emits the author identity as `profile_id`.
             author_id:         event.profile_id.clone(),
-            // Display name + avatar are NOT carried on post.published (profile-owned).
+            // Display name + avatar are NOT carried on PostPublished (profile-owned).
             // They are backfilled from profile.v1.events by a separate consumer;
             // until that join runs, the card renders them empty.
             author_handle:     String::new(),
@@ -218,5 +230,47 @@ where
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use post::domain::event::{DomainEvent, PostDeletedEvent, PostPublishedEvent as Published, PostUpdatedEvent};
+
+    fn wire(event: DomainEvent) -> PostPublishedEvent {
+        serde_json::from_slice(&serde_json::to_vec(&event).unwrap()).expect("decodes post's own event")
+    }
+
+    /// Wire contract: every variant post serializes on `post.v1.events`
+    /// decodes here (no DLQ), and only `PostPublished` is indexed (#487).
+    #[test]
+    fn decodes_posts_own_post_v1_events() {
+        let published = wire(DomainEvent::PostPublished(Published {
+            post_id:         "p1".to_owned(),
+            profile_id:      "a1".to_owned(),
+            kind:            "text".to_owned(),
+            published_at_ms: 1_700_000_000_000,
+            author_tier:     2,
+            audio_id:        None,
+            audio_kind:      None,
+            caption:         "hi".to_owned(),
+            thumbnail_url:   Some("https://cdn/t.jpg".to_owned()),
+            lat:             Some(48.85),
+            lng:             Some(2.35),
+        }));
+        assert_eq!(published.event_type, "PostPublished");
+        assert_eq!((published.post_id.as_str(), published.profile_id.as_str()), ("p1", "a1"));
+        assert_eq!((published.lat, published.lng), (Some(48.85), Some(2.35)));
+        assert_eq!((published.author_tier, published.published_at_ms), (2, 1_700_000_000_000));
+        assert_eq!((published.caption.as_str(), published.thumbnail_url.as_deref()), ("hi", Some("https://cdn/t.jpg")));
+
+        let updated = wire(DomainEvent::PostUpdated(PostUpdatedEvent {
+            post_id: "p1".to_owned(), profile_id: "a1".to_owned(), updated_at_ms: 1,
+        }));
+        let deleted = wire(DomainEvent::PostDeleted(PostDeletedEvent {
+            post_id: "p1".to_owned(), profile_id: "a1".to_owned(), deleted_at_ms: 1,
+        }));
+        assert_eq!((updated.event_type.as_str(), deleted.event_type.as_str()), ("PostUpdated", "PostDeleted"));
     }
 }

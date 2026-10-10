@@ -65,6 +65,8 @@ social-graph = { workspace = true }
 moderation = { workspace = true }
 # Wire-contract test: supervision events as account serializes them (#670).
 account = { workspace = true }
+# Wire-contract test of the mention worker: post's own `post.v1.events` (#487).
+post = { workspace = true }
 # Edge principals (the token's claims) in the integration suite.
 auth-context = { workspace = true }
 

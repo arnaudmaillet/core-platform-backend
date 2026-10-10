@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-1** — user-facing "Following" feed; derived, cold-start transparent |
 > | **Deployable** | `crates/apps/timeline-server` (library crate: `crates/services/timeline`) |
 > | **Datastores** | Redis (materialized feeds + VIP registries) · ScyllaDB keyspace `timeline` (durable cold store) |
-> | **Async** | publishes nothing · consumes `post.published` / `post.deleted` / `social-graph.followed` / `.unfollowed` |
+> | **Async** | publishes nothing · consumes `post.v1.events` / `post.deleted` / `social-graph.followed` / `.unfollowed` |
 > | **Upstream callers** | `<TODO: BFF / mobile>`; calls `social-graph` (gRPC) |
 > | **Downstream deps** | Redis, ScyllaDB, Kafka, `social-graph` |
 > | **SLO** | hot-read sub-ms (Redis ZSET) · VIP write amplification O(1)/post |
@@ -39,7 +39,7 @@ the client/BFF's job); cold-start transparency (Scylla served immediately, Redis
 The gRPC surface is **query-only** — all writes arrive via Kafka workers.
 
 ```
-Kafka: post.published │ post.deleted │ social-graph.followed/unfollowed
+Kafka: post.v1.events │ post.deleted │ social-graph.followed/unfollowed
    ▼                    ▼                ▼
 PostPublishedWorker  PostDeletedWorker  Follow{Created,Deleted}Worker
  (Std/Prem → fan-out  (VIP → ZREM;       (Created → add to following set,
@@ -63,7 +63,7 @@ PostPublishedWorker  PostDeletedWorker  Follow{Created,Deleted}Worker
 | `Premium` (1) | `Write` | same as Standard | same |
 | `Vip` (2) | `Read` | ZADD `timeline:vip:{author}` only | merge at query time (`try_join_all`) |
 
-Author tier is denormalized into every `post.published` event — **no synchronous tier lookup on the
+Author tier is denormalized into every `PostPublished` event — **no synchronous tier lookup on the
 write path**. ZSET members encode `"{post_id}:{author_id}"` so the BFF identifies the author without a
 secondary lookup.
 
@@ -79,7 +79,7 @@ secondary lookup.
 |---|---|---|---|
 | `GetFollowingFeed` p99 — warm (Redis) | `< <TODO> ms` | 1h | gRPC histogram |
 | Cold-start fallback p99 (Scylla) | `< <TODO> ms` | 1h | Scylla read histogram |
-| Fan-out ingest lag (`post.published`) | `< <TODO> s` | live | consumer-group lag |
+| Fan-out ingest lag (`PostPublished`) | `< <TODO> s` | live | consumer-group lag |
 | VIP write amplification | O(1) per post | — | invariant (`fan_out_mode`) |
 
 **Error budget:** `<TODO>`. **On burn:** `<TODO>`.
@@ -229,7 +229,7 @@ pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point *
 
 | Topic | Consumer group | Worker / action | On poison/exhaustion |
 |---|---|---|---|
-| `post.published` | `timeline-post-published` | fan-out (Std/Prem) or VIP-register | DLQ `{topic}.dlq` |
+| `post.v1.events` (`PostPublished`) | `timeline-post-published` | fan-out (Std/Prem) or VIP-register | DLQ `{topic}.dlq` |
 | `post.deleted` | `timeline-post-deleted` | VIP ZREM or Scylla purge | DLQ `{topic}.dlq` |
 | `social-graph.followed` | `timeline-sg-followed` | backfill recent posts + update following set | DLQ `{topic}.dlq` |
 | `social-graph.unfollowed` | `timeline-sg-unfollowed` | prune posts + update following set | DLQ `{topic}.dlq` |
@@ -248,7 +248,7 @@ pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point *
 | Redis unavailable / cold | warm reads fail | **Soft** — cold-start serves Scylla (`is_cold=true`), warms async | check Redis; self-heals |
 | ScyllaDB unavailable | cold-start + ingest fail | **Hard** for cold path; ingest retries via `run_consumer` | check Scylla; drain DLQ |
 | `social-graph` unreachable at boot | following rebuild fails | lazily-connected channel — timeline still boots; `TML-3001` retryable | check social-graph health |
-| Tier cache miss | author tier unknown | conservatively routes to `Standard` (no blocking; corrected on next `post.published`) | none — self-correcting |
+| Tier cache miss | author tier unknown | conservatively routes to `Standard` (no blocking; corrected on next `PostPublished`) | none — self-correcting |
 | Fan-out ingest lag | feed stale | retries within budget | scale the relevant consumer |
 
 **Backpressure & limits.** `TIMELINE_FEED_CAP` (default 500) and `TIMELINE_VIP_REGISTRY_CAP` (200) bound

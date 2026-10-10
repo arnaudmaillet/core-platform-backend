@@ -4,7 +4,7 @@ use std::time::Duration;
 ///
 /// Governs both the ScyllaDB `USING TTL` value and the Redis card key `EX`.
 /// Default is 48 hours. Premium creators may receive extended retention
-/// (e.g. 7 days) signalled via the Kafka `post.published` event.
+/// (e.g. 7 days) signalled via the `PostPublished` event (`post.v1.events`).
 ///
 /// The maximum TTL accepted is 30 days (2 592 000 s) — beyond that the
 /// space-amplification tradeoff with TWCS breaks down.
@@ -41,7 +41,7 @@ impl RetentionTtl {
     /// What is left of this retention for a post published at
     /// `published_at_ms`, at `now_ms`: the retention runs from the publication,
     /// not from when the event is processed, so a late or repeated
-    /// `post.published` (a restore re-announces an old post) cannot put it back
+    /// `PostPublished` (a restore re-announces an old post) cannot put it back
     /// on the map for a fresh window. `None` once it has run out. A publication
     /// time ahead of `now` (clock skew) keeps the whole retention.
     pub fn remaining(&self, published_at_ms: i64, now_ms: i64) -> Option<Self> {

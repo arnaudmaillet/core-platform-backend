@@ -31,10 +31,8 @@ producer's `DOMAIN.md §8`.
 | `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `timeline`, `media`, `engagement`, `comment`, `chat` |
 | `wallet.v1.events` | `wallet` | `counter`, `notification`, `timeline`, `geo-discovery`, `engagement` |
 | `notification.v1.events` | `notification` | `realtime` |
-| `post.published` | `post` | `notification`, `geo-discovery` |
-| `post.updated` | `post` | — *(orphan — see below)* |
 | `post.deleted` | `post` | `timeline`, `geo-discovery` |
-| `post.v1.events` | `post` | `timeline`, `search`, `realtime` |
+| `post.v1.events` | `post` | `timeline`, `search`, `realtime`, `notification`, `geo-discovery` |
 | `comment.created` | `comment` | `notification`, `engagement` |
 | `comment.deleted` | `comment` | `engagement` |
 | `social-graph.followed` | `social-graph` | `notification`, `timeline` |
@@ -70,7 +68,6 @@ producer's `DOMAIN.md §8`.
 
 | Topic | Producer | Why |
 |---|---|---|
-| `post.updated` | `post` | No stream consumer — search/timeline/realtime act on post.v1.events PostUpdated; the legacy per-type topic is emitted for completeness. |
 | `social-graph.blocked` | `social-graph` | Block is enforced on the gRPC read path; no stream consumer yet. |
 | `chat.conversation.published` | `chat` | Chat delivery-plane headroom. |
 
@@ -117,9 +114,12 @@ producer's `DOMAIN.md §8`.
 
 | Event | Means | Emitted when | Consumers & why |
 |---|---|---|---|
-| `post.published` | new content went live | publish commits | `timeline` (fan-out), `search`/`geo-discovery` (index), `counter`, `realtime` (broadcast) |
-| `post.updated` | content was edited | update commits | `search`/`geo-discovery` (re-index) |
-| `post.deleted` | content was removed | delete commits | `timeline`/`search`/`geo-discovery` (teardown) |
+| `PostPublished` | new content went live (carries caption, cover thumbnail, optional location, author tier) | publish commits | `timeline` (fan-out), `search` (index), `geo-discovery` (map index), `notification` (mentions; post-author cache), `realtime` (broadcast) |
+| `PostUpdated` | content was edited | update commits | `search` (re-index) |
+| `PostDeleted` | content was removed | delete commits | `search` (teardown); `timeline`/`geo-discovery` read it from the legacy `post.deleted` topic |
+
+The legacy per-type `post.published` / `post.updated` topics are retired (#487); only `post.deleted`
+remains beside the unified stream.
 
 ## Comments — `comment.created` / `comment.deleted` (producer: `comment`)
 

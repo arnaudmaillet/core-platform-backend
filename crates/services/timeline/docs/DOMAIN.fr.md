@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: b2f2e11b276b879b57f25d03c6f44da4b614c675d52e4342f01424bf76a321ec
-  translated_at: 2026-06-28
+  source_sha256: 449ed9020b19528c45882a83250b93ea52d09a4024ab27852bbc948610cf4b4b
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -79,7 +79,7 @@ fusionnés via un Lua `ZREVRANGEBYSCORE`.
 
 | Donnée copiée | Possédée par | Maintenue fraîche via | Tolérance d'obsolescence |
 |---|---|---|---|
-| Contenu/refs de post | `post` | `post.published` / `post.deleted` | cohérence à terme |
+| Contenu/refs de post | `post` | `post.v1.events` / `post.deleted` | cohérence à terme |
 | Graphe de followers | `social-graph` | lectures gRPC de l'ensemble des followers | au moment de la lecture |
 | Tier d'auteur | `profile` (émet) | consommation du changement de tier | cohérence à terme |
 
@@ -102,7 +102,7 @@ fusionnés via un Lua `ZREVRANGEBYSCORE`.
 
 > En ligne jusqu'à ce qu'un C4 corrigé soit régénéré depuis `docs/domain/`.
 
-**Fan-out à la publication (push).** Consommer `post.published` → lire l'ensemble des followers de
+**Fan-out à la publication (push).** Consommer `PostPublished` (`post.v1.events`) → lire l'ensemble des followers de
 l'auteur depuis `social-graph` (gRPC) → pour les auteurs tier-normal, matérialiser l'entrée dans le
 ZSET de fil de chaque follower. Les auteurs haut-tier sont ignorés ici (tirés à la lecture).
 
@@ -118,7 +118,7 @@ au moment de la lecture des followees haut-tier de l'utilisateur, ordonnés par 
 
 | Contexte voisin | Direction | Pattern | Mécanisme | Ce qui casse s'il change |
 |---|---|---|---|---|
-| `post` | amont | ACL | `post.published` / `post.deleted` | la fraîcheur/le démantèlement du fil casse |
+| `post` | amont | ACL | `post.v1.events` / `post.deleted` | la fraîcheur/le démantèlement du fil casse |
 | `social-graph` | amont | Customer/Supplier (gRPC) | lectures de l'ensemble des followers | le fan-out casse |
 | `profile` | amont | ACL | `tier_changed` | la décision push/pull devient périmée |
 | clients | aval | OHS | RPC de lecture du fil | le fil d'accueil casse |

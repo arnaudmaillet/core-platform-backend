@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: dbeeb09b840e944cbf349e728bf3255309ccceba986265f4dbd4fda37d787e56
-  translated_at: 2026-06-29
+  source_sha256: 75e4499f22103c926b10aad30d9522e3a317b1bd16098a358d0a06710d87c7fb
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -107,8 +107,9 @@ published --(update)--> published' --(delete)--> deleted   |   (la porte de mod�
 > En ligne jusqu'à ce qu'un C4 corrigé soit régénéré depuis `docs/domain/`.
 
 **Publier / mettre à jour / supprimer.** Commande autorisée → écrire les deux tables Scylla →
-publier `post.published` / `post.updated` / `post.deleted` sur `post.v1.events`. En aval, `timeline`
-fan-out, `search`/`geo-discovery` indexent, `counter` compte, `realtime` broadcast.
+publier `PostPublished` / `PostUpdated` / `PostDeleted` sur `post.v1.events` (et `post.deleted`, le seul
+topic legacy restant, #487). En aval, `timeline` fan-out, `search`/`geo-discovery` indexent,
+`notification` notifie les mentions, `realtime` broadcast.
 
 **Dénormalisation.** Consommer `profile.v1.events` pour garder frais les champs d'instantané auteur ;
 consommer `moderation.v1.events` pour refléter l'enforcement.
@@ -133,8 +134,8 @@ consommer `moderation.v1.events` pour refléter l'enforcement.
 
 | Événement (`post.v1.events`) | Signifie | Émis quand | Qui réagit |
 |---|---|---|---|
-| `post.published` | un nouveau contenu est en ligne (porte `caption`, `thumbnail_url`, `lat`/`lng` optionnels pour `geo`) | la publication commite | `timeline` (fan-out), `search`/`geo` (index), `counter`, `realtime` |
-| `post.updated` | le contenu a été édité | l'édition commite | `search`/`geo` (ré-indexation) |
+| `PostPublished` | un nouveau contenu est en ligne (porte `caption`, `thumbnail_url`, `lat`/`lng` optionnels pour `geo`) | la publication commite | `timeline` (fan-out), `search`/`geo` (index), `notification` (mentions), `realtime` |
+| `PostUpdated` | le contenu a été édité | l'édition commite | `search` (ré-indexation) |
 | `post.deleted` | le contenu a été retiré | la suppression commite | `timeline`/`search`/`geo` (démantèlement) |
 
 ---
@@ -144,7 +145,7 @@ consommer `moderation.v1.events` pour refléter l'enforcement.
 | Décision | ADR | Statut |
 |---|---|---|
 | Layout ScyllaDB deux tables (par id + par auteur) avec `post.v1.events` comme langage publié | [`ADR-0013`](../../../../docs/adr/0013-post-two-table-scylla-with-published-language.md) | Accepté |
-| Enrichissement de payload post→geo : `post.published` porte caption + miniature + localisation optionnelle (fournie par le client au `CreatePost`) ; les posts sans localisation ne sont pas géo-indexés | _résolu — voir geo-discovery §6_ | Accepté |
+| Enrichissement de payload post→geo : `PostPublished` porte caption + miniature + localisation optionnelle (fournie par le client au `CreatePost`) ; les posts sans localisation ne sont pas géo-indexés | _résolu — voir geo-discovery §6_ | Accepté |
 
 ---
 

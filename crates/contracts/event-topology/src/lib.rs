@@ -34,7 +34,8 @@
 //!
 //! NB: this guards topic **names and wiring**, not payload **shapes**. A
 //! producer and consumer can agree on a topic and still disagree on the JSON
-//! body (see the post→geo/notification payload gap). Shape compatibility is a
+//! body (#487: notification read a required `author_id` that no post event
+//! carried, so every message failed to decode). Shape compatibility is a
 //! separate concern (per-stream wire-lock tests live with each service).
 
 /// Every Kafka topic that some fleet service emits, paired with its owning
@@ -48,9 +49,8 @@ pub const PRODUCERS: &[(&str, &str)] = &[
     ("wallet.v1.events", "wallet"),
     // notification — per-recipient realtime push stream (consumed by realtime)
     ("notification.v1.events", "notification"),
-    // post — legacy per-type topics + the unified v1 stream (mid-migration)
-    ("post.published", "post"),
-    ("post.updated", "post"),
+    // post — the unified v1 stream, and the legacy deletion topic
+    // (`post.published` / `post.updated` retired, #487)
     ("post.deleted", "post"),
     ("post.v1.events", "post"),
     // comment
@@ -107,15 +107,16 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     // a decided verification request → media purges its private documents
     // 30 days later (#777)
     ("profile.v1.events", "media"),
-    // post (legacy)
-    ("post.published", "notification"),
-    ("post.published", "geo-discovery"),
+    // post (legacy deletion topic)
     ("post.deleted", "timeline"),
     ("post.deleted", "geo-discovery"),
-    // post (unified v1)
+    // post (unified v1): notification's mentions and post-author cache,
+    // geo-discovery's map index (#487)
     ("post.v1.events", "timeline"),
     ("post.v1.events", "search"),
     ("post.v1.events", "realtime"),
+    ("post.v1.events", "notification"),
+    ("post.v1.events", "geo-discovery"),
     // notification → realtime device push
     ("notification.v1.events", "realtime"),
     // comment
@@ -227,11 +228,6 @@ pub const DEFERRED: &[(&str, &str)] = &[
 /// Topics a producer emits that have **no** in-repo consumer: intentional
 /// headroom or read-path-enforced concerns. Each entry needs a reason.
 pub const ORPHAN_PRODUCERS: &[(&str, &str)] = &[
-    (
-        "post.updated",
-        "No stream consumer — search/timeline/realtime act on post.v1.events \
-         PostUpdated; the legacy per-type topic is emitted for completeness.",
-    ),
     (
         "social-graph.blocked",
         "Block is enforced on the gRPC read path; no stream consumer yet.",

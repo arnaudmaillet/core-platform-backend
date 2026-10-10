@@ -3,7 +3,7 @@ use crate::error::PostError;
 /// Client-supplied post location (WGS-84 decimal degrees).
 ///
 /// Optional on a post: text posts carry no location. When present, it is
-/// denormalized onto `post.published` so geo-discovery can spatially index the
+/// denormalized onto `PostPublished` so geo-discovery can spatially index the
 /// post. Posts without a location are simply not geo-indexed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GeoPoint {

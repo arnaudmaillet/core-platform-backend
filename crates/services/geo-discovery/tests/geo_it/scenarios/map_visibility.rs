@@ -77,7 +77,7 @@ async fn a_visibility_event_before_the_index_event_still_wins() {
     let h = TestHarness::start().await;
     let near = || h.pins_near_as(LAT, LNG, Viewer::Internal);
 
-    // Deleted before post.published reached the index consumer.
+    // Deleted before PostPublished reached the index consumer.
     let deleted = Uuid::now_v7();
     h.change_visibility(deleted, VisibilityChange::Deleted).await;
     h.index_post_with_id(deleted, LAT, LNG).await;

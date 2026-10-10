@@ -56,7 +56,7 @@ where
     /// missing pin) and its cached card; a restored one gets its pin and its
     /// spatial-index entries back. When the card does not exist yet (the index
     /// consumer lags behind this one), a **tombstone** keeps the decision so
-    /// the later post.published cannot surface the post. Idempotent: a
+    /// the later PostPublished cannot surface the post. Idempotent: a
     /// redelivery re-applies the same writes.
     async fn handle(&self, envelope: Envelope<ApplyMapVisibilityCommand>) -> Result<(), GeoDiscoveryError> {
         let cmd     = &envelope.payload;
@@ -70,7 +70,7 @@ where
         };
 
         let Some(card) = card else {
-            // No card (yet): record the decision as a tombstone. post.published
+            // No card (yet): record the decision as a tombstone. PostPublished
             // will find it and keep the post off Redis.
             let ttl = RetentionTtl::from_secs(TOMBSTONE_TTL_SECS);
             return self.tile_repository.set_visibility(&post_id, next, ttl).await;

@@ -71,7 +71,7 @@ cardinality), with Lua Top-K / XX / prune scripts and TTL'd retention so the ind
 
 | Copied data | Owned by | Kept fresh via | Staleness tolerance |
 |---|---|---|---|
-| Post content/location | `post` | `post.published` / `post.deleted` | eventually consistent |
+| Post content/location | `post` | `post.v1.events` / `post.deleted` | eventually consistent |
 | Virality | `engagement` | `engagement.score_updated` | eventually consistent |
 | Author tier | `profile` | `profile.tier_changed` | eventually consistent |
 
@@ -93,7 +93,7 @@ cardinality), with Lua Top-K / XX / prune scripts and TTL'd retention so the ind
 
 > Inline until a corrected C4 is regenerated from `docs/domain/`.
 
-**Index maintenance.** Consume `post.published` (add card), `post.deleted` (remove),
+**Index maintenance.** Consume `PostPublished` (add card), `post.deleted` (remove),
 `engagement.score_updated` (re-rank), `profile.tier_changed` (re-weight) → update the dual-layer
 Redis ZSET via Lua Top-K/XX/prune; TTL handles retention.
 
@@ -105,7 +105,7 @@ returns fewer/staler pins (fail-open).
 (caption, author metadata, tier) from Redis with a ScyllaDB fallback — the cold read the Radar path
 deliberately avoids.
 
-> **Payload contract (resolved).** `post.published` now carries `lat`/`lng`, `caption`, and
+> **Payload contract (resolved).** `PostPublished` now carries `lat`/`lng`, `caption`, and
 > `thumbnail_url` (client-supplied location at `CreatePost`); posts without a location are simply not
 > geo-indexed. `author_handle` / `author_avatar_url` are reserved on the card and backfilled from
 > `profile.v1.events` (a separate join).
@@ -116,7 +116,7 @@ deliberately avoids.
 
 | Neighbour context | Direction | Pattern | Mechanism | What breaks if they change |
 |---|---|---|---|---|
-| `post` | upstream | ACL | `post.published` / `post.deleted` | cards stop appearing/clearing |
+| `post` | upstream | ACL | `post.v1.events` / `post.deleted` | cards stop appearing/clearing |
 | `engagement` | upstream | ACL | `engagement.score_updated` | ranking goes stale |
 | `profile` | upstream | ACL | `profile.tier_changed` | tier weighting breaks |
 | clients | downstream | OHS | viewport gRPC query | map discovery breaks |
@@ -138,7 +138,7 @@ deliberately avoids.
 |---|---|---|
 | H3 grid_disk viewport + dual-layer Redis (ZSET+cardinality) Top-K spatial index | [`ADR-0010`](../../../../docs/adr/0010-geo-discovery-h3-grid-dual-layer-redis-topk.md) | Accepted |
 | Radar/Focus read split: lean `RadarPin` (Redis-only pan) vs hydrated `MapPostCard` (`GetGeoTimeline` on tap) | _inline — this change_ | Accepted |
-| Post→geo payload enrichment: `post.published` carries lat/lng + caption + thumbnail (location client-supplied at `CreatePost`) | _resolved — this change_ | Accepted |
+| Post→geo payload enrichment: `PostPublished` carries lat/lng + caption + thumbnail (location client-supplied at `CreatePost`) | _resolved — this change_ | Accepted |
 
 ---
 

@@ -11,7 +11,7 @@ use crate::error::TimelineError;
 ///   2. Follow-backfill source: inject a followee's recent posts into a new
 ///      follower's feed on `follow.created` for Standard/Premium authors.
 ///
-/// Written for ALL authors on `post.published` (one row per post).
+/// Written for ALL authors on `PostPublished` (one row per post).
 #[async_trait]
 pub trait AuthorPostRepository: Send + Sync + 'static {
     /// Inserts or updates an author's post entry. Last-write-wins. Idempotent.

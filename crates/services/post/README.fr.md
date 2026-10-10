@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: b54d7336accdbe1e6dd76bb5190dcfe65d42ebe7f11376e171d30d4c556d7be1
+  source_sha256: 017d96c9d464726875a44b1d7bf09201eae69bbe8090687d8bcde26c688b471f
   translated_at: 2026-10-10
   status: complete
 ---
@@ -20,7 +20,7 @@ i18n:
 > | **Palier (Tier)** | **TIER-0** — le chemin de publication du contenu ; feeds et découverte dérivent de ses événements |
 > | **Binaire déployable** | `crates/apps/post-server` (crate bibliothèque : `crates/services/post`) |
 > | **Bases de données** | ScyllaDB keyspace `post` (2 tables) |
-> | **Asynchrone** | publie `post.v1.events` (unifié) + `post.published` / `post.updated` / `post.deleted` (legacy) · consomme `profile.v1.events` (dénormalisation du palier auteur) + `moderation.v1.events` (restriction de lecture) |
+> | **Asynchrone** | publie `post.v1.events` (unifié) + `post.deleted` (legacy ; `post.published` / `post.updated` retirés, #487) · consomme `profile.v1.events` (dénormalisation du palier auteur) + `moderation.v1.events` (restriction de lecture) |
 > | **Appelants amont** | `<TODO: passerelle>` |
 > | **Dépendances aval** | ScyllaDB, Kafka |
 > | **SLO** | `<TODO>` dispo · `GetPost` p99 `<TODO>` · publication p99 `<TODO>` |
@@ -56,7 +56,7 @@ Hexagonal / DDD, bus CQRS, store durable ScyllaDB, événements Kafka.
 gRPC PostService ─► CQRS bus ─► Create/Publish/Update/Delete handlers ─► ScyllaPostRepository (dual-write)
                             └─► Get/ListByProfile handlers
                                             │
-                  KafkaEventPublisher ◄─────┘  ─► post.published / post.updated / post.deleted
+                  KafkaEventPublisher ◄─────┘  ─► post.v1.events / post.deleted
 ```
 
 **Conception du stockage — schéma wide-column à deux tables :**
@@ -99,9 +99,9 @@ validé (une colonne `text`) pour éviter la complexité de migration des UDT Sc
 
 | Caller | Uses | Impact visible utilisateur si `post` est indisponible |
 |---|---|---|
-| `timeline` | `post.published` / `post.deleted` | aucun nouveau post n'entre dans les fils d'accueil |
-| `geo-discovery` | `post.published` | les nouveaux posts n'apparaissent pas sur la carte |
-| `notification` | `post.published` (mentions) | les notifications de mention s'arrêtent |
+| `timeline` | `post.v1.events` / `post.deleted` | aucun nouveau post n'entre dans les fils d'accueil |
+| `geo-discovery` | `post.v1.events` | les nouveaux posts n'apparaissent pas sur la carte |
+| `notification` | `post.v1.events` (mentions) | les notifications de mention s'arrêtent |
 
 > **Chemin critique ?** **Oui** pour la publication ; le chemin d'écriture est face utilisateur et
 > l'événement est le déclencheur amont de toute la flotte côté lecture.
@@ -115,10 +115,10 @@ validé (une colonne `text`) pour éviter la complexité de migration des UDT Sc
 ```protobuf
 service PostService {
   rpc CreatePost (CreatePostRequest) returns (CreatePostResponse);          // draft; PostId pre-generated at boundary
-  rpc PublishPost (PublishPostRequest) returns (CommandResponse);           // Draft→Published; emits post.published
-  rpc UpdatePost (UpdatePostRequest) returns (CommandResponse);             // emits post.updated
+  rpc PublishPost (PublishPostRequest) returns (CommandResponse);           // Draft→Published; emits PostPublished
+  rpc UpdatePost (UpdatePostRequest) returns (CommandResponse);             // emits PostUpdated
   rpc DeletePost (DeletePostRequest) returns (CommandResponse);             // soft-delete; emits post.deleted
-  rpc RestorePost (RestorePostRequest) returns (CommandResponse);           // #663 within 30 days: published again (re-emits post.published at its original time) or a draft
+  rpc RestorePost (RestorePostRequest) returns (CommandResponse);           // #663 within 30 days: published again (re-emits PostPublished at its original time) or a draft
   rpc ListRecentlyDeleted (ListRecentlyDeletedRequest) returns (ListRecentlyDeletedResponse); // #663 the author's restorable posts, newest deletion first
   rpc GetPost (GetPostRequest) returns (PostView);                          // point lookup; viewer-aware
   rpc ListPostsByProfile (ListPostsByProfileRequest) returns (ListPostsByProfileResponse); // cursor-paginated; viewer-aware
@@ -157,7 +157,7 @@ légende sans mention n'interroge rien.
 **Récemment supprimés (#663).** Une suppression est une pierre tombale : le post est indexé dans
 `post.deleted_by_profile` (lignes expirées au bout de 30 jours) et `ListRecentlyDeleted` montre à l'auteur ses
 posts restaurables. `RestorePost` en ramène un dans les 30 jours tel qu'il était — publié (réannoncé sur
-`post.published` à sa date de publication d'origine, pour que fils et recherche le reprennent ; un post
+comme `PostPublished` à sa date de publication d'origine, pour que fils et recherche le reprennent ; un post
 retiré ou limité par la modération n'est restauré que pour son auteur, jamais réannoncé, pour qu'un retrait
 survive à supprimer → restaurer) ou brouillon — et le retire de la liste. geo-discovery écarte définitivement
 un post supprimé : l'épingle d'un post restauré ne revient pas sur la carte. Les deux sont `authenticated` sur l'edge, liés à `profile_id`.
@@ -249,12 +249,10 @@ pendant que le premier appel est encore en attente reçoit `PST-1010` (`ABORTED`
 
 | Topic | Déclencheur | Clé | Consommateurs |
 |---|---|---|---|
-| `post.v1.events` | chaque événement de cycle de vie (`PostPublished` / `PostUpdated` / `PostDeleted`) | `post_id` | `search` (indexation des posts) |
-| `post.published` | `PublishPost` success — porte le `author_tier` dénormalisé, plus `caption` / `thumbnail_url` / `lat`/`lng` optionnels pour la projection geo | `post_id` | `timeline`, `geo-discovery`, `notification` |
-| `post.updated` | `UpdatePost` success | `post_id` | `<TODO>` |
+| `post.v1.events` | chaque événement de cycle de vie (`PostPublished` / `PostUpdated` / `PostDeleted`) ; `PostPublished` porte le `author_tier` dénormalisé, plus `caption` / `thumbnail_url` / `lat`/`lng` optionnels pour la projection geo | `post_id` | `search`, `timeline`, `realtime`, `geo-discovery`, `notification` |
 | `post.deleted` | `DeletePost` success | `post_id` | `timeline`, `geo-discovery` |
 
-> **Deux styles d'émission, par conception.** `post.v1.events` est le flux unifié et versionné (la convention de la flotte, comme `moderation.v1.events` / `profile.v1.events`) : le `DomainEvent` entier tagué en interne, clé `post_id`. Les topics legacy par-type (`post.published` / `.updated` / `.deleted`, charges utiles brutes) sont conservés pour leurs consommateurs existants (`timeline` / `geo-discovery` / `notification`) ; chaque événement est publié sur **les deux**. Migrer ces consommateurs vers `post.v1.events` et retirer les topics legacy est un nettoyage futur.
+> **Un flux, un topic legacy.** `post.v1.events` est le flux unifié et versionné (la convention de la flotte, comme `moderation.v1.events` / `profile.v1.events`) : le `DomainEvent` entier tagué en interne, clé `post_id`. Les anciens topics par type `post.published` / `post.updated` sont retirés (#487 : geo-discovery et notification sont passés sur `post.v1.events`) ; `post.deleted` (charge utile brute) reste pour les consommateurs de suppression de timeline et de geo-discovery.
 
 **Consomme :**
 
@@ -382,6 +380,6 @@ ré-émettre l'écriture (idempotente sur `post_id`) ; si cela persiste, réconc
 `post.posts`.
 
 **3. Un nouveau post n'atteint jamais les timelines/la carte.**
-Cause racine : le post a été committé mais l'événement `post.published` n'a pas pu être publié, ou un
+Cause racine : le post a été committé mais son événement `PostPublished` n'a pas pu être publié, ou un
 consommateur aval est en retard. Mitigation : vérifier la santé de Kafka et les consumer-groups aval ;
 ré-émettre l'événement s'il a été abandonné après commit.

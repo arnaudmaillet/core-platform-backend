@@ -96,8 +96,9 @@ published --(update)--> published' --(delete)--> deleted   |   (moderation gate 
 > Inline until a corrected C4 is regenerated from `docs/domain/`.
 
 **Publish / update / delete.** Authorized command → write both Scylla tables → publish
-`post.published` / `post.updated` / `post.deleted` on `post.v1.events`. Downstream `timeline`
-fans out, `search`/`geo-discovery` index, `counter` counts, `realtime` broadcasts.
+`PostPublished` / `PostUpdated` / `PostDeleted` on `post.v1.events` (and `post.deleted`, the one legacy
+topic left, #487). Downstream `timeline` fans out, `search`/`geo-discovery` index, `notification`
+notifies mentions, `realtime` broadcasts.
 
 **Denormalization.** Consume `profile.v1.events` to keep author snapshot fields fresh; consume
 `moderation.v1.events` to reflect enforcement.
@@ -122,8 +123,8 @@ fans out, `search`/`geo-discovery` index, `counter` counts, `realtime` broadcast
 
 | Event (`post.v1.events`) | Means | Emitted when | Who reacts |
 |---|---|---|---|
-| `post.published` | new content went live (carries `caption`, `thumbnail_url`, optional `lat`/`lng` for `geo`) | publish commits | `timeline` (fan-out), `search`/`geo` (index), `counter`, `realtime` |
-| `post.updated` | content was edited | update commits | `search`/`geo` (re-index) |
+| `PostPublished` | new content went live (carries `caption`, `thumbnail_url`, optional `lat`/`lng` for `geo`) | publish commits | `timeline` (fan-out), `search`/`geo` (index), `notification` (mentions), `realtime` |
+| `PostUpdated` | content was edited | update commits | `search` (re-index) |
 | `post.deleted` | content was removed | delete commits | `timeline`/`search`/`geo` (teardown) |
 
 ---
@@ -133,7 +134,7 @@ fans out, `search`/`geo-discovery` index, `counter` counts, `realtime` broadcast
 | Decision | ADR | Status |
 |---|---|---|
 | Two-table ScyllaDB layout (by id + by author) with `post.v1.events` as published language | [`ADR-0013`](../../../../docs/adr/0013-post-two-table-scylla-with-published-language.md) | Accepted |
-| Post→geo payload enrichment: `post.published` carries caption + thumbnail + optional location (client-supplied at `CreatePost`); locationless posts are not geo-indexed | _resolved — see geo-discovery §6_ | Accepted |
+| Post→geo payload enrichment: `PostPublished` carries caption + thumbnail + optional location (client-supplied at `CreatePost`); locationless posts are not geo-indexed | _resolved — see geo-discovery §6_ | Accepted |
 
 ---
 

@@ -67,7 +67,7 @@ authors (push), pull for high-tier authors at read time, merged via a Lua `ZREVR
 
 | Copied data | Owned by | Kept fresh via | Staleness tolerance |
 |---|---|---|---|
-| Post content/refs | `post` | `post.published` / `post.deleted` | eventually consistent |
+| Post content/refs | `post` | `post.v1.events` / `post.deleted` | eventually consistent |
 | Follower graph | `social-graph` | gRPC follower-set reads | read-time |
 | Author tier | `profile` (emits) | tier-change consumption | eventually consistent |
 
@@ -90,7 +90,7 @@ authors (push), pull for high-tier authors at read time, merged via a Lua `ZREVR
 
 > Inline until a corrected C4 is regenerated from `docs/domain/`.
 
-**Fan-out on publish (push).** Consume `post.published` → read the author's follower set from
+**Fan-out on publish (push).** Consume `PostPublished` (`post.v1.events`) → read the author's follower set from
 `social-graph` (gRPC) → for normal-tier authors, materialize the entry into each follower's feed
 ZSET. High-tier authors are skipped here (pulled at read).
 
@@ -106,7 +106,7 @@ the user's high-tier followees, ordered by score via Lua `ZREVRANGEBYSCORE`, pag
 
 | Neighbour context | Direction | Pattern | Mechanism | What breaks if they change |
 |---|---|---|---|---|
-| `post` | upstream | ACL | `post.published` / `post.deleted` | feed freshness/teardown breaks |
+| `post` | upstream | ACL | `post.v1.events` / `post.deleted` | feed freshness/teardown breaks |
 | `social-graph` | upstream | Customer/Supplier (gRPC) | follower-set reads | fan-out breaks |
 | `profile` | upstream | ACL | `tier_changed` | push/pull decision goes stale |
 | clients | downstream | OHS | feed-read RPC | the home feed breaks |

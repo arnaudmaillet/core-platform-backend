@@ -13,7 +13,7 @@ use crate::error::GeoDiscoveryError;
 
 /// Indexes a newly published post into the spatial index and card store.
 ///
-/// Triggered by the `PostIndexerWorker` on every `post.published` Kafka event.
+/// Triggered by the `PostIndexerWorker` on every `PostPublished` event of `post.v1.events`.
 ///
 /// Write order (chosen for graceful degradation):
 ///   1. ScyllaDB — durable source of truth. Always written first.
@@ -25,7 +25,7 @@ pub struct IndexPostCommand {
     pub author_handle:     String,
     pub author_avatar_url: String,
     pub thumbnail_url:     String,
-    /// Post caption, denormalized from `post.published`. Stored on the card for
+    /// Post caption, denormalized from `PostPublished`. Stored on the card for
     /// the Focus-mode read path. Empty when the post has no caption.
     pub caption:           String,
     pub lat:               f64,
@@ -35,7 +35,7 @@ pub struct IndexPostCommand {
     /// Seconds from `published_at_ms`. None → service default (172 800 s).
     pub retention_secs:    Option<u64>,
     /// Author tier at publish time. 0=Standard, 1=Premium, 2=VIP.
-    /// Sourced from the post.published Kafka event (denormalized by services/post).
+    /// Sourced from the `PostPublished` event (denormalized by services/post).
     pub author_tier:       u8,
 }
 
@@ -93,7 +93,7 @@ where
         // The retention runs from the publication: a late or repeated event (a
         // restore re-announces an old post) does not resurface it.
         let Some(ttl) = retention.remaining(cmd.published_at_ms, chrono::Utc::now().timestamp_millis()) else {
-            tracing::debug!(post_id = %post_id, "post.published past its map retention — not indexed");
+            tracing::debug!(post_id = %post_id, "PostPublished past its map retention — not indexed");
             return Ok(());
         };
 
@@ -125,7 +125,7 @@ where
         {
             self.tile_repository.upsert_card(&card, ttl).await?;
             self.tile_repository.set_visibility(&post_id, visibility, ttl).await?;
-            tracing::debug!(post_id = %post_id, "post.published for a suppressed map post — card stored, map untouched");
+            tracing::debug!(post_id = %post_id, "PostPublished for a suppressed map post — card stored, map untouched");
             return Ok(());
         }
 

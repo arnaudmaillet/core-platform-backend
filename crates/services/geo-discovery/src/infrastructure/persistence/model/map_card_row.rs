@@ -9,7 +9,7 @@ use uuid::Uuid;
 /// impl casts it to u8 before storing in `MapPostCard`.
 /// Card columns are `Option` because a row can be a **tombstone**: only the
 /// visibility cells, written when a delete / takedown arrives before the
-/// post.published that indexes the card (two consumers, no ordering).
+/// PostPublished that indexes the card (two consumers, no ordering).
 #[derive(Debug, DeserializeRow)]
 pub struct MapCardRow {
     pub post_id:           Uuid,

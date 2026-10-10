@@ -39,7 +39,7 @@ pub struct GeoDiscoveryConfig {
     /// These are baked into `H3Resolution` and not overridable at runtime
     /// to keep the hot-path Lua script argument list stable.
 
-    /// Kafka consumer group ID for `post.published`.
+    /// Kafka consumer group ID for the `post.v1.events` map indexer.
     pub post_indexer_group_id: String,
 
     /// Kafka consumer group ID for `counter.v1.popularity`.

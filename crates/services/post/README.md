@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-0** — the content publish path; feeds and discovery derive from its events |
 > | **Deployable** | `crates/apps/post-server` (library crate: `crates/services/post`) |
 > | **Datastores** | ScyllaDB keyspace `post` (2 tables) |
-> | **Async** | publishes `post.v1.events` (unified) + `post.published` / `post.updated` / `post.deleted` (legacy) · consumes `profile.v1.events` (author-tier denormalization) + `moderation.v1.events` (read restriction) |
+> | **Async** | publishes `post.v1.events` (unified) + `post.deleted` (legacy; `post.published` / `post.updated` retired, #487) · consumes `profile.v1.events` (author-tier denormalization) + `moderation.v1.events` (read restriction) |
 > | **Upstream callers** | `<TODO: gateway>` |
 > | **Downstream deps** | ScyllaDB, Kafka |
 > | **SLO** | `<TODO>` avail · `GetPost` p99 `<TODO>` · publish p99 `<TODO>` |
@@ -44,7 +44,7 @@ Hexagonal / DDD, CQRS buses, ScyllaDB durable store, Kafka events.
 gRPC PostService ─► CQRS bus ─► Create/Publish/Update/Delete handlers ─► ScyllaPostRepository (dual-write)
                             └─► Get/ListByProfile handlers
                                             │
-                  KafkaEventPublisher ◄─────┘  ─► post.published / post.updated / post.deleted
+                  KafkaEventPublisher ◄─────┘  ─► post.v1.events / post.deleted
 ```
 
 **Storage design — two-table wide-column schema:**
@@ -87,9 +87,9 @@ Every write **dual-writes both tables sequentially**. Attachments are stored as 
 
 | Caller | Uses | User-visible impact if `post` is down |
 |---|---|---|
-| `timeline` | `post.published` / `post.deleted` | no new posts enter home feeds |
-| `geo-discovery` | `post.published` | new posts don't appear on the map |
-| `notification` | `post.published` (mentions) | mention notifications stop |
+| `timeline` | `post.v1.events` / `post.deleted` | no new posts enter home feeds |
+| `geo-discovery` | `post.v1.events` | new posts don't appear on the map |
+| `notification` | `post.v1.events` (mentions) | mention notifications stop |
 
 > **Critical path?** **Yes** for publishing; the write path is user-facing and the event is the
 > upstream trigger for the entire read-side fleet.
@@ -103,10 +103,10 @@ Every write **dual-writes both tables sequentially**. Attachments are stored as 
 ```protobuf
 service PostService {
   rpc CreatePost (CreatePostRequest) returns (CreatePostResponse);          // draft; PostId pre-generated at boundary
-  rpc PublishPost (PublishPostRequest) returns (CommandResponse);           // Draft→Published; emits post.published
-  rpc UpdatePost (UpdatePostRequest) returns (CommandResponse);             // emits post.updated
+  rpc PublishPost (PublishPostRequest) returns (CommandResponse);           // Draft→Published; emits PostPublished
+  rpc UpdatePost (UpdatePostRequest) returns (CommandResponse);             // emits PostUpdated
   rpc DeletePost (DeletePostRequest) returns (CommandResponse);             // soft-delete; emits post.deleted
-  rpc RestorePost (RestorePostRequest) returns (CommandResponse);           // #663 within 30 days: published again (re-emits post.published at its original time) or a draft
+  rpc RestorePost (RestorePostRequest) returns (CommandResponse);           // #663 within 30 days: published again (re-emits PostPublished at its original time) or a draft
   rpc ListRecentlyDeleted (ListRecentlyDeletedRequest) returns (ListRecentlyDeletedResponse); // #663 the author's restorable posts, newest deletion first
   rpc GetPost (GetPostRequest) returns (PostView);                          // point lookup; viewer-aware
   rpc ListPostsByProfile (ListPostsByProfileRequest) returns (ListPostsByProfileResponse); // cursor-paginated; viewer-aware
@@ -141,7 +141,7 @@ outage fails the write closed (retryable); a caption without mentions asks nothi
 
 **Recently deleted (#663).** A delete is a tombstone: the post is indexed in `post.deleted_by_profile`
 (rows expire after 30 days) and `ListRecentlyDeleted` shows the author their restorable posts.
-`RestorePost` brings one back within 30 days as it was — published (re-announced on `post.published` at its
+`RestorePost` brings one back within 30 days as it was — published (re-announced as `PostPublished` at its
 original publication time, so feeds and search take it back; a post moderation removed or limited is
 restored to its author only, never re-announced, so a takedown survives delete → restore) or a draft — and
 removes it from the list. geo-discovery suppresses a deleted post for good: a restored post's map pin does
@@ -229,12 +229,10 @@ pending gets `PST-1010` (`ABORTED`): retry it.
 
 | Topic | Trigger | Key | Consumers |
 |---|---|---|---|
-| `post.v1.events` | every lifecycle event (`PostPublished` / `PostUpdated` / `PostDeleted`) | `post_id` | `search` (post indexing) |
-| `post.published` | `PublishPost` success — carries denormalized `author_tier`, plus `caption` / `thumbnail_url` / optional `lat`/`lng` for the geo projection | `post_id` | `timeline`, `geo-discovery`, `notification` |
-| `post.updated` | `UpdatePost` success | `post_id` | `<TODO>` |
+| `post.v1.events` | every lifecycle event (`PostPublished` / `PostUpdated` / `PostDeleted`); `PostPublished` carries the denormalized `author_tier`, plus `caption` / `thumbnail_url` / optional `lat`/`lng` for the geo projection | `post_id` | `search`, `timeline`, `realtime`, `geo-discovery`, `notification` |
 | `post.deleted` | `DeletePost` success | `post_id` | `timeline`, `geo-discovery` |
 
-> **Two emission styles, by design.** `post.v1.events` is the unified, versioned stream (the fleet convention, like `moderation.v1.events` / `profile.v1.events`): the whole internally-tagged `DomainEvent`, keyed by `post_id`. The legacy per-type topics (`post.published` / `.updated` / `.deleted`, bare payloads) are retained for their existing consumers (`timeline` / `geo-discovery` / `notification`); every event is published to **both**. Migrating those consumers onto `post.v1.events` and retiring the legacy topics is a future cleanup.
+> **One stream, one legacy topic.** `post.v1.events` is the unified, versioned stream (the fleet convention, like `moderation.v1.events` / `profile.v1.events`): the whole internally-tagged `DomainEvent`, keyed by `post_id`. The legacy per-type `post.published` / `post.updated` topics are retired (#487: geo-discovery and notification moved onto `post.v1.events`); `post.deleted` (bare payload) remains for timeline's and geo-discovery's deletion consumers.
 
 **Consumes:**
 
@@ -359,6 +357,6 @@ Root cause: the dual-write partially failed (`posts` ok, `posts_by_profile` not)
 the write (idempotent on `post_id`); if it persists, reconcile the index from `post.posts`.
 
 **3. A new post never reaches timelines/map.**
-Root cause: the post committed but the `post.published` event failed to publish, or a downstream
+Root cause: the post committed but its `PostPublished` event failed to publish, or a downstream
 consumer is lagging. Mitigation: check Kafka health and the downstream consumer groups; re-emit the
 event if it was dropped post-commit.
