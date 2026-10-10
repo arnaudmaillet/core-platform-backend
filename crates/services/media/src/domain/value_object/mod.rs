@@ -14,6 +14,7 @@ pub mod media_kind;
 pub mod mime_type;
 pub mod rendition_kind;
 pub mod storage_key;
+pub mod upload_key;
 pub mod upload_ticket;
 
 pub use asset_state::AssetState;
@@ -27,4 +28,5 @@ pub use media_kind::MediaKind;
 pub use mime_type::MimeType;
 pub use rendition_kind::RenditionKind;
 pub use storage_key::StorageKey;
+pub use upload_key::UploadKey;
 pub use upload_ticket::UploadTicket;

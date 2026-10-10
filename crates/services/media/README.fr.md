@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 40f312d5e8da3969b1e8971c09ee5190002aa93bb4e30060bfda7530faf5ed0a
-  translated_at: 2026-10-08
+  source_sha256: 27b7c3414d9ebb206efba14ee2e0fb372a3a3c3a45c2e4edd4537723e5b4869c
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -198,6 +198,13 @@ quarantaine n'est jamais remis.
 `FAILED_PRECONDITION` (`MED-1005`) ; résolution d'un asset en quarantaine →
 `PERMISSION_DENIED` (`MED-7001`, 451) ; suppression sous blocage légal →
 `PERMISSION_DENIED` (`MED-7003`).
+
+**Clés d'idempotence d'upload (#876).** `IssueUploadTicketRequest.idempotency_key` (1 à 128 caractères
+ASCII imprimables ; `MED-1008` sinon) est enregistrée sur l'asset qu'elle réserve (`assets.upload_key`,
+unique par propriétaire parmi les assets vivants). Un ticket rejoué sous la même clé ne réserve rien et
+renvoie cet asset : une nouvelle URL d'upload tant qu'il est `PENDING`, aucun upload (`deduplicated`) une
+fois passé `PENDING`. La même clé pour un autre type de média, un autre type déclaré ou un autre contenu
+échoue en `FAILED_PRECONDITION` (`MED-1007`). Supprimer ou abandonner l'asset libère sa clé.
 
 **Documents privés (#777).** `MEDIA_KIND_PRIVATE_DOCUMENT` contient les pièces d'une demande de
 vérification (`RequestVerification` de profile) : JPEG, PNG, HEIC ou PDF, ≤ 10 Mio, possédés par le compte

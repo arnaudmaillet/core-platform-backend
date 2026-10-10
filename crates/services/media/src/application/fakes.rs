@@ -29,7 +29,7 @@ use crate::domain::aggregate::{Asset, AssetSnapshot, Rendition};
 use crate::domain::event::DomainEvent;
 use crate::domain::value_object::{
     AssetId, AssetState, Blurhash, ContentHash, DeliveryVisibility, Dimensions, MediaKind, MimeType,
-    OwnerId, RenditionKind, StorageKey,
+    OwnerId, RenditionKind, StorageKey, UploadKey,
 };
 use crate::error::MediaError;
 
@@ -64,11 +64,13 @@ fn mime_for_kind(kind: MediaKind) -> MimeType {
 
 pub struct InMemoryAssetRepository {
     assets: Mutex<HashMap<AssetId, Asset>>,
+    /// Upload keys (#876): `(owner, key)` → the asset reserved under it.
+    keys:   Mutex<HashMap<(OwnerId, String), AssetId>>,
 }
 
 impl InMemoryAssetRepository {
     pub fn new() -> Self {
-        Self { assets: Mutex::new(HashMap::new()) }
+        Self { assets: Mutex::new(HashMap::new()), keys: Mutex::new(HashMap::new()) }
     }
 }
 
@@ -79,6 +81,28 @@ impl AssetRepository for InMemoryAssetRepository {
         let _ = stored.drain_events(); // events do not survive persistence
         self.assets.lock().unwrap().insert(stored.id(), stored);
         Ok(())
+    }
+
+    async fn insert_keyed(&self, asset: &Asset, key: &UploadKey) -> Result<Option<AssetId>, MediaError> {
+        {
+            let mut keys = self.keys.lock().unwrap();
+            let slot = (asset.owner_id(), key.as_str().to_owned());
+            // A deleted asset frees its key, as the unique index's predicate does.
+            let live = keys.get(&slot).copied().filter(|id| {
+                self.assets.lock().unwrap().get(id).is_some_and(|a| a.state() != AssetState::Deleted)
+            });
+            if live.is_some() {
+                return Ok(live);
+            }
+            keys.insert(slot, asset.id());
+        }
+        self.save(asset).await?;
+        Ok(None)
+    }
+
+    async fn find_by_upload_key(&self, owner: &OwnerId, key: &UploadKey) -> Result<Option<AssetId>, MediaError> {
+        let held = self.keys.lock().unwrap().get(&(*owner, key.as_str().to_owned())).copied();
+        Ok(held.filter(|id| self.assets.lock().unwrap().get(id).is_some_and(|a| a.state() != AssetState::Deleted)))
     }
 
     async fn find_by_id(&self, id: &AssetId) -> Result<Option<Asset>, MediaError> {

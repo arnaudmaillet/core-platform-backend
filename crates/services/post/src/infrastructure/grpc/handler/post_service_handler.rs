@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
@@ -11,7 +13,7 @@ use crate::application::command::{
     restore_post::RestorePostCommand,
     update_post::UpdatePostCommand,
 };
-use crate::application::command::create_post::AttachmentInput;
+use crate::application::command::create_post::{AttachmentInput, CreatePosts};
 use crate::application::port::PostSummary;
 use crate::application::query::{
     get_post::GetPostQuery,
@@ -36,6 +38,8 @@ where
 {
     command_bus: CB,
     query_bus:   QB,
+    /// CreatePost, which answers the post it created or replayed (#876).
+    creator:     Arc<dyn CreatePosts>,
 }
 
 impl<CB, QB> PostServiceHandler<CB, QB>
@@ -43,8 +47,8 @@ where
     CB: CommandBus + Send + Sync + 'static,
     QB: QueryBus + Send + Sync + 'static,
 {
-    pub fn new(command_bus: CB, query_bus: QB) -> Self {
-        Self { command_bus, query_bus }
+    pub fn new(command_bus: CB, query_bus: QB, creator: Arc<dyn CreatePosts>) -> Self {
+        Self { command_bus, query_bus, creator }
     }
 }
 
@@ -60,15 +64,13 @@ where
         request: Request<proto::CreatePostRequest>,
     ) -> Result<Response<proto::CreatePostResponse>, Status> {
         edge::require_profile(&request, &request.get_ref().profile_id)?;
-        let req         = request.into_inner();
-        let post_id     = PostId::new_v7();
-        let post_id_str = post_id.as_str();
-        let profile_id  = req.profile_id.clone();
+        let req        = request.into_inner();
+        let profile_id = req.profile_id.clone();
 
         let audio_ref = proto_audio_ref_to_domain(req.audio_ref)?;
 
         let cmd = CreatePostCommand {
-            post_id:     post_id_str.clone(),
+            post_id:     PostId::new_v7().as_str(),
             profile_id:  req.profile_id,
             kind:        req.kind,
             caption:     req.caption,
@@ -78,16 +80,11 @@ where
             audio_ref,
             location:    req.location.map(|g| (g.lat, g.lng)),
             reuse:       ReuseOverrides { allow_remix: req.allow_remix, allow_sound_reuse: req.allow_sound_reuse },
+            idempotency_key: Some(req.idempotency_key).filter(|k| !k.is_empty()),
         };
 
-        self.command_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
-            .await
-            .map(|_| Response::new(proto::CreatePostResponse {
-                post_id:    post_id_str,
-                profile_id,
-            }))
-            .map_err(cqrs_to_status)
+        let created = self.creator.create(&cmd).await.map_err(|e| app_err_to_status(&e))?;
+        Ok(Response::new(proto::CreatePostResponse { post_id: created.post_id.as_str(), profile_id }))
     }
 
     pub async fn publish_post(
@@ -386,19 +383,21 @@ pub fn cqrs_to_status(err: cqrs::error::CqrsError) -> Status {
         CqrsError::DuplicateRegistration { type_name } => {
             Status::internal(format!("duplicate handler for {type_name}"))
         }
-        CqrsError::Handler(boxed) => {
-            use error::AppError as _;
-            let msg       = boxed.to_string();
-            let retryable = boxed.is_retryable();
-            match boxed.http_status().as_u16() {
-                403       => Status::permission_denied(msg),
-                404       => Status::not_found(msg),
-                409 if retryable => Status::aborted(msg),
-                409       => Status::already_exists(msg),
-                400 | 422 => Status::failed_precondition(msg),
-                503 | 502 => Status::unavailable(msg),
-                _         => Status::internal(msg),
-            }
-        }
+        CqrsError::Handler(boxed) => app_err_to_status(&boxed),
+    }
+}
+
+/// An application error's status: its HTTP class, `ABORTED` for a retryable
+/// conflict.
+fn app_err_to_status(err: &impl error::AppError) -> Status {
+    let msg = err.to_string();
+    match err.http_status().as_u16() {
+        403       => Status::permission_denied(msg),
+        404       => Status::not_found(msg),
+        409 if err.is_retryable() => Status::aborted(msg),
+        409       => Status::already_exists(msg),
+        400 | 422 => Status::failed_precondition(msg),
+        503 | 502 => Status::unavailable(msg),
+        _         => Status::internal(msg),
     }
 }

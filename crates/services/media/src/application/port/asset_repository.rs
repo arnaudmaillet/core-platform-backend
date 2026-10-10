@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 
 use crate::domain::aggregate::Asset;
-use crate::domain::value_object::{AssetId, ContentHash, OwnerId};
+use crate::domain::value_object::{AssetId, ContentHash, OwnerId, UploadKey};
 use crate::error::MediaError;
 
 #[async_trait]
@@ -13,6 +13,15 @@ pub trait AssetRepository: Send + Sync + 'static {
     /// Upserts the asset (optimistic-lock semantics in the Phase-4 adapter; a
     /// concurrent writer surfaces `ConcurrentModification`).
     async fn save(&self, asset: &Asset) -> Result<(), MediaError>;
+
+    /// Saves a new asset under its owner's upload key (#876), unless a live
+    /// (not deleted) asset of that owner already holds the key: then that
+    /// asset's id, and nothing is saved. Atomic per key, so two tickets racing
+    /// under one key reserve one asset.
+    async fn insert_keyed(&self, asset: &Asset, key: &UploadKey) -> Result<Option<AssetId>, MediaError>;
+
+    /// The live asset of `owner` holding the upload key, if any (#876).
+    async fn find_by_upload_key(&self, owner: &OwnerId, key: &UploadKey) -> Result<Option<AssetId>, MediaError>;
 
     async fn find_by_id(&self, id: &AssetId) -> Result<Option<Asset>, MediaError>;
 

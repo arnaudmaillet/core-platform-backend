@@ -18,7 +18,7 @@ use cqrs::{CommandBus, CqrsError, Envelope, QueryBus};
 use scylla_storage::ScyllaConfig;
 
 use post::app::{App, Backends};
-use post::application::command::create_post::CreatePostCommand;
+use post::application::command::create_post::{CreatePostCommand, CreatePosts, CreatedPost};
 use post::application::command::apply_moderation::ApplyModerationCommand;
 use post::application::command::delete_post::DeletePostCommand;
 use post::application::command::publish_post::PublishPostCommand;
@@ -52,6 +52,8 @@ pub const KIND_TEXT_ONLY: i32 = 1;
 pub struct TestHarness {
     pub command_bus: Arc<InMemoryCommandBus>,
     pub query_bus:   Arc<InMemoryQueryBus>,
+    /// CreatePost as the gRPC layer calls it (its answer, #876).
+    pub creator:     Arc<dyn CreatePosts>,
     pub publisher:   Arc<CapturingPublisher>,
     /// The audience check: authors are visible unless a scenario scripts it.
     pub gate:        Arc<ScriptedGate>,
@@ -88,6 +90,7 @@ impl TestHarness {
         Self {
             command_bus: app.command_bus,
             query_bus:   app.query_bus,
+            creator:     app.creator,
             publisher,
             gate,
             locations:   app.author_location_store,
@@ -102,6 +105,27 @@ impl TestHarness {
         dispatch_create(Arc::clone(&self.command_bus), post_id.to_owned(), profile_id.to_owned())
             .await
             .expect("create_post");
+    }
+
+    /// Creates a `TextOnly` post under a fresh post id with `key` (#876), as
+    /// a retried CreatePost does: the post it answers.
+    pub async fn create_keyed(&self, profile_id: &str, key: &str) -> Result<CreatedPost, post::error::PostError> {
+        let mut cmd = create_command(random_id(), profile_id.to_owned());
+        cmd.idempotency_key = Some(key.to_owned());
+        self.creator.create(&cmd).await
+    }
+
+    /// [`Self::create_keyed`] with `caption`.
+    pub async fn try_create_keyed_captioned(
+        &self,
+        profile_id: &str,
+        key: &str,
+        caption: &str,
+    ) -> Result<CreatedPost, post::error::PostError> {
+        let mut cmd = create_command(random_id(), profile_id.to_owned());
+        cmd.idempotency_key = Some(key.to_owned());
+        cmd.caption = caption.to_owned();
+        self.creator.create(&cmd).await
     }
 
     /// Tries to create a `TextOnly` post with `caption`; the error when refused.
@@ -312,6 +336,7 @@ fn create_command(post_id: String, profile_id: String) -> CreatePostCommand {
         audio_ref:   None,
         location:    None,
         reuse:       Default::default(),
+        idempotency_key: None,
     }
 }
 

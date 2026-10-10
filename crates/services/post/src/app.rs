@@ -17,15 +17,15 @@ use cqrs::query::{InMemoryQueryBus, QueryBusBuilder};
 use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 
 use crate::application::command::apply_moderation::{ApplyModerationCommand, ApplyModerationHandler};
-use crate::application::command::create_post::{CreatePostCommand, CreatePostHandler};
+use crate::application::command::create_post::{CreatePostCommand, CreatePostHandler, CreatePosts};
 use crate::application::command::delete_post::{DeletePostCommand, DeletePostHandler};
 use crate::application::command::publish_post::{PublishPostCommand, PublishPostHandler};
 use crate::application::command::restore_post::{RestorePostCommand, RestorePostHandler};
 use crate::application::query::list_recently_deleted::{ListRecentlyDeletedHandler, ListRecentlyDeletedQuery};
 use crate::application::command::update_post::{UpdatePostCommand, UpdatePostHandler};
 use crate::application::port::{
-    AudienceGate, AuthorLocationStore, AuthorTierStore, AuthorWindowStore, EventPublisher, RecentlyDeleted,
-    ReuseRegistry,
+    AudienceGate, AuthorLocationStore, AuthorTierStore, AuthorWindowStore, CreateKeys, EventPublisher,
+    RecentlyDeleted, ReuseRegistry,
 };
 use crate::application::query::get_post::{GetPostHandler, GetPostQuery};
 use crate::application::query::like_visibility::{GetLikeVisibilityHandler, GetLikeVisibilityQuery};
@@ -33,8 +33,8 @@ use crate::application::query::list_posts_by_profile::{
     ListPostsByProfileHandler, ListPostsByProfileQuery,
 };
 use crate::infrastructure::persistence::{
-    ScyllaAuthorLocationStore, ScyllaAuthorTierStore, ScyllaAuthorWindowStore, ScyllaPostRepository,
-    ScyllaRecentlyDeleted, ScyllaReuseRegistry,
+    ScyllaAuthorLocationStore, ScyllaAuthorTierStore, ScyllaAuthorWindowStore, ScyllaCreateKeys,
+    ScyllaPostRepository, ScyllaRecentlyDeleted, ScyllaReuseRegistry,
 };
 
 /// Storage endpoints the graph is wired against. Post has no Redis and emits its
@@ -50,6 +50,10 @@ pub struct Backends {
 pub struct App {
     pub command_bus: Arc<InMemoryCommandBus>,
     pub query_bus:   Arc<InMemoryQueryBus>,
+    /// CreatePost with its answer (the post created, or on a repeated
+    /// idempotency key the first call's — #876); the gRPC layer calls it
+    /// directly, the bus carries the same handler for the harness.
+    pub creator:     Arc<dyn CreatePosts>,
     /// Live storage client, retained so the runtime's readiness loop can probe
     /// its liveness (see [`crate::service`]).
     pub scylla:      Arc<ScyllaClient>,
@@ -86,15 +90,19 @@ impl App {
             Arc::new(ScyllaRecentlyDeleted::new(Arc::clone(&scylla_client)));
         let author_window_store: Arc<dyn AuthorWindowStore> =
             Arc::new(ScyllaAuthorWindowStore::new(Arc::clone(&scylla_client)));
+        let create_keys: Arc<dyn CreateKeys> = Arc::new(ScyllaCreateKeys::new(Arc::clone(&scylla_client)));
+        let create_handler = || CreatePostHandler {
+            repository: Arc::clone(&repository),
+            publisher:  Arc::clone(&publisher),
+            reuse:      Arc::clone(&reuse_registry),
+            audience:   Arc::clone(&audience),
+            keys:       Arc::clone(&create_keys),
+        };
+        let creator: Arc<dyn CreatePosts> = Arc::new(create_handler());
 
         let command_bus = Arc::new(
             CommandBusBuilder::new()
-                .register::<CreatePostCommand, _>(CreatePostHandler {
-                    repository: Arc::clone(&repository),
-                    publisher:  Arc::clone(&publisher),
-                    reuse:      Arc::clone(&reuse_registry),
-                    audience:   Arc::clone(&audience),
-                })?
+                .register::<CreatePostCommand, _>(create_handler())?
                 .register::<PublishPostCommand, _>(PublishPostHandler {
                     repository:        Arc::clone(&repository),
                     publisher:         Arc::clone(&publisher),
@@ -151,6 +159,7 @@ impl App {
         Ok(Self {
             command_bus,
             query_bus,
+            creator,
             scylla: scylla_client,
             author_tier_store,
             author_location_store,

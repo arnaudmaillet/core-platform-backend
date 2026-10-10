@@ -22,6 +22,8 @@ use thiserror::Error;
 /// | MED-1004 | UploadTicketExpired      | 410  | Low      | No        |
 /// | MED-1005 | UploadNotFinalized       | 409  | Low      | No        |
 /// | MED-1006 | PrivateDocumentsDisabled | 503  | Low      | No        |
+/// | MED-1007 | UploadKeyConflict        | 409  | Low      | No        |
+/// | MED-1008 | InvalidUploadKey         | 422  | Low      | No        |
 /// | MED-2001 | AssetNotFound            | 404  | Low      | No        |
 /// | MED-2002 | InvalidStateTransition   | 409  | Medium   | No        |
 /// | MED-2003 | ConcurrentModification   | 409  | **High** | **Yes**   |
@@ -109,6 +111,14 @@ pub enum MediaError {
     /// home yet.
     #[error("private documents are not enabled")]
     PrivateDocumentsDisabled,
+
+    /// The upload's idempotency key already reserved an asset of another kind,
+    /// type or content (#876): answering it would hand back other bytes.
+    #[error("idempotency key already used for a different upload")]
+    UploadKeyConflict,
+
+    #[error("upload idempotency key must be 1 to 128 printable ASCII characters")]
+    InvalidUploadKey,
 
     // ── Asset metadata SoR (MED-2xxx) ─────────────────────────────────────────
     #[error("asset not found: {id}")]
@@ -239,6 +249,8 @@ impl AppError for MediaError {
             MediaError::UploadTicketExpired => "MED-1004",
             MediaError::UploadNotFinalized => "MED-1005",
             MediaError::PrivateDocumentsDisabled => "MED-1006",
+            MediaError::UploadKeyConflict => "MED-1007",
+            MediaError::InvalidUploadKey => "MED-1008",
 
             MediaError::AssetNotFound { .. } => "MED-2001",
             MediaError::InvalidStateTransition { .. } => "MED-2002",
@@ -291,6 +303,7 @@ impl AppError for MediaError {
             | MediaError::ObjectNotFound { .. } => StatusCode::NOT_FOUND,
 
             MediaError::UploadNotFinalized
+            | MediaError::UploadKeyConflict
             | MediaError::InvalidStateTransition { .. }
             | MediaError::ConcurrentModification
             | MediaError::AssetAlreadyExists { .. } => StatusCode::CONFLICT,
@@ -403,6 +416,10 @@ impl AppError for MediaError {
 
             MediaError::UploadTicketExpired | MediaError::UploadNotFinalized => {
                 "Your upload could not be completed. Please try again."
+            }
+
+            MediaError::UploadKeyConflict | MediaError::InvalidUploadKey => {
+                "This upload could not be matched. Please start it again."
             }
 
             MediaError::MalwareDetected

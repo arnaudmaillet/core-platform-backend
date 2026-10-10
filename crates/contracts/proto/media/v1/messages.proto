@@ -66,18 +66,23 @@ message IssueUploadTicketRequest {
     // enabled this may short-circuit to an existing asset; otherwise it is recorded
     // for integrity verification on finalize.
     string     content_sha256      = 5;
-    // Optional caller idempotency key so a retried ticket request returns the same
-    // asset/ticket rather than reserving a new one.
+    // Optional caller idempotency key (1–128 printable ASCII characters,
+    // MED-1008 otherwise), one per upload and reused on every retry of its
+    // ticket: a repeat from the same owner reserves nothing and answers the
+    // asset the first ticket reserved — a fresh `ticket` for it while it is
+    // still PENDING, none (`deduplicated`) once it is past PENDING. The same
+    // key for another kind, declared type or content fails FAILED_PRECONDITION
+    // (MED-1007). Deleting or aborting the asset frees its key.
     string     idempotency_key     = 6;
 }
 
 message IssueUploadTicketResponse {
     string        asset_id = 1;
     UploadTicket  ticket   = 2;
-    // True when content-addressed dedup matched existing bytes: `asset_id` already
-    // refers to a READY asset and no upload is needed (the `ticket` is then unset).
-    // Always false when dedup is disabled (the default — it is gated behind a
-    // flag). See the blueprint's open-fork B.
+    // True when no upload is needed (the `ticket` is then unset): content-
+    // addressed dedup matched a READY asset with these bytes (only when dedup
+    // is enabled — off by default, the blueprint's open-fork B), or the
+    // idempotency key's asset is already past PENDING (#876).
     bool          deduplicated = 3;
 }
 

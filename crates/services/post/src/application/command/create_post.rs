@@ -1,14 +1,18 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
 use crate::{
-    application::port::{check_mentions, AudienceGate, EventPublisher, PostRepository, ReuseRegistry},
+    application::port::{check_mentions, AudienceGate, CreateClaim, CreateKeys, EventPublisher, PostRepository, ReuseRegistry},
     domain::{
         aggregate::{Post, ReuseOverrides},
         entity::MediaAttachment,
-        value_object::{AudioId, AudioKind, AudioReference, Caption, CdnUrl, GeoPoint, MimeType, PostId, PostKind, ProfileId},
+        value_object::{
+            AudioId, AudioKind, AudioReference, Caption, CdnUrl, GeoPoint, IdempotencyKey, MimeType, PostId, PostKind,
+            ProfileId,
+        },
     },
     error::PostError,
 };
@@ -38,6 +42,8 @@ pub struct CreatePostCommand {
     /// The post's own remix / original-sound reuse permission (#669); `None`
     /// follows the author's default.
     pub reuse:       ReuseOverrides,
+    /// The client's key for this post, reused on its retries (#876).
+    pub idempotency_key: Option<String>,
 }
 
 impl Command for CreatePostCommand {}
@@ -81,6 +87,21 @@ pub(crate) fn parse_attachments(inputs: &[AttachmentInput]) -> Result<Vec<MediaA
         .collect()
 }
 
+/// The post a CreatePost answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedPost {
+    /// The command's own id, or on a replay the first call's post.
+    pub post_id:  PostId,
+    /// The idempotency key was already used (#876): nothing was written.
+    pub replayed: bool,
+}
+
+/// Creates a post and says which (the gRPC layer answers its id).
+#[async_trait]
+pub trait CreatePosts: Send + Sync + 'static {
+    async fn create(&self, cmd: &CreatePostCommand) -> Result<CreatedPost, PostError>;
+}
+
 pub struct CreatePostHandler<R, P> {
     pub repository: Arc<R>,
     pub publisher:  Arc<P>,
@@ -88,6 +109,8 @@ pub struct CreatePostHandler<R, P> {
     pub reuse:      Arc<dyn ReuseRegistry>,
     /// Who takes mentions from whom (#656).
     pub audience:   Arc<dyn AudienceGate>,
+    /// CreatePost's idempotency keys (#876).
+    pub keys:       Arc<dyn CreateKeys>,
 }
 
 /// May `author` reuse `audio`? Allowed unless the sound's original post (by
@@ -120,10 +143,60 @@ where
     type Error = PostError;
 
     async fn handle(&self, envelope: Envelope<CreatePostCommand>) -> Result<(), PostError> {
-        let cmd = &envelope.payload;
+        self.create(&envelope.payload).await.map(drop)
+    }
+}
 
+#[async_trait]
+impl<R, P> CreatePosts for CreatePostHandler<R, P>
+where
+    R: PostRepository,
+    P: EventPublisher,
+{
+    /// A keyed call (#876) claims its key first: a key already used answers
+    /// its post and writes nothing; one still in flight is refused, retryably;
+    /// a call that fails before its post is stored frees the key for the retry.
+    async fn create(&self, cmd: &CreatePostCommand) -> Result<CreatedPost, PostError> {
         let post_id    = PostId::try_from(cmd.post_id.as_str())?;
         let profile_id = ProfileId::try_from(cmd.profile_id.as_str())?;
+        let key = cmd
+            .idempotency_key
+            .as_deref()
+            .filter(|k| !k.is_empty())
+            .map(IdempotencyKey::try_from)
+            .transpose()?;
+
+        if let Some(key) = &key {
+            match self.keys.claim(&profile_id, key, post_id.clone()).await? {
+                CreateClaim::Fresh => {}
+                CreateClaim::Created(first) => return Ok(CreatedPost { post_id: first, replayed: true }),
+                CreateClaim::InFlight => return Err(PostError::CreateInFlight),
+            }
+        }
+
+        let created = self.write(cmd, post_id.clone(), profile_id.clone(), key.as_ref()).await;
+        if let (Err(_), Some(key)) = (&created, &key)
+            && let Err(e) = self.keys.release(&profile_id, key, post_id.clone()).await
+        {
+            tracing::warn!(error = %e, "create key release failed; it expires on its own");
+        }
+        created.map(|()| CreatedPost { post_id, replayed: false })
+    }
+}
+
+impl<R, P> CreatePostHandler<R, P>
+where
+    R: PostRepository,
+    P: EventPublisher,
+{
+    /// Checks and stores the post (a draft).
+    async fn write(
+        &self,
+        cmd:        &CreatePostCommand,
+        post_id:    PostId,
+        profile_id: ProfileId,
+        claimed:    Option<&IdempotencyKey>,
+    ) -> Result<(), PostError> {
 
         let kind = match cmd.kind {
             1 => PostKind::TextOnly,
@@ -166,6 +239,13 @@ where
         let post = Post::create(post_id, profile_id, kind, caption, attachments, parent_id, root_id, cmd.audio_ref.clone(), location)?
             .with_reuse(cmd.reuse);
         self.repository.insert(&post).await?;
+        // Stored: from here a retry answers this post, even if a later step
+        // fails. A failed completion leaves the claim pending until it expires.
+        if let Some(key) = claimed
+            && let Err(e) = self.keys.complete(post.profile_id(), key, post.id().clone()).await
+        {
+            tracing::warn!(error = %e, "create key completion failed; retries are refused until it expires");
+        }
         // An original sound belongs to the post that made it.
         if let Some(audio) = cmd.audio_ref.as_ref().filter(|a| a.audio_kind == AudioKind::OriginalSound) {
             self.reuse.record_origin(&audio.audio_id, post.id(), post.profile_id()).await?;
