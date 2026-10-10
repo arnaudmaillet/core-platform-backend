@@ -99,5 +99,7 @@ async fn a_countrys_posts_and_its_rules() {
 
     // A guest without a granted country sees nothing, like the rest of the map.
     let guest = MapScope::Guest(format!("guest:{}", Uuid::now_v7()));
-    assert!(h.place_page(iceland, PlaceSort::Recent, 20, None, guest).await.cards.is_empty());
+    let page = h.place_page(iceland, PlaceSort::Recent, 1, None, guest).await;
+    assert!(page.cards.is_empty());
+    assert_eq!(page.next_page_token, None, "and nothing to page through");
 }

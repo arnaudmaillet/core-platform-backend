@@ -12,6 +12,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use cqrs::{Envelope, Query, QueryHandler};
 use uuid::Uuid;
 
+use crate::application::country_access::{country_filter, CountryFilter};
 use crate::application::port::{CardStore, PlaceEntry, TileRepository};
 use crate::application::query::get_geo_timeline::{GetGeoTimelineHandler, GetGeoTimelineQuery};
 use crate::domain::entity::MapPostCard;
@@ -68,6 +69,13 @@ where
 
     async fn handle(&self, envelope: Envelope<ListPlacePostsQuery>) -> Result<PlacePostsPage, GeoDiscoveryError> {
         let q = &envelope.payload;
+        // A reader who may see no country (a guest without a grant) gets one
+        // empty page, not a walk through the place's empty pages.
+        if country_filter(self.cards.grants.as_ref(), self.cards.unlocks.as_ref(), &q.scope).await?
+            == CountryFilter::Nothing
+        {
+            return Ok(PlacePostsPage::default());
+        }
         let limit = q.limit.clamp(1, MAX_PAGE);
         let cursor = q.page_token.as_deref().map(PlaceCursor::decode).transpose()?;
         match (q.sort, cursor) {
