@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a6ee9aba34f0d8180c66384f64879c14cd79af5d7ca6c8bde6932d7ec7b7508a
-  translated_at: 2026-10-06
+  source_sha256: 6da2bbf14111803c4bd771b13b818bde4f1f7f7665d7ea9c84793eb7e640a3ee
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -20,7 +20,7 @@ i18n:
 > | **Tier** | **TIER-1** — surface de découverte très visible, mais **dérivée et fail-open** : hors de tout chemin d'écriture synchrone ; une panne dégrade la découverte, elle ne bloque jamais une écriture/publication/connexion |
 > | **Déployable** | `crates/apps/search-server` (crate bibliothèque : `crates/services/search`) |
 > | **Stockages** | cluster OpenSearch — index `profiles`, `posts`, `hashtags` (chacun derrière des alias lecture/écriture). **Aucun** Postgres / Scylla / Redis propre |
-> | **Async** | ne publie **rien** · consomme `post.v1.events`, `profile.v1.events`, `moderation.v1.events` (+ un flux hashtag dérivé) (Kafka) |
+> | **Async** | ne publie **rien** · consomme `post.v1.events`, `profile.v1.events`, `moderation.v1.events` (Kafka) ; documents hashtag dérivés des documents post chaque minute (#831) |
 > | **Appelants amont** | gateway / BFF (le chemin de requête `Search` / `Suggest`) |
 > | **Dépendances aval** | OpenSearch, Kafka. Les systèmes de référence appartiennent à `post` / `profile` — search n'appelle **aucun** service sur le chemin de requête |
 > | **SLO** | `<TODO>` dispo · `Search` p99 `< <TODO ~150> ms` · latence d'ingestion `< <TODO ~5> s` |
@@ -107,6 +107,20 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS là où 
 
 La surface synchrone est délibérément en **lecture seule** : `Search` (fédérée, filtrable par type d'entité, paginée par curseur), `Suggest`/autocomplétion (préfixe), et `MultiSearch` (fan-out + fusion). **Il n'y a aucun RPC d'écriture/d'indexation** — l'ingestion est exclusivement Kafka — et search **ne publie aucun événement** (c'est un modèle de lecture terminal).
 
+**Les hashtags (#831)** n'ont pas d'événement propre : toutes les `SEARCH_HASHTAG_REFRESH_SECS` (60) un
+rafraîchissement agrège les `hashtags` des documents post recherchables (les mêmes exclusions qu'une
+recherche : modération, propriétaire, découverte, fenêtre de posts) — les 5 000 tags les plus utilisés,
+chacun avec son total et ses posts des dernières 24 heures et des 7 derniers jours — et tient un document
+`hashtags` par tag : `post_count`, une `popularity` de volume (`ln(1+total) + ln(1+semaine)`, sur laquelle
+se classent le tri POPULARITY de Search et Suggest) et un `trending` de vélocité (`3 × jour + reste de la
+semaine` ; 0 pour un tag inutilisé cette semaine). Seuls les tags qui changent sont réécrits ; un tag qui
+n'est plus utilisé perd son document, donc supprimer, masquer ou faire sortir de sa fenêtre un post
+abaisse le compte de ses tags au rafraîchissement suivant. Suggest classe un tag correspondant par sa seule
+popularité, un profil par sa correspondance. `ListTrendingHashtags` (edge `public_read`) renvoie les tags à
+`trending > 0`, les plus montants d'abord. Chaque pod rafraîchit ; les écritures sont gardées par version
+(une révision strictement croissante par rafraîchissement), donc des pods en concurrence ne font que
+réécrire les mêmes données.
+
 **Les recherches récentes (#663)** sont la seule chose que search garde *pour* un profil, afin que chaque appareil affiche la même liste :
 - `RecordRecentSearch` — l'app l'appelle quand une recherche est validée ou un résultat touché, pas à chaque frappe.
 - `ListRecentSearches`, `DeleteRecentSearch` (insensible à la casse), `ClearSearchHistory`.
@@ -153,7 +167,6 @@ Chaque faute implémente `error::AppError` avec un code `SCH-XXXX` stable, mapp�
 | `post.v1.events` | `search-post-indexer` | indexe/met à jour/supprime les posts (contenu hydraté via `GetPost`) | DLQ `post.v1.events.dlq` |
 | `profile.v1.events` | `search-profile-indexer` | indexe/met à jour/supprime les profils (contenu hydraté via `GetProfileById`) ; masquage par le propriétaire → drapeau de visibilité **owner** ; `ProfileTabSettingsChanged` → la fenêtre de posts de l'auteur | DLQ `profile.v1.events.dlq` |
 | `moderation.v1.events` | `search-moderation-indexer` | bascule le drapeau de visibilité **moderation** au masquage ; rétablit à la réversion et, pour un **post**, le réhydrate (`GetPost`, version de contenu = son `updated_at`), pour qu'un post écarté pendant le retrait — ou restauré sous le retrait et jamais réannoncé (#663) — revienne. Tant que `post` le lit encore retiré/limité : `SCH-8004`, réessayé | DLQ `moderation.v1.events.dlq` |
-| `<hashtag stream>` | `search-post-indexer` | maintient l'index hashtag (dérivé des événements post) | DLQ `<...>.dlq` |
 
 > **Deux autorités de visibilité :** un document n'est recherchable que si **les deux** drapeaux l'autorisent — `searchable = moderation_searchable AND owner_searchable`. Ce sont deux champs indépendants, chacun avec sa propre garde de version, écrits par des flux différents (`moderation.v1.events` vs un événement de masquage par le propriétaire du profil). Aucune autorité ne peut surpasser l'autre : un propriétaire de profil qui rétablit sa propre visibilité ne peut pas lever un masquage de modération, et inversement. Une **troisième autorité**, `discoverable` (#661), porte le choix du profil d'être trouvable par la recherche (`by_handle_search` de `ProfileDiscoverySettingsChanged`) ; le masquage et la modération n'y touchent pas. Ses deux champs ont été ajoutés aux index existants sur place : `ensure_indices` pose les propriétés communes à chaque démarrage, une mise à jour `_mapping` additive (sans réindexation). Un drapeau absent vaut visible. Un post **soumis à une limite d'âge** (`age_gate` de la modération) est hors de la recherche pour tous : search n'a pas de niveau de contenu par lecteur, il tient donc le contenu mature à l'écart des 13–17 ans et des invités de façon prudente (RESTRICTED par défaut, comme les fils de découverte).
 
@@ -219,6 +232,7 @@ async fn main() -> anyhow::Result<()> {
 | `SEARCH_POST_GRPC_ENDPOINT` | Non | `http://localhost:50056` | endpoint `post` pour l'hydrateur de contenu d'ingestion |
 | `SEARCH_HYDRATE_RPC_TIMEOUT_MS` | Non | `5000` | deadline par requête des RPC d'hydratation — un appel suspendu bloquerait sinon la partition du consumer |
 | `SEARCH_HYDRATE_CONNECT_TIMEOUT_MS` | Non | `2000` | deadline de connexion à l'ouverture des canaux `post` / `profile` |
+| `SEARCH_HASHTAG_REFRESH_SECS` | Non | `60` | fréquence de rafraîchissement des documents hashtag depuis les documents post (#831) |
 | `SEARCH_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Oui** (prod) | `http://localhost:50053` | endpoint `social-graph` du filtre d'audience du chemin de requête (`CheckAccess`) ; injoignable → les résultats clients se réduisent aux hashtags |
 | `SEARCH_AUDIENCE_RPC_TIMEOUT_MS` / `SEARCH_AUDIENCE_CONNECT_TIMEOUT_MS` | Non | `500` / `500` | délais de cet appel (il s'exécute dans la requête de l'utilisateur) |
 

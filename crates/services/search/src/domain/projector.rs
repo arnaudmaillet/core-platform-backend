@@ -114,6 +114,7 @@ fn project_hashtag(event: HashtagEvent, now: DateTime<Utc>) -> Result<IndexMutat
                 post_count: s.post_count,
                 searchable: Searchable::VISIBLE,
                 popularity: PopularityScore::ZERO,
+                trending: 0.0,
                 indexed_at: now,
                 version: DocVersion::new(s.revision),
             };

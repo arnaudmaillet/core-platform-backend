@@ -57,8 +57,21 @@ message PostHit {
 message HashtagHit {
     string  tag        = 1;
     // Coarse, periodically-refreshed post count for ranking/display — NOT a
-    // real-time counter.
+    // real-time counter: the searchable posts carrying the tag, refreshed
+    // every minute (#831); deleting or hiding a post lowers it.
     int64   post_count = 2;
+}
+
+// ── Trending hashtags (#831) ──────────────────────────────────────────────────
+
+message ListTrendingHashtagsRequest {
+    // At most 50; 0 means 20.
+    int32 limit = 1;
+}
+
+message ListTrendingHashtagsResponse {
+    // Most rising first.
+    repeated HashtagHit hashtags = 1;
 }
 
 // ── Search (federated, paginated) ─────────────────────────────────────────────

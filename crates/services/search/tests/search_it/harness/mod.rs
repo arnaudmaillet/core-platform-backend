@@ -35,6 +35,8 @@ pub const HASHTAG: i32 = 3;
 
 pub struct Harness {
     pub handler: SearchServiceHandler,
+    /// The hashtag documents' refresh (#831), on the real adapter.
+    pub hashtags: search::application::hashtags::HashtagRefresh,
     projection: ProjectionHandler,
     index: Arc<OpenSearchIndex>,
 }
@@ -85,10 +87,16 @@ impl Harness {
             .with_recent(Arc::clone(&index) as Arc<dyn search::application::port::RecentSearches>);
         // The harness calls the handler without an edge principal (the mesh),
         // so the audience filter never runs; any gate will do.
+        let hashtags = search::application::hashtags::HashtagRefresh::new(
+            Arc::clone(&port),
+            Arc::clone(&index) as Arc<dyn search::application::port::HashtagStats>,
+        );
         let handler = App::compose(port, Arc::new(NoAudienceCheck))
-            .with_recent(Arc::clone(&index) as Arc<dyn search::application::port::RecentSearches>);
+            .with_recent(Arc::clone(&index) as Arc<dyn search::application::port::RecentSearches>)
+            .with_hashtags(Arc::clone(&index) as Arc<dyn search::application::port::HashtagStats>);
         Self {
             handler,
+            hashtags,
             projection,
             index,
         }
@@ -267,6 +275,66 @@ impl Harness {
             author_id: author.to_owned(),
         }))
         .await;
+    }
+
+    /// A tagged post created at `created_at` (#831: a tag's recent use).
+    pub async fn index_post_tagged_at(&self, post_id: &str, author: &str, tags: &[&str], created_at: DateTime<Utc>) {
+        self.apply(SourceEvent::Post(PostEvent::Published(PostSnapshot {
+            post_id: post_id.to_owned(),
+            author_id: author.to_owned(),
+            author_handle: author.to_owned(),
+            caption: tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" "),
+            hashtags: tags.iter().map(|t| (*t).to_owned()).collect(),
+            thumbnail_key: String::new(),
+            created_at,
+            visible_until: None,
+            revision: 1,
+        })))
+        .await;
+    }
+
+    /// Runs a `post.v1.events` body through the real decoder (#831): what it
+    /// projects directly (a deletion) is applied.
+    pub async fn post_wire(&self, json: &str) {
+        match search::infrastructure::decode::decode_post(json.as_bytes()).expect("it: decode post") {
+            search::infrastructure::decode::Decoded::Ready(event) => self.apply(event).await,
+            other => panic!("it: expected a projectable post event, got {other:?}"),
+        }
+    }
+
+    /// One hashtag refresh over the refreshed post documents, then a refresh
+    /// so its writes are searchable (#831).
+    pub async fn refresh_hashtags(&self) -> search::application::hashtags::RefreshReport {
+        self.refresh().await;
+        let report = self.hashtags.run_once(Utc::now()).await.expect("it: hashtag refresh");
+        self.refresh().await;
+        report
+    }
+
+    /// The trending hashtags (#831): `(tag, post_count)`.
+    pub async fn trending(&self, limit: i32) -> Vec<(String, i64)> {
+        self.handler
+            .list_trending_hashtags(Request::new(proto::ListTrendingHashtagsRequest { limit }))
+            .await
+            .expect("it: trending")
+            .into_inner()
+            .hashtags
+            .into_iter()
+            .map(|h| (h.tag, h.post_count))
+            .collect()
+    }
+
+    /// Hashtag completions for `prefix`, in order (#831).
+    pub async fn suggest_tags(&self, prefix: &str) -> Vec<String> {
+        self.handler
+            .suggest(Request::new(proto::SuggestRequest { prefix: prefix.to_owned(), entity_types: vec![HASHTAG], limit: 10 }))
+            .await
+            .expect("it: suggest")
+            .into_inner()
+            .suggestions
+            .into_iter()
+            .map(|s| s.text)
+            .collect()
     }
 
     /// Make prior writes searchable (OpenSearch is near-real-time).

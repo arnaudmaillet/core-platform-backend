@@ -105,14 +105,20 @@ pub struct PostDoc {
     pub visible_until: Option<DateTime<Utc>>,
 }
 
-/// A hashtag document — the discoverable tag entity, maintained from the derived
-/// hashtag stream. `post_count` is the coarse, periodic signal, not a live counter.
+/// A hashtag document — the discoverable tag entity, derived from the post
+/// documents by the periodic hashtag refresh (#831). `post_count` is the coarse,
+/// periodic signal, not a live counter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HashtagDoc {
     pub tag: String,
     pub post_count: i64,
     pub searchable: Searchable,
+    /// Volume: all-time use and the last week's (#831). Ranks Search and Suggest.
     pub popularity: PopularityScore,
+    /// Velocity: recent use only (#831). Ranks the trending hashtags; 0 for a
+    /// tag nobody used this week.
+    #[serde(default)]
+    pub trending: f64,
     pub indexed_at: DateTime<Utc>,
     pub version: DocVersion,
 }

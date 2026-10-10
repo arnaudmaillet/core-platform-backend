@@ -19,8 +19,8 @@ use async_trait::async_trait;
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{Value, json};
 
-use super::mappings::{MAPPING_VERSION, common_properties, index_body};
-use crate::application::port::{IndexAdmin, SearchIndex, WriteOutcome};
+use super::mappings::{MAPPING_VERSION, index_body, properties_for};
+use crate::application::port::{HashtagStats, IndexAdmin, SearchIndex, TagUsage, TrendingTag, WriteOutcome};
 use crate::domain::{
     AuthorId, DocVersion, EntityKind, HitDisplay, IndexDocument, Searchable, SearchHit, SearchQuery,
     SearchResults, SuggestQuery, Suggestion, Suggestions, VisibilityAuthority,
@@ -373,15 +373,40 @@ impl SearchIndex for OpenSearchIndex {
             "{}/_search?ignore_unavailable=true&allow_no_indices=true",
             self.read_targets(&kinds)
         );
+        // Profiles rank by how well the prefix matches. A matching tag ranks by
+        // its popularity alone (#831: a popular tag before a one-off): its
+        // match is a constant 1, plus log(1 + 4 × popularity).
         let body = json!({
             "size": query.limit,
             "query": { "bool": {
                 "must_not": visibility_must_not(),
-                "must": [{ "multi_match": {
-                    "query": query.prefix,
-                    "type": "phrase_prefix",
-                    "fields": ["handle.prefix", "tag.prefix", "handle", "tag"]
-                }}]
+                "minimum_should_match": 1,
+                "should": [
+                    { "bool": {
+                        "must_not": [{ "term": { "entity_type": "hashtag" } }],
+                        "must": [{ "multi_match": {
+                            "query": query.prefix,
+                            "type": "phrase_prefix",
+                            "fields": ["handle.prefix", "handle"]
+                        }}]
+                    }},
+                    { "function_score": {
+                        "query": { "constant_score": { "filter": { "bool": {
+                            "filter": [
+                                { "term": { "entity_type": "hashtag" } },
+                                { "multi_match": {
+                                    "query": query.prefix,
+                                    "type": "phrase_prefix",
+                                    "fields": ["tag.prefix", "tag"]
+                                }}
+                            ]
+                        }}}},
+                        "functions": [{ "field_value_factor": {
+                            "field": "popularity", "modifier": "log1p", "factor": 4.0, "missing": 0
+                        }}],
+                        "boost_mode": "sum"
+                    }}
+                ]
             }}
         });
         let (status, value) = match self.send(Method::POST, &path, Some(body)).await {
@@ -393,6 +418,104 @@ impl SearchIndex for OpenSearchIndex {
         }
         Ok(parse_suggest(&value))
     }
+}
+
+#[async_trait]
+impl HashtagStats for OpenSearchIndex {
+    async fn tag_usage(&self, max: usize) -> Result<Vec<TagUsage>, SearchError> {
+        let path = format!(
+            "{}/_search?ignore_unavailable=true&allow_no_indices=true",
+            self.read_alias(EntityKind::Post)
+        );
+        let body = json!({
+            "size": 0,
+            "query": { "bool": {
+                "must_not": visibility_must_not(),
+                "filter": [{ "exists": { "field": "hashtags" } }]
+            }},
+            "aggs": { "tags": {
+                "terms": { "field": "hashtags", "size": max.max(1) },
+                "aggs": {
+                    "day":  { "filter": { "range": { "created_at": { "gte": "now-1d" } } } },
+                    "week": { "filter": { "range": { "created_at": { "gte": "now-7d" } } } }
+                }
+            }}
+        });
+        let (status, value) = self.send(Method::POST, &path, Some(body)).await?;
+        if !status.is_success() {
+            return Err(write_status_error(status, &value));
+        }
+        Ok(parse_tag_usage(&value))
+    }
+
+    async fn purge_hashtags_before(&self, revision: u64) -> Result<u64, SearchError> {
+        let path = format!(
+            "{}/_delete_by_query?conflicts=proceed&refresh=true&ignore_unavailable=true",
+            self.write_alias(EntityKind::Hashtag)
+        );
+        let body = json!({ "query": { "range": { "content_version": { "lt": revision } } } });
+        let (status, value) = self.send(Method::POST, &path, Some(body)).await?;
+        if !status.is_success() && status != StatusCode::NOT_FOUND {
+            return Err(write_status_error(status, &value));
+        }
+        Ok(value["deleted"].as_u64().unwrap_or(0))
+    }
+
+    async fn trending(&self, limit: usize) -> Result<Vec<TrendingTag>, SearchError> {
+        let path = format!(
+            "{}/_search?ignore_unavailable=true&allow_no_indices=true",
+            self.read_alias(EntityKind::Hashtag)
+        );
+        let body = json!({
+            "size": limit,
+            "query": { "bool": {
+                "must_not": visibility_must_not(),
+                "filter": [{ "range": { "trending": { "gt": 0 } } }]
+            }},
+            "sort": [{ "trending": "desc" }, { "post_count": "desc" }, { "tag.raw": "asc" }]
+        });
+        // Fail open like the other reads: no trending hashtags, never an error.
+        let Ok((status, value)) = self.send(Method::POST, &path, Some(body)).await else {
+            return Ok(Vec::new());
+        };
+        if !status.is_success() {
+            return Ok(Vec::new());
+        }
+        Ok(value["hits"]["hits"]
+            .as_array()
+            .map(|hits| {
+                hits.iter()
+                    .filter_map(|hit| {
+                        let source = &hit["_source"];
+                        Some(TrendingTag {
+                            tag:        source["tag"].as_str()?.to_owned(),
+                            post_count: source["post_count"].as_i64().unwrap_or(0),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+}
+
+/// The `tags` terms aggregation's buckets.
+fn parse_tag_usage(value: &Value) -> Vec<TagUsage> {
+    value["aggregations"]["tags"]["buckets"]
+        .as_array()
+        .map(|buckets| {
+            buckets
+                .iter()
+                .filter_map(|b| {
+                    Some(TagUsage {
+                        tag:       b["key"].as_str()?.to_owned(),
+                        total:     b["doc_count"].as_i64().unwrap_or(0),
+                        last_day:  b["day"]["doc_count"].as_i64().unwrap_or(0),
+                        last_week: b["week"]["doc_count"].as_i64().unwrap_or(0),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[async_trait]
@@ -421,12 +544,13 @@ impl IndexAdmin for OpenSearchIndex {
                 return Err(write_status_error(status, &value));
             }
             // Bring an existing index up to the mapping's additive fields (new
-            // fields only; changing a field or an analyzer needs a reindex).
+            // fields only; changing a field or an analyzer needs a reindex). The
+            // kind's own fields too (#831: `trending` on hashtags).
             let (status, value) = self
                 .send(
                     Method::PUT,
                     &format!("{}/_mapping", encode_path(&physical)),
-                    Some(json!({ "properties": common_properties() })),
+                    Some(json!({ "properties": properties_for(kind) })),
                 )
                 .await?;
             if !status.is_success() {
@@ -533,6 +657,7 @@ fn content_source(doc: &IndexDocument) -> Value {
             "post_count": d.post_count,
             "indexed_at": d.indexed_at,
             "popularity": d.popularity.value(),
+            "trending": d.trending,
         }),
     }
 }

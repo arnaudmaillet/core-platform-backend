@@ -156,6 +156,14 @@ impl InMemorySearchIndex {
         }
     }
 
+    /// The stored hashtag document (#831).
+    pub fn hashtag(&self, tag: &str) -> Option<crate::domain::HashtagDoc> {
+        match self.store.lock().unwrap().get(&(EntityKind::Hashtag, tag.to_owned()))?.doc {
+            Some(IndexDocument::Hashtag(ref d)) => Some(d.clone()),
+            _ => None,
+        }
+    }
+
     /// When a stored post leaves its author's post window (#664).
     pub fn visible_until(&self, id: &str) -> Option<DateTime<Utc>> {
         match self.store.lock().unwrap().get(&(EntityKind::Post, id.to_owned()))?.doc {

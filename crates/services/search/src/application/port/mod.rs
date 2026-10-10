@@ -6,12 +6,14 @@
 
 pub mod audience_gate;
 pub mod backfill;
+pub mod hashtag_stats;
 pub mod index_admin;
 pub mod recent_searches;
 pub mod search_index;
 
 pub use audience_gate::AudienceGate;
 pub use backfill::BackfillSource;
+pub use hashtag_stats::{HashtagStats, TagUsage, TrendingTag};
 pub use index_admin::IndexAdmin;
 pub use recent_searches::RecentSearches;
 pub use search_index::{SearchIndex, WriteOutcome};

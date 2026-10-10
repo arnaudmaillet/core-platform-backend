@@ -30,6 +30,13 @@ impl SearchService for SearchServiceHandler {
         self.multi_search(request).await
     }
 
+    async fn list_trending_hashtags(
+        &self,
+        request: Request<proto::ListTrendingHashtagsRequest>,
+    ) -> Result<Response<proto::ListTrendingHashtagsResponse>, Status> {
+        self.list_trending_hashtags(request).await
+    }
+
     async fn record_recent_search(
         &self,
         request: Request<proto::RecordRecentSearchRequest>,
