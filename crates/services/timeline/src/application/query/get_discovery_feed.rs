@@ -41,6 +41,9 @@ pub struct GetDiscoveryFeedQuery {
     /// `None` for a guest or a non-personalised feed. Bound to the caller at
     /// the edge.
     pub personalize_for: Option<ProfileId>,
+    /// Only the posts carrying this hashtag, normalized (#830): TRENDING and
+    /// RECENT over the pool's per-tag streams.
+    pub hashtag:       Option<String>,
 }
 
 #[derive(Debug)]
@@ -142,6 +145,8 @@ impl<SG: SocialGraphClient + ?Sized> Filter<'_, SG> {
 /// the last one consumed (where the next page starts).
 struct StreamReader {
     stream:   DiscoveryStream,
+    /// The hashtag whose stream this is (#830).
+    tag:      Option<String>,
     fetched:  Option<StreamPosition>,
     consumed: Option<StreamPosition>,
     buffer:   VecDeque<(StreamPosition, Option<FeedEntry>)>,
@@ -150,9 +155,9 @@ struct StreamReader {
 }
 
 impl StreamReader {
-    fn new(stream: DiscoveryStream, cursor: &DiscoveryCursor) -> Self {
+    fn new(stream: DiscoveryStream, tag: Option<String>, cursor: &DiscoveryCursor) -> Self {
         let start = cursor.position(stream).cloned();
-        Self { stream, fetched: start.clone(), consumed: start, buffer: VecDeque::new(), drained: false, refills: 0 }
+        Self { stream, tag, fetched: start.clone(), consumed: start, buffer: VecDeque::new(), drained: false, refills: 0 }
     }
 
     /// Nothing left below the cursor, as of this read.
@@ -186,7 +191,7 @@ impl<SG: SocialGraphClient> GetDiscoveryFeedHandler<SG> {
                 return Ok(None);
             }
             reader.refills += 1;
-            let entries = self.pool.range(reader.stream, reader.fetched.as_ref(), batch).await?;
+            let entries = self.pool.range(reader.stream, reader.tag.as_deref(), reader.fetched.as_ref(), batch).await?;
             reader.drained = entries.len() < batch;
             if let Some(last) = entries.last() {
                 reader.fetched = Some(last.position.clone());
@@ -201,6 +206,7 @@ impl<SG: SocialGraphClient> GetDiscoveryFeedHandler<SG> {
     async fn pool_page(
         &self,
         ranking: DiscoveryRanking,
+        hashtag: Option<&str>,
         cursor:  &DiscoveryCursor,
         filter:  &mut Filter<'_, SG>,
         size:    usize,
@@ -214,7 +220,7 @@ impl<SG: SocialGraphClient> GetDiscoveryFeedHandler<SG> {
         let mut readers: Vec<StreamReader> = Vec::new();
         for stream in pattern {
             if !readers.iter().any(|r| r.stream == *stream) {
-                readers.push(StreamReader::new(*stream, cursor));
+                readers.push(StreamReader::new(*stream, hashtag.map(str::to_owned), cursor));
             }
         }
         let batch = (size * 2).max(DEFAULT_PAGE_SIZE);
@@ -343,6 +349,13 @@ impl<SG: SocialGraphClient> QueryHandler<GetDiscoveryFeedQuery> for GetDiscovery
 
     async fn handle(&self, envelope: Envelope<GetDiscoveryFeedQuery>) -> Result<DiscoveryPage, TimelineError> {
         let query = &envelope.payload;
+        // A hashtag narrows TRENDING and RECENT only (#830).
+        if query.hashtag.is_some() && !matches!(query.ranking, DiscoveryRanking::Trending | DiscoveryRanking::Recent) {
+            return Err(TimelineError::DomainViolation {
+                field:   "hashtag".to_owned(),
+                message: "a hashtag narrows TRENDING and RECENT only".to_owned(),
+            });
+        }
         let cursor = match query.page_token.as_deref().filter(|t| !t.is_empty()) {
             Some(token) => DiscoveryCursor::decode(token, query.ranking)?,
             None => DiscoveryCursor::default(),
@@ -363,7 +376,7 @@ impl<SG: SocialGraphClient> QueryHandler<GetDiscoveryFeedQuery> for GetDiscovery
         };
         let mut page = match query.ranking {
             DiscoveryRanking::Nearby => self.nearby_page(query, &cursor, &mut filter, size).await?,
-            ranking => self.pool_page(ranking, &cursor, &mut filter, size).await?,
+            ranking => self.pool_page(ranking, query.hashtag.as_deref(), &cursor, &mut filter, size).await?,
         };
         if !interests.is_empty() {
             rank_by_interest(&mut page.items, &filter.tags, &interests);
@@ -448,10 +461,15 @@ mod tests {
         async fn range(
             &self,
             stream: DiscoveryStream,
+            tag:    Option<&str>,
             after:  Option<&StreamPosition>,
             count:  usize,
         ) -> Result<Vec<PoolEntry>, TimelineError> {
             let mut all = self.streams.lock().unwrap().get(&stream).cloned().unwrap_or_default();
+            if let Some(tag) = tag {
+                let meta = self.meta.lock().unwrap();
+                all.retain(|e| meta.get(&e.post_id).is_some_and(|m| m.tags.iter().any(|t| t == tag)));
+            }
             all.sort_by(|a, b| {
                 b.position.score.total_cmp(&a.position.score).then_with(|| b.position.member.cmp(&a.position.member))
             });
@@ -531,6 +549,7 @@ mod tests {
             limit,
             page_token,
             personalize_for: None,
+            hashtag: None,
         })
     }
 
@@ -711,5 +730,31 @@ mod tests {
         let page = h.handle(reader(DiscoveryRanking::ForYou)).await.unwrap();
         assert_eq!(ids(&page), vec![plain, go, rust, both]);
         assert!(!page.personalized);
+    }
+
+    /// #830: a hashtag narrows TRENDING to the posts carrying it, in the same
+    /// hot order; FOR_YOU and NEARBY refuse one.
+    #[tokio::test]
+    async fn a_hashtag_narrows_trending_and_recent_only() {
+        let pool = Arc::new(MemPool::default());
+        let a = author();
+        let low = pool.put(DiscoveryStream::Hot, a, 2.0, Restriction::None);
+        let high = pool.put(DiscoveryStream::Hot, a, 9.0, Restriction::None);
+        let other = pool.put(DiscoveryStream::Hot, a, 50.0, Restriction::None);
+        pool.tag(low, &["rust"]);
+        pool.tag(high, &["rust", "go"]);
+        pool.tag(other, &["go"]);
+        let h = handler(Arc::clone(&pool), Arc::new(Graph::default()), vec![]);
+
+        let mut tagged = query(DiscoveryRanking::Trending, 10, None);
+        tagged.payload.hashtag = Some("rust".to_owned());
+        let page = h.handle(tagged).await.unwrap();
+        assert_eq!(page.items.iter().map(|e| e.post_id).collect::<Vec<_>>(), vec![high, low]);
+
+        for ranking in [DiscoveryRanking::ForYou, DiscoveryRanking::Nearby] {
+            let mut q = query(ranking, 10, None);
+            q.payload.hashtag = Some("rust".to_owned());
+            assert!(matches!(h.handle(q).await, Err(TimelineError::DomainViolation { .. })));
+        }
     }
 }

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 433aa118d934dcec7aaa3dab0b8fd43c655b89908128428a4cecc01848187cbc
+  source_sha256: 3ff0a9f924247b67a06080578c4dc31bdcd4c8ed63d35a9726cf6677fb122a4d
   translated_at: 2026-10-10
   status: complete
 ---
@@ -142,7 +142,7 @@ rpc GetDiscoveryFeed(GetDiscoveryFeedRequest) returns (GetDiscoveryFeedResponse)
 
 message GetDiscoveryFeedRequest  { DiscoveryRanking ranking=1; string region=2; optional double lat=3;
                                    optional double lng=4; ContentLevel content_level=5; string page_token=6; int32 limit=7;
-                                   string profile_id=8; bool non_personalized=9; }
+                                   string profile_id=8; bool non_personalized=9; string hashtag=10; }
 message GetDiscoveryFeedResponse { repeated FeedItem items=1; string next_page_token=2; string region_applied=3;
                                    ContentLevel content_level_applied=4; bool personalized=5; }
 
@@ -163,6 +163,12 @@ message InterestsResponse { repeated Interest interests=1; }             // Inte
 Un fil qui n'a besoin d'aucun graphe de suivi : le For You des invités et des membres (#673, B3), classé
 pour un membre selon ses centres d'intérêt, sauf s'il l'a désactivé (#662).
 
+- **Les posts d'un hashtag (#830).** `hashtag` restreint `TRENDING` (même score chaud) et `RECENT` aux posts
+  dont la légende le porte, normalisé comme les légendes (`#` facultatif, sans casse) ; un autre classement
+  échoue en `FAILED_PRECONDITION`. Le pool tient des flux par tag `timeline:{disc}:tag:<tag>:recent|hot`
+  sur le slot du pool, écrits par les mêmes scripts (publication, popularité, restriction, suppression),
+  taillés à la fenêtre et expirant une fenêtre après le dernier post du tag. Mêmes filtres et même
+  pagination que le reste du fil ; un tag inutilisé depuis 3 jours renvoie des pages vides.
 - **Pool** (Redis, `timeline:{disc}:recent|fresh|hot` + un hash `timeline:disc:post:<id>` par post) : les posts
   publiés depuis moins de `TIMELINE_DISCOVERY_WINDOW_SECS` (72 h), plafonnés à `TIMELINE_DISCOVERY_POOL_CAP`.
   Alimenté par un seul consumer (`timeline-discovery`) sur `post.v1.events` (publié avec les hashtags de

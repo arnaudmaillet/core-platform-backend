@@ -45,6 +45,18 @@ async fn page(
     content_level: ContentLevel,
     page_token: Option<String>,
 ) -> DiscoveryPage {
+    tagged_page(h, ranking, content_level, page_token, None, 50).await
+}
+
+/// A page narrowed to `hashtag` (#830).
+async fn tagged_page(
+    h: &TestHarness,
+    ranking: DiscoveryRanking,
+    content_level: ContentLevel,
+    page_token: Option<String>,
+    hashtag: Option<&str>,
+    limit: i32,
+) -> DiscoveryPage {
     let query = GetDiscoveryFeedQuery {
         ranking,
         viewer: Viewer::Profiles(vec![]),
@@ -52,9 +64,10 @@ async fn page(
         content_level,
         lat: Some(48.85),
         lng: Some(2.35),
-        limit: 50,
+        limit,
         page_token,
         personalize_for: None,
+        hashtag: hashtag.map(str::to_owned),
     };
     h.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.expect("discovery page")
 }
@@ -134,4 +147,64 @@ async fn the_discovery_pool_ranks_filters_and_pages() {
         .map(|id| PostId::try_from(id.as_str()).unwrap())
         .collect();
     assert_eq!(all_of(&h, DiscoveryRanking::Nearby, r, &mine).await, vec![popular, old]);
+}
+
+/// #830 over live Redis: a hashtag's posts, trending (the time-decayed hot
+/// score: the same likes rank a newer post first) or recent, with the
+/// discovery filters, paged to the end.
+#[tokio::test]
+async fn a_hashtag_narrows_trending_and_recent() {
+    let h = TestHarness::start(HarnessOptions::default()).await;
+    let (author, private) = (harness::random_author(), harness::random_author());
+    h.social_graph.make_private(private);
+    let tag = format!("t{}", Uuid::now_v7().simple());
+    let t = now_ms() - 60_000;
+    let publish_tagged = |author: harness::AuthorId, at: i64, tags: Vec<String>| {
+        let h = &h;
+        async move {
+            let post_id = Uuid::now_v7().to_string();
+            signal(h, DiscoverySignal::Published {
+                post_id: post_id.clone(),
+                author_id: author.as_uuid().to_string(),
+                published_at_ms: at,
+                tags,
+            })
+            .await;
+            post_id
+        }
+    };
+    let older = publish_tagged(author, t, vec![tag.clone()]).await;
+    let newer = publish_tagged(author, t + 1_000, vec!["other".to_owned(), tag.clone()]).await;
+    let untagged = publish_tagged(author, t + 2_000, vec!["other".to_owned()]).await;
+    let deleted = publish_tagged(author, t + 3_000, vec![tag.clone()]).await;
+    let hidden = publish_tagged(private, t + 4_000, vec![tag.clone()]).await;
+    let quiet = publish_tagged(author, t + 5_000, vec![tag.clone()]).await;
+    // The same likes on both: the newer ranks first. The untagged one, far
+    // more popular, is not in the tag's feed.
+    for post in [&older, &newer] {
+        signal(&h, DiscoverySignal::Popularity { post_id: post.clone(), score: 50.0 }).await;
+    }
+    signal(&h, DiscoverySignal::Popularity { post_id: untagged.clone(), score: 5_000.0 }).await;
+    signal(&h, DiscoverySignal::Popularity { post_id: deleted.clone(), score: 900.0 }).await;
+    signal(&h, DiscoverySignal::Popularity { post_id: hidden.clone(), score: 900.0 }).await;
+    signal(&h, DiscoverySignal::Deleted { post_id: deleted.clone() }).await;
+
+    let all_tagged = |ranking| {
+        let (h, tag) = (&h, tag.clone());
+        async move {
+            let (mut token, mut out) = (None, Vec::new());
+            loop {
+                let p = tagged_page(h, ranking, ContentLevel::Restricted, token, Some(&tag), 1).await;
+                out.extend(p.items.iter().map(|e| e.post_id.to_string()));
+                match p.next_page_token {
+                    Some(next) => token = Some(next),
+                    None => return out,
+                }
+            }
+        }
+    };
+    // Trending: only posts with likes (the hot stream), the tag's only.
+    assert_eq!(all_tagged(DiscoveryRanking::Trending).await, vec![newer.clone(), older.clone()]);
+    // Recent: every visible post of the tag, newest first.
+    assert_eq!(all_tagged(DiscoveryRanking::Recent).await, vec![quiet, newer, older]);
 }

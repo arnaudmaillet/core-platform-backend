@@ -151,6 +151,14 @@ where
             _ => DiscoveryRanking::ForYou,
         };
         let content_level = content_level_for(req.content_level, guest, minor);
+        // Normalized as captions are indexed (#830).
+        let hashtag = match req.hashtag.trim() {
+            "" => None,
+            raw => Some(
+                crate::domain::value_object::interest::normalize_tag(raw)
+                    .ok_or_else(|| Status::invalid_argument("hashtag is not a valid tag"))?,
+            ),
+        };
 
         let query = GetDiscoveryFeedQuery {
             ranking,
@@ -162,6 +170,7 @@ where
             limit:      req.limit,
             page_token: if req.page_token.is_empty() { None } else { Some(req.page_token) },
             personalize_for,
+            hashtag,
         };
 
         let page = self

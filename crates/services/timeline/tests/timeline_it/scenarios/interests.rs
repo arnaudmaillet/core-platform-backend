@@ -62,6 +62,7 @@ async fn for_you(h: &TestHarness, reader: Option<ProfileId>) -> DiscoveryPage {
         limit:           50,
         page_token:      None,
         personalize_for: reader,
+        hashtag:         None,
     };
     h.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.expect("discovery page")
 }

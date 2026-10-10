@@ -96,6 +96,12 @@ message GetDiscoveryFeedRequest {
     // The holder's non-personalised feed setting (#662, profile
     // FeedSettings.non_personalized): set, interest tags are ignored.
     bool             non_personalized = 9;
+    // Only the posts whose caption carries this hashtag (#830), with or
+    // without its `#`, matched as captions are indexed (case-insensitive).
+    // TRENDING ranks them by the same time-decayed hot score, RECENT newest
+    // first; another ranking fails FAILED_PRECONDITION. The pool keeps the
+    // last TIMELINE_DISCOVERY_WINDOW_SECS (3 days): an older tag pages empty.
+    string           hashtag          = 10;
 }
 
 message GetDiscoveryFeedResponse {
