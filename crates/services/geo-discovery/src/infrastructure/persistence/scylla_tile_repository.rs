@@ -7,10 +7,10 @@ use scylla::value::CqlTimestamp;
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
 use uuid::Uuid;
 
-use crate::application::port::TileRepository;
+use crate::application::port::{PlaceEntry, TileRepository, COUNTRY_DAYS};
 use crate::domain::entity::MapPostCard;
 use crate::domain::value_object::{
-    H3Index, H3Resolution, MapVisibility, PostId, RetentionTtl, Suppression,
+    CountryCode, H3Index, H3Resolution, MapVisibility, Place, PostId, RetentionTtl, Suppression,
 };
 use crate::error::GeoDiscoveryError;
 use crate::infrastructure::persistence::model::{MapCardRow, PostTileRow};
@@ -286,4 +286,124 @@ impl TileRepository for ScyllaTileRepository {
 
         Ok(rows.into_iter().map(|r| r.post_id).collect())
     }
+
+    async fn insert_country_entry(
+        &self,
+        country:         CountryCode,
+        post_id:         &PostId,
+        published_at_ms: i64,
+        ttl:             RetentionTtl,
+    ) -> Result<(), GeoDiscoveryError> {
+        let stmt = self.strict_stmt(
+            "INSERT INTO geo_discovery.posts_by_country (country, day, published_at, post_id) \
+             VALUES (?, ?, ?, ?) USING TTL ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(
+                stmt,
+                (country.as_str(), cql_date(day_of(published_at_ms)), CqlTimestamp(published_at_ms), post_id.as_uuid(), ttl.as_scylla_ttl()),
+            )
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn list_place(
+        &self,
+        place: &Place,
+        after: Option<PlaceEntry>,
+        limit: i32,
+    ) -> Result<Vec<PlaceEntry>, GeoDiscoveryError> {
+        let limit = limit.max(1);
+        match place {
+            Place::Cell { index, resolution } => {
+                let key = (index.as_i64(), resolution.as_i8());
+                self.page_partition("posts_by_tile", "h3_index = ? AND resolution = ?", key, after, limit).await
+            }
+            Place::Country(country) => {
+                let today = day_of(chrono::Utc::now().timestamp_millis());
+                let first = after.map_or(today, |a| day_of(a.published_at_ms));
+                let mut entries = Vec::new();
+                let mut day = first;
+                while entries.len() < limit as usize && (today - day).num_days() < COUNTRY_DAYS {
+                    let left = limit - entries.len() as i32;
+                    let after_in_day = after.filter(|_| day == first);
+                    entries.extend(
+                        self.page_partition("posts_by_country", "country = ? AND day = ?", (country.as_str(), cql_date(day)), after_in_day, left)
+                            .await?,
+                    );
+                    day = day.pred_opt().expect("a day before");
+                }
+                Ok(entries)
+            }
+        }
+    }
 }
+
+impl ScyllaTileRepository {
+    /// One partition's posts newest first, strictly after `after`: the rest of
+    /// its millisecond (ids ascend within it), then the older ones.
+    async fn page_partition<A, B>(
+        &self,
+        table:  &str,
+        key:    &str,
+        (a, b): (A, B),
+        after:  Option<PlaceEntry>,
+        limit:  i32,
+    ) -> Result<Vec<PlaceEntry>, GeoDiscoveryError>
+    where
+        A: scylla::serialize::value::SerializeValue + Clone,
+        B: scylla::serialize::value::SerializeValue + Clone,
+    {
+        let base = format!("SELECT published_at, post_id FROM geo_discovery.{table} WHERE {key}");
+        let rows = match after {
+            None => self.place_rows(&format!("{base} LIMIT ?"), (a, b, limit)).await?,
+            Some(after) => {
+                let at = CqlTimestamp(after.published_at_ms);
+                let mut rows = self
+                    .place_rows(
+                        &format!("{base} AND published_at = ? AND post_id > ? LIMIT ?"),
+                        (a.clone(), b.clone(), at, after.post_id, limit),
+                    )
+                    .await?;
+                let left = limit - rows.len() as i32;
+                if left > 0 {
+                    rows.extend(self.place_rows(&format!("{base} AND published_at < ? LIMIT ?"), (a, b, at, left)).await?);
+                }
+                rows
+            }
+        };
+        Ok(rows.into_iter().map(|(at, post_id)| PlaceEntry { post_id, published_at_ms: at.0 }).collect())
+    }
+
+    async fn place_rows(
+        &self,
+        cql:    &str,
+        values: impl scylla::serialize::row::SerializeRow,
+    ) -> Result<Vec<(CqlTimestamp, Uuid)>, GeoDiscoveryError> {
+        self.client
+            .session
+            .execute_unpaged(self.fast_stmt(cql), values)
+            .await
+            .map_err(scylla_err)?
+            .into_rows_result()
+            .map_err(|e| row_err("list_place:rows", e))?
+            .rows::<(CqlTimestamp, Uuid)>()
+            .map_err(|e| row_err("list_place:iter", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| row_err("list_place:deser", e))
+    }
+}
+
+/// The UTC day of a millisecond timestamp (`posts_by_country`'s bucket).
+fn day_of(ms: i64) -> chrono::NaiveDate {
+    chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default().date_naive()
+}
+
+/// A CQL `date`: days since the Unix epoch, offset by 2^31.
+fn cql_date(day: chrono::NaiveDate) -> scylla::value::CqlDate {
+    let days = (day - chrono::NaiveDate::default()).num_days();
+    scylla::value::CqlDate((days + (1_i64 << 31)) as u32)
+}
+

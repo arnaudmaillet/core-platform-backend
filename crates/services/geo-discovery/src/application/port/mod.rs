@@ -19,5 +19,5 @@ pub use geo_ip::GeoIp;
 pub use location_settings_store::{sharing_for_reader, LocationSettingsStore};
 pub use pin_store::PinStore;
 pub use spatial_index::SpatialIndex;
-pub use tile_repository::TileRepository;
+pub use tile_repository::{PlaceEntry, TileRepository, COUNTRY_DAYS};
 pub use unlock_peers::{GemSpend, GemWallet, ResidenceDirectory};

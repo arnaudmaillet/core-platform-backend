@@ -23,6 +23,7 @@ use geo_discovery::application::command::{
 use geo_discovery::application::port::{AudienceGate, GemSpend, GemWallet, ResidenceDirectory};
 use geo_discovery::domain::value_object::CountryCode;
 use geo_discovery::application::query::get_geo_timeline::{GetGeoTimelineQuery, GetGeoTimelineResult};
+use geo_discovery::application::query::list_place_posts::{ListPlacePostsQuery, PlacePostsPage, PlaceSort};
 use geo_discovery::application::query::query_tile::{QueryTileQuery, QueryTileResult};
 use geo_discovery::config::GeoDiscoveryConfig;
 use geo_discovery::domain::value_object::{GeoCoordinate, H3Index, H3Resolution};
@@ -270,6 +271,59 @@ impl TestHarness {
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
         post_uuid
+    }
+
+    /// Indexes a post at `(lat, lng)` with `virality`, published at
+    /// `published_at_ms` (#833: a place listing's order).
+    pub async fn index_post_scored_at(&self, lat: f64, lng: f64, virality: f64, published_at_ms: i64) -> Uuid {
+        let post_uuid = Uuid::now_v7();
+        let cmd = IndexPostCommand {
+            post_id:           post_uuid.to_string(),
+            author_id:         Uuid::now_v7().to_string(),
+            author_handle:     "tester".to_owned(),
+            author_avatar_url: String::new(),
+            thumbnail_url:     String::new(),
+            caption:           String::new(),
+            lat,
+            lng,
+            virality_score:    virality,
+            published_at_ms,
+            retention_secs:    None,
+            author_tier:       0,
+        };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
+        post_uuid
+    }
+
+    /// One page of a place's posts (#833).
+    pub async fn place_page(
+        &self,
+        place: geo_discovery::domain::value_object::Place,
+        sort: PlaceSort,
+        limit: i32,
+        page_token: Option<String>,
+        scope: MapScope,
+    ) -> PlacePostsPage {
+        let query = ListPlacePostsQuery { place, sort, limit, page_token, viewer: Viewer::Internal, scope };
+        self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.expect("list_place_posts")
+    }
+
+    /// Every post of a place, page by page (#833).
+    pub async fn all_place_posts(
+        &self,
+        place: geo_discovery::domain::value_object::Place,
+        sort: PlaceSort,
+        limit: i32,
+    ) -> Vec<Uuid> {
+        let (mut ids, mut token) = (Vec::new(), None);
+        loop {
+            let page = self.place_page(place, sort, limit, token, MapScope::All).await;
+            ids.extend(page.cards.iter().map(|c| c.post_id));
+            match page.next_page_token {
+                Some(next) => token = Some(next),
+                None => return ids,
+            }
+        }
     }
 
     /// Re-scores a post at `(lat, lng)`, as the score updater does.

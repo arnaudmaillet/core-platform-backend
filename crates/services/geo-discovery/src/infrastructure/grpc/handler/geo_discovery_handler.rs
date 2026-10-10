@@ -9,8 +9,9 @@ use cqrs::{Envelope, QueryBus};
 use crate::application::country_access::ResolveCountryAccess;
 use crate::application::country_unlocks::{CountryUnlocking, Spender, UnlockOutcome};
 use crate::application::query::get_geo_timeline::GetGeoTimelineQuery;
+use crate::application::query::list_place_posts::{ListPlacePostsQuery, PlaceSort};
 use crate::application::query::query_tile::QueryTileQuery;
-use crate::domain::value_object::{CountryAccessOutcome, MapScope, Viewer};
+use crate::domain::value_object::{CountryAccessOutcome, CountryCode, H3Resolution, MapScope, Place, Viewer};
 use transport::grpc::edge;
 
 // ── Proto inclusion ───────────────────────────────────────────────────────────
@@ -108,6 +109,48 @@ where
         Ok(Response::new(proto::QueryTileResponse {
             pins,
             tile_count: result.tile_count,
+        }))
+    }
+
+    async fn list_place_posts_inner(
+        &self,
+        request: Request<proto::ListPlacePostsRequest>,
+    ) -> Result<Response<proto::ListPlacePostsResponse>, Status> {
+        let viewer = viewer_of(&request);
+        let scope = scope_of(&request, self.member_filtering());
+        let req = request.into_inner();
+        let invalid = |e: crate::error::GeoDiscoveryError| Status::invalid_argument(e.to_string());
+        let place = match req.place {
+            Some(proto::list_place_posts_request::Place::H3Cell(cell)) => Place::cell(cell).map_err(invalid)?,
+            Some(proto::list_place_posts_request::Place::CountryCode(code)) => {
+                Place::Country(CountryCode::try_from(code.as_str()).map_err(invalid)?)
+            }
+            Some(proto::list_place_posts_request::Place::Point(point)) => {
+                let resolution = match proto::PlaceScale::try_from(point.scale) {
+                    Ok(proto::PlaceScale::District) => H3Resolution::R7,
+                    Ok(proto::PlaceScale::Street) => H3Resolution::R9,
+                    _ => H3Resolution::R5,
+                };
+                Place::around(point.lat, point.lng, resolution).map_err(invalid)?
+            }
+            None => return Err(Status::invalid_argument("a place is required")),
+        };
+        let sort = match proto::PlaceSort::try_from(req.sort) {
+            Ok(proto::PlaceSort::Popular) => PlaceSort::Popular,
+            _ => PlaceSort::Recent,
+        };
+        let query = ListPlacePostsQuery {
+            place,
+            sort,
+            limit: if req.limit > 0 { req.limit } else { 20 },
+            page_token: Some(req.page_token).filter(|t| !t.is_empty()),
+            viewer,
+            scope,
+        };
+        let page = self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListPlacePostsResponse {
+            cards:           page.cards.into_iter().map(card_to_proto).collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
         }))
     }
 
@@ -270,6 +313,13 @@ where
         request: Request<proto::GetGeoTimelineRequest>,
     ) -> Result<Response<proto::GetGeoTimelineResponse>, Status> {
         self.get_geo_timeline_inner(request).await
+    }
+
+    async fn list_place_posts(
+        &self,
+        request: Request<proto::ListPlacePostsRequest>,
+    ) -> Result<Response<proto::ListPlacePostsResponse>, Status> {
+        self.list_place_posts_inner(request).await
     }
 
     async fn get_country_access(

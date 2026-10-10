@@ -46,6 +46,16 @@ impl H3Index {
         self.0.grid_disk::<Vec<_>>(k).into_iter().map(H3Index).collect()
     }
 
+    /// The cell's resolution, when it is one this service indexes (#833).
+    pub fn resolution(&self) -> Option<H3Resolution> {
+        match self.0.resolution() {
+            h3o::Resolution::Five => Some(H3Resolution::R5),
+            h3o::Resolution::Seven => Some(H3Resolution::R7),
+            h3o::Resolution::Nine => Some(H3Resolution::R9),
+            _ => None,
+        }
+    }
+
     /// Reconstructs from a ScyllaDB `bigint`. Returns an error for invalid indices.
     pub fn from_i64(v: i64) -> Result<Self, GeoDiscoveryError> {
         h3o::CellIndex::try_from(v as u64)

@@ -2,8 +2,18 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::domain::entity::MapPostCard;
-use crate::domain::value_object::{H3Index, H3Resolution, MapVisibility, PostId, RetentionTtl};
+use crate::domain::value_object::{CountryCode, H3Index, H3Resolution, MapVisibility, Place, PostId, RetentionTtl};
 use crate::error::GeoDiscoveryError;
+
+/// One post of a place's listing (#833), and where the next page resumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaceEntry {
+    pub post_id:         Uuid,
+    pub published_at_ms: i64,
+}
+
+/// How far back a country's listing reads (UTC days): past any map retention.
+pub const COUNTRY_DAYS: i64 = 31;
 
 /// Port: ScyllaDB durable persistence layer.
 ///
@@ -75,4 +85,24 @@ pub trait TileRepository: Send + Sync {
         resolution: H3Resolution,
         limit:      i32,
     ) -> Result<Vec<Uuid>, GeoDiscoveryError>;
+
+    /// Files a post under the country it was published in (#833), with the
+    /// map retention as its TTL.
+    async fn insert_country_entry(
+        &self,
+        country:         CountryCode,
+        post_id:         &PostId,
+        published_at_ms: i64,
+        ttl:             RetentionTtl,
+    ) -> Result<(), GeoDiscoveryError>;
+
+    /// A place's posts, newest first, strictly after `after` (#833) — every
+    /// post the cell or country holds within its retention, not the map's
+    /// Top-K. Suppressed posts are still listed: hydration drops them.
+    async fn list_place(
+        &self,
+        place: &Place,
+        after: Option<PlaceEntry>,
+        limit: i32,
+    ) -> Result<Vec<PlaceEntry>, GeoDiscoveryError>;
 }
