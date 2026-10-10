@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 0e2b63c159a26b07413b2e2fbda4477c507771c1c3981fe104a335dcfd631c61
-  translated_at: 2026-10-08
+  source_sha256: a2f8e3c052ea4806fcc5f6cc01b53df82807cdc0fadf811c5584835f07c1d070
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -392,6 +392,17 @@ Messages directs (#656) : `CHT-1010` (le message unique d'une demande est utilis
 dessein, la réponse à un expéditeur refusé ou bloqué), `CHT-1011` (le destinataire n'accepte de messages
 de personne ; jamais la réponse à un blocage), `CHT-1012` (aucune demande d'un autre à traiter).
 
+Envois idempotents (#875) : `SendMessageRequest.idempotency_key` (8 à 64 lettres, chiffres, `-`, `_` ;
+`CHT-2010` sinon) fait qu'un envoi rejoué ne stocke rien et renvoie le `message_id` du premier envoi.
+La clé est propre à l'expéditeur et à la conversation et vit dans Redis (`chat:{conv:<id>}:send:…`) :
+en attente pendant 60 s, le temps d'écrire son envoi, puis envoyée pendant 24 h dès que le message est
+stocké (même si son annonce échoue ensuite : une annonce manquée vaut mieux qu'un doublon). Une répétition pendant
+que le premier envoi est encore en attente échoue en `CHT-1013` (`ABORTED`, à réessayer). La clé est
+vérifiée en même temps que l'appartenance et avant la règle du message unique d'une demande : un envoi
+stocké répond à son rejeu même si l'expéditeur est parti depuis, et le rejeu du message d'une demande y
+répond au lieu de `CHT-1010`. Au mieux : si Redis ne répond pas, le
+message part sans déduplication.
+
 ---
 
 ## 📨 Contrat événementiel & asynchrone
@@ -431,7 +442,7 @@ de personne ; jamais la réponse à un blocage), `CHT-1012` (aucune demande d'un
 | Failure | Symptom | Service behavior | Operator action |
 |---|---|---|---|
 | ScyllaDB indisponible | `SendMessage` / `GetHistory` froid échouent | **Échec dur** — `UNAVAILABLE` ; rien n'est acquitté, donc rien n'est perdu | vérifier la santé du cluster Scylla / du DC |
-| Redis indisponible | les messages temps réel s'arrêtent ; présence/saisie disparaissent | **Souple** — `SendMessage` réussit toujours (durable) ; les invités lisent encore l'historique depuis Scylla | vérifier Redis Cluster ; les clients re-`GetHistory` |
+| Redis indisponible | les messages temps réel s'arrêtent ; présence/saisie disparaissent ; un envoi rejoué peut être dupliqué | **Souple** — `SendMessage` réussit toujours (durable), sans déduplication par clé d'idempotence ; les invités lisent encore l'historique depuis Scylla | vérifier Redis Cluster ; les clients re-`GetHistory` |
 | Cache hot-tail Redis froid/évincé | la latence des lecteurs passifs augmente | **Souple & sûr** — les lectures retombent sur Scylla (source de vérité durable) | vérifier le taux de hits / la capacité ; se rétablit en général seul |
 | Kafka indisponible | la fermeture à l'unpublish est retardée ; les événements aval s'arrêtent | **Souple** — fan-out non affecté ; la fermeture reprend depuis le dernier offset committé | vérifier les brokers ; surveiller le lag de `chat-visibility-consumer` |
 | `InboxWorker` arrêté ou en retard de plus de 2 jours | les inbox montrent une dernière activité plus ancienne, ces messages ne sont pas envoyés en push | `chat.message.sent` est gardé 2 jours : les mises à jour plus anciennes ont quitté le broker (les messages restent dans le journal de chat) | garder le lag de `chat-inbox` bien sous 2 jours ; le message suivant d'un membre répare son entrée |

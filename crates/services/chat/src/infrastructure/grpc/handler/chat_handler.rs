@@ -305,36 +305,40 @@ where
     ) -> Result<Response<proto::SendMessageResponse>, Status> {
         edge::require_profile(&request, &request.get_ref().sender_id)?;
         let req = request.into_inner();
-        let message_id = Uuid::now_v7().to_string();
-
         let content_type = ContentType::try_from(req.content_type as i8)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let media_ref = non_empty(req.media_ref);
         let reply_to  = non_empty(req.reply_to);
 
         let cmd = SendMessageCommand {
-            message_id:      message_id.clone(),
+            message_id:      Uuid::now_v7().to_string(),
             conversation_id: req.conversation_id.clone(),
             sender_id:       req.sender_id.clone(),
             content_type:    req.content_type,
             body:            req.body.clone(),
             media_ref:       media_ref.clone(),
             reply_to:        reply_to.clone(),
+            idempotency_key: non_empty(req.idempotency_key),
         };
 
         // Durable write (and Kafka seam) first.
         let sent = self.sender.send(&cmd).await.map_err(chat_err_to_status)?;
+        let message_id = sent.message_id.as_str();
+
+        // A retry whose key was already sent (#875) went out the first time.
+        if sent.replayed {
+            return Ok(Response::new(proto::SendMessageResponse { message_id }));
+        }
 
         // Then the best-effort real-time fork (hot-tail cache + both planes).
         // A failure here does not fail the RPC — the message is already durable.
-        if let (Ok(conversation_id), Ok(mid), Ok(sender_id)) = (
+        if let (Ok(conversation_id), Ok(sender_id)) = (
             ConversationId::try_from(req.conversation_id.as_str()),
-            MessageId::try_from(message_id.as_str()),
             ProfileId::try_from(req.sender_id.as_str()),
         ) {
             let now = Utc::now();
             let summary = MessageSummary {
-                message_id:   mid.as_uuid(),
+                message_id:   sent.message_id.as_uuid(),
                 sender_id:    sender_id.as_uuid(),
                 content_type,
                 body:         req.body,

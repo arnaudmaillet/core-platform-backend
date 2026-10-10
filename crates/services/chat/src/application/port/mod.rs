@@ -12,6 +12,7 @@ pub mod presence_settings_store;
 pub mod presence_store;
 pub mod receipt_store;
 pub mod routing_registry;
+pub mod send_keys;
 pub mod subscription_repository;
 
 pub use conversation_repository::ConversationRepository;
@@ -28,4 +29,5 @@ pub use presence_settings_store::{PresenceSettings, PresenceSettingsStore};
 pub use presence_store::PresenceStore;
 pub use receipt_store::ReceiptStore;
 pub use routing_registry::RoutingRegistry;
+pub use send_keys::{SendClaim, SendKeys};
 pub use subscription_repository::SubscriptionRepository;

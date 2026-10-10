@@ -61,6 +61,7 @@ async fn probe(h: &TestHarness, rpc: &str, conv: &ConversationId, caller: &Profi
                 body:            "probe".to_owned(),
                 media_ref:       String::new(),
                 reply_to:        String::new(),
+                idempotency_key: String::new(),
             }),
         )
         .await

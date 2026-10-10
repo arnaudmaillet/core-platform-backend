@@ -314,6 +314,7 @@ impl TestHarness {
                 body:            body.to_owned(),
                 media_ref:       String::new(),
                 reply_to:        String::new(),
+                idempotency_key: String::new(),
             }),
         )
         .await
@@ -358,6 +359,7 @@ impl TestHarness {
                 body:            body.to_owned(),
                 media_ref:       String::new(),
                 reply_to:        String::new(),
+                idempotency_key: String::new(),
             }),
         )
         .await
