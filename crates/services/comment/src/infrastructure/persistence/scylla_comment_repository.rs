@@ -329,7 +329,7 @@ impl CommentRepository for ScyllaCommentRepository {
             self.set_held(comment, true).await?;
         }
         if comment.parent_id().is_some() {
-            self.count_reply(comment.post_id(), parent_uuid, 1).await?;
+            self.count_reply(comment.post_id(), parent_uuid, 1).await;
         }
 
         Ok(())
@@ -487,7 +487,7 @@ impl CommentRepository for ScyllaCommentRepository {
         );
         self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
         if comment.parent_id().is_some() {
-            self.count_reply(comment.post_id(), parent_uuid, -1).await?;
+            self.count_reply(comment.post_id(), parent_uuid, -1).await;
         }
 
         Ok(())
@@ -718,17 +718,21 @@ impl ScyllaCommentRepository {
             .map_err(|e| row_err(ctx, e))
     }
 
-    /// Moves a parent's reply count by `delta` (#832).
-    async fn count_reply(&self, post_id: &PostId, parent: Uuid, delta: i64) -> Result<(), CommentError> {
+    /// Moves a parent's reply count by `delta` (#832). Best-effort: the reply
+    /// is already written (or purged), so a failed count is logged rather than
+    /// failing the call — whose retry would write the reply twice.
+    async fn count_reply(&self, post_id: &PostId, parent: Uuid, delta: i64) {
         let stmt = self.strict_stmt(
             "UPDATE comment.reply_counts SET replies = replies + ? WHERE post_id = ? AND parent_id = ?",
         );
-        self.client
+        if let Err(error) = self
+            .client
             .session
             .execute_unpaged(stmt, (scylla::value::Counter(delta), post_id.as_uuid(), parent))
             .await
-            .map_err(scylla_err)?;
-        Ok(())
+        {
+            tracing::warn!(%error, post_id = %post_id, parent = %parent, delta, "reply count not updated");
+        }
     }
 }
 
