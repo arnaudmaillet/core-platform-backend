@@ -69,6 +69,12 @@ pub enum ChatError {
     #[error("no message request to answer in conversation {conversation_id}")]
     NoMessageRequest { conversation_id: String },
 
+    /// A send with this idempotency key is still being written (#875): the
+    /// retry may not store a second message, and has no message id to answer
+    /// yet. Retryable — the next attempt finds the first send's message.
+    #[error("a send with this idempotency key is in flight in conversation {conversation_id}")]
+    SendInFlight { conversation_id: String },
+
     // ── CHT-5xxx: Peer services ───────────────────────────────────────────────
     /// social-graph, which decides who may message whom, did not answer:
     /// direct messages and invitations fail closed until it does (#656).
@@ -102,6 +108,9 @@ pub enum ChatError {
 
     #[error("invalid page token: '{token}'")]
     InvalidPageToken { token: String },
+
+    #[error("idempotency key must be 8 to 64 letters, digits, '-' or '_'")]
+    InvalidIdempotencyKey,
 
     // ── CHT-3xxx: Event / Kafka errors ────────────────────────────────────────
     #[error("failed to publish chat event to Kafka: {message}")]
@@ -144,6 +153,7 @@ impl AppError for ChatError {
             Self::MessageRequestPending { .. }      => "CHT-1010",
             Self::MessagingNotAllowed { .. }        => "CHT-1011",
             Self::NoMessageRequest { .. }           => "CHT-1012",
+            Self::SendInFlight { .. }               => "CHT-1013",
 
             Self::InteractionCheckUnavailable { .. } => "CHT-5001",
 
@@ -156,6 +166,7 @@ impl AppError for ChatError {
             Self::MediaReferenceMissing          => "CHT-2007",
             Self::InvalidParticipantRole { .. }  => "CHT-2008",
             Self::InvalidPageToken { .. }        => "CHT-2009",
+            Self::InvalidIdempotencyKey          => "CHT-2010",
 
             Self::EventPublishFailed { .. } => "CHT-3001",
 
@@ -179,7 +190,8 @@ impl AppError for ChatError {
 
             Self::ConversationAlreadyPublic { .. }
             | Self::ConversationAlreadyPrivate { .. }
-            | Self::AlreadyMember { .. } => StatusCode::CONFLICT,
+            | Self::AlreadyMember { .. }
+            | Self::SendInFlight { .. } => StatusCode::CONFLICT,
 
             Self::NotAuthorized { .. } => StatusCode::FORBIDDEN,
 
@@ -203,6 +215,7 @@ impl AppError for ChatError {
             | Self::MediaReferenceMissing
             | Self::InvalidParticipantRole { .. }
             | Self::InvalidPageToken { .. }
+            | Self::InvalidIdempotencyKey
             | Self::InvalidConversationId(_)
             | Self::InvalidMessageId(_)
             | Self::InvalidProfileId(_)
@@ -234,6 +247,7 @@ impl AppError for ChatError {
             | Self::MediaReferenceMissing
             | Self::InvalidParticipantRole { .. }
             | Self::InvalidPageToken { .. }
+            | Self::InvalidIdempotencyKey
             | Self::MemberLimitExceeded { .. }
             | Self::DomainViolation { .. } => Severity::Medium,
 
@@ -248,6 +262,7 @@ impl AppError for ChatError {
             | Self::MessageRequestPending { .. }
             | Self::MessagingNotAllowed { .. }
             | Self::NoMessageRequest { .. }
+            | Self::SendInFlight { .. }
             | Self::InvalidConversationId(_)
             | Self::InvalidMessageId(_)
             | Self::InvalidProfileId(_) => Severity::Low,
@@ -258,7 +273,8 @@ impl AppError for ChatError {
         match self {
             Self::Scylla(e) => e.is_retryable(),
             Self::Redis(e)  => e.is_retryable(),
-            Self::InteractionCheckUnavailable { .. } => true,
+            Self::InteractionCheckUnavailable { .. }
+            | Self::SendInFlight { .. } => true,
             _               => false,
         }
     }
@@ -313,6 +329,9 @@ impl AppError for ChatError {
             Self::NoMessageRequest { .. } =>
                 "There is no message request to answer.",
 
+            Self::SendInFlight { .. } =>
+                "Your message is still being sent. Please try again.",
+
             Self::InteractionCheckUnavailable { .. } =>
                 "Messages are temporarily unavailable. Please try again later.",
 
@@ -336,6 +355,9 @@ impl AppError for ChatError {
 
             Self::InvalidPageToken { .. } =>
                 "The pagination token is invalid or expired.",
+
+            Self::InvalidIdempotencyKey =>
+                "This request key is not valid.",
 
             Self::InvalidConversationId(_) => "The conversation ID is not valid.",
             Self::InvalidMessageId(_)      => "The message ID is not valid.",

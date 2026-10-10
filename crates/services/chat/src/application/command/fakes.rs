@@ -11,12 +11,12 @@ use uuid::Uuid;
 
 use crate::application::port::{
     ConversationRepository, EventPublisher, Folder, InboxEntry, InboxStore, InteractionGate, InvitationRepository,
-    MemberRepository, MessageRepository, MessageSummary, MessageVerdict, SubscriptionRepository,
+    MemberRepository, MessageRepository, MessageSummary, MessageVerdict, SendClaim, SendKeys, SubscriptionRepository,
 };
 use crate::domain::aggregate::{Conversation, Direct, Invitation, Message, Participant};
 use crate::domain::event::{DomainEvent, MessageEvent};
 use crate::domain::value_object::{
-    ConversationId, ConversationKind, MessageId, MessageRequest, ProfileId, Role, Visibility,
+    ConversationId, ConversationKind, IdempotencyKey, MessageId, MessageRequest, ProfileId, Role, Visibility,
 };
 use crate::error::ChatError;
 
@@ -582,6 +582,96 @@ impl FakePushes {
 impl crate::application::port::MessagePushes for FakePushes {
     async fn request(&self, push: &crate::application::port::MessagePush) -> Result<(), ChatError> {
         self.0.lock().unwrap().push(push.clone());
+        Ok(())
+    }
+}
+
+/// Idempotency keys (#875) in memory, with the Redis adapter's
+/// compare-and-set semantics; `down()` fails every call like a lost Redis.
+#[derive(Default)]
+pub struct FakeSendKeys {
+    /// `(sent, message_id)` per key.
+    keys: Mutex<HashMap<String, (bool, MessageId)>>,
+    down: AtomicBool,
+}
+
+impl FakeSendKeys {
+    pub fn down(&self) {
+        self.down.store(true, Ordering::SeqCst);
+    }
+
+    /// Claims the key for another send that never finishes.
+    pub fn hold(&self, conversation_id: &ConversationId, sender_id: &ProfileId, key: &IdempotencyKey) {
+        self.keys.lock().unwrap().insert(Self::slot(conversation_id, sender_id, key), (false, MessageId::new()));
+    }
+
+    /// How many keys are held, pending or sent.
+    pub fn held(&self) -> usize {
+        self.keys.lock().unwrap().len()
+    }
+
+    fn slot(conversation_id: &ConversationId, sender_id: &ProfileId, key: &IdempotencyKey) -> String {
+        format!("{conversation_id}:{sender_id}:{key}")
+    }
+
+    fn check(&self) -> Result<(), ChatError> {
+        if self.down.load(Ordering::SeqCst) {
+            return Err(ChatError::Redis(redis_storage::RedisStorageError::Timeout { message: "fake".to_owned() }));
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl SendKeys for FakeSendKeys {
+    async fn claim(
+        &self,
+        conversation_id: &ConversationId,
+        sender_id:       &ProfileId,
+        key:             &IdempotencyKey,
+        message_id:      MessageId,
+    ) -> Result<SendClaim, ChatError> {
+        self.check()?;
+        let mut keys = self.keys.lock().unwrap();
+        Ok(match keys.get(&Self::slot(conversation_id, sender_id, key)) {
+            Some((true, id)) => SendClaim::Sent(*id),
+            Some((false, _)) => SendClaim::InFlight,
+            None => {
+                keys.insert(Self::slot(conversation_id, sender_id, key), (false, message_id));
+                SendClaim::Fresh
+            }
+        })
+    }
+
+    async fn complete(
+        &self,
+        conversation_id: &ConversationId,
+        sender_id:       &ProfileId,
+        key:             &IdempotencyKey,
+        message_id:      MessageId,
+    ) -> Result<(), ChatError> {
+        self.check()?;
+        if let Some(held) = self.keys.lock().unwrap().get_mut(&Self::slot(conversation_id, sender_id, key))
+            && *held == (false, message_id)
+        {
+            held.0 = true;
+        }
+        Ok(())
+    }
+
+    async fn release(
+        &self,
+        conversation_id: &ConversationId,
+        sender_id:       &ProfileId,
+        key:             &IdempotencyKey,
+        message_id:      MessageId,
+    ) -> Result<(), ChatError> {
+        self.check()?;
+        let mut keys = self.keys.lock().unwrap();
+        let slot = Self::slot(conversation_id, sender_id, key);
+        if keys.get(&slot) == Some(&(false, message_id)) {
+            keys.remove(&slot);
+        }
         Ok(())
     }
 }

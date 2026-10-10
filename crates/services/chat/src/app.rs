@@ -33,14 +33,14 @@ use crate::application::command::{
 use crate::application::port::{
     ConversationRepository, EventPublisher, HotTailCache, InboxStore, InteractionGate, MemberRepository,
     MessageFilterStore, MessagePushes, MessageRepository, NoMessagePushes, PresenceSettingsStore, PresenceStore,
-    ReceiptStore, RoutingRegistry,
+    ReceiptStore, RoutingRegistry, SendKeys,
 };
 use crate::application::query::{
     FormerMemberHistoryQuery, GetHistoryHandler, GetHistoryQuery, ListInboxHandler, ListInboxQuery, ListMembersHandler, ListMembersQuery,
     ListConversationsByMemberHandler, ListConversationsByMemberQuery, ListSubscriptionsHandler, ListSubscriptionsQuery,
 };
 use crate::infrastructure::cache::{
-    RedisHotTailCache, RedisPresenceStore, RedisReceiptStore, RedisRoutingRegistry,
+    RedisHotTailCache, RedisPresenceStore, RedisReceiptStore, RedisRoutingRegistry, RedisSendKeys,
 };
 use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher, ProjectingPublisher};
 use crate::infrastructure::grpc::handler::chat_handler::StreamingParams;
@@ -174,6 +174,7 @@ impl App {
         let presence = Arc::new(RedisPresenceStore::new(redis_client.clone()));
         let receipt = Arc::new(RedisReceiptStore::new(redis_client.clone()));
         let routing = Arc::new(RedisRoutingRegistry::new(redis_client.clone()));
+        let send_keys: Arc<dyn SendKeys> = Arc::new(RedisSendKeys::new(redis_client.clone()));
         let presence_settings: Arc<dyn PresenceSettingsStore> =
             Arc::new(ScyllaPresenceSettingsStore::new(Arc::clone(&scylla_client)));
         let message_filters: Arc<dyn MessageFilterStore> =
@@ -209,6 +210,7 @@ impl App {
             subscription_repo: &subscription_repo,
             invitation_repo:   &invitation_repo,
             inbox:             &inbox,
+            send_keys:         &send_keys,
         };
         let commands = match &kafka_publisher {
             Some(publisher) => build_commands(Arc::clone(publisher), &repos, interaction_gate.clone())?,
@@ -333,6 +335,8 @@ struct Repos<'a> {
     subscription_repo: &'a Arc<ScyllaSubscriptionRepository>,
     invitation_repo:   &'a Arc<ScyllaInvitationRepository>,
     inbox:             &'a Arc<dyn InboxStore>,
+    /// `SendMessage`'s idempotency keys (#875).
+    send_keys:         &'a Arc<dyn SendKeys>,
 }
 
 /// The command side: the bus, plus the two services whose answers the gRPC
@@ -350,13 +354,14 @@ fn build_commands<EP: EventPublisher>(
     repos:     &Repos<'_>,
     gate:      Option<Arc<dyn InteractionGate>>,
 ) -> Result<Commands, Box<dyn std::error::Error>> {
-    let Repos { conversation_repo, message_repo, member_repo, subscription_repo, invitation_repo, inbox } = *repos;
+    let Repos { conversation_repo, message_repo, member_repo, subscription_repo, invitation_repo, inbox, send_keys } = *repos;
     let sender: Arc<dyn SendMessages> = Arc::new(SendMessageHandler {
         conversation_repo: Arc::clone(conversation_repo),
         member_repo:       Arc::clone(member_repo),
         message_repo:      Arc::clone(message_repo),
         publisher:         Arc::clone(&publisher),
         gate:              gate.clone(),
+        send_keys:         Some(Arc::clone(send_keys)),
     });
     let direct: Arc<dyn DirectMessaging> = Arc::new(DirectConversations {
         conversation_repo: Arc::clone(conversation_repo),

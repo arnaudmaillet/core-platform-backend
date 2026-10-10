@@ -363,6 +363,15 @@ Direct messages (#656): `CHT-1010` (a request's one message is spent — also th
 or blocked sender, by design), `CHT-1011` (the peer takes messages from no one; never the answer to a
 block), `CHT-1012` (no request from someone else to answer).
 
+Idempotent sends (#875): `SendMessageRequest.idempotency_key` (8–64 letters, digits, `-`, `_`;
+`CHT-2010` otherwise) makes a retried send store nothing and answer the first send's `message_id`.
+The key is scoped to the sender and the conversation and lives in Redis (`chat:{conv:<id>}:send:…`):
+pending for 60 s while its send is written, then sent for 24 h. A repeat while the first send is still
+pending fails `CHT-1013` (`ABORTED`, retryable). The key is claimed once the sender is known to be a
+member, before a message request's one-message rule, so the retry of a request's message answers it
+rather than `CHT-1010`. Best-effort: if Redis does not answer, the message is sent without
+deduplication.
+
 ---
 
 ## 📨 Events & Async Contract
@@ -400,7 +409,7 @@ block), `CHT-1012` (no request from someone else to answer).
 | Failure | Symptom | Service behavior | Operator action |
 |---|---|---|---|
 | ScyllaDB unavailable | `SendMessage` / cold `GetHistory` fail | **Hard fail** — `UNAVAILABLE`; nothing is acked, so nothing is lost | check Scylla cluster / DC health |
-| Redis unavailable | live messages stop; presence/typing gone | **Soft** — `SendMessage` still succeeds (durable); guests still read history from Scylla | check Redis Cluster; clients re-poll `GetHistory` |
+| Redis unavailable | live messages stop; presence/typing gone; retried sends may duplicate | **Soft** — `SendMessage` still succeeds (durable), without idempotency-key deduplication; guests still read history from Scylla | check Redis Cluster; clients re-poll `GetHistory` |
 | Redis hot-tail cache cold/evicted | passive-reader latency rises | **Soft & safe** — reads fall back to Scylla (durable source of truth) | verify cache hit ratio / cap; usually self-heals |
 | Kafka unavailable | unpublish teardown delayed; downstream events stop | **Soft** — fan-out unaffected; teardown resumes from last committed offset | check brokers; watch `chat-visibility-consumer` lag |
 | `InboxWorker` down or lagging > 2 days | inboxes show an older last activity, those messages unpushed | `chat.message.sent` is kept 2 days: older updates are gone from the broker (the messages stay in chat's log) | keep `chat-inbox` lag well under 2 days; a member's next message repairs their entry |

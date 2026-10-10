@@ -99,8 +99,16 @@ message SendMessageRequest {
     string      body            = 4;
     string      media_ref       = 5;
     string      reply_to        = 6;
+    // Optional, client-generated, one per message and reused on every retry
+    // (8–64 characters: letters, digits, `-`, `_`; CHT-2010 otherwise). A
+    // repeated key from the same sender in the same conversation, within
+    // 24 hours, stores nothing and answers the message the first send stored.
+    // While that first send is still in flight a repeat fails ABORTED
+    // (CHT-1013): retry it. Empty: no deduplication.
+    string      idempotency_key = 7;
 }
 message SendMessageResponse {
+    // The stored message; on a repeated idempotency key, the first send's.
     string message_id = 1;
 }
 

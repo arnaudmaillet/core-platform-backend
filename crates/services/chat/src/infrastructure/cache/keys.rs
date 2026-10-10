@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::domain::value_object::ConversationId;
+use crate::domain::value_object::{ConversationId, IdempotencyKey, ProfileId};
 
 // ── Member-Plane keys ───────────────────────────────────────────────────────
 //
@@ -28,6 +28,13 @@ pub fn typing_key(conversation_id: &ConversationId) -> String {
 /// Hash of per-member read-receipt horizons (field = member_id, value = MessageId).
 pub fn receipts_key(conversation_id: &ConversationId) -> String {
     format!("chat:{{conv:{conversation_id}}}:receipts")
+}
+
+/// One sender's `SendMessage` idempotency key (#875): `p:<message_id>` while
+/// its send is pending, `s:<message_id>` once stored. Expires (60 s pending,
+/// 24 h sent).
+pub fn send_key(conversation_id: &ConversationId, sender_id: &ProfileId, key: &IdempotencyKey) -> String {
+    format!("chat:{{conv:{conversation_id}}}:send:{sender_id}:{key}")
 }
 
 /// Expiring sorted set of active Audience-Plane shards (score = last heartbeat
