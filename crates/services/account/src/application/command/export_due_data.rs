@@ -121,6 +121,7 @@ fn readme(now: DateTime<Utc>) -> String {
            conversations/    your conversations (one-to-one in full; in groups and\n\
                              channels your own messages, the others' as placeholders)\n\
          likes.json          the posts and comments you liked, and how many points\n\
+         saves.json          the posts you saved, and with which profile\n\
          wallet.json         your points and gems, every movement, your stakes and how they settled\n\
          media.json          your photos and videos, each with a download link\n\n\
          Links in this archive work for {EXPORT_LINK_TTL_DAYS} days.\n"

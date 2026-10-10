@@ -85,6 +85,7 @@ forward — without a database round-trip on the read path.
 | I3 | Hidden like counts reach only the author and the mesh; when post cannot say, they are withheld | application | `ENG-6001` (fail closed) |
 | I4 | Only posts and comments can be liked | `LikeTarget::parse` | `ENG-9004` |
 | I5 | A deleted account is no longer known as a liker anywhere; the points it gave stay in the counts | `LikeEraser`; erasure-time Scylla deletes; the stake consumer drops its late stakes | — |
+| I6 | A saved post is listed once, at its first save time, until unsaved; a Saved tab is its owner's unless shown | `saves_by_account` authority; profile-tab rules (`Tab::Saved` hidden by default) | — |
 
 ---
 
@@ -96,11 +97,17 @@ forward — without a database round-trip on the read path.
 **Read.** `GetPostEngagement` / `BatchGetLikes` read counters and likes from Redis, withholding hidden
 counts per post's answer (`BatchGetLikeVisibility`, cached 60 s).
 
-**Export.** account's GDPR export pages `ListLikesByAccount` (mesh only) into `likes.json`.
+**Save (#872).** `SavePost` writes the save to `saves_by_account` (the authority) and the profile's Saved
+tab in one logged batch, unless it is saved already; `UnsavePost` deletes both; `ListSavedPosts` lists
+the tab, keeping only what the authority confirms, under the profile-tab rules (hidden by default).
+
+**Export.** account's GDPR export pages `ListLikesByAccount` and `ListSavedPostsByAccount` (mesh only)
+into `likes.json` and `saves.json`.
 
 **Erasure.** On `account_deleted`, `LikeEraser` marks the account erased, forgets it on each target it
 liked (Redis entry gone; Scylla row swapped for an anonymous one with the same total, so the counts
-stay rebuildable) and deletes its list; the counts stay.
+stay rebuildable) and deletes its list; the counts stay. Its saves go too (every profile's), as do a
+deleted profile's alone (`ProfileDeleted`).
 
 ---
 
@@ -112,9 +119,9 @@ stay rebuildable) and deletes its list; the counts stay.
 | `account` | upstream | ACL | `account.v1.events` (`account_deleted`) | a deleted account stays known as a liker |
 | `comment` | upstream | ACL | `comment.created` / `comment.deleted` | comment counts break |
 | `post` | upstream | Customer/Supplier | gRPC `BatchGetLikeVisibility` | hidden like counts withheld from everyone but the mesh |
-| `account` | downstream | Open Host Service | gRPC `ListLikesByAccount` | the GDPR export fails (retried) |
-| `profile` | upstream | ACL | `profile.v1.events` (`ProfileTabSettingsChanged`) | a hidden Likes tab shows (#829) |
-| `social-graph` | upstream | Customer/Supplier | gRPC `CheckAccess` | other readers' Likes tabs withheld (fail closed) |
+| `account` | downstream | Open Host Service | gRPC `ListLikesByAccount`, `ListSavedPostsByAccount` | the GDPR export fails (retried) |
+| `profile` | upstream | ACL | `profile.v1.events` (`ProfileTabSettingsChanged`, `ProfileDeleted`) | a hidden Likes tab shows (#829), a shown Saved tab stays hidden (#872), a deleted profile's tabs linger |
+| `social-graph` | upstream | Customer/Supplier | gRPC `CheckAccess` | other readers' Likes and Saved tabs withheld (fail closed) |
 | `wallet` | downstream | Open Host Service | gRPC `GetLikePositions` | stake settlement waits (retried) |
 
 ---

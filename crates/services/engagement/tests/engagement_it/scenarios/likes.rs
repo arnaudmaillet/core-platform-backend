@@ -303,7 +303,7 @@ async fn an_accounts_arrival_is_kept_with_its_total() {
 /// profiles' tabs; the owner's flag defaults to shown.
 #[tokio::test]
 async fn each_profile_has_its_likes_tab_and_an_erasure_empties_it() {
-    use engagement::application::port::ProfileTabs;
+    use engagement::application::port::{ProfileTabs, Tab, TabFlags};
     use engagement::infrastructure::persistence::ScyllaProfileTabs;
 
     let h = TestHarness::start().await;
@@ -343,9 +343,11 @@ async fn each_profile_has_its_likes_tab_and_an_erasure_empties_it() {
     assert!(ledger.liked_posts_by_profile(&other, 10, None).await.unwrap().is_empty());
 
     let tabs = ScyllaProfileTabs::new(client);
-    assert!(tabs.shows_likes(&mine).await.unwrap(), "shown by default");
-    tabs.set_shows_likes(&mine, false).await.unwrap();
-    assert!(!tabs.shows_likes(&mine).await.unwrap());
+    assert!(tabs.shows(&mine, Tab::Likes).await.unwrap(), "shown by default");
+    assert!(!tabs.shows(&mine, Tab::Saved).await.unwrap(), "the Saved tab hidden by default");
+    tabs.set_tabs(&mine, TabFlags { likes: false, saved: true }).await.unwrap();
+    assert!(!tabs.shows(&mine, Tab::Likes).await.unwrap());
+    assert!(tabs.shows(&mine, Tab::Saved).await.unwrap());
 }
 
 /// A deleted profile (#873): its Likes tab and its flags go as of the
@@ -353,7 +355,7 @@ async fn each_profile_has_its_likes_tab_and_an_erasure_empties_it() {
 /// account's other profiles keep theirs.
 #[tokio::test]
 async fn a_deleted_profiles_likes_tab_goes_as_of_its_deletion() {
-    use engagement::application::port::ProfileTabs;
+    use engagement::application::port::{ProfileTabs, Tab, TabFlags};
     use engagement::infrastructure::persistence::ScyllaProfileTabs;
 
     let contact = test_support::containers::scylla_ready("engagement", concat!(env!("CARGO_MANIFEST_DIR"), "/migrations")).await;
@@ -370,13 +372,17 @@ async fn a_deleted_profiles_likes_tab_goes_as_of_its_deletion() {
     let (post, late) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
     ledger.record(&LikeTarget::Post(post.clone()), &account, &gone, pos(2), 1_000_000).await.unwrap();
     ledger.record(&LikeTarget::Post(post.clone()), &account, &kept, pos(3), 1_100_000).await.unwrap();
-    tabs.set_shows_likes(&gone, false).await.unwrap();
+    tabs.set_tabs(&gone, TabFlags { likes: false, saved: true }).await.unwrap();
 
     // As of now: after the flag's write (stamped by the server).
     tabs.forget(&gone, chrono::Utc::now().timestamp_micros()).await.unwrap();
     ledger.record(&LikeTarget::Post(late.clone()), &account, &gone, pos(1), 1_500_000).await.unwrap();
     assert!(ledger.liked_posts_by_profile(&gone, 10, None).await.unwrap().is_empty(), "late stakes included");
-    assert!(tabs.shows_likes(&gone).await.unwrap(), "its flag is forgotten");
+    assert_eq!(
+        (tabs.shows(&gone, Tab::Likes).await.unwrap(), tabs.shows(&gone, Tab::Saved).await.unwrap()),
+        (true, false),
+        "its flags are forgotten"
+    );
     assert_eq!(ledger.liked_posts_by_profile(&kept, 10, None).await.unwrap(), vec![post.clone()]);
     assert_eq!(ledger.position_of(&LikeTarget::Post(post), &account).await.unwrap().map(|p| p.total), Some(3), "the like stays");
 }

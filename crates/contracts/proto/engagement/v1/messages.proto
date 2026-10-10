@@ -134,3 +134,60 @@ message ListLikesByProfileResponse {
     // Empty on the last page.
     string          next_page_token = 2;
 }
+
+message SavePostRequest {
+    // The caller's account (the edge token's subject).
+    string account_id = 1;
+    // One of the account's profiles (the edge token's `pids`).
+    string profile_id = 2;
+    string post_id    = 3;
+}
+
+message SavePostResponse {}
+
+message UnsavePostRequest {
+    string account_id = 1;
+    string profile_id = 2;
+    string post_id    = 3;
+}
+
+message UnsavePostResponse {}
+
+// One saved post (#872).
+message SavedPostView {
+    string                    post_id    = 1;
+    // The profile that saved it.
+    string                    profile_id = 2;
+    google.protobuf.Timestamp saved_at   = 3;
+}
+
+message ListSavedPostsRequest {
+    string profile_id = 1;
+    // Default 30, capped at 100.
+    int32  limit      = 2;
+    // The `next_page_token` of the previous page (empty: the first).
+    string page_token = 3;
+}
+
+message ListSavedPostsResponse {
+    // Most recently saved first. A visitor's page may be shorter than
+    // `limit` (posts they may not see are left out) and still be followed.
+    repeated SavedPostView posts           = 1;
+    // Empty on the last page.
+    string                 next_page_token = 2;
+}
+
+message ListSavedPostsByAccountRequest {
+    string account_id = 1;
+    // Default 100, capped at 500.
+    int32  limit      = 2;
+    // The `next_page_token` of the previous page (empty: the first).
+    string page_token = 3;
+}
+
+message ListSavedPostsByAccountResponse {
+    // By profile, then post.
+    repeated SavedPostView posts           = 1;
+    // Empty on the last page.
+    string                 next_page_token = 2;
+}

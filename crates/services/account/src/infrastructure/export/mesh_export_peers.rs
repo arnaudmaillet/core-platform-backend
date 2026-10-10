@@ -446,6 +446,29 @@ impl ExportPeers for MeshExportPeers {
         }
     }
 
+    /// engagement's `ListSavedPostsByAccount` (#872): mesh only.
+    async fn saves(&self, account_id: &AccountId) -> Result<Vec<serde_json::Value>, AccountError> {
+        let (mut saves, mut token) = (Vec::new(), String::new());
+        loop {
+            let page = self
+                .engagement
+                .clone()
+                .list_saved_posts_by_account(engagement_api::ListSavedPostsByAccountRequest {
+                    account_id: account_id.as_uuid().to_string(),
+                    limit: PAGE,
+                    page_token: token,
+                })
+                .await
+                .map_err(rpc("engagement"))?
+                .into_inner();
+            saves.extend(page.posts.iter().map(|s| self.engagement_d.json("engagement.v1.SavedPostView", s)));
+            match page_token(page.next_page_token) {
+                Some(next) => token = next,
+                None => return Ok(saves),
+            }
+        }
+    }
+
     /// wallet's mesh-only `ExportWallet` and `ListStakePositions`, and
     /// `ListWalletTransactions` (read-only; the mesh passes its account
     /// binding), every page (#665).

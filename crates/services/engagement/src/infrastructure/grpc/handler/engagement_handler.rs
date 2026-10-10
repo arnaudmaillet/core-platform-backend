@@ -4,8 +4,13 @@ use uuid::Uuid;
 use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
-use crate::application::command::{record_share::RecordShareCommand, record_view::RecordViewCommand};
-use crate::application::port::{AccountLike, PostEngagementSnapshot};
+use crate::application::command::{
+    record_share::RecordShareCommand, record_view::RecordViewCommand, save_post::SavePostCommand,
+};
+use crate::application::port::{AccountLike, PostEngagementSnapshot, SavedCursor, SavedPost};
+use crate::application::query::list_saved_posts::{
+    ListSavedPostsByAccountQuery, ListSavedPostsQuery, SavedPage, ACCOUNT_DEFAULT_LIMIT, ACCOUNT_MAX_LIMIT,
+};
 use crate::application::likes::LikePosition;
 use crate::application::query::batch_get_likes::BatchGetLikesQuery;
 use crate::application::query::get_like_positions::GetLikePositionsQuery;
@@ -224,6 +229,93 @@ where
             next_page_token,
         }))
     }
+
+    /// Saves (#872) a post for one of the caller's profiles: the account and
+    /// the profile bound to the edge token.
+    pub async fn save_post(
+        &self,
+        request: Request<proto::SavePostRequest>,
+    ) -> Result<Response<proto::SavePostResponse>, Status> {
+        let req = request.get_ref();
+        self.set_saved(&request, &req.account_id, &req.profile_id, &req.post_id, true).await?;
+        Ok(Response::new(proto::SavePostResponse {}))
+    }
+
+    pub async fn unsave_post(
+        &self,
+        request: Request<proto::UnsavePostRequest>,
+    ) -> Result<Response<proto::UnsavePostResponse>, Status> {
+        let req = request.get_ref();
+        self.set_saved(&request, &req.account_id, &req.profile_id, &req.post_id, false).await?;
+        Ok(Response::new(proto::UnsavePostResponse {}))
+    }
+
+    async fn set_saved<T>(
+        &self,
+        request: &Request<T>,
+        account_id: &str,
+        profile_id: &str,
+        post_id: &str,
+        saved: bool,
+    ) -> Result<(), Status> {
+        edge::require_account(request, account_id)?;
+        edge::require_profile(request, profile_id)?;
+        let cmd = SavePostCommand {
+            account_id: account_id.to_owned(),
+            profile_id: profile_id.to_owned(),
+            post_id: post_id.to_owned(),
+            saved,
+        };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.map_err(cqrs_to_status)
+    }
+
+    /// A profile's Saved tab (#872), viewer-aware.
+    pub async fn list_saved_posts(
+        &self,
+        request: Request<proto::ListSavedPostsRequest>,
+    ) -> Result<Response<proto::ListSavedPostsResponse>, Status> {
+        let (reader, _) = reader_of(&request);
+        let req = request.into_inner();
+        let after = match req.page_token.as_str() {
+            "" => None,
+            token => Some(SavedCursor::decode(token).ok_or_else(|| Status::invalid_argument("malformed page_token"))?),
+        };
+        let query = ListSavedPostsQuery { profile_id: req.profile_id, limit: req.limit, after, reader };
+        let page: SavedPage =
+            self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListSavedPostsResponse {
+            posts:           page.posts.into_iter().map(saved_to_proto).collect(),
+            next_page_token: page.next.map(|c| c.encode()).unwrap_or_default(),
+        }))
+    }
+
+    /// Mesh only (#872): what an account saved, for the GDPR export.
+    pub async fn list_saved_posts_by_account(
+        &self,
+        request: Request<proto::ListSavedPostsByAccountRequest>,
+    ) -> Result<Response<proto::ListSavedPostsByAccountResponse>, Status> {
+        let req = request.into_inner();
+        let after = match req.page_token.rsplit_once(':') {
+            _ if req.page_token.is_empty() => None,
+            Some((profile, post)) if !profile.is_empty() && !post.is_empty() => Some((profile.to_owned(), post.to_owned())),
+            _ => return Err(Status::invalid_argument("malformed page_token")),
+        };
+        let query = ListSavedPostsByAccountQuery { account_id: req.account_id, limit: req.limit, after };
+        let saves: Vec<SavedPost> =
+            self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.map_err(cqrs_to_status)?;
+        let limit = match req.limit {
+            l if l <= 0 => ACCOUNT_DEFAULT_LIMIT,
+            l => l.min(ACCOUNT_MAX_LIMIT),
+        };
+        let next_page_token = match saves.last() {
+            Some(last) if saves.len() == limit as usize => format!("{}:{}", last.profile_id, last.post_id),
+            _ => String::new(),
+        };
+        Ok(Response::new(proto::ListSavedPostsByAccountResponse {
+            posts: saves.into_iter().map(saved_to_proto).collect(),
+            next_page_token,
+        }))
+    }
 }
 
 // ── Proto trait implementation ────────────────────────────────────────────────
@@ -239,6 +331,31 @@ where
         request: Request<proto::ListLikesByAccountRequest>,
     ) -> Result<Response<proto::ListLikesByAccountResponse>, Status> {
         self.list_likes_by_account(request).await
+    }
+
+    async fn save_post(&self, request: Request<proto::SavePostRequest>) -> Result<Response<proto::SavePostResponse>, Status> {
+        self.save_post(request).await
+    }
+
+    async fn unsave_post(
+        &self,
+        request: Request<proto::UnsavePostRequest>,
+    ) -> Result<Response<proto::UnsavePostResponse>, Status> {
+        self.unsave_post(request).await
+    }
+
+    async fn list_saved_posts(
+        &self,
+        request: Request<proto::ListSavedPostsRequest>,
+    ) -> Result<Response<proto::ListSavedPostsResponse>, Status> {
+        self.list_saved_posts(request).await
+    }
+
+    async fn list_saved_posts_by_account(
+        &self,
+        request: Request<proto::ListSavedPostsByAccountRequest>,
+    ) -> Result<Response<proto::ListSavedPostsByAccountResponse>, Status> {
+        self.list_saved_posts_by_account(request).await
     }
 
     async fn get_like_positions(
@@ -298,6 +415,17 @@ fn reader_of<T>(request: &Request<T>) -> (EngagementReader, Option<String>) {
 }
 
 // ── Conversion helpers ────────────────────────────────────────────────────────
+
+fn saved_to_proto(save: SavedPost) -> proto::SavedPostView {
+    proto::SavedPostView {
+        post_id:    save.post_id,
+        profile_id: save.profile_id,
+        saved_at:   Some(prost_types::Timestamp {
+            seconds: save.saved_at_ms.div_euclid(1_000),
+            nanos:   (save.saved_at_ms.rem_euclid(1_000) * 1_000_000) as i32,
+        }),
+    }
+}
 
 fn ok_response() -> Response<proto::CommandResponse> {
     Response::new(proto::CommandResponse { success: true, message: String::new() })

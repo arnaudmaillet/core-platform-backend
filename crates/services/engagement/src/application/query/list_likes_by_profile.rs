@@ -1,23 +1,16 @@
-//! A profile's Likes tab (#829): the posts it liked, newest posts first. The
-//! owner (and the mesh) always see it; anyone else only when the owner shows
-//! the tab and may see the profile at all (a private profile they don't
-//! follow, a block either way) — otherwise the list is empty. For them, each
-//! page keeps only the posts whose authors they may see too (#873): not even
-//! the id of a post they couldn't open.
+//! A profile's Likes tab (#829): the posts it liked, newest posts first, as
+//! [`crate::application::query::profile_tab`] lets the reader see it.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use cqrs::{Envelope, Query, QueryHandler};
 
-use crate::application::port::{LikeLedger, LikeVisibility, ProfileAccess, ProfileTabs};
+use crate::application::port::{LikeLedger, Tab};
 use crate::application::query::get_post_engagement::EngagementReader;
+use crate::application::query::profile_tab::{page_limit, Sight, TabReaders};
 use crate::error::EngagementError;
 
-pub const DEFAULT_LIMIT: i32 = 30;
-pub const MAX_LIMIT: i32 = 100;
-// A page's authors are checked in one social-graph call.
-const _: () = assert!(MAX_LIMIT as usize <= crate::application::port::profile_tabs::MAX_ACCESS_TARGETS);
+pub use crate::application::query::profile_tab::{DEFAULT_LIMIT, MAX_LIMIT};
 
 pub struct ListLikesByProfileQuery {
     pub profile_id: String,
@@ -41,56 +34,8 @@ impl Query for ListLikesByProfileQuery {
 
 pub struct ListLikesByProfileHandler {
     /// `None`: this instance runs without the durable copy.
-    pub ledger: Option<Arc<dyn LikeLedger>>,
-    pub tabs:   Option<Arc<dyn ProfileTabs>>,
-    /// `None` (not wired): nobody but the owner and the mesh sees the tab.
-    pub access: Option<Arc<dyn ProfileAccess>>,
-    /// Whose each post is (post); `None` (not wired): likewise.
-    pub posts:  Option<Arc<dyn LikeVisibility>>,
-}
-
-/// What `reader` sees of the tab.
-enum Sight<'a> {
-    /// Every like (the owner, the mesh).
-    All,
-    /// The likes of posts whose authors these profiles may see.
-    Visitor(&'a [String], &'a dyn ProfileAccess, &'a dyn LikeVisibility),
-    Nothing,
-}
-
-impl ListLikesByProfileHandler {
-    async fn sight<'a>(&'a self, reader: &'a EngagementReader, profile_id: &str) -> Result<Sight<'a>, EngagementError> {
-        let viewers = match reader {
-            EngagementReader::Internal => return Ok(Sight::All),
-            EngagementReader::Profiles(own) if own.iter().any(|p| p == profile_id) => return Ok(Sight::All),
-            EngagementReader::Profiles(own) => own,
-        };
-        let (Some(tabs), Some(access), Some(posts)) = (&self.tabs, &self.access, &self.posts) else {
-            return Ok(Sight::Nothing);
-        };
-        Ok(match tabs.shows_likes(profile_id).await? && access.visible(viewers, profile_id).await? {
-            true => Sight::Visitor(viewers, access.as_ref(), posts.as_ref()),
-            false => Sight::Nothing,
-        })
-    }
-}
-
-/// The posts of `post_ids` whose authors `viewers` may see; a post post
-/// doesn't know goes too.
-async fn visible_posts(
-    post_ids: Vec<String>,
-    viewers: &[String],
-    access: &dyn ProfileAccess,
-    posts: &dyn LikeVisibility,
-) -> Result<Vec<String>, EngagementError> {
-    let authors: Vec<Option<String>> = posts.of_many(&post_ids).await?.into_iter().map(|v| v.map(|v| v.author_id)).collect();
-    let distinct: Vec<String> = authors.iter().flatten().cloned().collect::<HashSet<_>>().into_iter().collect();
-    let visible: HashSet<String> = access.visible_among(viewers, &distinct).await?.into_iter().collect();
-    Ok(post_ids
-        .into_iter()
-        .zip(authors)
-        .filter_map(|(post, author)| author.filter(|a| visible.contains(a)).map(|_| post))
-        .collect())
+    pub ledger:  Option<Arc<dyn LikeLedger>>,
+    pub readers: TabReaders,
 }
 
 impl QueryHandler<ListLikesByProfileQuery> for ListLikesByProfileHandler {
@@ -102,21 +47,15 @@ impl QueryHandler<ListLikesByProfileQuery> for ListLikesByProfileHandler {
             return Err(EngagementError::DomainViolation { field: "profile_id".into(), message: query.profile_id.clone() });
         }
         let ledger = self.ledger.as_ref().ok_or(EngagementError::LedgerUnavailable)?;
-        let sight = self.sight(&query.reader, &query.profile_id).await?;
+        let sight = self.readers.sight(&query.reader, &query.profile_id, Tab::Likes).await?;
         if let Sight::Nothing = sight {
             return Ok(LikedPosts { post_ids: Vec::new(), next: None });
         }
-        let limit = match query.limit {
-            l if l <= 0 => DEFAULT_LIMIT,
-            l => l.min(MAX_LIMIT),
-        };
+        let limit = page_limit(query.limit);
         let post_ids = ledger.liked_posts_by_profile(&query.profile_id, limit, query.after.as_deref()).await?;
         // From the page read, filtered or not: the next page starts after it.
         let next = (post_ids.len() == limit as usize).then(|| post_ids.last().cloned()).flatten();
-        let post_ids = match sight {
-            Sight::Visitor(viewers, access, posts) => visible_posts(post_ids, viewers, access, posts).await?,
-            _ => post_ids,
-        };
+        let post_ids = sight.filter(post_ids, |post| post.as_str()).await?;
         Ok(LikedPosts { post_ids, next })
     }
 }
@@ -127,7 +66,7 @@ mod tests {
 
     use super::*;
     use crate::application::fakes::Likes;
-    use crate::application::port::{Position, PostLikeVisibility};
+    use crate::application::port::{LikeVisibility, ProfileAccess, ProfileTabs, Position, PostLikeVisibility, TabFlags};
     use crate::domain::value_object::LikeTarget;
 
     /// `shown`: the owner shows the tab; `visible`: the reader may see the
@@ -140,10 +79,11 @@ mod tests {
 
     #[async_trait]
     impl ProfileTabs for Tabs {
-        async fn shows_likes(&self, _: &str) -> Result<bool, EngagementError> {
+        async fn shows(&self, _: &str, tab: Tab) -> Result<bool, EngagementError> {
+            assert_eq!(tab, Tab::Likes);
             Ok(self.shown)
         }
-        async fn set_shows_likes(&self, _: &str, _: bool) -> Result<(), EngagementError> {
+        async fn set_tabs(&self, _: &str, _: TabFlags) -> Result<(), EngagementError> {
             unimplemented!()
         }
         async fn forget(&self, _: &str, _: i64) -> Result<(), EngagementError> {
@@ -182,10 +122,12 @@ mod tests {
         likes.record(&LikeTarget::Post("0199-z".into()), "acct", "other-profile", Position { total: 1, arrival: None }, 1).await.unwrap();
         let tabs = Arc::new(tabs);
         ListLikesByProfileHandler {
-            ledger: Some(likes),
-            tabs:   wired.then(|| tabs.clone() as Arc<dyn ProfileTabs>),
-            access: wired.then_some(tabs as Arc<dyn ProfileAccess>),
-            posts:  wired.then_some(Arc::new(Authors) as Arc<dyn LikeVisibility>),
+            ledger:  Some(likes),
+            readers: TabReaders {
+                tabs:   wired.then(|| tabs.clone() as Arc<dyn ProfileTabs>),
+                access: wired.then_some(tabs as Arc<dyn ProfileAccess>),
+                posts:  wired.then_some(Arc::new(Authors) as Arc<dyn LikeVisibility>),
+            },
         }
     }
 

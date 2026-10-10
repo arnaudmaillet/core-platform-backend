@@ -9,9 +9,9 @@
 > | **Tier** | **TIER-1** — real-time interaction backbone; degradable to durable ledger |
 > | **Deployable** | `crates/apps/engagement-server` (library crate: `crates/services/engagement`) |
 > | **Datastores** | Redis (authoritative hot path) · ScyllaDB keyspace `engagement` (durable copies) |
-> | **Async** | publishes nothing · consumes `wallet.v1.events` (likes), `account.v1.events` (erasure), `profile.v1.events` (Likes-tab flag) and `comment.created` / `comment.deleted` |
+> | **Async** | publishes nothing · consumes `wallet.v1.events` (likes), `account.v1.events` (erasure), `profile.v1.events` (tab flags, deleted profiles) and `comment.created` / `comment.deleted` |
 > | **Upstream callers** | `<TODO: gateway>` |
-> | **Downstream deps** | Redis, ScyllaDB, Kafka, `post` (hidden like counts), `social-graph` (who may see a Likes tab) |
+> | **Downstream deps** | Redis, ScyllaDB, Kafka, `post` (hidden like counts), `social-graph` (who may see a Likes or Saved tab) |
 > | **SLO** | snapshot read p99 ~0.3 ms (zero Scylla on the read path) |
 
 ---
@@ -84,6 +84,22 @@ tab is its owner's only. `likes_by_account.profile_ids` names every profile of t
 target, so an account's erasure removes each profile's tab row too; a profile's own deletion
 (`ProfileDeleted`, #873) drops its tab and its flags as of the deletion.
 
+**Saved posts (#872).** `SavePost` / `UnsavePost(account_id, profile_id, post_id)` (edge `authenticated`:
+the account bound to the token's subject, the profile to its `pids`, guests refused) save a post for one
+of the caller's profiles, idempotently: saving a saved post keeps its first save time, unsaving what isn't
+saved is a no-op. `ListSavedPosts(profile_id, limit, page_token)` (edge `public_read`, viewer-aware) is the
+profile's **Saved tab**, most recently saved first (the token is `<saved_at_ms>:<post_id>`), under the
+Likes tab's rules but **hidden by default**: anyone but the owner and the mesh reads it only when the owner
+shows it (`ProfileTabSettingsChanged` `show_saved`, kept in `profile_tabs.show_saved`) and may see the
+profile, and then only the posts whose authors they may see. Two tables (migration 0010), written in one
+logged batch with the save's time: `saved_posts_by_profile` (the tab, newest saves first; `account_id`
+static) and `saves_by_account` (the authority, by profile then post). A tab row the authority doesn't
+confirm at the same time (two saves racing, an unsave racing a save) is never listed.
+`ListSavedPostsByAccount(account_id, limit, page_token)` is **mesh only**: the GDPR export's `saves.json`
+(the token is `<profile_id>:<post_id>`). A profile's deletion drops its saves; an account's
+(`account_deleted`) drops every profile's, both as of the deletion. Saves need the Kafka path (Scylla);
+without it the RPCs answer `ENG-5003`.
+
 **Expired likers.** A likers hash that holds every liker carries `_complete` (set on the target's first
 like, or when a rehydration finished). Once it expired, an account missing from a new one is
 **unknown**, not zero: the stake consumer then rehydrates the whole hash from `likes_by_target`
@@ -147,7 +163,8 @@ erasure may have listed the targets before it).
 | Caller | Uses | Impact if `engagement` is down |
 |---|---|---|
 | clients (edge) | view/share + `GetPostEngagement` / `BatchGetLikes` | no like or engagement counts on posts |
-| `account` | `ListLikesByAccount` (GDPR export) | exports retried next pass |
+| clients (edge) | `SavePost` / `UnsavePost` / `ListSavedPosts` (#872) | saves fail; Saved tabs empty |
+| `account` | `ListLikesByAccount`, `ListSavedPostsByAccount` (GDPR export) | exports retried next pass |
 | `wallet` | `GetLikePositions` (stake settlement, #665) | settlements wait for the next pass |
 
 > **Critical path?** **Yes** for the read path (Redis-backed); likes and persistence are async.
@@ -167,6 +184,10 @@ service EngagementService {
   rpc ListLikesByAccount (ListLikesByAccountRequest) returns (ListLikesByAccountResponse); // mesh only
   rpc GetLikePositions  (GetLikePositionsRequest)  returns (GetLikePositionsResponse);  // mesh only
   rpc ListLikesByProfile (ListLikesByProfileRequest) returns (ListLikesByProfileResponse); // a profile's Likes tab
+  rpc SavePost          (SavePostRequest)          returns (SavePostResponse);          // #872
+  rpc UnsavePost        (UnsavePostRequest)        returns (UnsavePostResponse);
+  rpc ListSavedPosts    (ListSavedPostsRequest)    returns (ListSavedPostsResponse);    // a profile's Saved tab
+  rpc ListSavedPostsByAccount (ListSavedPostsByAccountRequest) returns (ListSavedPostsByAccountResponse); // mesh only
 }
 ```
 
@@ -201,6 +222,9 @@ pub trait LikeLedger: Send + Sync + 'static {      // Scylla: the durable copy
     async fn record(&self, target, account, profile_id, total, at_micros) -> Result<(), EngagementError>;
     async fn list_by_account(&self, account, limit, after) -> Result<Vec<AccountLike>, EngagementError>;
 }
+pub trait SavedPosts: Send + Sync + 'static {      // Scylla: the saves (#872)
+    /* save, unsave, list (a profile's tab), list_by_account (export), forget_profile, forget_account */
+}
 pub trait ScoreStore: Send + Sync + 'static { /* incr_view/share/comment, decr_comment, get_snapshot */ }
 pub trait CounterLedger: Send + Sync + 'static { /* apply_interaction_delta (flush + comment consumer) */ }
 ```
@@ -229,8 +253,8 @@ reads the wallet's `wallet.v1.events` directly.
 |---|---|---|---|
 | `comment.created` / `comment.deleted` | `engagement-comment-consumer` | INCR/DECR comment counter (Redis + Scylla) | DLQ `{topic}.dlq` |
 | `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665): the account's total on a post or comment, idempotent and order-proof (Redis Lua + Scylla); a deleted account's stakes are dropped | DLQ `{topic}.dlq` |
-| `account.v1.events` | `engagement-account-erasure` | `account_deleted` → forget who liked (the counts stay); other events skipped | DLQ `{topic}.dlq` |
-| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → whether the profile shows its Likes tab (#829); `ProfileDeleted` → its tab and flags go, as of the deletion (#873); other events skipped | DLQ `{topic}.dlq` |
+| `account.v1.events` | `engagement-account-erasure` | `account_deleted` → forget who liked (the counts stay) and the account's saves (#872); other events skipped | DLQ `{topic}.dlq` |
+| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → whether the profile shows its Likes (#829) and Saved (#872) tabs; `ProfileDeleted` → its Likes tab, saves and flags go, as of the deletion (#873); other events skipped | DLQ `{topic}.dlq` |
 
 > **Runtime contract (mandatory):** the stake, account and comment consumers run under `run_consumer` — manual
 > commit after success, bounded retry with backoff + jitter, DLQ on exhaustion/poison. Totals are
@@ -316,7 +340,7 @@ async fn main() -> anyhow::Result<()> {
   `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` →
   `0005_create_likes_tables.cql` → `0006_drop_reaction_tables.cql` →
   `0007_create_erased_accounts_table.cql` → `0008_likes_by_target_first_count.cql` →
-  `0009_create_liked_posts_by_profile.cql` against
+  `0009_create_liked_posts_by_profile.cql` → `0010_create_saved_posts.cql` against
   `engagement`, applied **before** first start. (0002's table comment held a `;`; the integration
   suites' runner split on it until it became quote-aware like `apps/migrator` — prod never was affected.
   It is a comma now — same schema.)

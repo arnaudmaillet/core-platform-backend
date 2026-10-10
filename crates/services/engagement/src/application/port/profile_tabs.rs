@@ -2,13 +2,35 @@ use async_trait::async_trait;
 
 use crate::error::EngagementError;
 
-/// Which tabs each profile's owner shows (#829), from profile's
-/// `ProfileTabSettingsChanged`; shown when never told otherwise.
+/// A profile tab engagement serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    /// The posts it liked (#829): shown unless the owner hides it.
+    Likes,
+    /// The posts it saved (#872): hidden unless the owner shows it.
+    Saved,
+}
+
+/// Which tabs the owner shows others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabFlags {
+    pub likes: bool,
+    pub saved: bool,
+}
+
+impl Default for TabFlags {
+    fn default() -> Self {
+        Self { likes: true, saved: false }
+    }
+}
+
+/// Which tabs each profile's owner shows (#829, #872), from profile's
+/// `ProfileTabSettingsChanged`; [`TabFlags::default`] when never told.
 #[async_trait]
 pub trait ProfileTabs: Send + Sync + 'static {
-    async fn shows_likes(&self, profile_id: &str) -> Result<bool, EngagementError>;
+    async fn shows(&self, profile_id: &str, tab: Tab) -> Result<bool, EngagementError>;
 
-    async fn set_shows_likes(&self, profile_id: &str, shown: bool) -> Result<(), EngagementError>;
+    async fn set_tabs(&self, profile_id: &str, flags: TabFlags) -> Result<(), EngagementError>;
 
     /// Forgets a deleted profile (#873): its flags and its Likes tab's rows,
     /// as of `at_micros` (the deletion's time).

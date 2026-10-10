@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 88872e9fd1712b89149562b69437f16a8bdc31e88b775823d5d170e3354f1e86
+  source_sha256: 0d14d0664f4c71421b690f55c2abfa7a84b745e9ce0dd068f05a4b1cff91493f
   translated_at: 2026-10-10
   status: complete
 ---
@@ -21,9 +21,9 @@ i18n:
 > | **Palier (Tier)** | **TIER-1** — colonne vertébrale d'interaction temps réel ; dégradable vers le ledger durable |
 > | **Binaire déployable** | `crates/apps/engagement-server` (crate bibliothèque : `crates/services/engagement`) |
 > | **Bases de données** | Redis (chemin chaud faisant autorité) · ScyllaDB keyspace `engagement` (copies durables) |
-> | **Asynchrone** | ne publie rien · consomme `wallet.v1.events` (likes), `account.v1.events` (effacement), `profile.v1.events` (flag de l'onglet J'aime) et `comment.created` / `comment.deleted` |
+> | **Asynchrone** | ne publie rien · consomme `wallet.v1.events` (likes), `account.v1.events` (effacement), `profile.v1.events` (réglages des onglets, profils supprimés) et `comment.created` / `comment.deleted` |
 > | **Appelants amont** | `<TODO: passerelle>` |
-> | **Dépendances aval** | Redis, ScyllaDB, Kafka, `post` (compteurs de likes masqués), `social-graph` (qui peut voir un onglet J'aime) |
+> | **Dépendances aval** | Redis, ScyllaDB, Kafka, `post` (compteurs de likes masqués), `social-graph` (qui peut voir un onglet J'aime ou Enregistrés) |
 > | **SLO** | lecture de snapshot p99 ~0,3 ms (zéro Scylla sur le chemin de lecture) |
 
 ---
@@ -102,6 +102,24 @@ nomme chaque profil du compte qui a liké une cible, si bien que l'effacement d'
 ligne de l'onglet de chaque profil ; la suppression d'un profil seul (`ProfileDeleted`, #873) retire son
 onglet et ses réglages à la date de la suppression.
 
+**Posts enregistrés (#872).** `SavePost` / `UnsavePost(account_id, profile_id, post_id)` (edge
+`authenticated` : le compte lié au sujet du jeton, le profil à ses `pids`, invités refusés) enregistrent un
+post pour un des profils de l'appelant, de façon idempotente : enregistrer un post déjà enregistré garde
+sa première date, désenregistrer ce qui ne l'est pas ne fait rien. `ListSavedPosts(profile_id, limit,
+page_token)` (edge `public_read`, selon le lecteur) est l'**onglet Enregistrés** du profil, les plus
+récemment enregistrés d'abord (le jeton est `<saved_at_ms>:<post_id>`), sous les règles de l'onglet J'aime
+mais **masqué par défaut** : tout autre que le propriétaire et le mesh ne le lit que si le propriétaire le
+montre (`ProfileTabSettingsChanged` `show_saved`, gardé dans `profile_tabs.show_saved`) et qu'il peut voir
+le profil, et alors seulement les posts dont il peut voir l'auteur. Deux tables (migration 0010), écrites
+dans un seul batch logged avec l'heure de l'enregistrement : `saved_posts_by_profile` (l'onglet, les plus
+récents d'abord ; `account_id` statique) et `saves_by_account` (l'autorité, par profil puis post). Une ligne
+d'onglet que l'autorité ne confirme pas à la même date (deux enregistrements concurrents, un
+désenregistrement concurrent) n'est jamais listée. `ListSavedPostsByAccount(account_id, limit, page_token)`
+est **mesh uniquement** : le `saves.json` de l'export RGPD (le jeton est `<profile_id>:<post_id>`). La
+suppression d'un profil retire ses enregistrements ; celle d'un compte (`account_deleted`) ceux de chaque
+profil, toutes deux à la date de la suppression. Les enregistrements demandent le chemin Kafka (Scylla) ;
+sans lui les RPC répondent `ENG-5003`.
+
 **Likers expirés.** Un hash de likers qui contient tous les likers porte `_complete` (posé au premier
 like de la cible, ou à la fin d'une réhydratation). Une fois expiré, un compte absent d'un nouveau hash
 est **inconnu**, pas zéro : le consommateur des mises réhydrate alors tout le hash depuis
@@ -168,7 +186,8 @@ Le consommateur des mises ignore les mises d'un compte marqué, et revérifie ap
 | Caller | Uses | Impact si `engagement` est indisponible |
 |---|---|---|
 | clients (edge) | vue/partage + `GetPostEngagement` / `BatchGetLikes` | pas de compteurs de likes ni d'engagement sur les posts |
-| `account` | `ListLikesByAccount` (export RGPD) | exports réessayés au passage suivant |
+| clients (edge) | `SavePost` / `UnsavePost` / `ListSavedPosts` (#872) | les enregistrements échouent ; onglets Enregistrés vides |
+| `account` | `ListLikesByAccount`, `ListSavedPostsByAccount` (export RGPD) | exports réessayés au passage suivant |
 | `wallet` | `GetLikePositions` (règlement des mises, #665) | les règlements attendent le passage suivant |
 
 > **Chemin critique ?** **Oui** pour le chemin de lecture (porté par Redis) ; les likes et la
@@ -189,6 +208,10 @@ service EngagementService {
   rpc ListLikesByAccount (ListLikesByAccountRequest) returns (ListLikesByAccountResponse); // mesh only
   rpc GetLikePositions  (GetLikePositionsRequest)  returns (GetLikePositionsResponse);  // mesh only
   rpc ListLikesByProfile (ListLikesByProfileRequest) returns (ListLikesByProfileResponse); // a profile's Likes tab
+  rpc SavePost          (SavePostRequest)          returns (SavePostResponse);          // #872
+  rpc UnsavePost        (UnsavePostRequest)        returns (UnsavePostResponse);
+  rpc ListSavedPosts    (ListSavedPostsRequest)    returns (ListSavedPostsResponse);    // a profile's Saved tab
+  rpc ListSavedPostsByAccount (ListSavedPostsByAccountRequest) returns (ListSavedPostsByAccountResponse); // mesh only
 }
 ```
 
@@ -224,6 +247,9 @@ pub trait LikeLedger: Send + Sync + 'static {      // Scylla: the durable copy
     async fn record(&self, target, account, profile_id, total, at_micros) -> Result<(), EngagementError>;
     async fn list_by_account(&self, account, limit, after) -> Result<Vec<AccountLike>, EngagementError>;
 }
+pub trait SavedPosts: Send + Sync + 'static {      // Scylla: the saves (#872)
+    /* save, unsave, list (a profile's tab), list_by_account (export), forget_profile, forget_account */
+}
 pub trait ScoreStore: Send + Sync + 'static { /* incr_view/share/comment, decr_comment, get_snapshot */ }
 pub trait CounterLedger: Send + Sync + 'static { /* apply_interaction_delta (flush + comment consumer) */ }
 ```
@@ -252,8 +278,8 @@ pays) lit directement `wallet.v1.events` du wallet.
 |---|---|---|---|
 | `comment.created` / `comment.deleted` | `engagement-comment-consumer` | INCR/DECR du compteur de commentaires (Redis + Scylla) | DLQ `{topic}.dlq` |
 | `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665) : le total du compte sur un post ou un commentaire, idempotent et insensible à l'ordre (Lua Redis + Scylla) ; les mises d'un compte supprimé sont ignorées | DLQ `{topic}.dlq` |
-| `account.v1.events` | `engagement-account-erasure` | `account_deleted` → oublier qui a liké (les compteurs restent) ; autres événements ignorés | DLQ `{topic}.dlq` |
-| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → si le profil montre son onglet J'aime (#829) ; `ProfileDeleted` → son onglet et ses réglages partent, à la date de la suppression (#873) ; autres événements ignorés | DLQ `{topic}.dlq` |
+| `account.v1.events` | `engagement-account-erasure` | `account_deleted` → oublier qui a liké (les compteurs restent) et les enregistrements du compte (#872) ; autres événements ignorés | DLQ `{topic}.dlq` |
+| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → si le profil montre ses onglets J'aime (#829) et Enregistrés (#872) ; `ProfileDeleted` → son onglet J'aime, ses enregistrements et ses réglages partent, à la date de la suppression (#873) ; autres événements ignorés | DLQ `{topic}.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** les consommateurs des mises, des comptes et des commentaires tournent sous
 > `run_consumer` — commit manuel après succès, retry borné avec backoff + jitter, DLQ à l'épuisement /
@@ -340,7 +366,7 @@ async fn main() -> anyhow::Result<()> {
   `0003_create_post_interaction_counters_table.cql` → `0004_create_reactions_by_profile_table.cql` →
   `0005_create_likes_tables.cql` → `0006_drop_reaction_tables.cql` →
   `0007_create_erased_accounts_table.cql` → `0008_likes_by_target_first_count.cql` →
-  `0009_create_liked_posts_by_profile.cql` sur
+  `0009_create_liked_posts_by_profile.cql` → `0010_create_saved_posts.cql` sur
   `engagement`, appliquées **avant** le premier démarrage. (Le commentaire de table de 0002 contenait un
   `;` ; le lanceur des suites d'intégration coupait dessus jusqu'à ce qu'il respecte les guillemets comme
   `apps/migrator` — la prod n'a jamais été touchée. C'est une virgule désormais — même schéma.)

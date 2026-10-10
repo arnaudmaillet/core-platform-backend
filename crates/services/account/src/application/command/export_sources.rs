@@ -65,6 +65,7 @@ impl ExportSources for PeerExportSources {
             }
         }
         files.push(ExportFile::json("likes.json", &json!(self.peers.likes(account_id).await?)));
+        files.push(ExportFile::json("saves.json", &json!(self.peers.saves(account_id).await?)));
         match self.peers.wallet(account_id).await? {
             Some(wallet) => files.push(ExportFile::json("wallet.json", &wallet)),
             None => tracing::warn!("no route to the wallet: the export goes without wallet.json"),
@@ -150,6 +151,9 @@ mod tests {
         async fn likes(&self, _: &AccountId) -> Result<Vec<serde_json::Value>, AccountError> {
             Ok(vec![json!({ "target": { "post_id": "p1" }, "total": 12 })])
         }
+        async fn saves(&self, _: &AccountId) -> Result<Vec<serde_json::Value>, AccountError> {
+            Ok(vec![json!({ "post_id": "p2", "profile_id": "me" })])
+        }
         async fn wallet(&self, _: &AccountId) -> Result<Option<serde_json::Value>, AccountError> {
             Ok(self.wallet.then(|| json!({ "wallet": { "gems": 100 }, "transactions": [], "stake_positions": [] })))
         }
@@ -171,6 +175,7 @@ mod tests {
             .unwrap();
         assert_eq!(file(&files, "profiles/me/posts.json")[0]["caption"], "hello");
         assert_eq!(file(&files, "likes.json")[0]["total"], 12, "the account's likes, once");
+        assert_eq!(file(&files, "saves.json")[0]["post_id"], "p2", "and its saves");
         assert_eq!(file(&files, "wallet.json")["wallet"]["gems"], 100, "the account's wallet, once");
         assert!(files.iter().all(|f| !f.path.ends_with("reactions.json")));
         assert_eq!(file(&files, "profiles/me/recent_searches.json")[0]["query"], "paris food");
