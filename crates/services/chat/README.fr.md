@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a785c5d9aad77786eea9d2ea0197af51027c52ac9e16238527dcc1636a906e0c
+  source_sha256: a2f8e3c052ea4806fcc5f6cc01b53df82807cdc0fadf811c5584835f07c1d070
   translated_at: 2026-10-10
   status: complete
 ---
@@ -395,10 +395,12 @@ de personne ; jamais la réponse à un blocage), `CHT-1012` (aucune demande d'un
 Envois idempotents (#875) : `SendMessageRequest.idempotency_key` (8 à 64 lettres, chiffres, `-`, `_` ;
 `CHT-2010` sinon) fait qu'un envoi rejoué ne stocke rien et renvoie le `message_id` du premier envoi.
 La clé est propre à l'expéditeur et à la conversation et vit dans Redis (`chat:{conv:<id>}:send:…`) :
-en attente pendant 60 s, le temps d'écrire son envoi, puis envoyée pendant 24 h. Une répétition pendant
+en attente pendant 60 s, le temps d'écrire son envoi, puis envoyée pendant 24 h dès que le message est
+stocké (même si son annonce échoue ensuite : une annonce manquée vaut mieux qu'un doublon). Une répétition pendant
 que le premier envoi est encore en attente échoue en `CHT-1013` (`ABORTED`, à réessayer). La clé est
-réservée une fois l'expéditeur reconnu membre, avant la règle du message unique d'une demande : le
-rejeu du message d'une demande y répond au lieu de `CHT-1010`. Au mieux : si Redis ne répond pas, le
+vérifiée en même temps que l'appartenance et avant la règle du message unique d'une demande : un envoi
+stocké répond à son rejeu même si l'expéditeur est parti depuis, et le rejeu du message d'une demande y
+répond au lieu de `CHT-1010`. Au mieux : si Redis ne répond pas, le
 message part sans déduplication.
 
 ---

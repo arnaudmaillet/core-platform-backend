@@ -366,10 +366,11 @@ block), `CHT-1012` (no request from someone else to answer).
 Idempotent sends (#875): `SendMessageRequest.idempotency_key` (8–64 letters, digits, `-`, `_`;
 `CHT-2010` otherwise) makes a retried send store nothing and answer the first send's `message_id`.
 The key is scoped to the sender and the conversation and lives in Redis (`chat:{conv:<id>}:send:…`):
-pending for 60 s while its send is written, then sent for 24 h. A repeat while the first send is still
-pending fails `CHT-1013` (`ABORTED`, retryable). The key is claimed once the sender is known to be a
-member, before a message request's one-message rule, so the retry of a request's message answers it
-rather than `CHT-1010`. Best-effort: if Redis does not answer, the message is sent without
+pending for 60 s while its send is written, then sent for 24 h from the moment the message is stored
+(even if announcing it then fails: a missed announcement beats a duplicate). A repeat while the first send is still
+pending fails `CHT-1013` (`ABORTED`, retryable). The key is checked alongside the membership read and before a
+message request's one-message rule: a stored send answers its retry even if the sender has left since,
+and the retry of a request's message answers it rather than `CHT-1010`. Best-effort: if Redis does not answer, the message is sent without
 deduplication.
 
 ---

@@ -31,9 +31,10 @@ use crate::error::ChatError;
 /// far as its sender can tell, but shown to nobody else.
 ///
 /// An idempotency key (#875) makes a retried send store nothing: the key is
-/// claimed once the sender is known to be a member, before the request's
-/// one-message rule, so the retry of a request's message answers it rather
-/// than `CHT-1010`.
+/// claimed alongside the membership read and before the request's
+/// one-message rule, so a stored send answers its retry even after the sender
+/// has left, and the retry of a request's message answers it rather than
+/// `CHT-1010`.
 pub struct SendMessageCommand {
     pub message_id:      String,
     pub conversation_id: String,
@@ -69,7 +70,7 @@ impl Validate for SendMessageCommand {
 }
 
 /// How a sent message goes out.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SentMessage {
     /// The stored message: the command's own id, or on a replay the first send's.
     pub message_id: MessageId,
@@ -135,55 +136,49 @@ where
             .transpose()?;
 
         // Authorization: only roster members may write. Audience roles are never
-        // in the roster, so this read enforces read-only for guests.
-        let (member, conversation) = tokio::join!(
+        // in the roster, so this read enforces read-only for guests. The key is
+        // claimed alongside: a send already stored answers its message even if
+        // the sender has left since.
+        let (member, conversation, claim) = tokio::join!(
             self.member_repo.find(&conversation_id, &sender_id),
             self.conversation_repo.find(&conversation_id),
+            self.claim(&conversation_id, &sender_id, key.as_ref(), message_id),
         );
-        let (member, conversation) = (member?, conversation?);
-        let Some(member) = member else {
-            return Err(match conversation {
-                Some(conversation) => conversation.deny_outsider(sender_id),
-                None => ChatError::ConversationNotFound { conversation_id: conversation_id.as_str() },
-            });
-        };
-
-        if !member.can_write() {
-            return Err(ChatError::NotAuthorized {
-                profile_id:      sender_id.as_str(),
-                conversation_id: conversation_id.as_str(),
-            });
-        }
-
-        // A store that does not answer sends the message unkeyed: a lost
-        // dedupe beats a lost message.
-        let claimed = match (&self.send_keys, key) {
-            (Some(keys), Some(key)) => match keys.claim(&conversation_id, &sender_id, &key, message_id).await {
-                Ok(SendClaim::Fresh) => Some((keys, key)),
-                Ok(SendClaim::Sent(first)) => {
-                    return Ok(SentMessage { message_id: first, replayed: true, ..SentMessage::default() });
-                }
-                Ok(SendClaim::InFlight) => {
-                    return Err(ChatError::SendInFlight { conversation_id: conversation_id.as_str() });
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "send key claim failed; sending without deduplication");
-                    None
-                }
-            },
-            _ => None,
-        };
-
-        let sent = self.write(cmd, conversation_id, sender_id, message_id, conversation.as_ref()).await;
-
-        if let Some((keys, key)) = claimed {
-            let settled = match &sent {
-                Ok(_) => keys.complete(&conversation_id, &sender_id, &key, message_id).await,
-                Err(_) => keys.release(&conversation_id, &sender_id, &key, message_id).await,
-            };
-            if let Err(e) = settled {
-                tracing::warn!(error = %e, "send key settle failed; it expires on its own");
+        let claimed = match claim {
+            Some(SendClaim::Sent(first)) => {
+                return Ok(SentMessage { message_id: first, withheld: false, request: false, replayed: true });
             }
+            Some(SendClaim::InFlight) => {
+                return Err(ChatError::SendInFlight { conversation_id: conversation_id.as_str() });
+            }
+            Some(SendClaim::Fresh) => key.as_ref(),
+            None => None,
+        };
+
+        let sent = async {
+            let (member, conversation) = (member?, conversation?);
+            let Some(member) = member else {
+                return Err(match conversation {
+                    Some(conversation) => conversation.deny_outsider(sender_id),
+                    None => ChatError::ConversationNotFound { conversation_id: conversation_id.as_str() },
+                });
+            };
+            if !member.can_write() {
+                return Err(ChatError::NotAuthorized {
+                    profile_id:      sender_id.as_str(),
+                    conversation_id: conversation_id.as_str(),
+                });
+            }
+            self.write(cmd, conversation_id, sender_id, message_id, conversation.as_ref(), claimed).await
+        }
+        .await;
+
+        // Frees the key for the retry unless the message was stored (then the
+        // key is already sent and this is a no-op).
+        if let (Err(_), Some(key), Some(keys)) = (&sent, claimed, &self.send_keys)
+            && let Err(e) = keys.release(&conversation_id, &sender_id, key, message_id).await
+        {
+            tracing::warn!(error = %e, "send key release failed; it expires on its own");
         }
         sent
     }
@@ -196,6 +191,23 @@ where
     MSG: MessageRepository,
     EP:  EventPublisher,
 {
+    /// Claims the send's key, if it has one and the store answers: a store that
+    /// does not answer sends the message unkeyed (a lost dedupe beats a lost
+    /// message).
+    async fn claim(
+        &self,
+        conversation_id: &ConversationId,
+        sender_id:       &ProfileId,
+        key:             Option<&IdempotencyKey>,
+        message_id:      MessageId,
+    ) -> Option<SendClaim> {
+        let (keys, key) = (self.send_keys.as_ref()?, key?);
+        keys.claim(conversation_id, sender_id, key, message_id)
+            .await
+            .inspect_err(|e| tracing::warn!(error = %e, "send key claim failed; sending without deduplication"))
+            .ok()
+    }
+
     /// Admits, stores and announces a member's message.
     async fn write(
         &self,
@@ -204,6 +216,7 @@ where
         sender_id:       ProfileId,
         message_id:      MessageId,
         conversation:    Option<&Conversation>,
+        claimed:         Option<&IdempotencyKey>,
     ) -> Result<SentMessage, ChatError> {
         let content_type = ContentType::try_from(cmd.content_type as i8)?;
         let reply_to = cmd
@@ -236,6 +249,14 @@ where
         // Durable write first; the event is the seam the routing layer forks into
         // the Member-Plane broadcast and the Audience-Plane shadow.
         self.message_repo.insert(&message).await?;
+
+        // Stored: from here a retry answers this message, even if announcing it
+        // fails below — a missed announcement beats a duplicate in the log.
+        if let (Some(key), Some(keys)) = (claimed, &self.send_keys)
+            && let Err(e) = keys.complete(&conversation_id, &sender_id, key, message_id).await
+        {
+            tracing::warn!(error = %e, "send key completion failed; retries are refused until it expires");
+        }
 
         let event = MessageEvent::Sent(MessageSentEvent {
             conversation_id: conversation_id.as_str(),
@@ -539,5 +560,59 @@ mod tests {
             Err(ChatError::MessageRequestPending { .. }),
         ), "a new message is still a second one");
         assert_eq!(messages.inserts(), 1);
+    }
+
+    /// Announces nothing: Kafka is down.
+    struct DownPublisher;
+
+    #[async_trait]
+    impl EventPublisher for DownPublisher {
+        async fn publish_conversation(&self, _: &crate::domain::event::DomainEvent) -> Result<(), ChatError> {
+            Ok(())
+        }
+
+        async fn publish_message(&self, _: &MessageEvent) -> Result<(), ChatError> {
+            Err(ChatError::EventPublishFailed { message: "down".to_owned() })
+        }
+    }
+
+    /// Stored but not announced: the retry answers the stored message rather
+    /// than storing a second one.
+    #[tokio::test]
+    async fn a_send_stored_but_not_announced_is_not_stored_again() {
+        let f = Fixture::private_group();
+        let (messages, keys) = (Arc::<FakeMessages>::default(), Arc::<FakeSendKeys>::default());
+        let handler = SendMessageHandler {
+            conversation_repo: Arc::clone(&f.conversations),
+            member_repo:       Arc::clone(&f.members),
+            message_repo:      Arc::clone(&messages),
+            publisher:         Arc::new(DownPublisher),
+            gate:              None,
+            send_keys:         Some(Arc::clone(&keys) as Arc<dyn SendKeys>),
+        };
+        let first = keyed(f.conversation_id, f.owner, Some("bubble-0001"));
+
+        assert!(matches!(handler.send(&first).await, Err(ChatError::EventPublishFailed { .. })));
+        let retry = handler.send(&keyed(f.conversation_id, f.owner, Some("bubble-0001"))).await.unwrap();
+        assert!(retry.replayed);
+        assert_eq!(retry.message_id.as_str(), first.message_id);
+        assert_eq!(messages.inserts(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_retry_after_leaving_still_answers_the_stored_message() {
+        let f = Fixture::private_group();
+        let (messages, keys) = (Arc::default(), Arc::<FakeSendKeys>::default());
+        let handler = keyed_handler(&f, &messages, &keys);
+        let member = f.add_member(Role::Member);
+
+        let first = handler.send(&keyed(f.conversation_id, member, Some("bubble-0001"))).await.unwrap();
+        f.members.remove(&f.conversation_id, &member);
+        let retry = handler.send(&keyed(f.conversation_id, member, Some("bubble-0001"))).await.unwrap();
+        assert_eq!(retry.message_id, first.message_id);
+
+        // A new message is refused, and its claim freed.
+        assert!(handler.send(&keyed(f.conversation_id, member, Some("bubble-0002"))).await.is_err());
+        assert_eq!(keys.held(), 1);
     }
 }
