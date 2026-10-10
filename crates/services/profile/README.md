@@ -285,6 +285,7 @@ async fn main() -> anyhow::Result<()> {
 | `PROFILE_GRPC_ADDR` | No | `0.0.0.0:50052` | gRPC bind address. |
 | `PROFILE_MEDIA_GRPC_ENDPOINT` | No | — | media's mesh endpoint: checks a verification request's private documents (#777). Unset: requests take links only. |
 | `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS` | No | `500` / `1000` | deadlines of that call. |
+| `PROFILE_BACKFILL_TAB_SETTINGS` | No | unset | `1`/`true`/`yes`: at boot, re-announce every profile's non-default tab settings once (`ProfileTabSettingsChanged`, #873), for consumers that started after those events left `profile.v1.events`' retention (engagement, post). Every replica runs it, at each start (repeats are harmless, last writer wins): set it for one rollout at the first deployment, then unset it; run while owners edit their settings, a re-announced old value may land after a newer one. |
 
 > Full `SCYLLA_*` / `REDIS_*` / `KAFKA_*` tuning is documented in the shared storage/transport crates.
 > The `[cache]` TTL profiles are consumed from `infrastructure.toml`, not env.

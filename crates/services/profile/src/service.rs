@@ -114,6 +114,7 @@ impl Service for ProfileService {
             .context("build profile event producer")?;
         let publisher: Arc<dyn EventPublisher> = Arc::new(KafkaProfileEventPublisher::new(producer));
 
+        let backfill_publisher = Arc::clone(&publisher);
         let app = App::build(backends, cache_registry, publisher, private_documents_from_env()?)
             .await
             .map_err(|e| anyhow::anyhow!("profile app build: {e}"))?;
@@ -122,6 +123,16 @@ impl Service for ProfileService {
         spawn_account_event_consumer(Arc::clone(&app.command_bus));
         // Inbound integration: author-tier signal → denormalized profile tier.
         spawn_author_tier_consumer(Arc::clone(&app.command_bus));
+        // Tab settings older than the topic's retention (#873): opt-in, once.
+        if std::env::var("PROFILE_BACKFILL_TAB_SETTINGS").is_ok_and(|v| matches!(v.trim(), "1" | "true" | "yes")) {
+            let repository = Arc::clone(&app.repository);
+            tokio::spawn(async move {
+                match crate::application::backfill::backfill_tab_settings(&repository, &backfill_publisher, chrono::Utc::now()).await {
+                    Ok(announced) => tracing::info!(announced, "tab settings backfill done"),
+                    Err(error) => tracing::error!(%error, "tab settings backfill failed"),
+                }
+            });
+        }
 
         Ok(Self { app })
     }

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 460ece38370f3d1857bb1e54489ff3aaadb58420652cfe7b9fc135af0f42f871
+  source_sha256: 88872e9fd1712b89149562b69437f16a8bdc31e88b775823d5d170e3354f1e86
   translated_at: 2026-10-10
   status: complete
 ---
@@ -88,15 +88,19 @@ déduit la précocité d'un compte.
 **L'onglet J'aime d'un profil (#829).** `ListLikesByProfile(profile_id, limit, page_token)` (edge
 `public_read`, selon le lecteur) liste les posts que **ce profil** a likés — pas les autres profils de son
 compte —, les plus récents d'abord (Scylla `liked_posts_by_profile`, migration 0009, écrite par le
-consommateur des mises avec l'heure de la mise ; les ids de post sont des UUIDv7, leur texte se trie donc par
+consommateur des mises dans l'unique batch logged de la mise, avec l'heure de la mise ; les ids de post sont des UUIDv7, leur texte se trie donc par
 date). Le propriétaire (un des profils du lecteur) et le mesh le voient toujours ; tout autre lecteur
 seulement si le propriétaire montre l'onglet (`profile.v1.events` `ProfileTabSettingsChanged` `show_likes`,
 groupe `engagement-profile-tabs`, gardé dans `profile_tabs`) **et** que `CheckAccess` de social-graph dit
 qu'il peut voir le profil (un profil privé qu'il ne suit pas, un blocage dans un sens ou l'autre) — sinon
-vide. Sans `ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT`, un onglet n'est visible que de son propriétaire. Le client
-hydrate les posts via post, qui retient ce que le lecteur ne peut pas voir. `likes_by_account.profile_ids`
+vide. Pour lui, chaque page ne garde que les posts dont il peut voir aussi l'auteur (#873 :
+`BatchGetLikeVisibility` de post nomme les auteurs, un seul `CheckAccess` les vérifie), si bien que pas même
+l'id d'un post qu'il ne pourrait pas ouvrir ne lui parvient ; une page filtrée peut être plus courte que
+`limit`, et `next_page_token` suit toujours la page lue. Sans `ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` ou
+`ENGAGEMENT_POST_GRPC_ENDPOINT`, un onglet n'est visible que de son propriétaire. `likes_by_account.profile_ids`
 nomme chaque profil du compte qui a liké une cible, si bien que l'effacement d'un compte retire aussi la
-ligne de l'onglet de chaque profil.
+ligne de l'onglet de chaque profil ; la suppression d'un profil seul (`ProfileDeleted`, #873) retire son
+onglet et ses réglages à la date de la suppression.
 
 **Likers expirés.** Un hash de likers qui contient tous les likers porte `_complete` (posé au premier
 like de la cible, ou à la fin d'une réhydratation). Une fois expiré, un compte absent d'un nouveau hash
@@ -156,7 +160,7 @@ Le consommateur des mises ignore les mises d'un compte marqué, et revérifie ap
 | Redis | chemin chaud faisant autorité | vues/partages et lectures échouent ; mises réessayées | **Dur** — `503 Unavailable` (backpressure vers les appelants) |
 | ScyllaDB | copies durables + compteurs | mises réessayées, le flush temporise ; `ListLikesByAccount` échoue | **Souple** — lectures Redis non affectées ; les copies rattrapent |
 | Kafka | likes + ingestion de commentaires | comptes de likes et de commentaires retardés | **Souple** — lectures non affectées |
-| `social-graph` (gRPC `CheckAccess`, #829) | si un lecteur peut voir un profil | les onglets J'aime des autres lecteurs échouent (`ENG-6002`, réessayé) | **Mode fermé** pour les onglets J'aime seulement |
+| `social-graph` (gRPC `CheckAccess`, #829) | si un lecteur peut voir un profil (et les auteurs d'une page d'onglet J'aime, #873) | les onglets J'aime des autres lecteurs échouent (`ENG-6002`, réessayé) | **Mode fermé** pour les onglets J'aime seulement |
 | `post` (gRPC `BatchGetLikeVisibility`, #809) | à qui est le post et si son auteur masque les compteurs de likes | likes retenus pour les non-auteurs | **Mode fermé** pour les likes seulement (vues/partages/commentaires non affectés) ; cache de 60 s |
 
 **Amont (rayon d'impact) :**
@@ -249,7 +253,7 @@ pays) lit directement `wallet.v1.events` du wallet.
 | `comment.created` / `comment.deleted` | `engagement-comment-consumer` | INCR/DECR du compteur de commentaires (Redis + Scylla) | DLQ `{topic}.dlq` |
 | `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665) : le total du compte sur un post ou un commentaire, idempotent et insensible à l'ordre (Lua Redis + Scylla) ; les mises d'un compte supprimé sont ignorées | DLQ `{topic}.dlq` |
 | `account.v1.events` | `engagement-account-erasure` | `account_deleted` → oublier qui a liké (les compteurs restent) ; autres événements ignorés | DLQ `{topic}.dlq` |
-| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → si le profil montre son onglet J'aime (#829) ; autres événements ignorés | DLQ `{topic}.dlq` |
+| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → si le profil montre son onglet J'aime (#829) ; `ProfileDeleted` → son onglet et ses réglages partent, à la date de la suppression (#873) ; autres événements ignorés | DLQ `{topic}.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** les consommateurs des mises, des comptes et des commentaires tournent sous
 > `run_consumer` — commit manuel après succès, retry borné avec backoff + jitter, DLQ à l'épuisement /
@@ -309,7 +313,7 @@ async fn main() -> anyhow::Result<()> {
 
 | Variable | Default | Description |
 |---|---|---|
-| `ENGAGEMENT_POST_GRPC_ENDPOINT` | non défini | adresse mesh de post (p. ex. `http://post:50056`) : les compteurs de likes masqués sont retenus (#809). Non défini → retenus pour personne |
+| `ENGAGEMENT_POST_GRPC_ENDPOINT` | non défini | adresse mesh de post (p. ex. `http://post:50056`) : les compteurs de likes masqués sont retenus (#809), et à qui est chaque post (les onglets J'aime des autres lecteurs, #873). Non défini → retenus pour personne, un onglet J'aime visible de son seul propriétaire |
 | `ENGAGEMENT_POST_RPC_TIMEOUT_MS` · `ENGAGEMENT_POST_CONNECT_TIMEOUT_MS` | `500` · `1000` | délais de cet appel |
 | `ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | non défini | adresse mesh de social-graph (p. ex. `http://social-graph:50053`) : qui peut voir l'onglet J'aime d'un profil (#829). Non défini → l'onglet n'est visible que de son propriétaire |
 

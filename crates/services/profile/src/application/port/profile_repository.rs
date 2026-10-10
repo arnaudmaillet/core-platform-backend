@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use crate::domain::aggregate::Profile;
-use crate::domain::value_object::{AccountId, Handle, ProfileId};
+use crate::domain::value_object::{AccountId, Handle, ProfileId, TabSettings};
 use crate::error::ProfileError;
 
 /// Days a released handle stays reserved before anyone may claim it again.
@@ -44,6 +44,15 @@ pub trait ProfileRepository: Send + Sync + 'static {
     async fn find_by_id(&self, id: &ProfileId) -> Result<Option<Profile>, ProfileError>;
 
     async fn find_by_handle(&self, handle: &Handle) -> Result<Option<Profile>, ProfileError>;
+
+    /// A page of every profile's tab settings (#873: the one-off backfill),
+    /// in token order after `after`, deleted profiles left out; and where the
+    /// next page starts (`None`: the last).
+    async fn tab_settings_page(
+        &self,
+        after: Option<&ProfileId>,
+        limit: i32,
+    ) -> Result<(Vec<(ProfileId, TabSettings)>, Option<ProfileId>), ProfileError>;
 
     /// Returns a page of lightweight summaries and the next page token.
     /// `page_token` is an opaque cursor; `None` starts from the beginning.
