@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 10901ecfe4a6c94753940aeb6ad4eaeee4fc074dbc990ea20414d600ce13a00c
-  translated_at: 2026-10-08
+  source_sha256: 433aa118d934dcec7aaa3dab0b8fd43c655b89908128428a4cecc01848187cbc
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -20,7 +20,7 @@ i18n:
 > | **Palier (Tier)** | **TIER-1** — fil « Following » face utilisateur ; dérivé, cold-start transparent |
 > | **Binaire déployable** | `crates/apps/timeline-server` (crate bibliothèque : `crates/services/timeline`) |
 > | **Bases de données** | Redis (feeds matérialisés + registres VIP) · ScyllaDB keyspace `timeline` (store froid durable) |
-> | **Asynchrone** | ne publie rien · consomme `post.published` / `post.deleted` / `social-graph.followed` / `.unfollowed` |
+> | **Asynchrone** | ne publie rien · consomme `post.v1.events` / `post.deleted` / `social-graph.followed` / `.unfollowed` |
 > | **Appelants amont** | `<TODO: BFF / mobile>` ; appelle `social-graph` (gRPC) |
 > | **Dépendances aval** | Redis, ScyllaDB, Kafka, `social-graph` |
 > | **SLO** | lecture chaude sub-ms (Redis ZSET) · amplification d'écriture VIP O(1)/post |
@@ -52,7 +52,7 @@ d'afficher « chargement »).
 La surface gRPC est **en lecture seule** — toutes les écritures arrivent via des workers Kafka.
 
 ```
-Kafka: post.published │ post.deleted │ social-graph.followed/unfollowed
+Kafka: post.v1.events │ post.deleted │ social-graph.followed/unfollowed
    ▼                    ▼                ▼
 PostPublishedWorker  PostDeletedWorker  Follow{Created,Deleted}Worker
  (Std/Prem → fan-out  (VIP → ZREM;       (Created → add to following set,
@@ -77,7 +77,7 @@ config) :
 | `Premium` (1) | `Write` | same as Standard | same |
 | `Vip` (2) | `Read` | ZADD `timeline:vip:{author}` only | merge at query time (`try_join_all`) |
 
-Le palier d'auteur est dénormalisé dans chaque événement `post.published` — **aucun lookup de palier
+Le palier d'auteur est dénormalisé dans chaque événement `PostPublished` — **aucun lookup de palier
 synchrone sur le chemin d'écriture**. Les membres de ZSET encodent `"{post_id}:{author_id}"` pour que le
 BFF identifie l'auteur sans lookup secondaire.
 
@@ -94,7 +94,7 @@ BFF identifie l'auteur sans lookup secondaire.
 |---|---|---|---|
 | `GetFollowingFeed` p99 — chaud (Redis) | `< <TODO> ms` | 1 h | histogramme gRPC |
 | Fallback cold-start p99 (Scylla) | `< <TODO> ms` | 1 h | histogramme de lecture Scylla |
-| Lag d'ingestion du fan-out (`post.published`) | `< <TODO> s` | direct | lag du consumer-group |
+| Lag d'ingestion du fan-out (`PostPublished`) | `< <TODO> s` | direct | lag du consumer-group |
 | Amplification d'écriture VIP | O(1) par post | — | invariant (`fan_out_mode`) |
 
 **Budget d'erreur :** `<TODO>`. **En cas d'épuisement :** `<TODO>`.
@@ -251,7 +251,7 @@ pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point *
 
 | Topic | Consumer group | Worker / action | On poison/exhaustion |
 |---|---|---|---|
-| `post.published` | `timeline-post-published` | fan-out (Std/Prem) or VIP-register | DLQ `{topic}.dlq` |
+| `post.v1.events` (`PostPublished`) | `timeline-post-published` | fan-out (Std/Prem) or VIP-register | DLQ `{topic}.dlq` |
 | `post.deleted` | `timeline-post-deleted` | VIP ZREM or Scylla purge | DLQ `{topic}.dlq` |
 | `social-graph.followed` | `timeline-sg-followed` | backfill recent posts + update following set | DLQ `{topic}.dlq` |
 | `social-graph.unfollowed` | `timeline-sg-unfollowed` | prune posts + update following set | DLQ `{topic}.dlq` |
@@ -270,7 +270,7 @@ pub trait NearbyPosts: Send + Sync { /* geo-discovery QueryTile around a point *
 | Redis indisponible / froid | les lectures chaudes échouent | **Souple** — le cold-start sert Scylla (`is_cold=true`), réchauffe en asynchrone | vérifier Redis ; auto-réparation |
 | ScyllaDB indisponible | cold-start + ingestion échouent | **Dur** pour le chemin froid ; l'ingestion réessaie via `run_consumer` | vérifier Scylla ; drainer la DLQ |
 | `social-graph` injoignable au boot | la reconstruction du following échoue | canal connecté en lazy — timeline boote quand même ; `TML-3001` réessayable | vérifier la santé de social-graph |
-| Miss du tier cache | palier d'auteur inconnu | route conservativement vers `Standard` (sans bloquer ; corrigé au prochain `post.published`) | aucune — auto-correctif |
+| Miss du tier cache | palier d'auteur inconnu | route conservativement vers `Standard` (sans bloquer ; corrigé au prochain `PostPublished`) | aucune — auto-correctif |
 | Lag d'ingestion du fan-out | feed périmé | retries dans le budget | scaler le consommateur concerné |
 
 **Backpressure & limites.** `TIMELINE_FEED_CAP` (défaut 500) et `TIMELINE_VIP_REGISTRY_CAP` (200) bornent

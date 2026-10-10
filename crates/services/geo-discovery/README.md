@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-1** — query-only read surface; degradable to ScyllaDB |
 > | **Deployable** | `crates/apps/geo-discovery-server` (library crate: `crates/services/geo-discovery`) |
 > | **Datastores** | Redis (ZSET index + msgpack pin & card projections) · ScyllaDB keyspace `geo_discovery` |
-> | **Async** | publishes nothing · consumes `post.published` / `post.deleted` / `moderation.v1.events` / `engagement.score_updated` / `profile.tier_changed` / `wallet.v1.events` (the country ladder) |
+> | **Async** | publishes nothing · consumes `post.v1.events` / `post.deleted` / `moderation.v1.events` / `engagement.score_updated` / `profile.tier_changed` / `wallet.v1.events` (the country ladder) |
 > | **Upstream callers** | `<TODO: BFF / map clients>` |
 > | **Downstream deps** | Redis, ScyllaDB, Kafka |
 > | **SLO** | tile query p99 **< 50 ms** at continental scale |
@@ -34,14 +34,14 @@ lookups on every viewport pan**. It resolves this by splitting the read path by 
   read the pan path deliberately avoids.
 
 Card fields are denormalized at ingest so rendering stays local. `thumbnail_url`, `caption`, and
-`author_tier` arrive on `post.published`; `author_handle` / `author_avatar_url` are reserved on the
+`author_tier` arrive on `PostPublished`; `author_handle` / `author_avatar_url` are reserved on the
 card and backfilled from `profile.v1.events` (a separate join — empty until then). Dynamic relational
 state (friend/following) is resolved client-side, preserving a *shared* card cache and avoiding
 O(users × posts) cache variants.
 
 **Core objectives:** sub-50 ms P99 tile query (Redis pipeline + MGET); ~9 GB Redis at 100 M posts
 (Top-K cap + cold eviction + power-law filtering); zero query-time fan-out; 48 h default TTL (30 d for
-premium), counted from the post's `published_at` (a late or repeated `post.published` — a restore
+premium), counted from the post's `published_at` (a late or repeated `PostPublished` — a restore
 re-announces an old post — gets only what is left, and nothing once it ran out), enforced via Scylla
 `USING TTL` and Redis `EX`.
 
@@ -52,7 +52,7 @@ re-announces an old post — gets only what is left, and nothing once it ran out
 The gRPC surface is **query-only** — all writes arrive via Kafka workers.
 
 ```
-WRITE: post.published          ─► PostIndexerWorker  (H3 encode R5/7/9 → Scylla INSERT ×4 → Redis ZADD+cap ×3 → pin SET always → card SET if score≥θ)
+WRITE: post.v1.events          ─► PostIndexerWorker  (H3 encode R5/7/9 → Scylla INSERT ×4 → Redis ZADD+cap ×3 → pin SET always → card SET if score≥θ)
        engagement.score_updated ─► ScoreUpdaterWorker (Scylla UPDATE score → ZADD XX ×3, skip-if-absent)
        profile.tier_changed     ─► TierSyncWorker     (Scylla UPDATE author_tier → Redis DEL card)
        (60s tick)               ─► TilePrunerWorker    (PRUNE_COLD_TILES Lua → DEL cold tile ZSETs)
@@ -89,7 +89,7 @@ tiles idle past the cold threshold).
 |---|---|---|---|
 | `QueryTile` p99 | **< 50 ms** | 1h | `geo_discovery_tile_query_duration_ms` |
 | Cache miss ratio | < 0.30 | 5m | `geo_discovery_cache_miss_ratio` |
-| `post.published` ingest lag | < 30 s | live | `geo_discovery_post_indexer_lag_seconds` |
+| `PostPublished` ingest lag | < 30 s | live | `geo_discovery_post_indexer_lag_seconds` |
 | `engagement.score_updated` lag | < 10 s | live | `geo_discovery_score_updater_lag_seconds` |
 | Redis spatial RAM (hot tiles) | < 50 000 tiles | live | `geo_discovery_hot_tile_count` |
 
@@ -157,7 +157,7 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > (`suppressed`, `moderation_version`; writes carry the row's remaining TTL) and its pin and cached
 > card leave Redis, so both paths drop it; a **newer** reversal restores it and rebuilds the pin
 > and spatial-index entries from the card's stored coordinates. The two consumers are unordered: a
-> decision that arrives before its post.published is kept as a **tombstone** (visibility cells only,
+> decision that arrives before its PostPublished is kept as a **tombstone** (visibility cells only,
 > 30-day TTL), and the indexer then stores the card without surfacing it, re-stamping the
 > visibility with the card's TTL so it never expires first. **Per reader:** for any caller but the mesh, pins and cards are
 > kept only for authors the reader may see (social-graph `CheckAccess`, one bulk call; private authors
@@ -245,10 +245,10 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
-| `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
+| `post.v1.events` (`PostPublished`, #487) | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
 | `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | map suppression: delete → permanent; `remove_content` / `visibility_limit` / `age_gate` on a post → hidden; a newer reversal → restored (version-guarded; actor-level and other events skipped) | DLQ `{topic}.dlq` |
 | `profile.v1.events` | `geo-discovery-location-settings` | authors' location sharing (#657) from `ProfileLocationSettingsChanged` → `geo_discovery.location_settings`; every map query applies it for any reader but the author (the mesh included): a **ghost**'s pins and cards leave the map; a **city-level** author's pins show only at the R5 band at the R5 cell centre, and their cards name the city's R7 cell; an author whose **audience** is followers / mutuals stays only on the map of a reader who follows / is mutual with them (`CheckAccess` `follows` / `mutual`, in the same bulk call) — never the mesh's (NEARBY reads for no one) nor an anonymous reader's. Other profile events skipped | DLQ `{topic}.dlq` |
-| `wallet.v1.events` | `geo-discovery-country-likes` | the country ladder (#665: a like is a point): each `stake_committed` on a post counts its **points** for the country of the post (its map card's location, `data/countries.json`), on the stake's UTC day → Redis `sg:geo:cact:{YYYYMMDD:b}` (`l:{CC}`; 16 buckets per day by event, so a day's likes never sit on one slot; a read sums them); a post off the map, at sea or past its card's retention counts nowhere; likes on comments and other wallet events skipped. Indexing a `post.published` adds `p:{CC}` likewise. **Idempotent** (the ladder prices unlocks): each count is one Lua script with a `SET NX` marker in the day's hash slot — a stake keyed by its account and batch key (remembered 8 days, past any redelivery and the wallet outbox's 7-day retention), a post by its id (remembered with its day, so a re-announced `post.published` counts nothing more either) | DLQ `{topic}.dlq` |
+| `wallet.v1.events` | `geo-discovery-country-likes` | the country ladder (#665: a like is a point): each `stake_committed` on a post counts its **points** for the country of the post (its map card's location, `data/countries.json`), on the stake's UTC day → Redis `sg:geo:cact:{YYYYMMDD:b}` (`l:{CC}`; 16 buckets per day by event, so a day's likes never sit on one slot; a read sums them); a post off the map, at sea or past its card's retention counts nowhere; likes on comments and other wallet events skipped. Indexing a `PostPublished` adds `p:{CC}` likewise. **Idempotent** (the ladder prices unlocks): each count is one Lua script with a `SET NX` marker in the day's hash slot — a stake keyed by its account and batch key (remembered 8 days, past any redelivery and the wallet outbox's 7-day retention), a post by its id (remembered with its day, so a re-announced `PostPublished` counts nothing more either) | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |
 

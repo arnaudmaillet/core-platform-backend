@@ -5,19 +5,18 @@ use transport::{
 };
 
 use crate::application::port::EventPublisher;
-use crate::domain::event::{DomainEvent, PostDeletedEvent, PostPublishedEvent, PostUpdatedEvent};
+use crate::domain::event::{DomainEvent, PostDeletedEvent};
 use crate::error::PostError;
 
-// Legacy per-type topics (bare payloads), consumed by notification / geo-discovery
-// / timeline. Retained for backward compatibility.
-const TOPIC_PUBLISHED: &str = "post.published";
-const TOPIC_UPDATED:   &str = "post.updated";
-const TOPIC_DELETED:   &str = "post.deleted";
+// The legacy per-type topic still read by timeline and geo-discovery for
+// deletions (bare payload). `post.published` and `post.updated` are retired
+// (#487): every consumer reads `post.v1.events`.
+const TOPIC_DELETED: &str = "post.deleted";
 
 // The unified, versioned stream (the fleet convention, like `moderation.v1.events`
 // / `profile.v1.events`): the whole internally-tagged `DomainEvent`, keyed by
-// `post_id`. Consumed by `search`. Published ALONGSIDE the legacy topics so the
-// existing per-type consumers keep working.
+// `post_id`. Consumed by search, timeline, realtime, notification and
+// geo-discovery.
 const TOPIC_V1: &str = "post.v1.events";
 
 fn transport_err(e: TransportError) -> PostError {
@@ -40,13 +39,11 @@ impl KafkaEventPublisher {
 #[async_trait]
 impl EventPublisher for KafkaEventPublisher {
     async fn publish(&self, event: &DomainEvent) -> Result<(), PostError> {
-        // 1. Legacy per-type topics (existing consumers).
-        match event {
-            DomainEvent::PostPublished(e) => publish_published(&self.producer, e).await?,
-            DomainEvent::PostUpdated(e)   => publish_updated(&self.producer, e).await?,
-            DomainEvent::PostDeleted(e)   => publish_deleted(&self.producer, e).await?,
+        // 1. The legacy deletion topic (timeline, geo-discovery).
+        if let DomainEvent::PostDeleted(e) = event {
+            publish_deleted(&self.producer, e).await?;
         }
-        // 2. Unified `post.v1.events` stream (the fleet convention; consumed by search).
+        // 2. The unified `post.v1.events` stream, every event.
         publish_v1(&self.producer, event).await
     }
 }
@@ -67,32 +64,6 @@ async fn publish_v1(
         .with_header("event_type", event_type)
         .with_header("post_id",    post_id.clone())
         .with_header("profile_id", profile_id.clone());
-
-    producer.publish(envelope).await.map_err(transport_err)
-}
-
-async fn publish_published(
-    producer: &KafkaProducerHandle,
-    event:    &PostPublishedEvent,
-) -> Result<(), PostError> {
-    let key      = event.post_id.clone();
-    let envelope = EventEnvelope::new(TOPIC_PUBLISHED, key, event.clone())
-        .with_header("event_type",  "PostPublished")
-        .with_header("post_id",     event.post_id.clone())
-        .with_header("profile_id",  event.profile_id.clone());
-
-    producer.publish(envelope).await.map_err(transport_err)
-}
-
-async fn publish_updated(
-    producer: &KafkaProducerHandle,
-    event:    &PostUpdatedEvent,
-) -> Result<(), PostError> {
-    let key      = event.post_id.clone();
-    let envelope = EventEnvelope::new(TOPIC_UPDATED, key, event.clone())
-        .with_header("event_type",  "PostUpdated")
-        .with_header("post_id",     event.post_id.clone())
-        .with_header("profile_id",  event.profile_id.clone());
 
     producer.publish(envelope).await.map_err(transport_err)
 }
@@ -139,7 +110,8 @@ mod tests {
         assert_eq!(value["published_at_ms"], 1_700_000_000_000_i64);
     }
 
-    /// Locks the geo-discovery denormalization carried on `post.published`:
+    /// Locks the geo-discovery denormalization carried on `post.v1.events`'
+    /// PostPublished (geo-discovery and notification read it there, #487):
     /// caption, cover thumbnail, and optional location. Absent location must be
     /// omitted from the wire payload (geo-discovery skips indexing in that case).
     #[test]

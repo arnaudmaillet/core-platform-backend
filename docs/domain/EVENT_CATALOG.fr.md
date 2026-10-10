@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 3b73b8b76ab69bbbd734450642ec38e10c9e02d24da14a9518755d956eb724b4
+  source_sha256: e8770cbe35788218fac84934f0d956e55bf6456a48f7a2d87ecf25b646228bdc
   translated_at: 2026-10-10
   status: complete
 ---
@@ -44,10 +44,8 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `profile.v1.events` | `profile` | `search`, `post`, `social-graph`, `geo-discovery`, `timeline`, `media`, `engagement`, `comment`, `chat` |
 | `wallet.v1.events` | `wallet` | `counter`, `notification`, `timeline`, `geo-discovery`, `engagement` |
 | `notification.v1.events` | `notification` | `realtime` |
-| `post.published` | `post` | `notification`, `geo-discovery` |
-| `post.updated` | `post` | — *(orphan — see below)* |
 | `post.deleted` | `post` | `timeline`, `geo-discovery` |
-| `post.v1.events` | `post` | `timeline`, `search`, `realtime` |
+| `post.v1.events` | `post` | `timeline`, `search`, `realtime`, `notification`, `geo-discovery` |
 | `comment.created` | `comment` | `notification`, `engagement` |
 | `comment.deleted` | `comment` | `engagement` |
 | `social-graph.followed` | `social-graph` | `notification`, `timeline` |
@@ -83,7 +81,6 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 
 | Topic | Producer | Why |
 |---|---|---|
-| `post.updated` | `post` | No stream consumer — search/timeline/realtime act on post.v1.events PostUpdated; the legacy per-type topic is emitted for completeness. |
 | `social-graph.blocked` | `social-graph` | Block is enforced on the gRPC read path; no stream consumer yet. |
 | `chat.conversation.published` | `chat` | Chat delivery-plane headroom. |
 
@@ -130,9 +127,12 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 
 | Événement | Signifie | Émis quand | Consommateurs & pourquoi |
 |---|---|---|---|
-| `post.published` | un nouveau contenu est en ligne | la publication commite | `timeline` (fan-out), `search`/`geo-discovery` (index), `counter`, `realtime` (broadcast) |
-| `post.updated` | le contenu a été édité | l'édition commite | `search`/`geo-discovery` (ré-indexation) |
-| `post.deleted` | le contenu a été retiré | la suppression commite | `timeline`/`search`/`geo-discovery` (démantèlement) |
+| `PostPublished` | un nouveau contenu est en ligne (porte la légende, la miniature, la localisation facultative, le tier d'auteur) | la publication commite | `timeline` (fan-out), `search` (index), `geo-discovery` (index de la carte), `notification` (mentions ; cache de l'auteur du post), `realtime` (broadcast) |
+| `PostUpdated` | le contenu a été édité | l'édition commite | `search` (ré-indexation) |
+| `PostDeleted` | le contenu a été retiré | la suppression commite | `search` (démantèlement) ; `timeline`/`geo-discovery` le lisent depuis l'ancien topic `post.deleted` |
+
+Les anciens topics par type `post.published` / `post.updated` sont retirés (#487) ; seul `post.deleted`
+reste à côté du flux unifié.
 
 ## Commentaires — `comment.created` / `comment.deleted` (producteur : `comment`)
 

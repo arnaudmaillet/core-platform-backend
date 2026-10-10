@@ -4,7 +4,7 @@ use crate::domain::value_object::{AuthorId, PostId};
 ///
 /// Invariants:
 /// - `published_at_ms` is a Unix epoch millisecond timestamp sourced from
-///   the `post.published` Kafka event. It is never mutated after ingestion.
+///   the `PostPublished` event. It is never mutated after ingestion.
 /// - `post_id` is a UUID v7 sourced from services/post.
 /// - No post content (text, media URLs) is stored. The BFF hydrates
 ///   all rendering metadata from services/post and services/profile.

@@ -17,7 +17,7 @@ const DAY_TTL_SECS: i64 = 40 * 24 * 3600;
 /// retention (7 days), not for the whole window — one marker per stake.
 const LIKE_MARKER_TTL_SECS: i64 = 8 * 24 * 3600;
 /// A counted post is remembered as long as its day, so a late re-announced
-/// `post.published` counts nothing more either (posts are few).
+/// `PostPublished` counts nothing more either (posts are few).
 const POST_MARKER_TTL_SECS: i64 = DAY_TTL_SECS;
 
 /// A day's counts are spread over this many hashes (by event), so a day's

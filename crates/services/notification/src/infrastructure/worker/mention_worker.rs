@@ -23,7 +23,7 @@ use crate::domain::value_object::{
 use crate::error::NotificationError;
 use crate::infrastructure::worker::build_dlq_producer;
 
-const TOPIC: &str = "post.published";
+const TOPIC: &str = "post.v1.events";
 
 // ── Mention regex ─────────────────────────────────────────────────────────────
 
@@ -36,12 +36,20 @@ static MENTION_REGEX: Lazy<Regex> = Lazy::new(|| {
 
 // ── Payload shape ─────────────────────────────────────────────────────────────
 
-/// Minimal projection of `post.published` Kafka events.
-/// Unknown fields from the post service schema are silently ignored.
+/// Minimal projection of `post.v1.events` (#487) — services/post's
+/// internally-tagged `DomainEvent`. Only `PostPublished` is acted on; the other
+/// variants commit without work. Unknown fields are ignored.
 #[derive(Debug, Deserialize)]
 pub struct PostPublishedPayload {
+    /// The `DomainEvent` variant.
+    #[serde(rename = "type")]
+    pub event_type: String,
     pub post_id:   String,
-    pub author_id: String,
+    /// The author. services/post names it `profile_id`; it was read as a
+    /// required `author_id`, which no post event ever carried — every message
+    /// failed to decode (#487).
+    #[serde(alias = "author_id")]
+    pub profile_id: String,
     /// The raw post caption, used for mention token extraction.
     pub caption:   Option<String>,
     /// Publication timestamp (Unix ms), used as the notification `created_at` so
@@ -58,7 +66,7 @@ fn post_author_key(post_id: &str) -> String {
 
 // ── Worker ────────────────────────────────────────────────────────────────────
 
-/// Consumes `post.published` events and:
+/// Consumes the `PostPublished` events of `post.v1.events` and:
 ///
 /// 1. Caches `notification:pa:{post_id}` → `author_profile_id` in Redis so the
 ///    `ReactionNotificationWorker` can resolve the notification target without a
@@ -166,8 +174,12 @@ where
     }
 
     async fn process(&self, event: &PostPublishedPayload) -> Result<(), NotificationError> {
+        if event.event_type != "PostPublished" {
+            return Ok(());
+        }
+
         // Step 1: cache post author for the reaction worker.
-        self.cache_post_author(&event.post_id, &event.author_id).await;
+        self.cache_post_author(&event.post_id, &event.profile_id).await;
 
         // Step 2: extract mention UUIDs from caption.
         let caption = match event.caption.as_deref().filter(|c| !c.is_empty()) {
@@ -175,7 +187,7 @@ where
             None    => return Ok(()),
         };
 
-        let sender_id = ProfileId::try_from(event.author_id.as_str())?;
+        let sender_id = ProfileId::try_from(event.profile_id.as_str())?;
         let subject_id = SubjectId::try_from(event.post_id.as_str())?;
 
         let mut seen: Vec<Uuid> = Vec::new();
@@ -278,5 +290,43 @@ where
                 false,
             )
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use post::domain::event::{DomainEvent, PostPublishedEvent, PostUpdatedEvent};
+
+    fn wire(event: DomainEvent) -> PostPublishedPayload {
+        serde_json::from_slice(&serde_json::to_vec(&event).unwrap()).expect("decodes post's own event")
+    }
+
+    /// Wire contract: post's own `post.v1.events` decodes here. The author is
+    /// `profile_id`; a required `author_id` made every message poison (#487).
+    #[test]
+    fn decodes_posts_own_post_v1_events() {
+        let event = wire(DomainEvent::PostPublished(PostPublishedEvent {
+            post_id:         "p1".to_owned(),
+            profile_id:      "a1".to_owned(),
+            kind:            "text".to_owned(),
+            published_at_ms: 5,
+            author_tier:     0,
+            audio_id:        None,
+            audio_kind:      None,
+            caption:         "hello [@bob](profile:00000000-0000-0000-0000-000000000001)".to_owned(),
+            thumbnail_url:   None,
+            lat:             None,
+            lng:             None,
+        }));
+        assert_eq!(event.event_type, "PostPublished");
+        assert_eq!((event.post_id.as_str(), event.profile_id.as_str()), ("p1", "a1"));
+        assert_eq!(event.published_at_ms, 5);
+        assert_eq!(MENTION_REGEX.captures_iter(event.caption.as_deref().unwrap()).count(), 1);
+
+        let updated = wire(DomainEvent::PostUpdated(PostUpdatedEvent {
+            post_id: "p1".to_owned(), profile_id: "a1".to_owned(), updated_at_ms: 1,
+        }));
+        assert_eq!(updated.event_type, "PostUpdated");
     }
 }

@@ -59,7 +59,7 @@ message MapPostCard {
     // kept current via the TierSyncWorker (profile.tier_changed Kafka topic).
     // Defaults to AUTHOR_TIER_UNSPECIFIED (= Standard) for ungated legacy cards.
     AuthorTier author_tier       = 9;
-    // Post caption, denormalized from post.published. Served only on the Focus
+    // Post caption, denormalized from PostPublished. Served only on the Focus
     // path (GetGeoTimeline) — never on the Radar pan path. Empty when absent.
     string     caption           = 10;
 }

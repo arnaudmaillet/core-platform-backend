@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-2** — derived/best-effort; feed is durable, pushes are best-effort |
 > | **Deployable** | `crates/apps/notification-server` (library crate: `crates/services/notification`) |
 > | **Datastores** | ScyllaDB keyspace `notification` (TWCS feed + counters) · Redis (collapse + unread) |
-> | **Async** | publishes nothing · consumes `wallet.v1.events` / `comment.created` / `post.published` / `social-graph.followed` / `social-graph.follow_requested` / `moderation.v1.events` (appeal outcomes) |
+> | **Async** | publishes nothing · consumes `wallet.v1.events` / `comment.created` / `PostPublished` / `social-graph.followed` / `social-graph.follow_requested` / `moderation.v1.events` (appeal outcomes) |
 > | **Upstream callers** | `<TODO: mobile / BFF (stream + feed reads)>` |
 > | **Downstream deps** | ScyllaDB, Redis, Kafka; APNs + `profile` (push, #654) |
 > | **SLO** | unread-count read sub-ms (Redis) · feed read O(1) paginated · push best-effort |
@@ -19,7 +19,7 @@
 ## 🎯 Overview & Service Role
 
 `notification` closes the user feedback loop. It ingests semantic business events from Kafka
-(`wallet.v1.events`, `comment.created`, `post.published`), persists durable per-profile activity
+(`wallet.v1.events`, `comment.created`, `PostPublished`), persists durable per-profile activity
 records to ScyllaDB, and dispatches real-time pushes to active clients via a gRPC server-streaming
 channel.
 
@@ -37,7 +37,7 @@ semantic relation IDs only — no localized strings, handles, or content; UI hyd
 ## 📐 Architecture & Concepts
 
 ```
-Kafka: wallet.v1.events │ comment.created │ post.published
+Kafka: wallet.v1.events │ comment.created │ post.v1.events
    │                          │                 │
 ReactionNotificationWorker  CommentNotificationWorker  MentionNotificationWorker
  (L1 in-batch collapse,     (cache comment author,    (cache post author, parse
@@ -212,7 +212,7 @@ identifiers — via the shared `error` crate.
 | `moderation.v1.events` (`appeal_resolved` only) | `notification-appeal-consumer` | an appeal's outcome → `APPEAL_UPHELD` / `APPEAL_OVERTURNED` to **every profile** moderation names (`profile_ids`: the appellant account's profiles, #744). Subject: the appeal (`SUBJECT_KIND_APPEAL`, the app opens it via `ListMyAppeals`). A platform notice: no sender (nil `sender_profile_id`, `sender_count` 0), not block-gated; one notification per (appeal, profile) (deterministic id). Other moderation events are ignored | DLQ `{topic}.dlq` |
 | `account.v1.events` (`supervision_started` / `supervision_ended` only) | `notification-supervision-consumer` | family supervision (#670) → `SUPERVISION_STARTED` to both sides; `SUPERVISION_ENDED` to the other side when one ends it (both when an account is erased); `SUPERVISION_CAME_OF_AGE` to both at 18. To every profile account names on the event; sender = the other side's first profile (else the platform), subject = the other side's account (`SUBJECT_KIND_ACCOUNT`: the app opens Settings → Supervision). Not block-gated (a teen is always told); feed only (no push category); one notification per (event, profile) (deterministic id). Other account events are ignored | DLQ `{topic}.dlq` |
 | `comment.created` | `notification-comment-consumer` | comment notifications (block-gated, self-guarded; none for a `quiet` event: a restricted author, #659) | DLQ `{topic}.dlq` |
-| `post.published` | `notification-mention-consumer` | parse `@mentions`, cache post author | DLQ `{topic}.dlq` |
+| `post.v1.events` (`PostPublished`, #487) | `notification-mention-consumer` | parse `@mentions`, cache post author | DLQ `{topic}.dlq` |
 | `chat.message.push` | `notification-chat-push` | a chat message's push to the recipients chat names (#654), once per message (Redis claim), under each one's `messages` preference; nothing written to the feed. Only when push is on; `latest` reset (a new group never pushes the past) | DLQ `{topic}.dlq` |
 
 > **Runtime contract (mandatory):** all workers run under `run_consumer` — manual commit after success
@@ -306,7 +306,7 @@ async fn main() -> anyhow::Result<()> {
 - **Migrations:** `001_keyspace.cql` → `002_notifications_by_profile.cql` →
   `003_notification_unread_counters.cql` against `notification`, applied **before** first boot.
 - **Kafka:** topics pre-created — `wallet.v1.events` (key `{target_kind}:{target_id}`),
-  `comment.created`/`comment.deleted` (key `comment_id`), `post.published` (key `post_id`).
+  `comment.created`/`comment.deleted` (key `comment_id`), `post.v1.events` (key `post_id`).
 - **Rollout/Rollback:** `<TODO>`; workers are at-least-once consumers, gRPC tier stateless — safe to roll.
 
 ---
@@ -343,7 +343,7 @@ cargo test  -p notification
 
 **1. `NTF-6001`: reaction notifications silently dropped for a post.**
 Root cause: `ReactionNotificationWorker` reads `notification:pa:{post_id}` (populated by
-`MentionNotificationWorker` on `post.published`) before writing; the key is absent if the mention worker
+`MentionNotificationWorker` on `PostPublished`) before writing; the key is absent if the mention worker
 lags or the post predates deployment. Mitigation: check `notification-mention-consumer` lag; replay with
 `auto.offset.reset=earliest`; for immediate recovery `SET notification:pa:{post_id} {author} EX 604800`.
 

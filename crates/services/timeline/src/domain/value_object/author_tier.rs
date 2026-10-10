@@ -1,7 +1,7 @@
 /// Tier classification for a post's author, mirrored from geo-discovery.
 ///
 /// Stored as `tinyint` (i8) in ScyllaDB `posts_by_author.author_tier`.
-/// Denormalized into every `post.published` Kafka event by services/post
+/// Denormalized into every `PostPublished` event of `post.v1.events` by services/post
 /// (sourced from services/profile via geo-discovery). Timeline consumes it
 /// directly — no synchronous tier lookup required on the write path.
 ///

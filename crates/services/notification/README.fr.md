@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 9dbd17cd07eedb0762385be25cad65e4bc694655a538e9c77e7dc5e8a23b8e1d
-  translated_at: 2026-10-08
+  source_sha256: 47c83e18a42aee7db99b5da8eb2238425c0003172bbb85d7f93c6bf9f576508e
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -20,7 +20,7 @@ i18n:
 > | **Palier (Tier)** | **TIER-2** — dérivé/best-effort ; le fil est durable, les pushs sont best-effort |
 > | **Binaire déployable** | `crates/apps/notification-server` (crate bibliothèque : `crates/services/notification`) |
 > | **Bases de données** | ScyllaDB keyspace `notification` (fil TWCS + compteurs) · Redis (collapse + non-lus) |
-> | **Asynchrone** | ne publie rien · consomme `wallet.v1.events` / `comment.created` / `post.published` / `social-graph.followed` / `social-graph.follow_requested` / `moderation.v1.events` (appeal outcomes) |
+> | **Asynchrone** | ne publie rien · consomme `wallet.v1.events` / `comment.created` / `PostPublished` / `social-graph.followed` / `social-graph.follow_requested` / `moderation.v1.events` (appeal outcomes) |
 > | **Appelants amont** | `<TODO: mobile / BFF (stream + lectures de fil)>` |
 > | **Dépendances aval** | ScyllaDB, Redis, Kafka ; APNs + `profile` (push, #654) |
 > | **SLO** | lecture du compte de non-lus sub-ms (Redis) · lecture de fil paginée O(1) · push best-effort |
@@ -30,7 +30,7 @@ i18n:
 ## 🎯 Vue d'ensemble & rôle du service
 
 `notification` boucle la rétroaction utilisateur. Il ingère des événements métier sémantiques depuis
-Kafka (`wallet.v1.events`, `comment.created`, `post.published`), persiste des enregistrements
+Kafka (`wallet.v1.events`, `comment.created`, `PostPublished`), persiste des enregistrements
 d'activité durables par profil dans ScyllaDB, et dispatche des pushs temps réel vers les clients actifs
 via un canal gRPC server-streaming.
 
@@ -50,7 +50,7 @@ handle, aucun contenu ; l'hydratation UI est l'affaire du client.
 ## 📐 Architecture & concepts
 
 ```
-Kafka: wallet.v1.events │ comment.created │ post.published
+Kafka: wallet.v1.events │ comment.created │ post.v1.events
    │                          │                 │
 ReactionNotificationWorker  CommentNotificationWorker  MentionNotificationWorker
  (L1 in-batch collapse,     (cache comment author,    (cache post author, parse
@@ -233,7 +233,7 @@ identifiers — via le crate partagé `error`.
 | `moderation.v1.events` (`appeal_resolved` only) | `notification-appeal-consumer` | an appeal's outcome → `APPEAL_UPHELD` / `APPEAL_OVERTURNED` to **every profile** moderation names (`profile_ids`: the appellant account's profiles, #744). Subject: the appeal (`SUBJECT_KIND_APPEAL`, the app opens it via `ListMyAppeals`). A platform notice: no sender (nil `sender_profile_id`, `sender_count` 0), not block-gated; one notification per (appeal, profile) (deterministic id). Other moderation events are ignored | DLQ `{topic}.dlq` |
 | `account.v1.events` (`supervision_started` / `supervision_ended` seulement) | `notification-supervision-consumer` | supervision familiale (#670) → `SUPERVISION_STARTED` aux deux côtés ; `SUPERVISION_ENDED` à l'autre côté quand l'un y met fin (aux deux quand un compte est effacé) ; `SUPERVISION_CAME_OF_AGE` aux deux à 18 ans. À chaque profil que account nomme sur l'événement ; expéditeur = le premier profil de l'autre côté (sinon la plateforme), sujet = le compte de l'autre côté (`SUBJECT_KIND_ACCOUNT` : l'app ouvre Réglages → Supervision). Sans filtre de blocage (un ado est toujours prévenu) ; fil seulement (pas de catégorie push) ; une notification par (événement, profil) (id déterministe). Les autres événements de compte sont ignorés | DLQ `{topic}.dlq` |
 | `comment.created` | `notification-comment-consumer` | comment notifications (block-gated, self-guarded; none for a `quiet` event: a restricted author, #659) | DLQ `{topic}.dlq` |
-| `post.published` | `notification-mention-consumer` | parse `@mentions`, cache post author | DLQ `{topic}.dlq` |
+| `post.v1.events` (`PostPublished`, #487) | `notification-mention-consumer` | parse `@mentions`, cache post author | DLQ `{topic}.dlq` |
 | `chat.message.push` | `notification-chat-push` | le push d'un message du chat aux destinataires que chat désigne (#654), une fois par message (claim Redis), selon la préférence `messages` de chacun ; rien n'est écrit dans le fil. Seulement quand le push est actif ; reset `latest` (un nouveau groupe n'envoie jamais le passé) | DLQ `{topic}.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** tous les workers s'exécutent sous `run_consumer` — commit manuel
@@ -329,7 +329,7 @@ async fn main() -> anyhow::Result<()> {
 - **Migrations :** `001_keyspace.cql` → `002_notifications_by_profile.cql` →
   `003_notification_unread_counters.cql` sur `notification`, appliquées **avant** le premier boot.
 - **Kafka :** topics pré-créés — `wallet.v1.events` (key `{target_kind}:{target_id}`),
-  `comment.created`/`comment.deleted` (key `comment_id`), `post.published` (key `post_id`).
+  `comment.created`/`comment.deleted` (key `comment_id`), `post.v1.events` (key `post_id`).
 - **Déploiement/Rollback :** `<TODO>` ; les workers sont des consommateurs at-least-once, la couche gRPC
   est sans état — sûr à déployer.
 
@@ -367,7 +367,7 @@ cargo test  -p notification
 
 **1. `NTF-6001` : notifications de réaction silencieusement abandonnées pour un post.**
 Cause racine : `ReactionNotificationWorker` lit `notification:pa:{post_id}` (peuplé par
-`MentionNotificationWorker` sur `post.published`) avant d'écrire ; la clé est absente si le mention worker
+`MentionNotificationWorker` sur `PostPublished`) avant d'écrire ; la clé est absente si le mention worker
 a du lag ou si le post est antérieur au déploiement. Mitigation : vérifier le lag de
 `notification-mention-consumer` ; rejouer avec `auto.offset.reset=earliest` ; pour une récupération
 immédiate `SET notification:pa:{post_id} {author} EX 604800`.

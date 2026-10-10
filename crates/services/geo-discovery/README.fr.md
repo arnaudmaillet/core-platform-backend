@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 0f9d4805cfd82c7a0681e7d081159f09310e1e6307163b78f8a7969c4fe28caa
-  translated_at: 2026-10-08
+  source_sha256: 2014959214e50f782e763ee5069cab7df9ff5086a1aa4d53b6c7b5a4ed235736
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -20,7 +20,7 @@ i18n:
 > | **Palier (Tier)** | **TIER-1** — surface de lecture seule ; dégradable vers ScyllaDB |
 > | **Binaire déployable** | `crates/apps/geo-discovery-server` (crate bibliothèque : `crates/services/geo-discovery`) |
 > | **Bases de données** | Redis (index ZSET + projections pin & carte msgpack) · ScyllaDB keyspace `geo_discovery` |
-> | **Asynchrone** | ne publie rien · consomme `post.published` / `post.deleted` / `moderation.v1.events` / `engagement.score_updated` / `profile.tier_changed` / `wallet.v1.events` (le classement des pays) |
+> | **Asynchrone** | ne publie rien · consomme `post.v1.events` / `post.deleted` / `moderation.v1.events` / `engagement.score_updated` / `profile.tier_changed` / `wallet.v1.events` (le classement des pays) |
 > | **Appelants amont** | `<TODO: BFF / clients carte>` |
 > | **Dépendances aval** | Redis, ScyllaDB, Kafka |
 > | **SLO** | requête de tuile p99 **< 50 ms** à l'échelle continentale |
@@ -46,14 +46,14 @@ chemin de lecture par étape d'interaction :
   la lecture à froid que le chemin panoramique évite délibérément.
 
 Les champs de carte sont dénormalisés à l'ingestion pour garder l'affichage local. `thumbnail_url`,
-`caption` et `author_tier` arrivent sur `post.published` ; `author_handle` / `author_avatar_url` sont
+`caption` et `author_tier` arrivent sur `PostPublished` ; `author_handle` / `author_avatar_url` sont
 réservés sur la carte et complétés depuis `profile.v1.events` (jointure séparée — vides jusque-là).
 L'état relationnel dynamique (ami/abonné) est résolu côté client, préservant un cache de cartes *partagé*
 et évitant des variantes de cache en O(utilisateurs × posts).
 
 **Objectifs fondamentaux :** requête de tuile sub-50 ms P99 (pipeline Redis + MGET) ; ~9 Go de Redis à
 100 M de posts (cap Top-K + éviction à froid + filtrage en loi de puissance) ; zéro fan-out au moment de
-la requête ; TTL par défaut 48 h (30 j pour premium), compté depuis le `published_at` du post (un `post.published`
+la requête ; TTL par défaut 48 h (30 j pour premium), compté depuis le `published_at` du post (un `PostPublished`
 tardif ou répété — une restauration réannonce un vieux post — n'obtient que ce qui reste, et rien une fois
 écoulé), imposé via `USING TTL` Scylla et `EX` Redis.
 
@@ -64,7 +64,7 @@ tardif ou répété — une restauration réannonce un vieux post — n'obtient 
 La surface gRPC est **en lecture seule** — toutes les écritures arrivent via des workers Kafka.
 
 ```
-WRITE: post.published          ─► PostIndexerWorker  (H3 encode R5/7/9 → Scylla INSERT ×4 → Redis ZADD+cap ×3 → pin SET always → card SET if score≥θ)
+WRITE: post.v1.events          ─► PostIndexerWorker  (H3 encode R5/7/9 → Scylla INSERT ×4 → Redis ZADD+cap ×3 → pin SET always → card SET if score≥θ)
        engagement.score_updated ─► ScoreUpdaterWorker (Scylla UPDATE score → ZADD XX ×3, skip-if-absent)
        profile.tier_changed     ─► TierSyncWorker     (Scylla UPDATE author_tier → Redis DEL card)
        (60s tick)               ─► TilePrunerWorker    (PRUNE_COLD_TILES Lua → DEL cold tile ZSETs)
@@ -101,7 +101,7 @@ réinsérés), `PRUNE_COLD_TILES` (évince les tuiles inactives au-delà du seui
 |---|---|---|---|
 | `QueryTile` p99 | **< 50 ms** | 1 h | `geo_discovery_tile_query_duration_ms` |
 | Taux de cache miss | < 0,30 | 5 min | `geo_discovery_cache_miss_ratio` |
-| Lag d'ingestion `post.published` | < 30 s | direct | `geo_discovery_post_indexer_lag_seconds` |
+| Lag d'ingestion `PostPublished` | < 30 s | direct | `geo_discovery_post_indexer_lag_seconds` |
 | Lag `engagement.score_updated` | < 10 s | direct | `geo_discovery_score_updater_lag_seconds` |
 | RAM spatiale Redis (tuiles chaudes) | < 50 000 tuiles | direct | `geo_discovery_hot_tile_count` |
 
@@ -173,7 +173,7 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > restant de la ligne) et son pin et sa fiche en cache quittent Redis, si bien que les deux chemins
 > l'ignorent ; une réversion **plus récente** le restaure et reconstruit le pin et les entrées de
 > l'index spatial à partir des coordonnées stockées sur la fiche. Les deux consumers ne sont pas
-> ordonnés : une décision arrivée avant son post.published est conservée comme **pierre tombale**
+> ordonnés : une décision arrivée avant son PostPublished est conservée comme **pierre tombale**
 > (cellules de visibilité seules, TTL 30 jours), puis l'indexeur stocke la fiche sans l'afficher, en
 > ré-estampillant la visibilité avec le TTL de la fiche pour qu'elle n'expire jamais avant elle. **Par lecteur :** pour tout appelant hors mesh, pins et fiches ne
 > sont gardés que pour les auteurs que le lecteur peut voir (`CheckAccess` de social-graph, un appel
@@ -267,9 +267,9 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
-| `post.published` | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
+| `post.v1.events` (`PostPublished`, #487) | `geo-discovery-post-indexer` | H3 index + card projection | DLQ `{topic}.dlq` |
 | `post.deleted` + `moderation.v1.events` | `geo-discovery-visibility` | suppression de la carte : suppression → définitive ; `remove_content` / `visibility_limit` / `age_gate` sur un post → masqué ; une réversion plus récente → restauré (gardé par version ; événements au niveau de l'acteur et autres ignorés) | DLQ `{topic}.dlq` |
-| `wallet.v1.events` | `geo-discovery-country-likes` | le classement des pays (#665 : un like est un point) : chaque `stake_committed` sur un post compte ses **points** pour le pays du post (la position de sa carte, `data/countries.json`), au jour UTC de la mise → Redis `sg:geo:cact:{YYYYMMDD:b}` (`l:{CC}` ; 16 seaux par jour selon l'événement, pour que les likes d'un jour ne pèsent jamais sur un seul slot ; la lecture les additionne) ; un post hors carte, en mer ou au-delà de la rétention de sa carte ne compte nulle part ; les likes sur les commentaires et les autres événements du wallet sont ignorés. L'indexation d'un `post.published` ajoute `p:{CC}` de même. **Idempotent** (le classement fixe le prix des déblocages) : chaque comptage est un script Lua avec un marqueur `SET NX` dans le slot du hash du jour — une mise identifiée par son compte et sa clé de lot (gardée 8 jours, au-delà de toute relivraison et des 7 jours de rétention de l'outbox du wallet), un post par son id (gardé avec son jour, donc un `post.published` réannoncé ne compte pas non plus) | DLQ `{topic}.dlq` |
+| `wallet.v1.events` | `geo-discovery-country-likes` | le classement des pays (#665 : un like est un point) : chaque `stake_committed` sur un post compte ses **points** pour le pays du post (la position de sa carte, `data/countries.json`), au jour UTC de la mise → Redis `sg:geo:cact:{YYYYMMDD:b}` (`l:{CC}` ; 16 seaux par jour selon l'événement, pour que les likes d'un jour ne pèsent jamais sur un seul slot ; la lecture les additionne) ; un post hors carte, en mer ou au-delà de la rétention de sa carte ne compte nulle part ; les likes sur les commentaires et les autres événements du wallet sont ignorés. L'indexation d'un `PostPublished` ajoute `p:{CC}` de même. **Idempotent** (le classement fixe le prix des déblocages) : chaque comptage est un script Lua avec un marqueur `SET NX` dans le slot du hash du jour — une mise identifiée par son compte et sa clé de lot (gardée 8 jours, au-delà de toute relivraison et des 7 jours de rétention de l'outbox du wallet), un post par son id (gardé avec son jour, donc un `PostPublished` réannoncé ne compte pas non plus) | DLQ `{topic}.dlq` |
 | `profile.v1.events` | `geo-discovery-location-settings` | partage de localisation des auteurs (#657) depuis `ProfileLocationSettingsChanged` → `geo_discovery.location_settings` ; chaque requête de carte l'applique pour tout lecteur sauf l'auteur (mesh compris) : les pins et cartes d'un **fantôme** quittent la carte ; ceux d'un auteur au **niveau ville** n'apparaissent qu'à la bande R5, au centre de la cellule R5, et ses cartes indiquent la cellule R7 de la ville ; un auteur dont l'**audience** est abonnés / mutuels ne reste que sur la carte d'un lecteur qui le suit / lui est mutuel (`follows` / `mutual` de `CheckAccess`, dans le même appel groupé) — jamais celle du mesh (NEARBY ne lit pour personne) ni d'un lecteur anonyme. Autres événements profile ignorés | DLQ `{topic}.dlq` |
 | `engagement.score_updated` | `geo-discovery-score-updater` | virality score sync (ZADD XX) | DLQ `{topic}.dlq` |
 | `profile.tier_changed` | `geo-discovery-tier-sync` | author tier sync + card invalidation (one event per `post_id`, stateless) | DLQ `{topic}.dlq` |

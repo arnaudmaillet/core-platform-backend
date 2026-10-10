@@ -10,7 +10,7 @@ message AudioReference {
 }
 
 // Client-supplied post location (WGS-84 decimal degrees). Optional on a post.
-// Denormalized onto post.published so geo-discovery can spatially index the post.
+// Denormalized onto PostPublished so geo-discovery can spatially index the post.
 message GeoPoint {
     double lat = 1; // [-90, 90]
     double lng = 2; // [-180, 180]

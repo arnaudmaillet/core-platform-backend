@@ -60,7 +60,7 @@ async fn a_restricted_authors_comments_and_replies_notify_nobody() {
     let w = worker(&h);
     let (owner, friend, restricted) = (profile(), profile(), profile());
     let post = Uuid::now_v7().to_string();
-    // The post's author, as the mention worker caches it from post.published.
+    // The post's author, as the mention worker caches it from PostPublished.
     let _: () = h.redis.inner.set(format!("notification:pa:{post}"), owner.as_str(), None, None, false).await.unwrap();
 
     // A restricted profile comments: the owner hears nothing.

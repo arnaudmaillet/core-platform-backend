@@ -68,6 +68,8 @@ moderation = { workspace = true }
 profile    = { workspace = true }
 # Same for the country likes worker: the wallet's own StakeCommitted (#665).
 wallet     = { workspace = true }
+# Same for the post indexer: post's own `post.v1.events` DomainEvent (#487).
+post       = { workspace = true }
 
 # ── Integration suite (feature = "integration-geo-discovery") ────────────────
 # Container orchestration, the RF=1 migration runner, and `await_until` come from

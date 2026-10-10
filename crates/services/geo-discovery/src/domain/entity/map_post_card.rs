@@ -22,7 +22,7 @@ pub struct MapPostCard {
     pub author_handle:     String,
     pub author_avatar_url: String,
     pub thumbnail_url:     String,
-    /// Post caption, denormalized from `post.published`. Served on the Focus-mode
+    /// Post caption, denormalized from `PostPublished`. Served on the Focus-mode
     /// read path. `#[serde(default)]` so cards cached before this field existed
     /// decode as an empty caption rather than failing (zero-downtime rolling deploy).
     #[serde(default)]

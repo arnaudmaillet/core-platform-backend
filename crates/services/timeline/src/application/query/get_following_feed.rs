@@ -172,7 +172,7 @@ where
 
     /// Splits a following list into regular and VIP subsets by consulting the
     /// tier cache. On cache miss the author is conservatively routed to regular
-    /// (avoids blocking; the tier cache will be populated on next post.published).
+    /// (avoids blocking; the tier cache will be populated on next PostPublished).
     async fn split_by_tier(
         &self,
         following_ids: &[AuthorId],
@@ -192,7 +192,7 @@ where
 
         for (author_id, tier) in following_ids.iter().zip(tiers) {
             // Cache miss → conservatively route to regular (avoids blocking; the
-            // tier cache is populated on the author's next post.published).
+            // tier cache is populated on the author's next PostPublished).
             let tier = tier.unwrap_or(AuthorTier::Standard);
 
             if tier.is_vip() {
