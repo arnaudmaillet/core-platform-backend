@@ -39,4 +39,4 @@ impl FollowListPage {
         Self { hidden: true, ..Self::default() }
     }
 }
-pub use suggest_profiles::{SuggestProfilesHandler, SuggestProfilesQuery, Suggestion, MAX_SUGGESTIONS};
+pub use suggest_profiles::{SuggestProfilesHandler, SuggestProfilesQuery, Suggestion, SuggestionPage, MAX_SUGGESTIONS};

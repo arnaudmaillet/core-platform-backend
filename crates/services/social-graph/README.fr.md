@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: b2ea24b4217c254c8f919de447b78ee3d19caae956c1bbea047a1d43c1ad3657
-  translated_at: 2026-10-06
+  source_sha256: fb833839dbed52908ea66355a513a84e8b12d4661d8a96297e003e30839fe74d
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -149,7 +149,7 @@ service SocialGraphService {
   rpc ListRestricted(ListRestrictedRequest) returns (ListRestrictedResponse);   // propriétaire
   rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);   // MESH-ONLY : par cible, l'accès au contenu, plus `follows` / `mutual` (un profil lecteur suit la cible / ils se suivent mutuellement — l'audience de localisation d'un auteur, #657)
   rpc CheckInteraction(CheckInteractionRequest) returns (CheckInteractionResponse);   // MESH-ONLY : l'acteur peut-il commenter / mentionner / écrire à la cible (ses réglages d'interaction profile, blocages) ; `held` quand la limite temporaire de la cible (#669) couvre l'acteur — un commentaire / message d'un non-abonné, ou d'un abonné de moins de 7 jours sous `recent_followers` ; en cas de refus, `refusal` dit pourquoi (`BLOCKED`, `NO_ONE`, ou `AUDIENCE` : l'audience abonnés / mutuels exclut l'acteur — chat fait alors de ce message une demande, #656)
-  rpc SuggestProfiles(SuggestProfilesRequest) returns (SuggestProfilesResponse);   // #661, edge (un des profils de l'appelant) : les amis d'amis classés par abonnements communs ; jamais soi-même, un profil suivi, bloqué dans un sens ou l'autre, privé ou masqué, ni aucun profil non annoncé suggérable (`profile_audience.suggestible`, depuis ProfileDiscoverySettingsChanged — fermé par défaut : profile annonce les réglages de chaque profil à sa création, ceux d'un ado non suggérables ; les profils créés avant cette annonce ont besoin d'un événement de découvrabilité ou d'une reprise pour être suggérés). Les lectures des sources se font 16 à la fois
+  rpc SuggestProfiles(SuggestProfilesRequest) returns (SuggestProfilesResponse);   // #661, edge (un des profils de l'appelant) : les amis d'amis classés par abonnements communs ; jamais soi-même, un profil suivi, bloqué dans un sens ou l'autre, privé ou masqué, ni aucun profil non annoncé suggérable (`profile_audience.suggestible`, depuis ProfileDiscoverySettingsChanged — fermé par défaut : profile annonce les réglages de chaque profil à sa création, ceux d'un ado non suggérables ; les profils créés avant cette annonce ont besoin d'un événement de découvrabilité ou d'une reprise pour être suggérés). Paginé (#834) : `page_token` / `next_page_token`, un curseur sur `(mutual_count, profile_id)` qui reprend strictement après le dernier profil examiné ; une page vérifie au plus 500 candidats et peut revenir incomplète avec un jeton. Les lectures des sources se font 16 à la fois
   rpc ListMutedProfiles(ListMutedProfilesRequest) returns (ListMutedProfilesResponse);   // MESH-ONLY : les mises en sourdine d'un lecteur pour une portée (timeline)
   rpc ListRestrictedAmong(ListRestrictedAmongRequest) returns (ListRestrictedAmongResponse);   // MESH-ONLY : quels commentateurs le propriétaire du post a restreints (comment)
 }

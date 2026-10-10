@@ -316,6 +316,15 @@ message SuggestProfilesRequest {
     string profile_id = 1;
     // At most 50; 0 means 20.
     int32  limit      = 2;
+    // The previous response's `next_page_token`; empty for the first page
+    // (#834). Each page resumes strictly after the last profile the previous
+    // one examined, by (mutual_count, profile_id): while the ranking holds, a
+    // profile is neither shown twice nor skipped. The ranking is recomputed
+    // per page, so a profile whose mutual count drops between pages can show
+    // again: de-duplicate by profile_id. A page may come back short (even
+    // empty) with a token when most candidates are filtered out: keep paging
+    // until the token is empty.
+    string page_token = 3;
 }
 
 message SuggestedProfile {
@@ -325,5 +334,7 @@ message SuggestedProfile {
 }
 
 message SuggestProfilesResponse {
-    repeated SuggestedProfile profiles = 1;
+    repeated SuggestedProfile profiles        = 1;
+    // Empty on the last page.
+    string                    next_page_token = 2;
 }
