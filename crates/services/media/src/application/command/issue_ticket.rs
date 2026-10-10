@@ -88,6 +88,13 @@ impl IssueUploadTicketHandler {
             && !cmd.kind.is_private()
             && let Some(sha) = cmd.content_sha256.as_deref()
         {
+            // A key that already reserved an asset answers it first: a READY
+            // match appearing since must not leave that reservation orphaned.
+            if let Some(key) = &key
+                && let Some(holder) = self.assets.find_by_upload_key(&cmd.owner_id, key).await?
+            {
+                return self.replay(holder, &cmd, now).await;
+            }
             let hash = ContentHash::new(sha)?;
             if let Some(existing) =
                 self.assets.find_ready_by_content_hash(&hash).await?.filter(|a| !a.kind().is_private())
@@ -357,6 +364,22 @@ mod tests {
         let fx = Fixture::new();
         let err = fx.issue_ticket_handler().handle(env(keyed("has space")), t0()).await.unwrap_err();
         assert!(matches!(err, MediaError::InvalidUploadKey));
+    }
+
+    /// With dedup on, a READY match appearing after the first ticket does not
+    /// orphan the key's reservation.
+    #[tokio::test]
+    async fn a_keyed_retry_answers_its_reservation_before_dedup() {
+        let mut fx = Fixture::new();
+        fx.policy.dedup_enabled = true;
+        let mut first = keyed("k-1");
+        first.content_sha256 = Some(TEST_HASH.to_owned());
+        let reserved = fx.issue_ticket_handler().handle(env(first.clone()), t0()).await.unwrap();
+        fx.seed_ready_asset(TEST_HASH).await;
+
+        let retry = fx.issue_ticket_handler().handle(env(first), t0()).await.unwrap();
+        assert_eq!(retry.asset_id, reserved.asset_id);
+        assert!(retry.upload.is_some(), "still pending: upload it");
     }
 
     fn env_commit(asset_id: AssetId) -> Envelope<crate::application::command::CommitUploadCommand> {

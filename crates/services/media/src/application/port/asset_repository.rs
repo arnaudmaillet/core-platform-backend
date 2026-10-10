@@ -20,6 +20,9 @@ pub trait AssetRepository: Send + Sync + 'static {
     /// under one key reserve one asset.
     async fn insert_keyed(&self, asset: &Asset, key: &UploadKey) -> Result<Option<AssetId>, MediaError>;
 
+    /// The live asset of `owner` holding the upload key, if any (#876).
+    async fn find_by_upload_key(&self, owner: &OwnerId, key: &UploadKey) -> Result<Option<AssetId>, MediaError>;
+
     async fn find_by_id(&self, id: &AssetId) -> Result<Option<Asset>, MediaError>;
 
     /// Every asset (not deleted) holding these exact bytes — they share their

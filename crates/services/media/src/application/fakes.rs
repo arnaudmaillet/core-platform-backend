@@ -100,6 +100,11 @@ impl AssetRepository for InMemoryAssetRepository {
         Ok(None)
     }
 
+    async fn find_by_upload_key(&self, owner: &OwnerId, key: &UploadKey) -> Result<Option<AssetId>, MediaError> {
+        let held = self.keys.lock().unwrap().get(&(*owner, key.as_str().to_owned())).copied();
+        Ok(held.filter(|id| self.assets.lock().unwrap().get(id).is_some_and(|a| a.state() != AssetState::Deleted)))
+    }
+
     async fn find_by_id(&self, id: &AssetId) -> Result<Option<Asset>, MediaError> {
         Ok(self.assets.lock().unwrap().get(id).cloned())
     }
