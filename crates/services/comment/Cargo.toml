@@ -12,6 +12,7 @@ comment-api = { workspace = true }
 text-filter = { workspace = true }
 post-api         = { workspace = true }   # GetPost client (read gate)
 social-graph-api = { workspace = true }   # CheckAccess client (read gate)
+engagement-api   = { workspace = true }   # BatchGetLikes client (replies by popularity, #832)
 error          = { workspace = true }
 validate-core  = { workspace = true }
 validation     = { workspace = true }

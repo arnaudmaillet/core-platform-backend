@@ -69,6 +69,11 @@ pub enum CommentError {
     /// answer. Reads fail closed rather than risk showing hidden content.
     #[error("audience check unavailable: {reason}")]
     AccessCheckUnavailable { reason: String },
+
+    /// engagement's like counts did not answer (#832). Never reaches a
+    /// client: a popularity page falls back to the newest order.
+    #[error("comment likes unavailable: {reason}")]
+    LikesUnavailable { reason: String },
 }
 
 impl AppError for CommentError {
@@ -97,6 +102,7 @@ impl AppError for CommentError {
             Self::InvalidProfileId(_)          => "CMT-9003",
             Self::DomainViolation { .. }       => "CMT-9004",
             Self::AccessCheckUnavailable { .. } => "CMT-5001",
+            Self::LikesUnavailable { .. }       => "CMT-5002",
         }
     }
 
@@ -124,7 +130,8 @@ impl AppError for CommentError {
             | Self::DomainViolation { .. }     => StatusCode::UNPROCESSABLE_ENTITY,
 
             Self::EventPublishFailed { .. }    => StatusCode::INTERNAL_SERVER_ERROR,
-            Self::AccessCheckUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            Self::AccessCheckUnavailable { .. }
+            | Self::LikesUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -135,7 +142,8 @@ impl AppError for CommentError {
             Self::EventPublishFailed { .. }    => Severity::High,
             Self::AuthorMismatch { .. }        => Severity::Medium,
             Self::DomainViolation { .. }       => Severity::Medium,
-            Self::AccessCheckUnavailable { .. } => Severity::Medium,
+            Self::AccessCheckUnavailable { .. }
+            | Self::LikesUnavailable { .. } => Severity::Medium,
             _                                  => Severity::Low,
         }
     }
@@ -143,7 +151,8 @@ impl AppError for CommentError {
     fn is_retryable(&self) -> bool {
         match self {
             Self::Storage(e) => e.is_retryable(),
-            Self::AccessCheckUnavailable { .. } => true,
+            Self::AccessCheckUnavailable { .. }
+            | Self::LikesUnavailable { .. } => true,
             _                => false,
         }
     }
@@ -161,7 +170,8 @@ impl AppError for CommentError {
             Self::EmptyContent
             | Self::IncompleteGifMetadata      => "content",
             Self::EventPublishFailed { .. }    => "kafka",
-            Self::AccessCheckUnavailable { .. } => "dependency",
+            Self::AccessCheckUnavailable { .. }
+            | Self::LikesUnavailable { .. } => "dependency",
             _                                  => "CMT",
         }
     }
@@ -186,7 +196,7 @@ impl AppError for CommentError {
             Self::InvalidPostId(_)             => "The provided post ID is not valid.",
             Self::InvalidProfileId(_)          => "The provided profile ID is not valid.",
             Self::DomainViolation { .. }       => "A domain constraint was violated.",
-            Self::AccessCheckUnavailable { .. } =>
+            Self::AccessCheckUnavailable { .. } | Self::LikesUnavailable { .. } =>
                 "These comments are temporarily unavailable. Please try again later.",
             Self::Validation(e)                => e.user_facing_message(),
         }

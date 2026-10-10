@@ -13,6 +13,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::{Channel, Server};
 use tonic::{Request, Response, Status};
 
+use engagement_api::engagement_service_server::{EngagementService, EngagementServiceServer};
 use post_api::post_service_server::{PostService, PostServiceServer};
 use social_graph_api::social_graph_service_server::{SocialGraphService, SocialGraphServiceServer};
 
@@ -215,6 +216,89 @@ impl SocialGraphService for GraphServer {
     async fn list_muted_profiles(&self, _: Request<social_graph_api::ListMutedProfilesRequest>) -> Result<Response<social_graph_api::ListMutedProfilesResponse>, Status> {
         Err(Status::unimplemented("ListMutedProfiles"))
     }
+}
+
+/// What `engagement` holds for `BatchGetLikes` (#832): each comment's likes,
+/// and every call's target count, to check the cap.
+#[derive(Default)]
+pub struct Engagement {
+    pub likes: Mutex<HashMap<String, i64>>,
+    pub calls: Mutex<Vec<usize>>,
+}
+
+struct EngagementServer(Arc<Engagement>);
+
+#[tonic::async_trait]
+impl EngagementService for EngagementServer {
+    async fn batch_get_likes(
+        &self,
+        request: Request<engagement_api::BatchGetLikesRequest>,
+    ) -> Result<Response<engagement_api::BatchGetLikesResponse>, Status> {
+        use engagement_api::like_target::Target;
+        let targets = request.into_inner().targets;
+        if targets.len() > 100 {
+            return Err(Status::invalid_argument("at most 100 targets"));
+        }
+        self.0.calls.lock().unwrap().push(targets.len());
+        let likes = self.0.likes.lock().unwrap();
+        Ok(Response::new(engagement_api::BatchGetLikesResponse {
+            likes: targets
+                .into_iter()
+                .map(|target| {
+                    let count = match &target.target {
+                        Some(Target::CommentId(id)) => likes.get(id).copied().unwrap_or(0),
+                        _ => 0,
+                    };
+                    engagement_api::LikeView { target: Some(target), count, mine: 0, hidden: false }
+                })
+                .collect(),
+        }))
+    }
+    async fn record_view(&self, _: Request<engagement_api::RecordViewRequest>) -> Result<Response<engagement_api::CommandResponse>, Status> {
+        Err(Status::unimplemented("record_view"))
+    }
+    async fn record_share(&self, _: Request<engagement_api::RecordShareRequest>) -> Result<Response<engagement_api::CommandResponse>, Status> {
+        Err(Status::unimplemented("record_share"))
+    }
+    async fn get_post_engagement(&self, _: Request<engagement_api::GetPostEngagementRequest>) -> Result<Response<engagement_api::PostEngagementView>, Status> {
+        Err(Status::unimplemented("get_post_engagement"))
+    }
+    async fn list_likes_by_account(&self, _: Request<engagement_api::ListLikesByAccountRequest>) -> Result<Response<engagement_api::ListLikesByAccountResponse>, Status> {
+        Err(Status::unimplemented("list_likes_by_account"))
+    }
+    async fn get_like_positions(&self, _: Request<engagement_api::GetLikePositionsRequest>) -> Result<Response<engagement_api::GetLikePositionsResponse>, Status> {
+        Err(Status::unimplemented("get_like_positions"))
+    }
+    async fn list_likes_by_profile(&self, _: Request<engagement_api::ListLikesByProfileRequest>) -> Result<Response<engagement_api::ListLikesByProfileResponse>, Status> {
+        Err(Status::unimplemented("list_likes_by_profile"))
+    }
+    async fn save_post(&self, _: Request<engagement_api::SavePostRequest>) -> Result<Response<engagement_api::SavePostResponse>, Status> {
+        Err(Status::unimplemented("save_post"))
+    }
+    async fn unsave_post(&self, _: Request<engagement_api::UnsavePostRequest>) -> Result<Response<engagement_api::UnsavePostResponse>, Status> {
+        Err(Status::unimplemented("unsave_post"))
+    }
+    async fn list_saved_posts(&self, _: Request<engagement_api::ListSavedPostsRequest>) -> Result<Response<engagement_api::ListSavedPostsResponse>, Status> {
+        Err(Status::unimplemented("list_saved_posts"))
+    }
+    async fn list_saved_posts_by_account(&self, _: Request<engagement_api::ListSavedPostsByAccountRequest>) -> Result<Response<engagement_api::ListSavedPostsByAccountResponse>, Status> {
+        Err(Status::unimplemented("list_saved_posts_by_account"))
+    }
+}
+
+/// An in-process `engagement` on a loopback port, and a channel to it.
+pub async fn start_engagement() -> (Arc<Engagement>, Channel) {
+    let engagement = Arc::new(Engagement::default());
+    let (engagement_listener, addr) = listener().await;
+    let service = EngagementServiceServer::new(EngagementServer(Arc::clone(&engagement)));
+    tokio::spawn(async move {
+        Server::builder()
+            .add_service(service)
+            .serve_with_incoming(TcpListenerStream::new(engagement_listener))
+            .await
+            .expect("engagement peer");
+    });
+    (engagement, Channel::from_shared(format!("http://{addr}")).unwrap().connect_lazy())
 }
 
 /// Both peers, served on loopback ports, and channels to them.

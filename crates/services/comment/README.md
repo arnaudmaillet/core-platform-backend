@@ -51,6 +51,7 @@ gRPC CommentService ─► CommandBus ─► CreateComment ─► Comment::creat
 | `comment.comments` | `comment_id` | — | source-of-truth point reads & mutations (LCS) |
 | `comment.comments_by_post` | `post_id` | `parent_id, created_at DESC, comment_id` | feed pagination, no ALLOW FILTERING (TWCS) |
 | `comment.comments_by_author` | `author_id` | `created_at DESC, comment_id DESC` | a profile's own comments (pointers into `comments`), for the GDPR export (#653); written and purged with `comments` and `comments_by_post` in one LOGGED BATCH |
+| `comment.reply_counts` | `post_id` | `parent_id` | a top-level comment's replies (#832): a counter, +1 with each reply, −1 with its purge |
 
 **Nil-UUID sentinel:** top-level comments store `parent_id = 0000…0000` (lexicographically smallest),
 making the top-level scan a valid clustering prefix; replies use their actual parent `comment_id`.
@@ -86,6 +87,7 @@ navigable) : **Purge** (physical DELETE from both tables). Both paths emit `comm
 |---|---|---|---|
 | ScyllaDB (`comment`) | durable store | reads + writes fail | **Hard** — `CMT-…/Storage` |
 | Kafka | `comment.*` emission | engagement comment counters lag | **Soft** — comments still persist |
+| `engagement` (`BatchGetLikes`) | replies by popularity (#832) | popularity pages rank nothing | **Soft** — they come back newest first |
 
 **Upstream (blast radius):**
 
@@ -115,8 +117,19 @@ service CommentService {
 ```
 
 > **Wire contract:** a reply's `parent_id` must always be the **top-level** `comment_id` (never another
-> reply) — the flat-tree allows exactly one nesting level. Pagination cursors are `created_at DESC`;
-> inserts after the cursor are never returned (monotonically stable pages).
+> reply) — the flat-tree allows exactly one nesting level. Pagination cursors are `created_at DESC`
+> then `comment_id` (#832: rows of the same millisecond are neither repeated nor skipped); inserts after
+> the cursor are never returned (monotonically stable pages).
+
+**Replies and their likes (#832).** A comment is liked through the wallet (`wallet.Stake` on a
+`comment_id`, #665: a like is a point, final) and its likes — with the reader's own — are read from
+engagement `BatchGetLikes`. `ListTopLevel` fills each comment's `reply_count` (from `reply_counts`; held
+replies count), so a thread without replies needs no `ListReplies`. `ListReplies { sort: POPULARITY }`
+ranks the thread's 500 newest replies by their likes (engagement `BatchGetLikes`, 100 a call), ties to
+the newest, then carries on with the older replies newest first. Its pages resume after the last reply
+by `(likes, created_at, comment_id)`; the ranking is read again per page, so a reply whose likes change
+in between can show twice or be passed over (the client de-duplicates). Engagement unreachable: the
+page comes back newest first (logged, never an error).
 
 **A profile's own comments (#653).** `ListCommentsByAuthor(author_id)` is **mesh only** (never on the
 edge): the GDPR data export reads a profile's comments, newest first, as `comments` holds them now — a
@@ -168,6 +181,7 @@ silently.
 | CMT-1004 | `PostNotFound` (missing, or not readable by the commenter) | 404 → `NOT_FOUND` |
 | CMT-1005 | `CommentsRestricted` (the post's author does not take this profile's comments) | 403 → `PERMISSION_DENIED` |
 | CMT-5001 | `AccessCheckUnavailable` (read gate down; retryable) | 503 → `UNAVAILABLE` |
+| CMT-5002 | `LikesUnavailable` (engagement's likes did not answer, #832) — never returned: the page falls back to newest first | — |
 | CMT-4001 | Kafka publish failed | 500 |
 | CMT-9001..9004 | invalid ids / domain violation | 422 |
 
@@ -246,6 +260,7 @@ async fn main() -> anyhow::Result<()> {
 | `COMMENT_GRPC_ADDR` | No | `0.0.0.0:50057` | gRPC bind address. |
 | `COMMENT_OFFENSIVE_TERMS_FILE` | No | unset | One offensive term per line (`#` comments) for the offensive-comment filter (#660). Unset or unreadable: that filter hides nothing (logged); hidden words still apply. |
 | `COMMENT_POST_GRPC_ENDPOINT` / `COMMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Yes** (prod) | `http://localhost:50056` / `:50053` | Mesh endpoints of the read gate (`GetPost`, `CheckAccess`). Non-mesh reads fail closed (`CMT-5001`) without them. |
+| `COMMENT_ENGAGEMENT_GRPC_ENDPOINT` | No | `http://localhost:50058` | engagement's mesh endpoint (`BatchGetLikes`) for replies by popularity (#832). Unreachable: those pages come back newest first. |
 | `COMMENT_GATE_RPC_TIMEOUT_MS` / `COMMENT_GATE_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Deadlines for those calls. |
 | `COMMENT_BACKFILL_AUTHOR_INDEX` | No | unset | `true`: index every existing comment by author at startup (once; idempotent) — #653. |
 

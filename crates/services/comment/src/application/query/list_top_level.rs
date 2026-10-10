@@ -42,6 +42,16 @@ impl<R: CommentRepository> QueryHandler<ListTopLevelQuery> for ListTopLevelHandl
             .repository
             .list_top_level(&post_id, q.limit, q.page_token.as_deref())
             .await?;
-        filter_page(self.gate.as_ref(), &self.filters, &q.viewer, q.mature, &post_id, page).await
+        let (mut comments, next) =
+            filter_page(self.gate.as_ref(), &self.filters, &q.viewer, q.mature, &post_id, page).await?;
+
+        // Each one's replies (#832): "View N more replies", and no replies
+        // call for a thread without any.
+        let ids: Vec<_> = comments.iter().map(|c| c.comment_id.clone()).collect();
+        let counts = self.repository.reply_counts(&post_id, &ids).await?;
+        for comment in &mut comments {
+            comment.reply_count = counts.get(&comment.comment_id).copied().unwrap_or(0);
+        }
+        Ok((comments, next))
     }
 }

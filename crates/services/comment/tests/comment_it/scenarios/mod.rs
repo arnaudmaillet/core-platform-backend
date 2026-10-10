@@ -10,3 +10,4 @@ mod held_comments;
 mod restricted_comments;
 mod gate_over_grpc;
 mod comments_by_author;
+mod replies_by_popularity;

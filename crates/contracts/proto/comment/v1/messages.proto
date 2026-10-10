@@ -49,10 +49,18 @@ message ListTopLevelRequest {
 
 // Lists direct replies to a single top-level comment, newest-first.
 message ListRepliesRequest {
-    string post_id    = 1;
-    string comment_id = 2;
-    int32  limit      = 3;
-    string page_token = 4;
+    string    post_id    = 1;
+    string    comment_id = 2;
+    int32     limit      = 3;
+    // The previous page's `next_token`, from a request with the same `sort`.
+    string    page_token = 4;
+    // NEWEST by default (#832). POPULARITY ranks the thread's 500 newest
+    // replies by their likes (ties to the newest), then the older ones newest
+    // first. Pages resume after the last reply of the previous one, by (likes,
+    // created_at, comment_id); the ranking is read again per page, so a reply
+    // whose likes change between pages can show twice or be passed over:
+    // de-duplicate by comment_id. Engagement unavailable: NEWEST order.
+    ReplySort sort       = 5;
 }
 
 message ListCommentsByAuthorRequest {
@@ -95,6 +103,9 @@ message CommentView {
     // Held for the post owner's review (their temporary interaction limit,
     // #669): only its author and the post's owner see it.
     bool          held          = 10;
+    // A top-level comment's replies, held ones included (#832). Filled by
+    // ListTopLevel; 0 elsewhere. A comment's likes: engagement BatchGetLikes.
+    uint64        reply_count   = 11;
 }
 
 message ListCommentsResponse {

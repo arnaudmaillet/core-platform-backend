@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -25,10 +26,19 @@ const NIL_UUID: Uuid = Uuid::nil();
 
 // ── Page-token ────────────────────────────────────────────────────────────────
 
+/// The last row of a thread page: its `created_at` and, since #832, its id, so
+/// the next page resumes exactly after it — rows of the same millisecond are
+/// neither repeated nor skipped. A token without an id (issued before) resumes
+/// after its millisecond.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct FeedPageToken {
     created_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    comment_id:    Option<Uuid>,
 }
+
+/// The columns `CommentFeedRow` reads, in its order.
+const FEED_COLUMNS: &str = "created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height, held";
 
 // ── Error helpers ─────────────────────────────────────────────────────────────
 
@@ -102,6 +112,7 @@ fn feed_row_to_summary(row: CommentFeedRow) -> Result<CommentSummary, CommentErr
         gif_height: row.gif_height.map(|h| h as u32),
         created_at,
         held:       row.held.unwrap_or(false),
+        reply_count: 0,
     })
 }
 
@@ -136,8 +147,8 @@ fn decode_page_token(page_token: Option<&str>) -> Result<Option<FeedPageToken>, 
         .transpose()
 }
 
-fn encode_page_token(created_at_ms: i64) -> String {
-    let tok  = FeedPageToken { created_at_ms };
+fn encode_page_token(created_at_ms: i64, comment_id: Uuid) -> String {
+    let tok  = FeedPageToken { created_at_ms, comment_id: Some(comment_id) };
     let json = serde_json::to_vec(&tok).unwrap_or_default();
     URL_SAFE_NO_PAD.encode(json)
 }
@@ -317,6 +328,9 @@ impl CommentRepository for ScyllaCommentRepository {
         if comment.held() {
             self.set_held(comment, true).await?;
         }
+        if comment.parent_id().is_some() {
+            self.count_reply(comment.post_id(), parent_uuid, 1).await;
+        }
 
         Ok(())
     }
@@ -472,8 +486,64 @@ impl CommentRepository for ScyllaCommentRepository {
             (comment.author_id().as_uuid(), dt_ms(comment.created_at()), comment.id().as_uuid()),
         );
         self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
+        if comment.parent_id().is_some() {
+            self.count_reply(comment.post_id(), parent_uuid, -1).await;
+        }
 
         Ok(())
+    }
+
+    // ── reply counts (#832) ───────────────────────────────────────────────────
+
+    async fn reply_counts(
+        &self,
+        post_id: &PostId,
+        parents: &[CommentId],
+    ) -> Result<HashMap<CommentId, u64>, CommentError> {
+        if parents.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let stmt = self.fast_stmt(
+            "SELECT parent_id, replies FROM comment.reply_counts WHERE post_id = ? AND parent_id IN ?",
+        );
+        let ids: Vec<Uuid> = parents.iter().map(CommentId::as_uuid).collect();
+        let rows = self
+            .client
+            .session
+            .execute_unpaged(stmt, (post_id.as_uuid(), ids))
+            .await
+            .map_err(scylla_err)?
+            .into_rows_result()
+            .map_err(|e| row_err("reply_counts:rows", e))?
+            .rows::<(Uuid, scylla::value::Counter)>()
+            .map_err(|e| row_err("reply_counts:iter", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| row_err("reply_counts:deser", e))?;
+        // A counter driven below zero (a purge retried twice) reads as none.
+        Ok(rows
+            .into_iter()
+            .filter(|(_, replies)| replies.0 > 0)
+            .map(|(parent, replies)| (CommentId::from_uuid(parent), replies.0 as u64))
+            .collect())
+    }
+
+    fn page_token_after(&self, last: &CommentSummary) -> String {
+        encode_page_token(last.created_at.timestamp_millis(), last.comment_id.as_uuid())
+    }
+
+    async fn list_reply_window(
+        &self,
+        post_id:    &PostId,
+        comment_id: &CommentId,
+        max:        i32,
+    ) -> Result<Vec<CommentSummary>, CommentError> {
+        let cql = format!(
+            "SELECT {FEED_COLUMNS} FROM comment.comments_by_post WHERE post_id = ? AND parent_id = ? LIMIT ?"
+        );
+        let rows = self
+            .feed_rows(&cql, (post_id.as_uuid(), comment_id.as_uuid(), max.max(1)), "list_reply_window")
+            .await?;
+        rows.into_iter().map(feed_row_to_summary).collect()
     }
 
     // ── list_by_author ────────────────────────────────────────────────────────
@@ -564,55 +634,7 @@ impl CommentRepository for ScyllaCommentRepository {
         limit:      i32,
         page_token: Option<&str>,
     ) -> Result<(Vec<CommentSummary>, Option<String>), CommentError> {
-        // i32, NOT i64: CQL `LIMIT ?` type-checks against int32 and the i64 bind
-        // fails serialization — the soak's social-graph finding (#17), same class,
-        // never swept here (these list paths had no live traffic until the suites
-        // ran in CI).
-        let limit = limit.clamp(1, 100);
-        let token = decode_page_token(page_token)?;
-
-        let rows: Vec<CommentFeedRow> = if let Some(ref tok) = token {
-            let stmt = self.fast_stmt(
-                "SELECT created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height, held \
-                 FROM comment.comments_by_post \
-                 WHERE post_id = ? AND parent_id = ? AND created_at < ? \
-                 LIMIT ?",
-            );
-            self.client
-                .session
-                .execute_unpaged(
-                    stmt,
-                    (post_id.as_uuid(), NIL_UUID, CqlTimestamp(tok.created_at_ms), limit),
-                )
-                .await
-                .map_err(scylla_err)?
-                .into_rows_result()
-                .map_err(|e| row_err("list_top_level:rows", e))?
-                .rows::<CommentFeedRow>()
-                .map_err(|e| row_err("list_top_level:iter", e))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| row_err("list_top_level:deser", e))?
-        } else {
-            let stmt = self.fast_stmt(
-                "SELECT created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height, held \
-                 FROM comment.comments_by_post \
-                 WHERE post_id = ? AND parent_id = ? \
-                 LIMIT ?",
-            );
-            self.client
-                .session
-                .execute_unpaged(stmt, (post_id.as_uuid(), NIL_UUID, limit))
-                .await
-                .map_err(scylla_err)?
-                .into_rows_result()
-                .map_err(|e| row_err("list_top_level:rows", e))?
-                .rows::<CommentFeedRow>()
-                .map_err(|e| row_err("list_top_level:iter", e))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| row_err("list_top_level:deser", e))?
-        };
-
-        build_page(rows, limit as usize)
+        self.list_slot(post_id, NIL_UUID, limit, page_token, "list_top_level").await
     }
 
     // ── list_replies ──────────────────────────────────────────────────────────
@@ -624,53 +646,93 @@ impl CommentRepository for ScyllaCommentRepository {
         limit:      i32,
         page_token: Option<&str>,
     ) -> Result<(Vec<CommentSummary>, Option<String>), CommentError> {
-        // i32 for the CQL int32 LIMIT — same fix as list_top_level above.
-        let limit  = limit.clamp(1, 100);
-        let token  = decode_page_token(page_token)?;
-        let parent = comment_id.as_uuid();
+        self.list_slot(post_id, comment_id.as_uuid(), limit, page_token, "list_replies").await
+    }
+}
 
-        let rows: Vec<CommentFeedRow> = if let Some(ref tok) = token {
-            let stmt = self.fast_stmt(
-                "SELECT created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height, held \
-                 FROM comment.comments_by_post \
-                 WHERE post_id = ? AND parent_id = ? AND created_at < ? \
-                 LIMIT ?",
-            );
-            self.client
-                .session
-                .execute_unpaged(
-                    stmt,
-                    (post_id.as_uuid(), parent, CqlTimestamp(tok.created_at_ms), limit),
-                )
-                .await
-                .map_err(scylla_err)?
-                .into_rows_result()
-                .map_err(|e| row_err("list_replies:rows", e))?
-                .rows::<CommentFeedRow>()
-                .map_err(|e| row_err("list_replies:iter", e))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| row_err("list_replies:deser", e))?
-        } else {
-            let stmt = self.fast_stmt(
-                "SELECT created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height, held \
-                 FROM comment.comments_by_post \
-                 WHERE post_id = ? AND parent_id = ? \
-                 LIMIT ?",
-            );
-            self.client
-                .session
-                .execute_unpaged(stmt, (post_id.as_uuid(), parent, limit))
-                .await
-                .map_err(scylla_err)?
-                .into_rows_result()
-                .map_err(|e| row_err("list_replies:rows", e))?
-                .rows::<CommentFeedRow>()
-                .map_err(|e| row_err("list_replies:iter", e))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| row_err("list_replies:deser", e))?
-        };
-
+impl ScyllaCommentRepository {
+    /// One page of a thread slot (the top level, or one comment's replies),
+    /// newest first, resuming exactly after the token's row.
+    async fn list_slot(
+        &self,
+        post_id:    &PostId,
+        parent:     Uuid,
+        limit:      i32,
+        page_token: Option<&str>,
+        ctx:        &'static str,
+    ) -> Result<(Vec<CommentSummary>, Option<String>), CommentError> {
+        // i32, NOT i64: CQL `LIMIT ?` type-checks against int32 and the i64 bind
+        // fails serialization — the soak's social-graph finding (#17), same class,
+        // never swept here (these list paths had no live traffic until the suites
+        // ran in CI).
+        let limit = limit.clamp(1, 100);
+        let post  = post_id.as_uuid();
+        let mut rows = Vec::new();
+        match decode_page_token(page_token)? {
+            None => {
+                let cql = format!(
+                    "SELECT {FEED_COLUMNS} FROM comment.comments_by_post WHERE post_id = ? AND parent_id = ? LIMIT ?"
+                );
+                rows = self.feed_rows(&cql, (post, parent, limit), ctx).await?;
+            }
+            Some(token) => {
+                let at = CqlTimestamp(token.created_at_ms);
+                // The rest of the token's millisecond first (ids ascend within
+                // it), then the older ones.
+                if let Some(after) = token.comment_id {
+                    let cql = format!(
+                        "SELECT {FEED_COLUMNS} FROM comment.comments_by_post \
+                         WHERE post_id = ? AND parent_id = ? AND created_at = ? AND comment_id > ? LIMIT ?"
+                    );
+                    rows = self.feed_rows(&cql, (post, parent, at, after, limit), ctx).await?;
+                }
+                let left = limit - rows.len() as i32;
+                if left > 0 {
+                    let cql = format!(
+                        "SELECT {FEED_COLUMNS} FROM comment.comments_by_post \
+                         WHERE post_id = ? AND parent_id = ? AND created_at < ? LIMIT ?"
+                    );
+                    rows.extend(self.feed_rows(&cql, (post, parent, at, left), ctx).await?);
+                }
+            }
+        }
         build_page(rows, limit as usize)
+    }
+
+    async fn feed_rows(
+        &self,
+        cql:    &str,
+        values: impl scylla::serialize::row::SerializeRow,
+        ctx:    &'static str,
+    ) -> Result<Vec<CommentFeedRow>, CommentError> {
+        self.client
+            .session
+            .execute_unpaged(self.fast_stmt(cql), values)
+            .await
+            .map_err(scylla_err)?
+            .into_rows_result()
+            .map_err(|e| row_err(ctx, e))?
+            .rows::<CommentFeedRow>()
+            .map_err(|e| row_err(ctx, e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| row_err(ctx, e))
+    }
+
+    /// Moves a parent's reply count by `delta` (#832). Best-effort: the reply
+    /// is already written (or purged), so a failed count is logged rather than
+    /// failing the call — whose retry would write the reply twice.
+    async fn count_reply(&self, post_id: &PostId, parent: Uuid, delta: i64) {
+        let stmt = self.strict_stmt(
+            "UPDATE comment.reply_counts SET replies = replies + ? WHERE post_id = ? AND parent_id = ?",
+        );
+        if let Err(error) = self
+            .client
+            .session
+            .execute_unpaged(stmt, (scylla::value::Counter(delta), post_id.as_uuid(), parent))
+            .await
+        {
+            tracing::warn!(%error, post_id = %post_id, parent = %parent, delta, "reply count not updated");
+        }
     }
 }
 
@@ -678,20 +740,11 @@ fn build_page(
     rows:  Vec<CommentFeedRow>,
     limit: usize,
 ) -> Result<(Vec<CommentSummary>, Option<String>), CommentError> {
-    let total = rows.len();
-    let mut summaries = Vec::with_capacity(total);
-    let mut last_ms   = 0i64;
-
-    for row in rows {
-        last_ms = row.created_at.0;
-        summaries.push(feed_row_to_summary(row)?);
-    }
-
-    let next_token = if total == limit {
-        Some(encode_page_token(last_ms))
+    let next_token = if rows.len() == limit {
+        rows.last().map(|row| encode_page_token(row.created_at.0, row.comment_id))
     } else {
         None
     };
-
+    let summaries = rows.into_iter().map(feed_row_to_summary).collect::<Result<Vec<_>, _>>()?;
     Ok((summaries, next_token))
 }

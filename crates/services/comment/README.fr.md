@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 64ee2c23c289893e254843bee654f058ee5c38abd5b2c314aba99b1b1175a775
-  translated_at: 2026-10-08
+  source_sha256: 2c24ba73feffd1291cd3fe98a894f85a365becd7731355443ab707cdf13693ec
+  translated_at: 2026-10-10
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -63,6 +63,7 @@ gRPC CommentService ─► CommandBus ─► CreateComment ─► Comment::creat
 | `comment.comments` | `comment_id` | — | source-of-truth point reads & mutations (LCS) |
 | `comment.comments_by_post` | `post_id` | `parent_id, created_at DESC, comment_id` | feed pagination, no ALLOW FILTERING (TWCS) |
 | `comment.comments_by_author` | `author_id` | `created_at DESC, comment_id DESC` | les commentaires d'un profil (pointeurs vers `comments`), pour l'export RGPD (#653) ; écrite et purgée avec `comments` et `comments_by_post` dans un même LOGGED BATCH |
+| `comment.reply_counts` | `post_id` | `parent_id` | les réponses d'un commentaire de premier niveau (#832) : un compteur, +1 à chaque réponse, −1 à sa purge |
 
 **Sentinelle nil-UUID :** les commentaires de premier niveau stockent `parent_id = 0000…0000`
 (lexicographiquement le plus petit), faisant du scan de premier niveau un préfixe de clustering valide ;
@@ -100,6 +101,7 @@ que le fil reste navigable) : **Purge** (DELETE physique des deux tables). Les d
 |---|---|---|---|
 | ScyllaDB (`comment`) | store durable | lectures + écritures échouent | **Dur** — `CMT-…/Storage` |
 | Kafka | émission de `comment.*` | les compteurs de commentaires d'engagement retardent | **Souple** — les commentaires persistent quand même |
+| `engagement` (`BatchGetLikes`) | réponses par popularité (#832) | les pages par popularité ne classent rien | **Souple** — elles reviennent de la plus récente à la plus ancienne |
 
 **Amont (rayon d'impact) :**
 
@@ -130,8 +132,20 @@ service CommentService {
 
 > **Contrat de sérialisation :** le `parent_id` d'une réponse doit toujours être le `comment_id` de
 > **premier niveau** (jamais une autre réponse) — le flat-tree autorise exactement un niveau de nesting.
-> Les curseurs de pagination sont `created_at DESC` ; les inserts après le curseur ne sont jamais renvoyés
+> Les curseurs de pagination sont `created_at DESC` puis `comment_id` (#832 : les lignes d'une même
+> milliseconde ne sont ni répétées ni sautées) ; les inserts après le curseur ne sont jamais renvoyés
 > (pages stables de façon monotone).
+
+**Les réponses et leurs likes (#832).** On like un commentaire via le wallet (`wallet.Stake` sur un
+`comment_id`, #665 : un like est un point, définitif) et ses likes — avec ceux du lecteur — se lisent avec
+`BatchGetLikes` d'engagement. `ListTopLevel` remplit le `reply_count` de chaque commentaire (depuis
+`reply_counts` ; les réponses retenues comptent), si bien qu'un fil sans réponse n'a pas besoin de
+`ListReplies`. `ListReplies { sort: POPULARITY }` classe les 500 réponses les plus récentes du fil par leurs
+likes (`BatchGetLikes` d'engagement, 100 par appel), à égalité la plus récente d'abord, puis continue avec
+les réponses plus anciennes de la plus récente à la plus ancienne. Ses pages reprennent après la dernière
+réponse par `(likes, created_at, comment_id)` ; le classement est relu à chaque page, donc une réponse dont
+les likes changent entre-temps peut apparaître deux fois ou être sautée (le client dédoublonne). Engagement
+injoignable : la page revient de la plus récente à la plus ancienne (journalisé, jamais une erreur).
 
 **Les commentaires d'un profil (#653).** `ListCommentsByAuthor(author_id)` est **mesh uniquement**
 (jamais sur l'edge) : l'export de données RGPD lit les commentaires d'un profil, du plus récent au plus
@@ -188,6 +202,7 @@ part alors — ou le refuser — il disparaît, sans bruit.
 | CMT-1004 | `PostNotFound` (absent, ou non lisible par le commentateur) | 404 → `NOT_FOUND` |
 | CMT-1005 | `CommentsRestricted` (l'auteur du post n'accepte pas les commentaires de ce profil) | 403 → `PERMISSION_DENIED` |
 | CMT-5001 | `AccessCheckUnavailable` (read gate down; retryable) | 503 → `UNAVAILABLE` |
+| CMT-5002 | `LikesUnavailable` (les likes d'engagement n'ont pas répondu, #832) — jamais renvoyé : la page revient de la plus récente à la plus ancienne | — |
 | CMT-4001 | Kafka publish failed | 500 |
 | CMT-9001..9004 | invalid ids / domain violation | 422 |
 
@@ -267,6 +282,7 @@ async fn main() -> anyhow::Result<()> {
 | `COMMENT_GRPC_ADDR` | No | `0.0.0.0:50057` | gRPC bind address. |
 | `COMMENT_OFFENSIVE_TERMS_FILE` | Non | non défini | Un terme offensant par ligne (commentaires `#`) pour le filtre de commentaires offensants (#660). Non défini ou illisible : ce filtre ne masque rien (journalisé) ; les mots masqués s'appliquent toujours. |
 | `COMMENT_POST_GRPC_ENDPOINT` / `COMMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Oui** (prod) | `http://localhost:50056` / `:50053` | Endpoints mesh du read gate (`GetPost`, `CheckAccess`). Sans eux, les lectures hors mesh échouent fermé (`CMT-5001`). |
+| `COMMENT_ENGAGEMENT_GRPC_ENDPOINT` | Non | `http://localhost:50058` | Endpoint mesh d'engagement (`BatchGetLikes`) pour les réponses par popularité (#832). Injoignable : ces pages reviennent de la plus récente à la plus ancienne. |
 | `COMMENT_GATE_RPC_TIMEOUT_MS` / `COMMENT_GATE_CONNECT_TIMEOUT_MS` | Non | `1000` / `1000` | Délais de ces appels. |
 | `COMMENT_BACKFILL_AUTHOR_INDEX` | Non | non défini | `true` : indexe chaque commentaire existant par auteur au démarrage (une fois ; idempotent) — #653. |
 
