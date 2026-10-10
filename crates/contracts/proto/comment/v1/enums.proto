@@ -9,3 +9,14 @@ enum CommentStatus {
     COMMENT_STATUS_PUBLISHED   = 1;
     COMMENT_STATUS_DELETED     = 2;
 }
+
+// The order of a thread's replies (#832).
+enum ReplySort {
+    // NEWEST.
+    REPLY_SORT_UNSPECIFIED = 0;
+    // Newest first.
+    REPLY_SORT_NEWEST      = 1;
+    // Most liked first (likes are wallet stakes, counted by engagement);
+    // ties go to the newest.
+    REPLY_SORT_POPULARITY  = 2;
+}

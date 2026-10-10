@@ -3,7 +3,7 @@
 //! the buses for assertions. The event publisher records in process.
 #![allow(dead_code)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -21,11 +21,11 @@ use comment::app::{App, Backends};
 use comment::application::command::create_comment::CreateCommentCommand;
 use comment::application::command::delete_comment::DeleteCommentCommand;
 use comment::application::port::{
-    CommentAdmission, CommentEventPublisher, CommentFilterStore, CommentSummary, ReadDecision, ReadGate,
+    CommentAdmission, CommentEventPublisher, CommentFilterStore, CommentLikes, CommentSummary, ReadDecision, ReadGate,
 };
 use comment::domain::comment_filter::TermList;
 use comment::application::query::get_comment::GetCommentQuery;
-use comment::application::query::list_replies::ListRepliesQuery;
+use comment::application::query::list_replies::{ListRepliesQuery, ReplySort};
 use comment::application::query::list_top_level::ListTopLevelQuery;
 use comment::domain::event::{CommentCreatedEvent, DomainEvent};
 use comment::error::CommentError;
@@ -67,6 +67,38 @@ impl CommentEventPublisher for RecordingPublisher {
     async fn publish(&self, event: &DomainEvent) -> Result<(), CommentError> {
         self.events.lock().unwrap().push(event.clone());
         Ok(())
+    }
+}
+
+/// Comments' like counts as engagement would answer them (#832); can be made
+/// to fail.
+#[derive(Default)]
+pub struct ScriptedLikes {
+    likes: Mutex<HashMap<String, i64>>,
+    down:  std::sync::atomic::AtomicBool,
+}
+
+impl ScriptedLikes {
+    pub fn set(&self, comment_id: &str, likes: i64) {
+        self.likes.lock().unwrap().insert(comment_id.to_owned(), likes);
+    }
+
+    pub fn set_down(&self, down: bool) {
+        self.down.store(down, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl CommentLikes for ScriptedLikes {
+    async fn counts(
+        &self,
+        comments: &[comment::domain::value_object::CommentId],
+    ) -> Result<HashMap<comment::domain::value_object::CommentId, i64>, CommentError> {
+        if self.down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(CommentError::LikesUnavailable { reason: "scripted".to_owned() });
+        }
+        let likes = self.likes.lock().unwrap();
+        Ok(comments.iter().filter_map(|id| likes.get(&id.as_str()).map(|n| (id.clone(), *n))).collect())
     }
 }
 
@@ -174,6 +206,8 @@ pub struct TestHarness {
     pub command_bus: Arc<InMemoryCommandBus>,
     pub query_bus:   Arc<InMemoryQueryBus>,
     pub gate:        Arc<ScriptedGate>,
+    /// Comments' likes, as engagement answers them (#832).
+    pub likes:       Arc<ScriptedLikes>,
     /// What would have gone to Kafka.
     pub published:   Arc<RecordingPublisher>,
     /// The post owners' comment filters (the `profile.v1.events` projection).
@@ -215,7 +249,8 @@ impl TestHarness {
 
         let offensive = Arc::new(TermList::new([OFFENSIVE_TERM.to_owned()]));
         let published = Arc::new(RecordingPublisher::default());
-        let app = App::build(backends, Arc::clone(&published), read_gate, offensive)
+        let likes = Arc::new(ScriptedLikes::default());
+        let app = App::build(backends, Arc::clone(&published), read_gate, offensive, Arc::clone(&likes) as _)
             .await
             .expect("integration: build comment app");
 
@@ -223,6 +258,7 @@ impl TestHarness {
             command_bus: app.command_bus,
             query_bus: app.query_bus,
             gate,
+            likes,
             published,
             filters: app.filter_store,
             repository: app.repository,
@@ -398,6 +434,7 @@ impl TestHarness {
                     comment_id: parent.to_owned(),
                     limit:      100,
                     page_token: None,
+                    sort:       ReplySort::Newest,
                     viewer:     Viewer::Internal,
                     mature:     true,
                 },
@@ -405,6 +442,45 @@ impl TestHarness {
             .await
             .expect("list_replies");
         summaries
+    }
+
+    /// One page of `parent`'s replies in `sort` order (#832).
+    pub async fn replies_page(
+        &self,
+        post_id: &str,
+        parent: &str,
+        sort: ReplySort,
+        limit: i32,
+        page_token: Option<String>,
+    ) -> (Vec<CommentSummary>, Option<String>) {
+        self.query_bus
+            .dispatch(Envelope::new(
+                Uuid::now_v7(),
+                ListRepliesQuery {
+                    post_id: post_id.to_owned(),
+                    comment_id: parent.to_owned(),
+                    limit,
+                    page_token,
+                    sort,
+                    viewer: Viewer::Internal,
+                    mature: true,
+                },
+            ))
+            .await
+            .expect("list_replies page")
+    }
+
+    /// Every reply of `parent`, page by page in `sort` order (#832).
+    pub async fn all_replies(&self, post_id: &str, parent: &str, sort: ReplySort, limit: i32) -> Vec<String> {
+        let (mut ids, mut token) = (Vec::new(), None);
+        loop {
+            let (page, next) = self.replies_page(post_id, parent, sort, limit, token).await;
+            ids.extend(page.into_iter().map(|c| c.comment_id.as_str()));
+            match next {
+                Some(next) => token = Some(next),
+                None => return ids,
+            }
+        }
     }
 }
 

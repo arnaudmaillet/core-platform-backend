@@ -19,7 +19,7 @@ use scylla_storage::{ScyllaClient, ScyllaConfig, ScyllaSessionBuilder};
 use crate::application::command::create_comment::{CreateCommentCommand, CreateCommentHandler};
 use crate::application::command::delete_comment::{DeleteCommentCommand, DeleteCommentHandler};
 use crate::application::command::review_held::{ReviewHeldCommentCommand, ReviewHeldCommentHandler};
-use crate::application::port::{CommentEventPublisher, CommentFilterStore, OwnerFilters, ReadGate};
+use crate::application::port::{CommentEventPublisher, CommentFilterStore, CommentLikes, OwnerFilters, ReadGate};
 use crate::application::query::get_comment::{GetCommentHandler, GetCommentQuery};
 use crate::application::query::list_by_author::{ListCommentsByAuthorHandler, ListCommentsByAuthorQuery};
 use crate::application::query::list_replies::{ListRepliesHandler, ListRepliesQuery};
@@ -58,6 +58,7 @@ impl App {
         publisher: Arc<P>,
         gate:      Arc<dyn ReadGate>,
         offensive: Arc<TermList>,
+        likes:     Arc<dyn CommentLikes>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let scylla_client = Arc::new(ScyllaSessionBuilder::new(backends.scylla).build().await?);
         let repository = Arc::new(ScyllaCommentRepository::new(Arc::clone(&scylla_client)));
@@ -103,6 +104,7 @@ impl App {
                     repository: Arc::clone(&repository),
                     gate,
                     filters,
+                    likes,
                 })?
                 .build(),
         );

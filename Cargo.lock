@@ -982,6 +982,7 @@ dependencies = [
  "chrono",
  "comment-api",
  "cqrs",
+ "engagement-api",
  "error",
  "http",
  "post-api",

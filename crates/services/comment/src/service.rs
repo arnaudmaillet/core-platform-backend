@@ -17,8 +17,8 @@ use transport::kafka::config::{KafkaClientConfig, ProducerConfig};
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::app::{App, Backends};
-use crate::application::port::ReadGate;
-use crate::infrastructure::client::GrpcReadGate;
+use crate::application::port::{CommentLikes, ReadGate};
+use crate::infrastructure::client::{GrpcCommentLikes, GrpcReadGate};
 use crate::infrastructure::grpc::handler::comment_service_handler::{
     CommentServiceHandler, CommentServiceServer,
 };
@@ -61,7 +61,7 @@ impl Service for CommentService {
             .build()?;
         let publisher = Arc::new(KafkaCommentEventPublisher::new(producer));
 
-        let app = App::build(backends, publisher, read_gate_from_env()?, offensive_terms_from_env())
+        let app = App::build(backends, publisher, read_gate_from_env()?, offensive_terms_from_env(), comment_likes_from_env()?)
             .await
             .map_err(|e| anyhow::anyhow!("comment app build: {e}"))?;
 
@@ -143,6 +143,17 @@ pub(crate) fn read_gate_from_env() -> anyhow::Result<Arc<dyn ReadGate>> {
         lazy_channel("COMMENT_POST_GRPC_ENDPOINT", "http://localhost:50056")?,
         lazy_channel("COMMENT_SOCIAL_GRAPH_GRPC_ENDPOINT", "http://localhost:50053")?,
     )))
+}
+
+/// Comments' like counts, for replies by popularity (#832): engagement
+/// BatchGetLikes. Lazy like the gate; while engagement is unreachable (the
+/// endpoint unset in a deployment, or down) popularity pages come back newest
+/// first.
+pub(crate) fn comment_likes_from_env() -> anyhow::Result<Arc<dyn CommentLikes>> {
+    Ok(Arc::new(GrpcCommentLikes::new(lazy_channel(
+        "COMMENT_ENGAGEMENT_GRPC_ENDPOINT",
+        "http://localhost:50058",
+    )?)))
 }
 
 /// A lazily-connected channel to the endpoint in `endpoint_env` (or `default`),

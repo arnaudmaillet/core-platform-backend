@@ -12,7 +12,7 @@ use crate::application::port::CommentSummary;
 use crate::application::query::{
     get_comment::GetCommentQuery,
     list_by_author::ListCommentsByAuthorQuery,
-    list_replies::ListRepliesQuery,
+    list_replies::{ListRepliesQuery, ReplySort},
     list_top_level::ListTopLevelQuery,
 };
 use crate::domain::aggregate::Comment;
@@ -205,6 +205,7 @@ where
             comment_id: req.comment_id,
             limit:      req.limit,
             page_token: Some(req.page_token).filter(|s| !s.is_empty()),
+            sort:       reply_sort_from_proto(req.sort),
             viewer,
         };
         let (summaries, next): (Vec<CommentSummary>, Option<String>) = self
@@ -321,6 +322,7 @@ fn comment_to_proto(c: Comment) -> proto::CommentView {
         created_at_ms: c.created_at().timestamp_millis(),
         updated_at_ms: c.updated_at().timestamp_millis(),
         held:          c.held(),
+        reply_count:   0,
     }
 }
 
@@ -336,6 +338,15 @@ fn summary_to_proto(s: CommentSummary) -> proto::CommentView {
         created_at_ms: s.created_at.timestamp_millis(),
         updated_at_ms: 0,
         held:          s.held,
+        reply_count:   s.reply_count,
+    }
+}
+
+/// UNSPECIFIED and unknown values: NEWEST (#832).
+fn reply_sort_from_proto(sort: i32) -> ReplySort {
+    match proto::ReplySort::try_from(sort) {
+        Ok(proto::ReplySort::Popularity) => ReplySort::Popularity,
+        _ => ReplySort::Newest,
     }
 }
 
