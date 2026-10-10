@@ -108,6 +108,12 @@ fn rank(counts: HashMap<ProfileId, u32>) -> Vec<(ProfileId, u32)> {
     ranked
 }
 
+/// The next page's token when profiles remain ranked after the `examined`
+/// first of `remaining`: the position of the last one examined.
+fn next_token(remaining: &[(ProfileId, u32)], examined: usize) -> Option<String> {
+    (examined > 0 && examined < remaining.len()).then(|| Cursor::of(&remaining[examined - 1]).encode())
+}
+
 pub struct SuggestProfilesHandler {
     repo: Arc<dyn SocialGraphRepository>,
 }
@@ -170,10 +176,7 @@ impl QueryHandler<SuggestProfilesQuery> for SuggestProfilesHandler {
                 break;
             }
         }
-        // More ranked after the last profile examined: the next page resumes there.
-        if examined < remaining.len() {
-            page.next_page_token = Some(Cursor::of(&remaining[examined - 1]).encode());
-        }
+        page.next_page_token = next_token(remaining, examined);
         Ok(page)
     }
 }
@@ -205,6 +208,19 @@ mod tests {
         let moved = rank(HashMap::from([(profile(2), 9), (profile(3), 1), (profile(5), 1)]));
         let start = moved.partition_point(|c| !cursor.precedes(c));
         assert_eq!(moved[start..].iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![profile(3), profile(5)]);
+    }
+
+    #[test]
+    fn the_next_page_resumes_right_after_the_last_profile_examined() {
+        let ranked = rank(HashMap::from([(profile(1), 3), (profile(2), 2), (profile(3), 2), (profile(4), 1)]));
+        // A short page (most filtered) that examined three: the fourth is next.
+        let token = next_token(&ranked, 3).expect("one left");
+        let cursor = Cursor::decode(&token).unwrap();
+        assert_eq!(cursor, Cursor::of(&ranked[2]));
+        assert_eq!(ranked.partition_point(|c| !cursor.precedes(c)), 3);
+        // Everything examined, or nothing to examine: the last page.
+        assert_eq!(next_token(&ranked, 4), None);
+        assert_eq!(next_token(&[], 0), None);
     }
 
     #[test]
