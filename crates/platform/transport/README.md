@@ -107,6 +107,13 @@ sent as `x-mesh-token` and verified against the cluster's issuer (`auth_context:
 checks an **end user's** edge token a service forwards on a mesh call (the wallet checks who spends
 gems).
 
+**Revoked tokens (#884).** A verified edge token is also checked against `auth`'s revocation state
+where a `revocation::Revocations` is attached: `EdgeGuard::with_revocations` (the client edge) and
+`StaffGate::with_revocations` (always fail closed). The lookup is the `RevocationCheck` trait
+(`service-runtime` provides the Redis one); a token whose `gen` is below the account's current
+generation, whose `sid` is blacklisted, or that lacks either is `UNAUTHENTICATED`; an unreadable state is
+`UNAVAILABLE` under `RevocationFailure::Closed` and admitted (with a warning) under `Open`.
+
 ### Kafka
 
 ```rust

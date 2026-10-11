@@ -358,6 +358,8 @@ pub fn bearer_token(metadata: &tonic::metadata::MetadataMap) -> Option<String> {
 #[derive(Clone)]
 pub struct StaffGate {
     verifier: Option<Arc<dyn StaffVerifier>>,
+    /// Refuses a token revoked in `auth` (#884); always fail closed here.
+    revocations: Option<crate::grpc::revocation::Revocations>,
 }
 
 /// A token check in flight: the verified principal, or `None` (invalid).
@@ -377,12 +379,21 @@ impl StaffVerifier for auth_context::edge::EdgeDecoder {
 
 impl StaffGate {
     pub fn new(verifier: Arc<dyn StaffVerifier>) -> Self {
-        Self { verifier: Some(verifier) }
+        Self { verifier: Some(verifier), revocations: None }
     }
 
     /// No verifier: every staff call is refused.
     pub fn deny_all() -> Self {
-        Self { verifier: None }
+        Self { verifier: None, revocations: None }
+    }
+
+    /// Also refuses a token revoked in `auth` since it was minted (#884): a staff
+    /// member whose role was revoked, a signed-out session. Fail closed whatever
+    /// the posture given: a staff call or a gem spend is not let through
+    /// unchecked.
+    pub fn with_revocations(mut self, revocations: crate::grpc::revocation::Revocations) -> Self {
+        self.revocations = Some(revocations.with_failure(crate::grpc::revocation::RevocationFailure::Closed));
+        self
     }
 
     /// The verified staff caller of `request`, holding `permission`.
@@ -405,6 +416,9 @@ impl StaffGate {
         let verifier = self.verifier.as_ref().ok_or_else(|| Status::unauthenticated("token checks are not enabled"))?;
         let token = bearer_token(request.metadata()).ok_or_else(|| Status::unauthenticated("a token is required"))?;
         let principal = verifier.verify(&token).await.ok_or_else(|| Status::unauthenticated("invalid token"))?;
+        if let Some(revocations) = &self.revocations {
+            revocations.admit(&principal.raw_claims).await.map_err(|refusal| refusal.status())?;
+        }
         Ok(EdgePrincipal::new(Arc::new(principal)))
     }
 }
@@ -417,7 +431,7 @@ mod tests {
 
     fn principal_with(pids: &[&str], perms: &[&str]) -> EdgePrincipal {
         let mut raw: OidcClaims =
-            serde_json::from_value(json!({ "sub": "acct-1", "exp": 4_102_444_800_i64, "sid": "s-1" }))
+            serde_json::from_value(json!({ "sub": "acct-1", "exp": 4_102_444_800_i64, "sid": "s-1", "gen": 1 }))
                 .unwrap();
         raw.extra.insert("pids".into(), json!(pids));
         EdgePrincipal::new(Arc::new(CurrentPrincipal {
@@ -675,5 +689,29 @@ mod tests {
             closed.require(&bearer(Some("reviewer")), VERIFICATION_REVIEW).await.unwrap_err().code(),
             tonic::Code::Unauthenticated
         );
+    }
+    /// Revoked when the state says so; `None` = unreadable.
+    struct Revoked(Option<bool>);
+
+    impl crate::grpc::revocation::RevocationCheck for Revoked {
+        fn is_revoked<'a>(&'a self, _: &'a str, _: &'a str, _: i64) -> crate::grpc::revocation::RevocationLookup<'a> {
+            Box::pin(async move { self.0.ok_or(crate::grpc::revocation::RevocationUnavailable) })
+        }
+    }
+
+    /// #884: a staff token revoked in `auth` is refused; an unreadable state
+    /// refuses too, whatever posture the check was given.
+    #[tokio::test]
+    async fn a_revoked_staff_token_is_refused_and_the_gate_fails_closed() {
+        use crate::grpc::revocation::{RevocationFailure, Revocations};
+        let gate = |state| {
+            StaffGate::new(Arc::new(Tokens))
+                .with_revocations(Revocations::new(Arc::new(Revoked(state)), RevocationFailure::Open))
+        };
+        assert!(gate(Some(false)).require(&bearer(Some("reviewer")), VERIFICATION_REVIEW).await.is_ok());
+        let revoked = gate(Some(true)).require(&bearer(Some("reviewer")), VERIFICATION_REVIEW).await.unwrap_err();
+        assert_eq!(revoked.code(), tonic::Code::Unauthenticated);
+        let unreadable = gate(None).require(&bearer(Some("reviewer")), VERIFICATION_REVIEW).await.unwrap_err();
+        assert_eq!(unreadable.code(), tonic::Code::Unavailable);
     }
 }

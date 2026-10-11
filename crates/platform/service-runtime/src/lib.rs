@@ -51,7 +51,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -71,6 +71,7 @@ use tonic_health::server::{health_reporter, HealthReporter};
 use tonic_health::ServingStatus;
 pub use transport::grpc::edge::{self as edge, EdgePolicy};
 use transport::grpc::layer::edge::EdgeGuard;
+use transport::grpc::revocation::{RevocationCheck, RevocationFailure, Revocations};
 use transport::grpc::server::{GrpcServerBuilder, GrpcServerConfig};
 
 /// Environment variable naming the externalized-config document.
@@ -115,6 +116,13 @@ const EDGE_JWKS_REFRESH_ENV: &str = "EDGE_JWKS_REFRESH_SECS";
 /// Optional per-fetch JWKS timeout override (milliseconds; default 10 000).
 const EDGE_JWKS_TIMEOUT_ENV: &str = "EDGE_JWKS_TIMEOUT_MS";
 
+pub mod edge_revocation;
+pub use edge_revocation::{EDGE_REVOCATION_CACHE_MS_ENV, EDGE_REVOCATION_HOSTS_ENV};
+
+/// The process's edge-token revocation check (#884), set by [`serve`] before the
+/// service is built so [`staff_gate_from_env`] sees it too.
+static EDGE_REVOCATION: OnceLock<Arc<dyn RevocationCheck>> = OnceLock::new();
+
 /// Backend health probes now live in the `health` foundation crate, so storage
 /// crates can expose ready-made probes (`<storage>::health::probe(...)`) without
 /// depending on this platform crate. Re-exported here for ergonomic use from
@@ -144,6 +152,13 @@ pub trait Service: Sized + Send + 'static {
     /// listed here. Handlers of listed methods must bind their actor field to the
     /// verified caller with [`edge::require_account`] / [`edge::require_profile`].
     const EDGE_POLICY: EdgePolicy = &[];
+
+    /// When `auth`'s revocation state cannot be read (#884): `true` refuses the
+    /// edge call (`UNAVAILABLE`) and fails boot if the revocation Redis cannot be
+    /// built — the TIER-0 posture; `false` (the default, TIER-1 and the rest)
+    /// admits the token until `exp` with a warning. Staff calls
+    /// ([`staff_gate_from_env`]) always fail closed.
+    const EDGE_REVOCATION_FAIL_CLOSED: bool = false;
 
     /// Pure composition root: build the fully-wired service graph.
     ///
@@ -201,6 +216,17 @@ pub async fn serve<S: Service>(addr: SocketAddr) -> anyhow::Result<()> {
 
     let _watcher = spawn_watcher(path, Arc::clone(&infra)).context("spawn config watcher")?;
 
+    // ── Edge-token revocation (#884) ───────────────────────────────────────────
+    // Before the build, so the staff gates the service builds see it.
+    match edge_revocation::from_env().await {
+        Ok(Some(check)) => {
+            let _ = EDGE_REVOCATION.set(check);
+        }
+        Ok(None) => {}
+        Err(error) if S::EDGE_REVOCATION_FAIL_CLOSED => return Err(error.context("edge revocation check (fail closed)")),
+        Err(error) => tracing::warn!(%error, "edge revocation check unavailable: revoked tokens are accepted until exp"),
+    }
+
     // ── Compose the service graph ──────────────────────────────────────────────
     let service = S::build(Arc::clone(&infra)).await.context("service build")?;
     let probes = service.health_probes();
@@ -244,7 +270,18 @@ pub async fn serve<S: Service>(addr: SocketAddr) -> anyhow::Result<()> {
         None => None,
         Some(cfg) => {
             edge::validate_policy(S::EDGE_POLICY).map_err(anyhow::Error::msg)?;
-            let guard = Arc::new(EdgeGuard::new(spawn_edge_decoder(&cfg.auth), S::EDGE_POLICY));
+            let mut guard = EdgeGuard::new(spawn_edge_decoder(&cfg.auth), S::EDGE_POLICY);
+            match EDGE_REVOCATION.get() {
+                Some(check) => {
+                    let on_failure =
+                        if S::EDGE_REVOCATION_FAIL_CLOSED { RevocationFailure::Closed } else { RevocationFailure::Open };
+                    guard = guard.with_revocations(Revocations::new(Arc::clone(check), on_failure));
+                }
+                None => tracing::warn!(
+                    "{EDGE_REVOCATION_HOSTS_ENV} unset: a token revoked in auth stays valid on the edge until exp (#884)"
+                ),
+            }
+            let guard = Arc::new(guard);
             let mut edge_builder = GrpcServerBuilder::new(grpc_config).with_edge(Arc::clone(&guard));
             if let Some(registry) = &traffic {
                 edge_builder = edge_builder.with_traffic(Arc::clone(registry));
@@ -320,7 +357,12 @@ pub fn staff_gate_from_env() -> edge::StaffGate {
         ),
         ..AuthContextConfig::default()
     };
-    edge::StaffGate::new(spawn_edge_decoder(&auth))
+    let gate = edge::StaffGate::new(spawn_edge_decoder(&auth));
+    match EDGE_REVOCATION.get() {
+        // Fail closed whatever the service's posture (see `StaffGate::with_revocations`).
+        Some(check) => gate.with_revocations(Revocations::new(Arc::clone(check), RevocationFailure::Closed)),
+        None => gate,
+    }
 }
 
 /// The [`transport::grpc::mesh::MeshCallerGate`] (#852): which services may

@@ -35,9 +35,10 @@ resolves this with a **split-token model**: short-lived, locally-verifiable **ed
 (verified in pure CPU by the `auth-context` library in every downstream service) plus long-lived,
 server-side, single-use **refresh tokens** with mandatory rotation and reuse-detection. Global
 logout rides a per-session **generation** counter in Redis Cluster, so revocation is a single
-write — never a write amplified across every reader. Refresh and `Introspect` see it at once;
-services that verify edge tokens locally accept a revoked token until it expires
-(≤ `AUTH_ACCESS_TTL_SECS`) until the edge revocation check lands (#884).
+write — never a write amplified across every reader. Refresh and `Introspect` see it at once; the
+client edge and the staff gates of every service see it within `EDGE_REVOCATION_CACHE_MS` (5 s) when
+`EDGE_REVOCATION_REDIS_HOSTS` points them at this Redis (#884, `service-runtime`), and otherwise
+accept a revoked token until it expires (≤ `AUTH_ACCESS_TTL_SECS`).
 
 **Core objectives:** (1) no datastore read on the request hot path; (2) refresh-token reuse =
 compromise ⇒ revoke the whole session generation; (3) **100% IdP-agnostic** — the domain and
@@ -188,8 +189,8 @@ tokens. A suspension or deactivation is acted on only while `account` still repo
 inactive: one reactivated by an admin, or resumed by its holder signing back in, since the event
 keeps its new sessions; when `account` cannot be asked, the account is signed out anyway (fail closed). A revoked role is always acted on, so the
 permissions it granted die with the tokens that carried them, not at the next refresh. Already
-minted access tokens are refused by `Refresh` and `Introspect` at once and elsewhere at `exp` until
-the edge revocation check lands.
+minted access tokens are refused by `Refresh` and `Introspect` at once, and by the client edge and
+staff gates within the revocation cache window (see the hot path below).
 
 ### Credentials and step-up
 
@@ -329,8 +330,12 @@ Keycloak type leaks above `infrastructure`.
 ```
 
 **Split-token hot path.** 99% of API calls = signature verify only, no I/O. Revocation is a
-`generation` bump written through to `auth:sess:{account}:gen` in Redis; `Refresh` and `Introspect`
-reject an edge token carrying a stale `gen` (the local-verification edge does not yet, #884). Only
+`generation` bump written through to `auth:{acct:<id>}:gen` in Redis, plus a per-session
+`auth:{sess:<id>}:revoked` marker for the access-token lifetime (the layout lives in
+`auth_context::edge::revocation`, shared with the readers). `Refresh` and `Introspect` reject an edge
+token carrying a stale `gen` or a blacklisted `sid`; the client edge and the staff gates of every
+service do too when configured (#884): two Redis reads per session, cached 5 s in process, fail closed
+on TIER-0 (`Service::EDGE_REVOCATION_FAIL_CLOSED`) and for staff calls, fail open elsewhere. Only
 `/refresh` (low QPS) touches PostgreSQL.
 
 > **Invariants** (and where enforced): edge-token TTL ⊆ session TTL ⊆ absolute cap; refresh

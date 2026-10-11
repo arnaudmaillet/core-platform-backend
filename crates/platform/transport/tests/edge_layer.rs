@@ -337,3 +337,54 @@ async fn the_production_decoder_builder_accepts_a_real_es256_token() {
     assert!(grpc_status(&resp).is_none(), "production decoder must accept the token: {:?}", header(&resp, "grpc-message"));
     assert_eq!(header(&resp, "x-seen-principal"), Some("acct-1"));
 }
+
+/// Revoked when the account's generation is above the token's (`gen` 1) or the
+/// session is blacklisted; `None` = the state is unreadable.
+struct State(Option<(i64, bool)>);
+
+impl transport::grpc::revocation::RevocationCheck for State {
+    fn is_revoked<'a>(
+        &'a self,
+        _owner: &'a str,
+        _session: &'a str,
+        generation: i64,
+    ) -> transport::grpc::revocation::RevocationLookup<'a> {
+        Box::pin(async move {
+            let (current, blacklisted) = self.0.ok_or(transport::grpc::revocation::RevocationUnavailable)?;
+            Ok(generation < current || blacklisted)
+        })
+    }
+}
+
+/// #884: with revocations attached, a token signed out (generation bumped) or
+/// whose session was blacklisted is UNAUTHENTICATED; an unreadable state is
+/// UNAVAILABLE fail closed and admitted fail open.
+#[tokio::test]
+async fn a_revoked_token_is_refused_and_an_unreadable_state_follows_the_posture() {
+    use transport::grpc::revocation::{RevocationFailure, Revocations};
+
+    let key = test_key();
+    let token = mint(&key, "acct-1", &[], &["read:public"], now() + 600, KID);
+    for (state, posture, expected) in [
+        (Some((1, false)), RevocationFailure::Closed, None),
+        (Some((2, false)), RevocationFailure::Open, Some("16")),
+        (Some((1, true)), RevocationFailure::Open, Some("16")),
+        (None, RevocationFailure::Closed, Some("14")),
+        (None, RevocationFailure::Open, None),
+    ] {
+        let guard = Arc::try_unwrap(guard(&key, POLICY).await).ok()
+            .unwrap()
+            .with_revocations(Revocations::new(Arc::new(State(state)), posture));
+        let svc = layer(Arc::new(guard)).layer(echo_service!());
+        for path in ["/post.v1.PostService/CreatePost", "/post.v1.PostService/GetPost"] {
+            let resp = svc.clone().oneshot(req(path, Some(&token))).await.unwrap();
+            assert_eq!(grpc_status(&resp), expected, "{state:?} {posture:?} {path}");
+        }
+    }
+    // Public methods never consult it.
+    let guard = Arc::try_unwrap(guard(&key, POLICY).await).ok()
+        .unwrap()
+        .with_revocations(Revocations::new(Arc::new(State(None)), RevocationFailure::Closed));
+    let resp = layer(Arc::new(guard)).layer(echo_service!()).oneshot(req("/auth.v1.AuthService/Login", None)).await.unwrap();
+    assert!(grpc_status(&resp).is_none());
+}

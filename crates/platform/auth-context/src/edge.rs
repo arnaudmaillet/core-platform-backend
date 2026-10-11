@@ -152,10 +152,64 @@ pub fn session_id(claims: &OidcClaims) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
+/// The claim carrying the revocation generation (`gen`).
+pub const EDGE_GENERATION_CLAIM: &str = "gen";
+
+/// The revocation generation carried by a verified edge token's
+/// [`EDGE_GENERATION_CLAIM`].
+pub fn generation(claims: &OidcClaims) -> Option<i64> {
+    claims.extra.get(EDGE_GENERATION_CLAIM).and_then(|v| v.as_i64())
+}
+
+/// The id the token's revocation generation is kept under: the account id, or
+/// a guest token's guest id (its `sub` without [`GUEST_SUB_PREFIX`]).
+pub fn generation_owner(claims: &OidcClaims) -> &str {
+    claims.sub.strip_prefix(GUEST_SUB_PREFIX).unwrap_or(&claims.sub)
+}
+
+/// Where `auth` keeps the revocation state in its Redis (#884): `auth` writes
+/// it, the client edge of every service reads it. Shared here so the two never
+/// drift (pinned by a test).
+pub mod revocation {
+    /// The generation an account has before its first bump (a missing counter).
+    pub const INITIAL_GENERATION: i64 = 0;
+
+    /// The account's revocation-generation counter. Hash-tagged on the account
+    /// so the `GET`/`INCR` stays slot-local in a Redis Cluster. A token whose
+    /// `gen` is below it is revoked.
+    pub fn generation_key(account_id: &str) -> String {
+        format!("auth:{{acct:{account_id}}}:gen")
+    }
+
+    /// The per-session blacklist marker, set for the access-token lifetime: a
+    /// token of a session holding it is revoked.
+    pub fn blacklist_key(session_id: &str) -> String {
+        format!("auth:{{sess:{session_id}}}:revoked")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The layout `auth` writes; changing it splits the writer from the readers.
+    #[test]
+    fn revocation_keys_are_pinned() {
+        assert_eq!(revocation::generation_key("a-1"), "auth:{acct:a-1}:gen");
+        assert_eq!(revocation::blacklist_key("s-1"), "auth:{sess:s-1}:revoked");
+    }
+
+    #[test]
+    fn generation_and_its_owner_read_member_and_guest_tokens() {
+        let member = claims(json!({ "gen": 3 }));
+        assert_eq!(generation(&member), Some(3));
+        assert_eq!(generation_owner(&member), "acct-1");
+        let mut guest = claims(json!({}));
+        guest.sub = "guest:g-1".into();
+        assert_eq!(generation(&guest), None);
+        assert_eq!(generation_owner(&guest), "g-1");
+    }
 
     fn claims(extra: serde_json::Value) -> OidcClaims {
         serde_json::from_value(json!({

@@ -69,6 +69,8 @@ pub trait Service: Sized {
     const NAME: &'static str;
     const VERSION: &'static str;
     const GRPC_SERVICE_NAME: &'static str;     // the concrete server's NamedService::NAME (health key)
+    const EDGE_POLICY: EdgePolicy = &[];       // the RPCs exposed on the client edge
+    const EDGE_REVOCATION_FAIL_CLOSED: bool = false; // TIER-0: refuse when revocation is unreadable (#884)
 
     async fn build(infra: Arc<InfraRegistry>) -> anyhow::Result<Self>;   // composition root
     fn health_probes(&self) -> Vec<Arc<dyn HealthProbe>> { vec![] }       // default: none
@@ -121,10 +123,20 @@ See the `Service` impl and binary in §Public API — that is the whole integrat
 | `MESH_JWKS_CA_FILE` · `MESH_JWKS_BEARER_FILE` | unset | the in-cluster JWKS's CA and the bearer token sent with each fetch |
 | `MESH_NAMESPACE` | this pod's namespace | callers must be in this namespace (default: the mounted ServiceAccount's `namespace`) |
 | `MESH_TOKEN_FILE` | unset | the caller side (`MeshTokenInterceptor::from_env`): this pod's projected token; unset → none sent |
+| `EDGE_REVOCATION_REDIS_HOSTS` | unset (no check) | `auth`'s Redis (#884): set, every verified token on the client edge and in `staff_gate_from_env()` is refused once `auth` revoked it (generation bumped, session blacklisted). Unset ⇒ a revoked token works until `exp` (a warning at boot) |
+| `EDGE_REVOCATION_REDIS_TOPOLOGY` · `_TLS` · `_PASSWORD` · … | as `REDIS_*` | the rest of that Redis's settings, every `REDIS_*` variable under the `EDGE_REVOCATION_` prefix |
+| `EDGE_REVOCATION_CACHE_MS` | `5000` | how long a read revocation state is reused: the delay before a revocation reaches every pod |
 
 Per-service `*_GRPC_ADDR` + tuning live in each service's README. Telemetry honours `RUST_LOG` /
 `OTEL_*` at boot; live dials are then driven by the `[telemetry]` section of `infrastructure.toml`. No
 cargo features.
+
+**Edge-token revocation (#884)** — with `EDGE_REVOCATION_REDIS_HOSTS` set, `serve` builds the check before
+`Service::build` (so `staff_gate_from_env()` gets it too): two reads per session (`auth`'s generation and
+blacklist keys, `auth_context::edge::revocation`), cached in process. When they fail, the edge follows
+`Service::EDGE_REVOCATION_FAIL_CLOSED` (`UNAVAILABLE`, and a boot error if the Redis cannot be built; else
+admitted until `exp` with a warning) and the staff gate always fails closed. A refusal is counted in
+`infra_edge_rejected_total{reason="revoked_token"|"revocation_unavailable"}`.
 
 **Live retuning** — because the runtime spawns the config watcher, an `infrastructure.toml` push
 retunes the fleet with no restart (`[telemetry]` log filter + sampling; `[traffic]` rps/quotas;

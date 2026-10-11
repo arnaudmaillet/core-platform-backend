@@ -88,7 +88,8 @@ service AuthService {
 
     // Global sign-out: bump the account's session generation and revoke every
     // session. Refresh and Introspect reject every previously minted edge token
-    // at once; services verifying edge tokens locally accept one until it
+    // at once; the client edge of every service within its revocation cache
+    // window when the revocation check is configured, else when the token
     // expires (at most the access-token lifetime).
     rpc LogoutAllSessions(LogoutAllSessionsRequest) returns (LogoutAllSessionsResponse);
 

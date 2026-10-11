@@ -55,6 +55,9 @@ impl Service for ModerationService {
     /// else on this service is mesh-only. See `transport::grpc::edge`.
     // The reviewer console (assign/decide/queue/resolve) stays mesh-only until a
     // staff permission catalogue exists; Screen is a mesh callee (media).
+    /// TIER-0: a token whose revocation cannot be checked is refused (#884).
+    const EDGE_REVOCATION_FAIL_CLOSED: bool = true;
+
     const EDGE_POLICY: EdgePolicy = &[
         // DSA Art. 17 / 20: the sanctioned account reads its restrictions, each
         // one's statement of reasons, and appeals — its own only (actor_id = sub;

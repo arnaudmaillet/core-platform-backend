@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 33c263a3493112bf931f62d6d67ff66348e54ed7b39b693f7273c1e0c95c049b
-  translated_at: 2026-10-10
+  source_sha256: d52bc35de8258dc3f9f230af3c94a43dab57efd6e2e5032099373d38952d9a5c
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -120,6 +120,13 @@ Le jeton est le jeton de ServiceAccount projeté par Kubernetes de l'appelant (a
 est journalisé, laissé passer), `enforce` (`PERMISSION_DENIED`) ; sans vérificateur, tout appelant est
 inconnu. `edge::StaffGate::verified` vérifie aussi le jeton edge d'un **utilisateur final** qu'un
 service transmet sur un appel mesh (le wallet vérifie qui dépense des gems).
+
+**Jetons révoqués (#884).** Un jeton edge vérifié est aussi confronté à l'état de révocation d'`auth`
+là où un `revocation::Revocations` est attaché : `EdgeGuard::with_revocations` (l'edge client) et
+`StaffGate::with_revocations` (toujours en échec fermé). La lecture passe par le trait `RevocationCheck`
+(`service-runtime` fournit celle sur Redis) ; un jeton dont la `gen` est sous la génération courante du
+compte, dont le `sid` est en blacklist, ou à qui l'un des deux manque est `UNAUTHENTICATED` ; un état
+illisible est `UNAVAILABLE` sous `RevocationFailure::Closed` et admis (avec un avertissement) sous `Open`.
 
 ### Kafka
 

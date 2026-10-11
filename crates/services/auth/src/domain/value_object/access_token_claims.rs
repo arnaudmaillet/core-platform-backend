@@ -18,7 +18,7 @@ pub struct AccessTokenClaims {
     /// `sid` — the session this token belongs to.
     pub session_id: SessionId,
     /// `gen` — the revocation epoch: a token below the account's current one is
-    /// revoked (checked by `Refresh` and `Introspect`).
+    /// revoked (checked by `Refresh`, `Introspect` and the client edge, #884).
     pub generation: Generation,
     /// Normalized authorization grants.
     pub permissions: Vec<Permission>,

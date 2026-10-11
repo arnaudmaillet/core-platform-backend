@@ -167,41 +167,50 @@ impl RedisConfig {
     /// Populates every field from environment variables, falling back to
     /// production-safe defaults when variables are absent.
     pub fn from_env() -> Self {
-        let topology = TopologyKind::from_env();
+        Self::from_env_prefixed("")
+    }
 
-        let hosts = std::env::var("REDIS_HOSTS")
+    /// [`Self::from_env`] with every variable name prefixed (`<prefix>REDIS_HOSTS`,
+    /// `<prefix>REDIS_TOPOLOGY`, …): a second Redis the process reads beside its
+    /// own, e.g. `EDGE_REVOCATION_` for `auth`'s revocation state (#884).
+    pub fn from_env_prefixed(prefix: &str) -> Self {
+        let var = |key: &str| std::env::var(format!("{prefix}{key}"));
+        let parse = |key: &str| format!("{prefix}{key}");
+        let topology = TopologyKind::from_env_prefixed(prefix);
+
+        let hosts = var("REDIS_HOSTS")
             .unwrap_or_else(|_| "127.0.0.1:6379".to_string())
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>();
 
-        assert!(!hosts.is_empty(), "REDIS_HOSTS must not be empty");
+        assert!(!hosts.is_empty(), "{prefix}REDIS_HOSTS must not be empty");
 
         Self {
             topology,
             hosts,
-            username:              std::env::var("REDIS_USERNAME").ok(),
-            password:              std::env::var("REDIS_PASSWORD").ok(),
-            tls:                   parse_env("REDIS_TLS", false),
-            database:              parse_env("REDIS_DATABASE", 0u8),
-            sentinel_service_name: std::env::var("REDIS_SENTINEL_SERVICE_NAME").ok(),
+            username:              var("REDIS_USERNAME").ok(),
+            password:              var("REDIS_PASSWORD").ok(),
+            tls:                   parse_env(&parse("REDIS_TLS"), false),
+            database:              parse_env(&parse("REDIS_DATABASE"), 0u8),
+            sentinel_service_name: var("REDIS_SENTINEL_SERVICE_NAME").ok(),
             connection_timeout:    Duration::from_secs_f64(
-                parse_env("REDIS_CONNECTION_TIMEOUT_SECS", 10.0f64),
+                parse_env(&parse("REDIS_CONNECTION_TIMEOUT_SECS"), 10.0f64),
             ),
             command_timeout:       Duration::from_millis(
-                parse_env("REDIS_COMMAND_TIMEOUT_MS", 3_000u64),
+                parse_env(&parse("REDIS_COMMAND_TIMEOUT_MS"), 3_000u64),
             ),
-            fail_fast:             parse_env("REDIS_FAIL_FAST", true),
-            pool_size:             parse_env("REDIS_POOL_SIZE", 8usize),
-            max_feed_count:        parse_env("REDIS_MAX_FEED_COUNT", 200u64),
-            max_command_buffer_len: parse_env("REDIS_MAX_COMMAND_BUFFER_LEN", 0usize),
-            reconnect_min_delay_ms: parse_env("REDIS_RECONNECT_MIN_DELAY_MS", 100u32),
-            reconnect_max_delay_ms: parse_env("REDIS_RECONNECT_MAX_DELAY_MS", 30_000u32),
-            reconnect_max_attempts: parse_env("REDIS_RECONNECT_MAX_ATTEMPTS", 0u32),
-            reconnect_multiplier:   parse_env("REDIS_RECONNECT_MULTIPLIER", 2u32),
-            max_redirections:       parse_env("REDIS_MAX_REDIRECTIONS", 5u32),
-            unresponsive_timeout:   parse_env_opt::<u64>("REDIS_UNRESPONSIVE_TIMEOUT_MS")
+            fail_fast:             parse_env(&parse("REDIS_FAIL_FAST"), true),
+            pool_size:             parse_env(&parse("REDIS_POOL_SIZE"), 8usize),
+            max_feed_count:        parse_env(&parse("REDIS_MAX_FEED_COUNT"), 200u64),
+            max_command_buffer_len: parse_env(&parse("REDIS_MAX_COMMAND_BUFFER_LEN"), 0usize),
+            reconnect_min_delay_ms: parse_env(&parse("REDIS_RECONNECT_MIN_DELAY_MS"), 100u32),
+            reconnect_max_delay_ms: parse_env(&parse("REDIS_RECONNECT_MAX_DELAY_MS"), 30_000u32),
+            reconnect_max_attempts: parse_env(&parse("REDIS_RECONNECT_MAX_ATTEMPTS"), 0u32),
+            reconnect_multiplier:   parse_env(&parse("REDIS_RECONNECT_MULTIPLIER"), 2u32),
+            max_redirections:       parse_env(&parse("REDIS_MAX_REDIRECTIONS"), 5u32),
+            unresponsive_timeout:   parse_env_opt::<u64>(&parse("REDIS_UNRESPONSIVE_TIMEOUT_MS"))
                 .map(Duration::from_millis),
         }
     }

@@ -44,8 +44,8 @@ pub struct LogoutAllSessionsOutcome {
 ///
 /// The generation bump is what invalidates outstanding edge tokens for `Refresh`
 /// and `Introspect`; the per-session revocation keeps the durable record and the
-/// blacklist consistent. Services that verify edge tokens locally accept them
-/// until `exp` (the edge revocation check is #884).
+/// blacklist consistent. The client edge and the staff gates of every service
+/// read the same state (#884, `service_runtime::edge_revocation`) when configured.
 pub struct LogoutAllSessionsHandler {
     sessions: Arc<dyn SessionRepository>,
     refresh_tokens: Arc<dyn RefreshTokenRepository>,
