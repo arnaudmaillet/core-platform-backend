@@ -146,7 +146,8 @@ impl AccountDirectory for StubDirectory {
         };
         Ok(AccountSnapshot {
             activation,
-            permissions: vec![Permission::new("posts:write")],
+            // What `account` grants a member: its role (#880: anything else is staff).
+            permissions: vec![Permission::new("user")],
             age_bracket: None,
             mfa_enrolled: self.mfa.lock().unwrap().contains_key(account_id),
         })

@@ -96,6 +96,8 @@ producer's `DOMAIN.md §8`.
 | `session_issued` | an authenticated session was established | login / token issuance | `audit` (Authentication) |
 | `session_revoked` | a session was invalidated | logout / revoke / generation bump | `audit` (Authentication) |
 | `subject_linked` | an IdP subject was bound to an account | account-link flow | internal |
+| `staff_enrollment_granted` | a staff passkey enrollment grant was issued (#880; `granted_by` absent for the one-off bootstrap; the grant itself never leaves auth) | `IssueStaffPasskeyEnrollment` / `auth-server bootstrap-staff` | `audit` (PrivilegedAction) |
+| `staff_passkey_enrolled` | a passkey became a staff passkey with a grant (#880): sessions opened with it carry staff permissions | `FinishPasskeyRegistration` with a grant | `audit` (PrivilegedAction) |
 
 ## Profile — `profile.v1.events` (producer: `profile`)
 

@@ -189,6 +189,14 @@ impl StubAccountDirectory {
         self.resumed.lock().unwrap().clone()
     }
 
+    /// Sets a known account's grants (roles and permissions, as `account`
+    /// returns them).
+    pub fn set_permissions(&self, account_id: &AccountId, permissions: &[&str]) {
+        if let Some(snapshot) = self.snapshots.lock().unwrap().get_mut(account_id) {
+            snapshot.permissions = permissions.iter().map(|p| Permission::new(*p)).collect();
+        }
+    }
+
     /// Changes a known account's activation (e.g. deactivated after login).
     pub fn set_activation(&self, account_id: &AccountId, activation: AccountActivation) {
         if let Some(snapshot) = self.snapshots.lock().unwrap().get_mut(account_id) {

@@ -57,6 +57,7 @@ pub use account_decode::{
 };
 pub use auth_decode::{
     AuthEventWire, TOPIC_AUTH_EVENTS, map_app_authorization_revoked, map_app_authorized, map_session_issued,
+    map_staff_enrollment_granted, map_staff_passkey_enrolled,
     map_session_revoked,
 };
 pub use kms::{AwsKms, KmsCipher, KmsConfig, KmsSigner, LocalCheckpointSigner};

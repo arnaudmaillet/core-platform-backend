@@ -92,6 +92,9 @@ issued --(refresh: rotate)--> issued' --(revoke / generation-bump / expiry)--> r
 | I2 | A `Generation` bump revokes all tokens of that subject family | domain | (revocation) |
 | I3 | Access tokens are short-lived and ES256-signed | domain + infrastructure | verify fails downstream |
 | I4 | Revocation is fail-closed and immediate | application | — |
+| I5 | A staff grant is minted only in a session opened with a staff-enrolled passkey that is still the account's (#880) | application (`Permission::for_session`, re-read at every mint) | member grants only |
+| I6 | A passkey is staff-enrolled only with a single-use, unexpired grant bound to its account; grants come from an admin in a staff passkey session (never for itself) or the one-off bootstrap while no staff passkey exists | application + Postgres (conditional update) | `AUT-5032` / `AUT-5033` / `AUT-5034` |
+| I7 | A staff session steps up with its passkey only | application | `AUT-5031` |
 
 ---
 
@@ -132,6 +135,8 @@ access token. Reuse of a rotated token is a security signal.
 | `session_issued` | An authenticated session was established | login / token issuance | `audit` (Authentication) |
 | `session_revoked` | A session was invalidated | logout / revoke / generation bump | `audit` (Authentication) |
 | `subject_linked` | An IdP subject was bound to an account | account-link flow | (internal) |
+| `staff_enrollment_granted` | A staff passkey enrollment grant was issued (by an admin, or the bootstrap) | `IssueStaffPasskeyEnrollment` / `auth-server bootstrap-staff` | `audit` (PrivilegedAction) |
+| `staff_passkey_enrolled` | A passkey became a staff passkey with a grant | `FinishPasskeyRegistration` with a grant | `audit` (PrivilegedAction) |
 
 ---
 

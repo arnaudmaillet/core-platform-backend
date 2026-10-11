@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8e48f3b77b2c8d1c3555ef471294ffe2a3e68629d1fcbfb85d4ef079196766e9
+  source_sha256: 4475d82d7d6941d077ed4356970d8c2d6ea8f059dd6e5a62ca267b0265a9264e
   translated_at: 2026-10-11
   status: complete
 ---
@@ -330,6 +330,35 @@ passkey représente la première liaison d'identité du compte (si bien que `Cha
 par mot de passe fonctionnent depuis elle). Les suites habituelles d'une connexion s'appliquent (alerte
 de nouvel appareil, compte désactivé repris, invité retiré).
 
+**Le staff se connecte uniquement par passkey (#880).** Un compte staff — toute autorisation venue
+d'`account` en dehors du rôle membre `user` (un rôle staff comme `admin` ou `support_agent`, une
+permission fine comme `audit:read`, une dérogation ; une autorisation inconnue compte comme staff) —
+n'obtient ses autorisations staff **que dans une session ouverte avec une passkey enrôlée staff**
+(`Login { passkey }`, ou `CompleteLogin { passkey }` après un premier facteur). Connecté autrement
+(Apple / Google, un code e-mail ou SMS, un mot de passe, une passkey membre), le même compte obtient une
+session membre : `user`, `read:public` et ses profils. Chaque session enregistre comment elle a été
+ouverte (`sessions.sign_in_method` + `passkey_credential_id`, migration 0009) ; chaque `Refresh` et
+`VerifyCredentials` relit cette passkey, si bien que la supprimer met fin aux autorisations staff au
+refresh suivant, et `RevokeRole` s'y applique aussi. Une session staff fait son step-up avec sa passkey
+uniquement (`AUT-5031`) ; un step-up par passkey ne transforme jamais une session membre en session
+staff. Les services qui vérifient les permissions staff (le gate d'audit, la file de vérification, les
+documents privés, les RPC admin d'account) ne changent pas : ils lisent toujours `perms`, que seules les
+sessions par passkey staff portent.
+
+Une passkey n'est **enrôlée staff** que si son `FinishPasskeyRegistration` présente une **autorisation
+d'enrôlement staff** (`staff_enrollment_grant`) : à usage unique, 24 heures, liée à un compte (seul son
+SHA-256 est conservé ; `AUT-5032` si inconnue, d'un autre compte, expirée ou déjà utilisée). Les passkeys
+enregistrées sans — avant l'attribution d'un rôle, ou par quiconque contrôle la boîte mail d'un membre
+du staff — restent des passkeys membres. Les autorisations viennent d'`IssueStaffPasskeyEnrollment(account_id)`
+(mesh seulement) : l'appelant présente son propre jeton, introspecté ici, et doit être `admin` /
+`super_admin` — des rôles que seule une session par passkey staff porte — pour un autre compte
+(`AUT-5033`). La toute première vient du bootstrap ponctuel, `auth-server bootstrap-staff <account_id>`
+lancé dans un pod auth avec `AUTH_STAFF_BOOTSTRAP=true` (aucune surface réseau ; l'autorisation est
+affichée dans ce terminal), refusé définitivement dès qu'une passkey staff existe sur un shard
+(`AUT-5034`). Chaque autorisation et chaque enrôlement staff est publié
+(`auth.staff_enrollment_granted`, `auth.staff_passkey_enrolled`) et enregistré par audit comme
+`PrivilegedAction` ; les autorisations sont effacées avec le compte.
+
 **Step-up.** Un jeton émis juste après une preuve d'identifiant — `Login` / `CompleteLogin`, ou
 `VerifyCredentials` (re-prouver le mot de passe, ou donner un code de deux étapes : le step-up d'un
 compte sans mot de passe ; `AUT-5020` si la connexion en deux étapes est désactivée) — porte
@@ -446,6 +475,7 @@ staff, échec ouvert ailleurs. Seul `/refresh` (faible QPS) touche PostgreSQL.
 | `AUTH_SMS_COUNTRIES` | Pays (ISO 3166-1 alpha-2, séparés par des virgules) vers lesquels les codes SMS peuvent partir ; doit être égal à la liste autorisée de la protect configuration SNS (infra `global/messaging/sms`). Un code inconnu fait échouer le démarrage. | les marchés de lancement (37) |
 | `AUTH_SMS_DAILY_BUDGET` | SMS que le service entier peut envoyer par jour UTC (`0` = aucun) ; au-delà `AUT-5016`. | `50` |
 | `AUTH_SMS_COUNTRY_DAILY_BUDGET` | SMS qu'un pays de destination peut recevoir par jour UTC, vérifié avant celui du service ; au-delà `AUT-5016`. | `25` |
+| `AUTH_STAFF_BOOTSTRAP` | `true` ouvre `auth-server bootstrap-staff <account_id>` (#880) : la toute première autorisation d'enrôlement staff, refusée dès qu'une passkey staff existe. À poser sur la ligne de commande de cette exécution seulement, jamais sur le Deployment. | absent |
 | `AUTH_WEBAUTHN_RP_ID` · `AUTH_WEBAUTHN_ORIGINS` | Passkeys (#808) : le RP id (le domaine que l'app iOS déclare sous `webcredentials`, qui sert son `apple-app-site-association`) et les origines client admises (liste séparée par des virgules ; par défaut `https://<rp id>`). Absent → passkeys indisponibles (UNAVAILABLE). **Ne jamais changer le RP id une fois des passkeys créées** : elles y sont liées. | — · — |
 | `AUTH_MFA_SEED_KEY` · `AUTH_MFA_SEED_KEY_ID` · `AUTH_MFA_SEED_KEYS_PREVIOUS` | Connexion en deux étapes (#649) : la clé AES-256 qui scelle les graines TOTP (32 octets, base64 standard), son identifiant, et les clés retirées (`id:base64,…`) qui ouvrent encore les anciennes graines. Absente → connexion en deux étapes indisponible, en mode fermé (`AUT-5019`). **Ne jamais la retirer une fois utilisée.** Provisionnée par core-platform-infra#27. | — · `k1` · — |
 | `AUTH_MFA_ISSUER` | Le nom du service dans l'application d'authentification du titulaire (#649). | `Core Platform` |
