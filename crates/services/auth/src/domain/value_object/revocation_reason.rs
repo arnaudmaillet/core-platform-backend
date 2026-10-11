@@ -25,6 +25,13 @@ pub enum RevocationReason {
     /// The holder turned two-step sign-in on or regenerated its backup codes:
     /// their other sessions end (#649).
     MfaChanged,
+    /// `account` suspended the account (#884).
+    AccountSuspended,
+    /// The holder deactivated their account (#884); a later sign-in resumes it.
+    AccountDeactivated,
+    /// `account` revoked one of the account's roles (#884): the permissions it
+    /// granted must not outlive it in a token.
+    RoleRevoked,
 }
 
 impl RevocationReason {
@@ -37,6 +44,9 @@ impl RevocationReason {
             Self::PasswordChanged => "password_changed",
             Self::GuestUpgraded => "guest_upgraded",
             Self::MfaChanged => "mfa_changed",
+            Self::AccountSuspended => "account_suspended",
+            Self::AccountDeactivated => "account_deactivated",
+            Self::RoleRevoked => "role_revoked",
         }
     }
 }
@@ -59,6 +69,9 @@ impl TryFrom<&str> for RevocationReason {
             "password_changed" => Ok(Self::PasswordChanged),
             "guest_upgraded" => Ok(Self::GuestUpgraded),
             "mfa_changed" => Ok(Self::MfaChanged),
+            "account_suspended" => Ok(Self::AccountSuspended),
+            "account_deactivated" => Ok(Self::AccountDeactivated),
+            "role_revoked" => Ok(Self::RoleRevoked),
             other => Err(AuthError::DomainViolation {
                 field: "revocation_reason".into(),
                 message: format!("unknown revocation reason: '{other}'"),

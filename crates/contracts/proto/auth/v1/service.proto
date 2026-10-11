@@ -86,8 +86,10 @@ service AuthService {
     // Revoke a single session (the caller's current one by default). Idempotent.
     rpc Logout(LogoutRequest) returns (LogoutResponse);
 
-    // Global sign-out: bump the account's session generation so every previously
-    // minted edge token is rejected at the edge within one cache read.
+    // Global sign-out: bump the account's session generation and revoke every
+    // session. Refresh and Introspect reject every previously minted edge token
+    // at once; services verifying edge tokens locally accept one until it
+    // expires (at most the access-token lifetime).
     rpc LogoutAllSessions(LogoutAllSessionsRequest) returns (LogoutAllSessionsResponse);
 
     // ── Credentials (the signed-in holder, client edge) ───────────────────────

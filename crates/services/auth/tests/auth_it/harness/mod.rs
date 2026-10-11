@@ -103,7 +103,8 @@ impl CredentialAdmin for StubCredentials {
 }
 
 /// `account` stub: provisions a stable account id per subject and reports every
-/// account active with a fixed permission set; contacts are kept per account.
+/// account active (unless listed suspended) with a fixed permission set;
+/// contacts are kept per account.
 /// (sealed seed, unused backup-code hashes), as `account` keeps them.
 pub type StoredMfa = (Vec<u8>, Vec<String>);
 
@@ -113,6 +114,8 @@ pub struct StubDirectory {
     /// account → (sealed seed, unused backup-code hashes): two-step sign-in
     /// on (#649), kept as `account` would.
     pub mfa: Mutex<HashMap<AccountId, StoredMfa>>,
+    /// Accounts `account` reports suspended (#884); every other is active.
+    pub suspended: Mutex<Vec<AccountId>>,
 }
 
 impl StubDirectory {
@@ -121,6 +124,7 @@ impl StubDirectory {
             accounts: Mutex::new(HashMap::new()),
             contacts: Mutex::new(HashMap::new()),
             mfa: Mutex::new(HashMap::new()),
+            suspended: Mutex::new(Vec::new()),
         }
     }
 }
@@ -135,8 +139,13 @@ impl AccountDirectory for StubDirectory {
     }
 
     async fn lookup(&self, account_id: &AccountId) -> Result<AccountSnapshot, AuthError> {
+        let activation = if self.suspended.lock().unwrap().contains(account_id) {
+            AccountActivation::Inactive { reason: "suspended".into() }
+        } else {
+            AccountActivation::Active
+        };
         Ok(AccountSnapshot {
-            activation: AccountActivation::Active,
+            activation,
             permissions: vec![Permission::new("posts:write")],
             age_bracket: None,
             mfa_enrolled: self.mfa.lock().unwrap().contains_key(account_id),

@@ -17,7 +17,7 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    AccountErasure, AppAuthorizations, ExportReadyNotifier, AttestMode, GuestAttestation, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
+    AccountErasure, AccountRevocation, AppAuthorizations, ExportReadyNotifier, AttestMode, GuestAttestation, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
     LogoutAllSessionsHandler, LogoutHandler, MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler,
     MfaPolicy, MfaSettingsHandler, MfaVerifier, PasskeyHandler, PasskeySignIn, StartGuestSessionHandler,
     VerificationCodes,
@@ -134,6 +134,9 @@ pub struct App {
     pub erasure: Arc<AccountErasure>,
     /// Emails a delivered GDPR export's link (#653); fed by the same consumer.
     pub export_ready: Arc<ExportReadyNotifier>,
+    /// Signs an account out everywhere when `account` suspends or deactivates
+    /// it or revokes one of its roles (#884); fed by the same consumer.
+    pub account_revocation: Arc<AccountRevocation>,
 }
 
 impl App {
@@ -445,6 +448,16 @@ impl App {
             config.verification.clone(),
         ));
         let export_ready = Arc::new(ExportReadyNotifier::new(Arc::clone(&directory), Arc::clone(&codes)));
+        let account_revocation = Arc::new(AccountRevocation::new(
+            Arc::new(LogoutAllSessionsHandler::new(
+                Arc::new(PgSessionRepository::new(tx.clone())),
+                Arc::new(PgRefreshTokenRepository::new(tx.clone())),
+                Arc::new(RedisSessionCache::new(redis.clone())),
+                Arc::clone(&publisher),
+                config.policy.clone(),
+            )),
+            Arc::clone(&directory),
+        ));
         let deps = AppDeps {
             idp: Arc::new(KeycloakIdentityProvider::new(idp_client, config.keycloak)),
             credentials,
@@ -510,6 +523,7 @@ impl App {
             guest_retention,
             erasure,
             export_ready,
+            account_revocation,
         })
     }
 }

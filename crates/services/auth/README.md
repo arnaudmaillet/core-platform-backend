@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-0** — every authenticated request depends on tokens this service issues |
 > | **Deployable** | `crates/apps/auth-server` (library crate: `crates/services/auth`) |
 > | **Datastores** | PostgreSQL/CockroachDB (db `auth`) · Redis Cluster (sessions/blacklist) |
-> | **Async** | publishes `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked/AppAuthorized/AppAuthorizationRevoked) · consumes `account.v1.events` (`account_deleted` → GDPR erasure) |
+> | **Async** | publishes `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked/AppAuthorized/AppAuthorizationRevoked) · consumes `account.v1.events` (`account_deleted` → GDPR erasure; `account_suspended` / `account_deactivated` / `role_revoked` → sign-out everywhere) |
 > | **Upstream callers** | gateway / edge, end-user clients (login & refresh) |
 > | **Downstream deps** | Keycloak (IdP), `account` (gRPC, identity SoR), PostgreSQL, Redis Cluster |
 > | **SLO** | `<TODO: 99.95%>` avail · login p99 `<TODO>` · refresh p99 `<TODO>` |
@@ -33,9 +33,11 @@ The hard problem it solves is **authenticating hyperscale traffic without a data
 call**. A naive design checks a session table on every request and melts under load. `auth`
 resolves this with a **split-token model**: short-lived, locally-verifiable **edge tokens**
 (verified in pure CPU by the `auth-context` library in every downstream service) plus long-lived,
-server-side, single-use **refresh tokens** with mandatory rotation and reuse-detection. Instant
-global logout rides a per-session **generation** counter in Redis Cluster, so revocation is
-milliseconds — never a write amplified across every reader.
+server-side, single-use **refresh tokens** with mandatory rotation and reuse-detection. Global
+logout rides a per-session **generation** counter in Redis Cluster, so revocation is a single
+write — never a write amplified across every reader. Refresh and `Introspect` see it at once;
+services that verify edge tokens locally accept a revoked token until it expires
+(≤ `AUTH_ACCESS_TTL_SECS`) until the edge revocation check lands (#884).
 
 **Core objectives:** (1) no datastore read on the request hot path; (2) refresh-token reuse =
 compromise ⇒ revoke the whole session generation; (3) **100% IdP-agnostic** — the domain and
@@ -176,6 +178,19 @@ the subject **is** the address), and the guest it was before signing up with tha
 (every shard; index `idx_guest_principals_upgraded`). Idempotent: a replay deletes nothing more.
 Afterwards the identity is free: signing in with it again finds no account and may sign up.
 
+### Suspension, deactivation, revoked role (#884)
+
+The same consumer signs the account out everywhere on `account_suspended`, `account_deactivated`
+and `role_revoked` (`AccountRevocation`, the work `LogoutAllSessions` does): a new generation, then
+every active session revoked (reason `account_suspended` / `account_deactivated` / `role_revoked`,
+published as `auth.session_revoked`), blacklisted for the access-token lifetime, with its refresh
+tokens. A suspension or deactivation is acted on only while `account` still reports the account
+inactive: one reactivated by an admin, or resumed by its holder signing back in, since the event
+keeps its new sessions; when `account` cannot be asked, the account is signed out anyway (fail closed). A revoked role is always acted on, so the
+permissions it granted die with the tokens that carried them, not at the next refresh. Already
+minted access tokens are refused by `Refresh` and `Introspect` at once and elsewhere at `exp` until
+the edge revocation check lands.
+
 ### Credentials and step-up
 
 The password lives at the IdP only. `ChangePassword` (edge **authenticated**, members) proves the
@@ -314,8 +329,9 @@ Keycloak type leaks above `infrastructure`.
 ```
 
 **Split-token hot path.** 99% of API calls = signature verify only, no I/O. Revocation is a
-`generation` bump written through to `auth:sess:{account}:gen` in Redis; an edge token carrying a
-stale `gen` is rejected. Only `/refresh` (low QPS) touches PostgreSQL.
+`generation` bump written through to `auth:sess:{account}:gen` in Redis; `Refresh` and `Introspect`
+reject an edge token carrying a stale `gen` (the local-verification edge does not yet, #884). Only
+`/refresh` (low QPS) touches PostgreSQL.
 
 > **Invariants** (and where enforced): edge-token TTL ⊆ session TTL ⊆ absolute cap; refresh
 > rotation is mandatory + single-use, and reuse revokes the whole generation (enforced in the
