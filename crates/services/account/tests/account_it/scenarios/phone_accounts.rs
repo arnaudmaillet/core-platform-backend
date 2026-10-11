@@ -16,7 +16,6 @@ fn phone_only(identity: &str, phone: &str) -> Envelope<CreateAccountCommand> {
         identity_id: identity.to_owned(),
         email: String::new(),
         phone: Some(phone.to_owned()),
-        password_hash: None,
         country_of_residence: Some("FR".to_owned()),
         role: None,
         created_by: None,

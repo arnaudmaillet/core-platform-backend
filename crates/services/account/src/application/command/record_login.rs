@@ -7,8 +7,7 @@ use crate::application::command::helpers::load_account;
 use crate::application::port::AccountRepository;
 use crate::error::AccountError;
 
-/// Records a successful login: resets failed-attempt counter, clears lockout,
-/// and updates `last_login_at`.
+/// Records a successful sign-in: updates `last_login_at`.
 #[derive(Debug, Clone)]
 pub struct RecordLoginCommand {
     pub account_id: String,

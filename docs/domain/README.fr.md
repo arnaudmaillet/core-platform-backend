@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 03bb53776b15296935ab5bcfbd8055e097aaf44791d06ba2a303604676fc2478
-  translated_at: 2026-10-08
+  source_sha256: 65ff204ecbb14bf4676964273d055b39ab90605ab1210957e71f8828079424e6
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -57,7 +57,7 @@ TIER-2 conserve CORE plus des sections DEEP réduites à une ligne.
 |---|---|---|---|
 | `account` | Account / Identity SoR | [`crates/services/account/docs/DOMAIN.md`](../../crates/services/account/docs/DOMAIN.md) | ✅ |
 | `audit` | Preuve de conformité infalsifiable | [`crates/services/audit/docs/DOMAIN.md`](../../crates/services/audit/docs/DOMAIN.md) | ✅ |
-| `auth` | Authentification / session / courtier IdP | [`crates/services/auth/docs/DOMAIN.md`](../../crates/services/auth/docs/DOMAIN.md) | ✅ |
+| `auth` | Authentification / session (sans mot de passe : id_tokens, codes, passkeys) | [`crates/services/auth/docs/DOMAIN.md`](../../crates/services/auth/docs/DOMAIN.md) | ✅ |
 | `chat` | Conversations & messagerie | [`crates/services/chat/docs/DOMAIN.md`](../../crates/services/chat/docs/DOMAIN.md) | ✅ |
 | `comment` | Fils de commentaires | [`crates/services/comment/docs/DOMAIN.md`](../../crates/services/comment/docs/DOMAIN.md) | ✅ |
 | `counter` | Compteurs / SoReference analytique | [`crates/services/counter/docs/DOMAIN.md`](../../crates/services/counter/docs/DOMAIN.md) | ✅ |

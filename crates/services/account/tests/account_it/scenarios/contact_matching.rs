@@ -49,7 +49,6 @@ async fn verified_contacts_of_active_accounts_match_their_hash() {
             identity_id: identity.clone(),
             email: String::new(),
             phone: Some(phone.clone()),
-            password_hash: None,
             country_of_residence: Some("FR".to_owned()),
             role: None,
             created_by: None,

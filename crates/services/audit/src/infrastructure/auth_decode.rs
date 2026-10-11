@@ -315,7 +315,7 @@ mod tests {
             "type": "session_issued",
             "session_id": "11111111-1111-1111-1111-111111111111",
             "account_id": "22222222-2222-2222-2222-222222222222",
-            "subject": { "provider": "keycloak", "subject": "kc-abc" },
+            "subject": { "issuer": "https://appleid.apple.com", "subject": "apple-abc" },
             "generation": 3,
             "issued_at": "2026-06-26T12:00:00Z",
             "expires_at": "2026-06-26T13:00:00Z",

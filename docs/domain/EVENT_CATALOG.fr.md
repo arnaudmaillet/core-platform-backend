@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: dcf688e07b715908a0900acd6806e0a5f69994c3fe30a89f72d76a4ef81feb24
+  source_sha256: 4d2232838558ab335517f7596213f1922e9854da13e9777bcca1bd4662f3b756
   translated_at: 2026-10-11
   status: complete
 ---
@@ -91,7 +91,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | Événement | Signifie (fait métier au passé) | Émis quand | Consommateurs & pourquoi |
 |---|---|---|---|
 | `account_created` / `email_changed` / `email_verified` / `phone_changed` | un fait de cycle de vie de compte porteur de PII s'est produit | la commande correspondante commite | `audit` (PII scellée en enveloppe crypto-shred), `profile` (persona) |
-| `password_changed` / `mfa_enrolled` / `mfa_revoked` | un fait sécurité/identifiant (sans PII) | changement d'identifiant | `audit` (catégorie Authentication) |
+| `password_changed` / `mfa_enrolled` / `mfa_revoked` | un fait sécurité/identifiant (sans PII) ; `password_changed` n'est **plus émis** (#881 : plus de mots de passe) — conservé tant qu'audit le décode | changement d'identifiant | `audit` (catégorie Authentication) |
 | `activated` / `deactivated` / `suspended` / `deleted` / `kyc_status_changed` | une transition du cycle de vie de l'identité (`deleted` : anonymisé par le janitor RGPD, ou suppression admin) | changement de cycle de vie | `audit` (Identity ; `deleted` → **crypto-shred du sujet**, ferme la boucle Art. 17), `profile`, `wallet` (`deleted` → efface le wallet), `engagement` (`deleted` → oublie qui a liké, les compteurs de likes gardés, #665) |
 | `role_assigned` / `role_revoked` | un octroi d'autorisation a changé | octroi/révocation de rôle | `audit` (Authorization) |
 | `gdpr_deletion_requested` | le droit à l'effacement (Art. 17) a été invoqué ; effacement programmé à 30 jours (un compte actif est désactivé entre-temps) | demande utilisateur/DPO | `audit` (preuve DataErasure) |
@@ -108,7 +108,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 |---|---|---|---|
 | `session_issued` | une session authentifiée a été établie | connexion / émission de token | `audit` (Authentication) |
 | `session_revoked` | une session a été invalidée | déconnexion / révocation / bump de génération | `audit` (Authentication) |
-| `subject_linked` | un sujet IdP a été lié à un compte | flux de liaison de compte | interne |
+| `subject_linked` | une identité de connexion (un sujet Apple / Google, une adresse e-mail ou un numéro de téléphone) a été liée à un compte | `SignUp` ; `ChangeContact` qui re-clé une identité par code | interne |
 | `staff_enrollment_granted` | une autorisation d'enrôlement de passkey staff a été émise (#880 ; `granted_by` absent pour le bootstrap ponctuel ; l'autorisation elle-même ne quitte jamais auth) | `IssueStaffPasskeyEnrollment` / `auth-server bootstrap-staff` | `audit` (PrivilegedAction) |
 | `staff_passkey_enrolled` | une passkey est devenue passkey staff avec une autorisation (#880) : les sessions ouvertes avec elle portent les permissions staff | `FinishPasskeyRegistration` avec une autorisation | `audit` (PrivilegedAction) |
 

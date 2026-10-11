@@ -21,10 +21,9 @@ use crate::application::command::{
     AnonymizeAccountCommand, AnonymizeAccountHandler, AssignRoleCommand, AssignRoleHandler,
     CancelGdprDeletionCommand, CancelGdprDeletionHandler, SetDateOfBirthCommand,
     SetDateOfBirthHandler,
-    ChangePasswordCommand, ChangePasswordHandler, CreateAccountCommand, CreateAccountHandler,
+    CreateAccountCommand, CreateAccountHandler,
     DeactivateAccountCommand, DeactivateAccountHandler, EnrollMfaCommand, EnrollMfaHandler,
-    ReactivateAccountCommand, ReactivateAccountHandler, RecordFailedLoginCommand,
-    RecordFailedLoginHandler, RecordLoginCommand, RecordLoginHandler, RequestDataExportCommand,
+    ReactivateAccountCommand, ReactivateAccountHandler, RecordLoginCommand, RecordLoginHandler, RequestDataExportCommand,
     RequestDataExportHandler, RequestGdprDeletionCommand, RequestGdprDeletionHandler,
     ResumeDeactivatedAccountCommand, ResumeDeactivatedAccountHandler,
     ConsumeRecoveryCodeCommand, ConsumeRecoveryCodeHandler, ReplaceRecoveryCodesCommand, ReplaceRecoveryCodesHandler,
@@ -110,7 +109,6 @@ impl App {
                 .register::<VerifyPhoneCommand, _>(VerifyPhoneHandler::new(Arc::clone(&repository)))?
                 .register::<ChangeEmailCommand, _>(ChangeEmailHandler::new(Arc::clone(&repository)))?
                 .register::<ChangePhoneCommand, _>(ChangePhoneHandler::new(Arc::clone(&repository)))?
-                .register::<ChangePasswordCommand, _>(ChangePasswordHandler::new(Arc::clone(&repository)))?
                 .register::<EnrollMfaCommand, _>(EnrollMfaHandler::new(Arc::clone(&repository)))?
                 .register::<RevokeMfaCommand, _>(RevokeMfaHandler::new(Arc::clone(&repository)))?
                 .register::<ConsumeRecoveryCodeCommand, _>(ConsumeRecoveryCodeHandler::new(Arc::clone(&repository)))?
@@ -121,7 +119,6 @@ impl App {
                 .register::<DeactivateAccountCommand, _>(DeactivateAccountHandler::new(Arc::clone(&repository)))?
                 .register::<ResumeDeactivatedAccountCommand, _>(ResumeDeactivatedAccountHandler::new(Arc::clone(&repository)))?
                 .register::<RecordLoginCommand, _>(RecordLoginHandler::new(Arc::clone(&repository)))?
-                .register::<RecordFailedLoginCommand, _>(RecordFailedLoginHandler::new(Arc::clone(&repository)))?
                 .register::<RequestGdprDeletionCommand, _>(RequestGdprDeletionHandler::new(Arc::clone(&repository)))?
                 .register::<AnonymizeAccountCommand, _>(AnonymizeAccountHandler::new(Arc::clone(&repository)))?
                 .register::<RequestDataExportCommand, _>(RequestDataExportHandler::new(Arc::clone(&repository)))?

@@ -77,8 +77,8 @@ impl ExportDueData {
     }
 }
 
-/// The holder's own account record, without anything secret (no password
-/// hash, no MFA material) or internal (version, permission overrides).
+/// The holder's own account record, without anything secret (no MFA
+/// material) or internal (version, permission overrides).
 fn account_record(account: &Account) -> serde_json::Value {
     let gdpr = account.gdpr();
     json!({

@@ -7,7 +7,7 @@ use crate::application::port::AccountRepository;
 use crate::domain::aggregate::{Account, AccountCreateParams};
 use crate::domain::value_object::{
     check_date_of_birth, AccountId, AccountRole, CountryCode, EmailAddress, IdentityId,
-    PasswordHash, PhoneNumber,
+    PhoneNumber,
 };
 use crate::error::AccountError;
 
@@ -18,8 +18,6 @@ pub struct CreateAccountCommand {
     pub identity_id: String,
     pub email: String,
     pub phone: Option<String>,
-    /// Pre-hashed password (Argon2id); `None` for SSO-only accounts.
-    pub password_hash: Option<String>,
     /// ISO 3166-1 alpha-2 country code; optional at creation.
     pub country_of_residence: Option<String>,
     /// Role variant name (e.g. `"user"`); defaults to `User` if absent.
@@ -137,8 +135,6 @@ impl CommandHandler<CreateAccountCommand> for CreateAccountHandler {
         {
             return Err(AccountError::PhoneAlreadyRegistered);
         }
-        let password_hash = cmd.password_hash.as_deref().map(PasswordHash::from_hash);
-
         let country_of_residence = cmd
             .country_of_residence
             .as_deref()
@@ -180,7 +176,6 @@ impl CommandHandler<CreateAccountCommand> for CreateAccountHandler {
             identity_id,
             email,
             phone,
-            password_hash,
             role,
             country_of_residence,
             created_by,

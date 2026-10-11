@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: eaeb5b6b09b1493b3807ca8272921a5f703a78d7958d615d8446158154f08395
+  source_sha256: f4cee3c07d9e1238e9fae3b36432231764f95e1a57cdeab3032314a4e3dd7c2f
   translated_at: 2026-10-11
   status: complete
 ---
@@ -15,15 +15,15 @@ i18n:
 >
 > | | |
 > |---|---|
-> | **Bounded Context** | Authentication — émission de sessions, refresh et courtage IdP |
-> | **Classe de sous-domaine** | **Supporting** — capacité de sécurité nécessaire ; s'appuie en partie sur un IdP fédéré (Keycloak) mais le modèle edge-token / génération de session est sur-mesure |
+> | **Bounded Context** | Authentication — vérification des identifiants, émission de sessions, refresh et révocation |
+> | **Classe de sous-domaine** | **Supporting** — capacité de sécurité nécessaire ; s'appuie sur des identifiants standard (id_tokens Apple / Google, codes à usage unique, passkeys WebAuthn) vérifiés en interne ; le modèle edge-token / génération de session est sur-mesure |
 > | **System of …** | **Record** pour les sessions et refresh tokens (pas pour le compte utilisateur — c'est `account`) |
 > | **Racine(s) d'agrégat** | `Session`, `RefreshToken` (`domain`) |
 > | **Tier** | **TIER-0** |
 > | **Posture de défaillance** | **Fail-closed** — pas de session/token valide, pas d'accès |
-> | **Contextes amont** | flux de connexion utilisateur ; IdP fédéré (Keycloak) ; `account` (lien sujet ↔ compte) |
+> | **Contextes amont** | flux de connexion utilisateur ; Apple / Google (clés publiées des id_tokens) ; `account` (lien sujet ↔ compte) |
 > | **Contextes aval** | chaque service via la bibliothèque de vérification `auth-context` ; `realtime` (vérif edge-token au handshake) ; `audit` (`auth.v1.events`) |
-> | **Journal de décisions** | [`ADR-0005`](../../../../docs/adr/0005-auth-federated-idp-with-platform-edge-tokens.md) |
+> | **Journal de décisions** | [`ADR-0005`](../../../../docs/adr/0005-auth-federated-idp-with-platform-edge-tokens.md) · [`ADR-0018`](../../../../docs/adr/0018-passwordless-identity-passkeys-for-staff.md) |
 
 ---
 
@@ -33,15 +33,22 @@ i18n:
 **« cet appelant est-il bien celui qu'il prétend être en ce moment, et cette session est-elle encore
 valide ? »** — en émettant des edge tokens ES256 courts et en gérant le cycle de refresh.
 
-**Le problème difficile.** Fédérer un IdP externe tout en émettant les propres edge tokens rapides
-(stateless-à-vérifier) de la plateforme — et pouvoir **révoquer** instantanément malgré l'absence
-d'état. Le mécanisme de résolution est une `Generation` monotone par-sujet qui invalide les familles
-de tokens.
+**Le problème difficile.** Émettre les propres edge tokens rapides (stateless-à-vérifier) de la
+plateforme — et pouvoir **révoquer** instantanément malgré l'absence d'état. Le mécanisme de
+résolution est une `Generation` monotone par-sujet qui invalide les familles de tokens.
+
+**Sans mot de passe (#881, ADR-0018).** Personne ne se connecte par mot de passe et il n'y a pas
+d'IdP externe : auth vérifie lui-même chaque identifiant — un id_token Apple / Google natif (contre
+les clés publiées du fournisseur, avec un nonce émis par le serveur), un code à usage unique envoyé à
+une adresse e-mail ou un téléphone, ou une passkey. Les autorisations staff n'existent que dans les
+sessions ouvertes avec une passkey enrôlée staff (#880). `Login` ne crée jamais de compte ni de lien
+d'identité : une identité sans compte donne `AUT-6004` et part vers `SignUp`.
 
 **Non-objectifs — ce que ce contexte ne fait délibérément PAS :**
 - ❌ Posséder le compte utilisateur / la PII → `account` est le SoR.
 - ❌ Vérifier les tokens en process pour chaque service → c'est la bibliothèque `auth-context` (une vérification, pas un appel).
 - ❌ Autoriser les actions métier → il authentifie ; les services autorisent via permissions/`auth-context`.
+- ❌ Stocker ou vérifier des mots de passe → il n'y en a aucun (#881) ; aucun flux de réinitialisation ou de changement de mot de passe n'existe.
 
 ---
 
@@ -53,10 +60,12 @@ de tokens.
 | Refresh token | L'identifiant longue durée qui frappe des access tokens | `RefreshToken`, `RefreshTokenId`, `RefreshTokenHash` |
 | Access token claims | La charge utile de l'edge token ES256 | `AccessTokenClaims` |
 | Generation | Compteur monotone par-sujet ; l'incrémenter révoque une famille de tokens | `Generation` |
-| IdP subject | L'identifiant de sujet du fournisseur d'identité fédéré | `IdpSubject`, `SubjectLink` |
+| Identity subject | Une identité de connexion `(issuer, subject)` : un sujet Apple / Google, ou une adresse e-mail / un numéro de téléphone sous `urn:core-platform:email` / `urn:core-platform:phone` (nom de type historique) | `IdpSubject`, `SubjectLink` |
 | Device fingerprint | Liaison par-appareil pour une session | `DeviceFingerprint` |
 | Permission | Un octroi d'autorisation porté dans les claims | `Permission` |
 | Revocation reason | Pourquoi une session/token a été révoquée | `RevocationReason` |
+| Credential | Ce que présente une connexion : un id_token, un code à usage unique ou une assertion de passkey — jamais un mot de passe | `AuthnGrant` |
+| Staff passkey | Une passkey enrôlée avec une autorisation d'enrôlement staff ; le seul chemin vers une session portant des autorisations staff | `StaffGrant`, `StaffEnrollmentGrants` (port) |
 
 ---
 
@@ -68,7 +77,7 @@ de tokens.
 | `RefreshToken` | racine d'agrégat | Rotation de token ; un refresh token utilisé ne peut être réutilisé |
 | `AccessTokenClaims` | VO | Le contrat de l'edge token signé |
 | `Generation` | VO | Monotone par-sujet ; le levier de révocation instantanée |
-| `SubjectLink` | VO | Liaison sujet IdP ↔ `AccountId` |
+| `SubjectLink` | VO | Liaison sujet d'identité ↔ `AccountId` (créée au `SignUp`, jamais au `Login`) |
 
 **Cycle de vie de session :**
 
@@ -90,7 +99,7 @@ issued --(refresh: rotate)--> issued' --(revoke / generation-bump / expiry)--> r
 
 | Donnée copiée | Possédée par | Maintenue fraîche via | Tolérance d'obsolescence |
 |---|---|---|---|
-| Lien compte ↔ sujet IdP | `account` / IdP | flux de liaison | au moment de la liaison |
+| Lien compte ↔ sujet d'identité | `account` (le compte) / auth (le lien) | `SignUp`, `ChangeContact` | au moment de la liaison |
 
 **La liste « ne-pas-écrire » :** auth ne mute jamais l'état du compte et ne stocke aucune donnée de profil/métier.
 
@@ -114,7 +123,8 @@ issued --(refresh: rotate)--> issued' --(revoke / generation-bump / expiry)--> r
 
 > En ligne jusqu'à ce qu'un C4 corrigé soit régénéré depuis `docs/domain/`.
 
-**Émission.** Connexion (IdP fédéré vérifié) → créer `Session` + `RefreshToken`, frapper un access
+**Émission.** Connexion (identifiant vérifié par auth : id_token, code ou passkey ; l'identité doit
+déjà avoir un compte) → créer `Session` + `RefreshToken`, frapper un access
 token ES256, persister, et émettre `session_issued` sur `auth.v1.events`.
 
 **Refresh (rotation).** Présenter le refresh token → valider + tourner (l'ancien invalidé) → frapper
@@ -130,14 +140,15 @@ ensuite.
 
 | Contexte voisin | Direction | Pattern | Mécanisme | Ce qui casse s'il change |
 |---|---|---|---|---|
-| IdP fédéré (Keycloak) | amont | Conformist | OIDC/identifiants | la connexion casse |
+| Apple / Google | amont | Conformist | JWKS publiés ; id_tokens natifs | leur connexion casse (codes, passkeys intacts) |
 | `account` | pair | Customer/Supplier | `SubjectLink` ↔ `AccountId` | résolution du sujet |
 | tous les services | aval | Open-Host Service (Published Language) | edge token ES256 vérifié par `auth-context` | tout appel authentifié casse |
 | `realtime` | aval | Conformist (verify-only) | vérif edge-token au handshake WS | les nouvelles connexions ne peuvent s'authentifier |
 | `audit` | aval | Published Language | `auth.v1.events` | la preuve du cycle de vie des sessions casse |
 
-> **Anti-Corruption Layer :** l'adaptateur IdP-fédéré traduit les claims OIDC externes vers le modèle
-> interne `Session` / `AccessTokenClaims`.
+> **Anti-Corruption Layer :** l'adaptateur `FederatedTokenVerifier` traduit les claims de l'id_token
+> d'un fournisseur en un sujet d'identité interne ; rien de propre au fournisseur n'atteint le modèle
+> `Session` / `AccessTokenClaims`.
 
 ---
 
@@ -147,7 +158,7 @@ ensuite.
 |---|---|---|---|
 | `session_issued` | une session authentifiée a été établie | connexion / émission de token | `audit` (Authentication) |
 | `session_revoked` | une session a été invalidée | déconnexion / révocation / bump de génération | `audit` (Authentication) |
-| `subject_linked` | un sujet IdP a été lié à un compte | flux de liaison de compte | (interne) |
+| `subject_linked` | une identité de connexion a été liée à un compte | `SignUp` ; `ChangeContact` qui re-clé une identité par code | (interne) |
 | `staff_enrollment_granted` | une autorisation d'enrôlement de passkey staff a été émise (par un admin, ou le bootstrap) | `IssueStaffPasskeyEnrollment` / `auth-server bootstrap-staff` | `audit` (PrivilegedAction) |
 | `staff_passkey_enrolled` | une passkey est devenue passkey staff avec une autorisation | `FinishPasskeyRegistration` avec une autorisation | `audit` (PrivilegedAction) |
 
@@ -157,14 +168,15 @@ ensuite.
 
 | Décision | ADR | Statut |
 |---|---|---|
-| Identifiants Keycloak fédérés + edge tokens ES256 sur-mesure ; distinct de `account` (SoR) et `auth-context` (lib de vérif) | [`ADR-0005`](../../../../docs/adr/0005-auth-federated-idp-with-platform-edge-tokens.md) | Accepté |
+| Identifiants par IdP fédéré + edge tokens ES256 sur-mesure ; distinct de `account` (SoR) et `auth-context` (lib de vérif) | [`ADR-0005`](../../../../docs/adr/0005-auth-federated-idp-with-platform-edge-tokens.md) | Accepté — partie IdP fédéré remplacée par l'ADR-0018 |
+| Sans mot de passe : auth vérifie lui-même chaque identifiant (Apple / Google, codes, passkeys) ; le staff uniquement par passkeys staff | [`ADR-0018`](../../../../docs/adr/0018-passwordless-identity-passkeys-for-staff.md) | Accepté |
 | Révocation instantanée via `Generation` monotone par-sujet malgré des tokens stateless | [`ADR-0005`](../../../../docs/adr/0005-auth-federated-idp-with-platform-edge-tokens.md) | Accepté |
 
 ---
 
 ## 10. Classification de Sous-domaine & Évolution
 
-- **Classification :** Supporting — critique pour la sécurité, fédère un IdP générique, sur-mesure seulement à la couche edge-token/session.
-- **Volatilité :** faible-à-moyenne — guidée par la posture de sécurité et les changements d'IdP.
+- **Classification :** Supporting — critique pour la sécurité ; identifiants standard vérifiés en interne, sur-mesure à la couche edge-token/session.
+- **Volatilité :** faible-à-moyenne — guidée par la posture de sécurité et les changements de fournisseurs de connexion.
 - **Dette de modélisation connue :** rien de matériel consigné.
-- **Capacités différées :** surfaces de gestion d'appareils/sessions plus riches. Le step-up par mot de passe, code de deux étapes ou passkey (`VerifyCredentials` → `auth_time`), la connexion en deux étapes (#649) et les passkeys (#808 : enregistrement, et connexion comme premier facteur, seconde étape ou step-up) sont en service.
+- **Capacités différées :** surfaces de gestion d'appareils/sessions plus riches. Le step-up par code de deux étapes ou passkey (`VerifyCredentials` → `auth_time` ; une session staff avec sa passkey uniquement), la connexion en deux étapes (#649), les passkeys (#808 : enregistrement, et connexion comme premier facteur, seconde étape ou step-up) et les passkeys staff (#880) sont en service. Les mots de passe et l'IdP externe ont été retirés (#881).

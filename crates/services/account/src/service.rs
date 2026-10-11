@@ -56,7 +56,6 @@ impl Service for AccountService {
     // auth-plane writes too: they carry no proof, so only auth calls them, once
     // the holder proved the address (a verified id_token or a one-time code).
     const EDGE_POLICY: EdgePolicy = &[
-        authenticated("/account.v1.AccountService/ChangePassword"),
         authenticated("/account.v1.AccountService/DeactivateAccount"),
         authenticated("/account.v1.AccountService/RequestGdprDeletion"),
         authenticated("/account.v1.AccountService/CancelGdprDeletion"),

@@ -72,10 +72,6 @@ impl AccountRepository for PgAccountRepository {
         let p_phone              = account.phone().map(|p| p.as_str().to_owned());
         let p_phone_verified     = account.phone_verified();
         let p_phone_verified_at  = account.phone_verified_at();
-        let p_password_hash      = account.password_hash().map(|h| h.as_str().to_owned());
-        let p_password_changed   = account.password_changed_at();
-        let p_failed_logins      = account.failed_login_attempts() as i16;
-        let p_locked_until       = account.locked_until();
         let p_last_login         = account.last_login_at();
         let p_kyc_status         = account.kyc_status().as_str().to_owned();
         let p_kyc_reviewed_at    = account.kyc_reviewed_at();
@@ -136,8 +132,7 @@ impl AccountRepository for PgAccountRepository {
                                 id, identity_id, status, suspension_reason, deactivated_at,
                                 email, email_verified, email_verified_at,
                                 phone, phone_verified, phone_verified_at,
-                                password_hash, password_changed_at,
-                                failed_login_attempts, locked_until, last_login_at,
+                                last_login_at,
                                 mfa_enforced, mfa_totp_secret, mfa_totp_enrolled_at,
                                 mfa_recovery_codes, mfa_backup_verified_at,
                                 kyc_status, kyc_reviewed_at, kyc_reviewer_id,
@@ -154,8 +149,7 @@ impl AccountRepository for PgAccountRepository {
                             ) VALUES (
                                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
                                 $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-                                $31,$32,$33,$34,$35,$36,$37,
-                                $38,$39,$40,$41,$42,$43,$44
+                                $31,$32,$33,$34,$35,$36,$37,$38,$39,$40
                             )
                             "#,
                         )
@@ -170,39 +164,35 @@ impl AccountRepository for PgAccountRepository {
                         .bind(p_phone)               // $9
                         .bind(p_phone_verified)      // $10
                         .bind(p_phone_verified_at)   // $11
-                        .bind(p_password_hash)       // $12
-                        .bind(p_password_changed)    // $13
-                        .bind(p_failed_logins)       // $14
-                        .bind(p_locked_until)        // $15
-                        .bind(p_last_login)          // $16
-                        .bind(p_mfa_enforced)        // $17
-                        .bind(p_mfa_totp_secret)     // $18
-                        .bind(p_mfa_enrolled_at)     // $19
-                        .bind(&p_recovery_codes)     // $20
-                        .bind(p_mfa_backup_at)       // $21
-                        .bind(p_kyc_status)          // $22
-                        .bind(p_kyc_reviewed_at)     // $23
-                        .bind(p_kyc_reviewer_id)     // $24
-                        .bind(p_date_of_birth)       // $25
-                        .bind(p_country)             // $26
-                        .bind(p_gdpr_processing_at)  // $27
-                        .bind(p_gdpr_marketing_at)   // $28
-                        .bind(p_gdpr_consent_ip)     // $29
-                        .bind(p_gdpr_consent_ver)    // $30
-                        .bind(p_gdpr_deletion_req)   // $31
-                        .bind(p_gdpr_deletion_sched) // $32
-                        .bind(p_gdpr_anonymized)     // $33
-                        .bind(p_gdpr_export_req)     // $34
-                        .bind(p_gdpr_export_done)    // $35
-                        .bind(&p_roles)              // $36
-                        .bind(&p_perms)              // $37
-                        .bind(1i64)                  // $38  version starts at 1 after first save
-                        .bind(p_created_at)          // $39
-                        .bind(p_updated_at)          // $40
-                        .bind(p_created_by)          // $41
-                        .bind(p_gdpr_analytics_at)   // $42
-                        .bind(p_gdpr_export_key.clone())     // $43
-                        .bind(p_gdpr_export_expires) // $44
+                        .bind(p_last_login)          // $12
+                        .bind(p_mfa_enforced)        // $13
+                        .bind(p_mfa_totp_secret)     // $14
+                        .bind(p_mfa_enrolled_at)     // $15
+                        .bind(&p_recovery_codes)     // $16
+                        .bind(p_mfa_backup_at)       // $17
+                        .bind(p_kyc_status)          // $18
+                        .bind(p_kyc_reviewed_at)     // $19
+                        .bind(p_kyc_reviewer_id)     // $20
+                        .bind(p_date_of_birth)       // $21
+                        .bind(p_country)             // $22
+                        .bind(p_gdpr_processing_at)  // $23
+                        .bind(p_gdpr_marketing_at)   // $24
+                        .bind(p_gdpr_consent_ip)     // $25
+                        .bind(p_gdpr_consent_ver)    // $26
+                        .bind(p_gdpr_deletion_req)   // $27
+                        .bind(p_gdpr_deletion_sched) // $28
+                        .bind(p_gdpr_anonymized)     // $29
+                        .bind(p_gdpr_export_req)     // $30
+                        .bind(p_gdpr_export_done)    // $31
+                        .bind(&p_roles)              // $32
+                        .bind(&p_perms)              // $33
+                        .bind(1i64)                  // $34  version starts at 1 after first save
+                        .bind(p_created_at)          // $35
+                        .bind(p_updated_at)          // $36
+                        .bind(p_created_by)          // $37
+                        .bind(p_gdpr_analytics_at)   // $38
+                        .bind(p_gdpr_export_key.clone())     // $39
+                        .bind(p_gdpr_export_expires) // $40
                         .execute(&mut **tx)
                         .await
                         .map(|_| ())
@@ -217,7 +207,7 @@ impl AccountRepository for PgAccountRepository {
             // pre-mutation value: CAS on version() - 1 — the same convention as
             // auth's session/refresh repos and profile's LWT. Binding version()
             // itself made EVERY mutation on EVERY account abort with
-            // ConcurrentModification (found by the prod Keycloak E2E drill:
+            // ConcurrentModification (found by the prod E2E login drill:
             // VerifyEmail could never activate an account).
             let expected_version = account.version() - 1;
 
@@ -236,38 +226,34 @@ impl AccountRepository for PgAccountRepository {
                                 phone = $8,
                                 phone_verified = $9,
                                 phone_verified_at = $10,
-                                password_hash = $11,
-                                password_changed_at = $12,
-                                failed_login_attempts = $13,
-                                locked_until = $14,
-                                last_login_at = $15,
-                                mfa_enforced = $16,
-                                mfa_totp_secret = $17,
-                                mfa_totp_enrolled_at = $18,
-                                mfa_recovery_codes = $19,
-                                mfa_backup_verified_at = $20,
-                                kyc_status = $21,
-                                kyc_reviewed_at = $22,
-                                kyc_reviewer_id = $23,
-                                date_of_birth = $24,
-                                country_of_residence = $25,
-                                gdpr_data_processing_consented_at = $26,
-                                gdpr_marketing_consented_at = $27,
-                                gdpr_consent_ip = $28,
-                                gdpr_last_consent_version = $29,
-                                gdpr_deletion_requested_at = $30,
-                                gdpr_deletion_scheduled_at = $31,
-                                gdpr_anonymized_at = $32,
-                                gdpr_data_export_requested_at = $33,
-                                gdpr_data_export_completed_at = $34,
-                                roles = $35,
-                                permission_overrides = $36,
-                                gdpr_analytics_consented_at = $38,
-                                gdpr_data_export_key = $39,
-                                gdpr_data_export_expires_at = $40,
+                                last_login_at = $11,
+                                mfa_enforced = $12,
+                                mfa_totp_secret = $13,
+                                mfa_totp_enrolled_at = $14,
+                                mfa_recovery_codes = $15,
+                                mfa_backup_verified_at = $16,
+                                kyc_status = $17,
+                                kyc_reviewed_at = $18,
+                                kyc_reviewer_id = $19,
+                                date_of_birth = $20,
+                                country_of_residence = $21,
+                                gdpr_data_processing_consented_at = $22,
+                                gdpr_marketing_consented_at = $23,
+                                gdpr_consent_ip = $24,
+                                gdpr_last_consent_version = $25,
+                                gdpr_deletion_requested_at = $26,
+                                gdpr_deletion_scheduled_at = $27,
+                                gdpr_anonymized_at = $28,
+                                gdpr_data_export_requested_at = $29,
+                                gdpr_data_export_completed_at = $30,
+                                roles = $31,
+                                permission_overrides = $32,
+                                gdpr_analytics_consented_at = $34,
+                                gdpr_data_export_key = $35,
+                                gdpr_data_export_expires_at = $36,
                                 version = version + 1,
                                 updated_at = NOW()
-                            WHERE id = $1 AND version = $37
+                            WHERE id = $1 AND version = $33
                             "#,
                         )
                         .bind(id.as_uuid())         // $1
@@ -280,36 +266,32 @@ impl AccountRepository for PgAccountRepository {
                         .bind(p_phone)              // $8
                         .bind(p_phone_verified)     // $9
                         .bind(p_phone_verified_at)  // $10
-                        .bind(p_password_hash)      // $11
-                        .bind(p_password_changed)   // $12
-                        .bind(p_failed_logins)      // $13
-                        .bind(p_locked_until)       // $14
-                        .bind(p_last_login)         // $15
-                        .bind(p_mfa_enforced)       // $16
-                        .bind(p_mfa_totp_secret)    // $17
-                        .bind(p_mfa_enrolled_at)    // $18
-                        .bind(&p_recovery_codes)    // $19
-                        .bind(p_mfa_backup_at)      // $20
-                        .bind(p_kyc_status)         // $21
-                        .bind(p_kyc_reviewed_at)    // $22
-                        .bind(p_kyc_reviewer_id)    // $23
-                        .bind(p_date_of_birth)      // $24
-                        .bind(p_country)            // $25
-                        .bind(p_gdpr_processing_at) // $26
-                        .bind(p_gdpr_marketing_at)  // $27
-                        .bind(p_gdpr_consent_ip)    // $28
-                        .bind(p_gdpr_consent_ver)   // $29
-                        .bind(p_gdpr_deletion_req)  // $30
-                        .bind(p_gdpr_deletion_sched)// $31
-                        .bind(p_gdpr_anonymized)    // $32
-                        .bind(p_gdpr_export_req)    // $33
-                        .bind(p_gdpr_export_done)   // $34
-                        .bind(&p_roles)             // $35
-                        .bind(&p_perms)             // $36
-                        .bind(expected_version)     // $37
-                        .bind(p_gdpr_analytics_at)  // $38
-                        .bind(p_gdpr_export_key)    // $39
-                        .bind(p_gdpr_export_expires) // $40
+                        .bind(p_last_login)         // $11
+                        .bind(p_mfa_enforced)       // $12
+                        .bind(p_mfa_totp_secret)    // $13
+                        .bind(p_mfa_enrolled_at)    // $14
+                        .bind(&p_recovery_codes)    // $15
+                        .bind(p_mfa_backup_at)      // $16
+                        .bind(p_kyc_status)         // $17
+                        .bind(p_kyc_reviewed_at)    // $18
+                        .bind(p_kyc_reviewer_id)    // $19
+                        .bind(p_date_of_birth)      // $20
+                        .bind(p_country)            // $21
+                        .bind(p_gdpr_processing_at) // $22
+                        .bind(p_gdpr_marketing_at)  // $23
+                        .bind(p_gdpr_consent_ip)    // $24
+                        .bind(p_gdpr_consent_ver)   // $25
+                        .bind(p_gdpr_deletion_req)  // $26
+                        .bind(p_gdpr_deletion_sched)// $27
+                        .bind(p_gdpr_anonymized)    // $28
+                        .bind(p_gdpr_export_req)    // $29
+                        .bind(p_gdpr_export_done)   // $30
+                        .bind(&p_roles)             // $31
+                        .bind(&p_perms)             // $32
+                        .bind(expected_version)     // $33
+                        .bind(p_gdpr_analytics_at)  // $34
+                        .bind(p_gdpr_export_key)    // $35
+                        .bind(p_gdpr_export_expires) // $36
                         .execute(&mut **tx)
                         .await
                         .map_err(|e| AccountError::Storage(StorageError::from(e)))?

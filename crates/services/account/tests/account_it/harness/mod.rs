@@ -130,7 +130,6 @@ pub async fn dispatch_create(
         identity_id,
         email,
         phone:                None,
-        password_hash:        None,
         country_of_residence: None,
         role:                 None,
         created_by:           None,

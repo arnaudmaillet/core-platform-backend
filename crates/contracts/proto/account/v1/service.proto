@@ -39,11 +39,6 @@ service AccountService {
     rpc ChangeEmail(ChangeEmailRequest) returns (CommandResponse);
     rpc ChangePhone(ChangePhoneRequest) returns (CommandResponse);
 
-    // ── Credentials ───────────────────────────────────────────────────────────
-
-    // Replace the stored Argon2id password hash.
-    rpc ChangePassword(ChangePasswordRequest) returns (CommandResponse);
-
     // ── MFA ───────────────────────────────────────────────────────────────────
 
     // MFA is auth's (#649): it encrypts the TOTP seed, hashes the backup codes
@@ -94,11 +89,8 @@ service AccountService {
 
     // ── Session tracking ──────────────────────────────────────────────────────
 
-    // Record a successful login; resets failed_login_attempts and updates last_login_at.
+    // Record a successful sign-in: updates last_login_at.
     rpc RecordLogin(RecordLoginRequest) returns (CommandResponse);
-
-    // Increment failed_login_attempts; may set locked_until if threshold reached.
-    rpc RecordFailedLogin(RecordFailedLoginRequest) returns (CommandResponse);
 
     // Record the holder's date of birth when none is on file (accounts created
     // before it was collected). On the client edge, the caller's own only.

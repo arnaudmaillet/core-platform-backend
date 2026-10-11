@@ -9,7 +9,6 @@ use crate::domain::value_object::{
     encrypted_bytes::EncryptedBytes,
     identity_id::IdentityId,
     kyc_status::KycStatus,
-    password_hash::PasswordHash,
     phone_number::PhoneNumber,
     recovery_code_hash::RecoveryCodeHash,
 };
@@ -40,10 +39,6 @@ pub struct AccountRow {
     pub phone_verified: bool,
     pub phone_verified_at: Option<DateTime<Utc>>,
 
-    pub password_hash: Option<String>,
-    pub password_changed_at: Option<DateTime<Utc>>,
-    pub failed_login_attempts: i32,
-    pub locked_until: Option<DateTime<Utc>>,
     pub last_login_at: Option<DateTime<Utc>>,
 
     pub mfa_enforced: bool,
@@ -94,8 +89,6 @@ impl TryFrom<AccountRow> for Account {
         let email = row.email.map(EmailAddress::new).transpose()?;
 
         let phone = row.phone.map(PhoneNumber::new).transpose()?;
-
-        let password_hash = row.password_hash.map(PasswordHash::from_hash);
 
         let mfa_recovery_codes: Vec<RecoveryCodeHash> = row
             .mfa_recovery_codes
@@ -154,10 +147,6 @@ impl TryFrom<AccountRow> for Account {
             phone,
             row.phone_verified,
             row.phone_verified_at,
-            password_hash,
-            row.password_changed_at,
-            row.failed_login_attempts,
-            row.locked_until,
             row.last_login_at,
             mfa,
             kyc_status,

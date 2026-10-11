@@ -25,7 +25,6 @@ fn create(identity: &str, email: &str, dob: Option<String>, country: Option<&str
             identity_id: identity.to_owned(),
             email: email.to_owned(),
             phone: None,
-            password_hash: None,
             country_of_residence: country.map(str::to_owned),
             role: None,
             created_by: None,

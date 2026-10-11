@@ -10,13 +10,11 @@ use crate::application::command::{
     anonymize_account::AnonymizeAccountCommand,
     assign_role::AssignRoleCommand,
     cancel_gdpr_deletion::CancelGdprDeletionCommand,
-    change_password::ChangePasswordCommand,
     create_account::CreateAccountCommand,
     deactivate_account::DeactivateAccountCommand,
     enroll_mfa::EnrollMfaCommand,
     recovery_codes::{ConsumeRecoveryCodeCommand, ReplaceRecoveryCodesCommand},
     reactivate_account::ReactivateAccountCommand,
-    record_failed_login::RecordFailedLoginCommand,
     record_login::RecordLoginCommand,
     request_data_export::RequestDataExportCommand,
     request_gdpr_deletion::RequestGdprDeletionCommand,
@@ -341,7 +339,6 @@ where
             identity_id: req.identity_id.clone(),
             email: req.email,
             phone: Some(req.phone).filter(|s| !s.is_empty()),
-            password_hash: Some(req.password_hash).filter(|s| !s.is_empty()),
             country_of_residence: Some(req.country_of_residence).filter(|s| !s.is_empty()),
             role: None,
             created_by: Some(req.created_by).filter(|s| !s.is_empty()),
@@ -409,23 +406,6 @@ where
         edge::require_account(&request, &request.get_ref().account_id)?;
         let req = request.into_inner();
         let cmd = VerifyPhoneCommand { account_id: req.account_id.clone() };
-        self.command_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
-            .await
-            .map(|_| Self::ok_command(&req.account_id))
-            .map_err(cqrs_error_to_status)
-    }
-
-    pub async fn change_password(
-        &self,
-        request: Request<proto::ChangePasswordRequest>,
-    ) -> Result<Response<proto::CommandResponse>, Status> {
-        edge::require_account(&request, &request.get_ref().account_id)?;
-        let req = request.into_inner();
-        let cmd = ChangePasswordCommand {
-            account_id: req.account_id.clone(),
-            new_password_hash: req.new_password_hash,
-        };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await
@@ -598,23 +578,6 @@ where
     ) -> Result<Response<proto::CommandResponse>, Status> {
         let req = request.into_inner();
         let cmd = RecordLoginCommand { account_id: req.account_id.clone() };
-        self.command_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
-            .await
-            .map(|_| Self::ok_command(&req.account_id))
-            .map_err(cqrs_error_to_status)
-    }
-
-    pub async fn record_failed_login(
-        &self,
-        request: Request<proto::RecordFailedLoginRequest>,
-    ) -> Result<Response<proto::CommandResponse>, Status> {
-        let req = request.into_inner();
-        let cmd = RecordFailedLoginCommand {
-            account_id: req.account_id.clone(),
-            max_attempts: 5,            // default; can be made configurable
-            lockout_duration_secs: 900, // default: 15 minutes
-        };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await

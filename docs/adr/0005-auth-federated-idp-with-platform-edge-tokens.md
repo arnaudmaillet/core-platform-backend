@@ -1,6 +1,6 @@
 # ADR-0005: Auth federates an IdP and issues platform ES256 edge tokens with generation-based revocation
 
-- **Status:** Accepted
+- **Status:** Accepted — superseded in part by [ADR-0018](./0018-passwordless-identity-passkeys-for-staff.md) (the federated IdP for credentials; the edge-token model stands)
 - **Date:** 2026-06-26
 - **Context(s) affected:** auth; account; auth-context (verify lib); realtime; all services
 - **Deciders:** arnaudmaillet (architecture)

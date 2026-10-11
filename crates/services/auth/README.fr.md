@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 4475d82d7d6941d077ed4356970d8c2d6ea8f059dd6e5a62ca267b0265a9264e
+  source_sha256: a14abf28a00fd1c93a41addb86d04b922bfd7dda864572ba2c52db9e616b5198
   translated_at: 2026-10-11
   status: complete
 ---
@@ -22,7 +22,7 @@ i18n:
 > | **Stockage** | PostgreSQL/CockroachDB (db `auth`) · Redis Cluster (sessions/blacklist) |
 > | **Asynchrone** | publie `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked/AppAuthorized/AppAuthorizationRevoked) · consomme `account.v1.events` (`account_deleted` → effacement RGPD ; `account_suspended` / `account_deactivated` / `role_revoked` → déconnexion partout) |
 > | **Appelants amont** | gateway / edge, clients utilisateurs (login & refresh) |
-> | **Dépendances aval** | Keycloak (IdP), `account` (gRPC, SoR d'identité), PostgreSQL, Redis Cluster |
+> | **Dépendances aval** | `account` (gRPC, SoR d'identité), PostgreSQL, Redis Cluster, JWKS Apple / Google (clés des id_tokens), Amazon SES / SNS (codes) |
 > | **SLO** | `<TODO: 99.95%>` dispo · login p99 `<TODO>` · refresh p99 `<TODO>` |
 
 > **✅ Statut — toutes les phases (0–7) terminées.** Contrat, domaine, application, infrastructure,
@@ -36,10 +36,18 @@ i18n:
 
 ## 🎯 Vue d'ensemble & rôle du service
 
-`auth` est la frontière **émission / session / courtage IdP** de la plateforme. Il possède l'*acte
-d'authentification et son cycle de vie* — courtage de connexion, suivi de session, rotation des
-refresh tokens, révocation et émission des jetons d'edge — ainsi que l'unique donnée d'identité qui
-relève de l'authentification : le lien sujet-IdP ↔ `account_id`.
+`auth` est la frontière **émission / session** de la plateforme. Il possède l'*acte
+d'authentification et son cycle de vie* — vérification de l'identifiant, suivi de session, rotation
+des refresh tokens, révocation et émission des jetons d'edge — ainsi que l'unique donnée d'identité
+qui relève de l'authentification : le lien sujet d'identité ↔ `account_id`.
+
+**Sans mot de passe (#881, [ADR-0018](../../../docs/adr/0018-passwordless-identity-passkeys-for-staff.fr.md)).**
+Personne ne se connecte par mot de passe et auth ne parle à aucun fournisseur d'identité externe : il
+vérifie lui-même chaque identifiant. Les membres se connectent avec un id_token natif **Sign in with
+Apple / Google** (vérifié contre les clés publiées du fournisseur, avec un nonce émis par le serveur),
+un **code à usage unique** envoyé à leur adresse e-mail ou leur téléphone, ou une **passkey** ; le
+staff se connecte uniquement avec une **passkey staff** (#880). `Login` ne crée jamais de compte ni de
+lien d'identité : une identité sans compte donne `AUT-6004` et part vers `SignUp`.
 
 Le problème difficile qu'il résout : **authentifier un trafic à l'échelle hyperscale sans lecture en
 base à chaque appel**. Une conception naïve consulte une table de sessions à chaque requête et
@@ -54,15 +62,17 @@ client et les portes staff de chaque service la voient sous `EDGE_REVOCATION_CAC
 acceptent un jeton révoqué jusqu'à son expiration (≤ `AUTH_ACCESS_TTL_SECS`).
 
 **Objectifs fondamentaux :** (1) aucune lecture en base sur le chemin chaud ; (2) réutilisation d'un
-refresh token = compromission ⇒ révocation de toute la génération de session ; (3) **100 %
-indépendant de l'IdP** — les couches domaine et application ne nomment jamais Keycloak ; migrer vers
-Cognito/Okta/custom est un nouvel adaptateur d'infrastructure et zéro changement de domaine.
+refresh token = compromission ⇒ révocation de toute la génération de session ; (3) **aucun secret
+partagé à voler ou à hameçonner** — aucun mot de passe nulle part ; chaque identifiant (id_token signé
+par le fournisseur, code à usage unique, signature de passkey) est vérifié par auth lui-même, derrière
+des ports (`FederatedTokenVerifier`, le store des codes, le dépôt des passkeys), si bien qu'un nouveau
+fournisseur est un nouvel adaptateur et zéro changement de domaine.
 
 ### Ce que ce service ne possède **pas**
 | Préoccupation | Propriétaire |
 |---|---|
 | Qui est une personne (dossier d'identité, KYC, RGPD, rôles RBAC) | service `account` (SoR d'identité) |
-| Identifiants (mots de passe, MFA, récupération) | Keycloak (IdP) — modèle fédéré |
+| L'identifiant Apple / le compte Google derrière une connexion fédérée | Apple / Google — auth vérifie seulement les id_tokens qu'ils signent |
 | Vérification entrante des jetons sur le chemin chaud | bibliothèque plateforme `auth-context` |
 
 ---
@@ -120,7 +130,7 @@ analytics) et le **pays d'origine**. Le compte est créé via `account` (`Create
 idempotente, donc une inscription relancée termine une inscription interrompue), l'identité est liée
 (`subject_links`, `auth.subject_linked`) et une session membre s'ouvre. **Une personne, un compte :**
 si l'identité, ou son e-mail vérifié par le fournisseur, a déjà un compte, la réponse est
-`existing_account{method}` (APPLE / GOOGLE / PASSWORD) — seul l'e-mail d'un jeton vérifié est
+`existing_account{method}` (`APPLE` / `GOOGLE` / `EMAIL_CODE` / `PHONE_CODE`, ou non spécifiée) — seul l'e-mail d'un jeton vérifié est
 recherché, et les adresses relais privées d'Apple ne correspondent jamais. Le profil suit
 (`profile.CreateProfile`, puis `Refresh` pour que `pids` le porte). `Login` accepte le même
 id_token (`IdTokenGrant`) pour les retours ; une identité sans compte reçoit `AUT-6004` (`NOT_FOUND`)
@@ -190,15 +200,13 @@ n'est envoyé. Un échec de l'annuaire ou de l'envoi est réessayé par `run_con
 
 Quand `account` supprime un compte au terme de son délai de grâce, il publie `account_deleted` ; le
 consumer d'auth (`auth-account-events`, sur le `run_consumer` partagé : retry, DLQ, commit manuel)
-coupe alors les jetons du compte (nouvelle génération), supprime l'**utilisateur IdP** du compte
-(API Admin Keycloak, `DELETE users/{id}` : son e-mail, son nom d'utilisateur et le hash de son mot de
-passe — pour chaque lien vers l'IdP de la flotte ; Apple / Google et les identités par code n'en ont
-pas) **avant** tout le reste, le lien étant le seul enregistrement de l'id de l'utilisateur IdP (un
-échec de l'IdP interrompt sans rien toucher et l'événement est rejoué ; sans client admin configuré,
-ces effacements sont rejoués jusqu'à ce qu'il le soit), et supprime définitivement ce qu'auth détient
+coupe alors les jetons du compte (nouvelle génération) et supprime définitivement ce qu'auth détient
 sur lui : ses sessions et refresh tokens (appareil, IP), ses liens d'identité (pour une identité par
-code e-mail ou téléphone, le sujet **est** l'adresse), et l'invité qu'il était avant l'inscription,
-avec les sessions de cet invité (sur chaque shard ; index `idx_guest_principals_upgraded`).
+code e-mail ou téléphone, le sujet **est** l'adresse), ses passkeys, autorisations d'apps et
+autorisations d'enrôlement staff, et l'invité qu'il était avant l'inscription, avec les sessions de
+cet invité (sur chaque shard ; index `idx_guest_principals_upgraded`). Aucune identité ne vit
+ailleurs : Apple / Google sont vérifiés nativement et il n'y a plus d'utilisateur d'IdP externe à
+supprimer (#881).
 Idempotent : un rejeu ne supprime rien de plus. L'identité est ensuite libre : se reconnecter avec elle
 ne trouve aucun compte et peut s'inscrire à nouveau.
 
@@ -218,13 +226,11 @@ fenêtre du cache de révocation (voir le chemin chaud plus bas).
 
 ### Identifiants et step-up
 
-Le mot de passe ne vit que chez l'IdP. `ChangePassword` (edge **authenticated**, membres) prouve le
-mot de passe actuel par un password grant sous le nom de connexion du sujet, pose le nouveau via
-l'API Admin de Keycloak (`reset-password`, un client confidentiel à service account doté de
-`view-users` + `manage-users`), et déconnecte en option toutes les **autres** sessions (révocations
-`password_changed` ; celle de l'appelant reste). Nouveaux mots de passe : 8 à 128 caractères et
-différents de l'actuel (`AUT-VAL-024/025/026`), puis la politique du realm (`AUT-5006`, sa règle dans
-le message). Sans client admin configuré, les RPC d'identifiants répondent `UNAVAILABLE` (`AUT-5005`).
+Il n'y a aucun mot de passe à poser, changer ou réinitialiser (#881) : `ChangePassword` a disparu
+d'`auth.v1` et d'`account.v1`, tout comme le password grant et l'authorization-code grant. La perte
+d'un appareil se rattrape par un code à usage unique envoyé à l'e-mail ou au téléphone du compte (ou
+par Apple / Google) ; un membre du staff qui a perdu toutes ses passkeys staff reçoit une nouvelle
+autorisation d'enrôlement d'un admin.
 
 **Alertes de nouvelle connexion (#649).** Une connexion depuis un appareil que le compte n'a jamais
 utilisé — son `device_id` (`DeviceContext`) absent de toutes les sessions que le compte a eues, quel que
@@ -240,18 +246,15 @@ connexion. Les alertes push attendent APNs.
 **Changer son e-mail ou son téléphone (#651).** `ChangeContact(challenge_id, code)` (edge
 **authenticated**, membres, derrière le step-up ci-dessous) : le titulaire envoie d'abord un code à la
 nouvelle adresse avec `StartVerification`, puis le prouve ici. Tout ce qui le connecte suit, dans cet ordre
-— l'e-mail de l'utilisateur IdP d'un compte à mot de passe (API Admin de Keycloak ; son nom de connexion
-aussi quand c'était l'e-mail ; l'adresse d'un autre utilisateur IdP donne `AUT-6006`), le compte
-(`account.ChangeEmail` / `ChangePhone`, mesh ; l'adresse d'un autre compte donne `AUT-6006` /
-`AUT-6007`), et le lien de connexion par code (`urn:core-platform:email|phone`, re-clé dans
+— le compte (`account.ChangeEmail` / `ChangePhone`, mesh ; l'adresse d'un autre compte donne `AUT-6006` /
+`AUT-6007`) et le lien de connexion par code (`urn:core-platform:email|phone`, re-clé dans
 `subject_links` : la nouvelle adresse connecte, l'ancienne non). Les liens Apple / Google gardent leur
 propre e-mail. L'e-mail enregistré avant est prévenu (un e-mail, jamais un SMS : un changement de
 téléphone prévient l'e-mail) ; les codes SMS gardent leur liste de pays et leurs budgets.
 
 **Connexion en deux étapes (#649).** Pour un compte qui l'a activée (`mfa_enrolled` d'`account`),
-**toutes** les méthodes de connexion — mot de passe, code e-mail/SMS, Apple, Google — s'arrêtent après
-l'identifiant : `Login` n'émet aucune session (ne réactive aucun compte désactivé, ne crée aucun premier
-lien) et répond `mfa_required` avec un `mfa_token` opaque à usage unique (5 minutes ; seul son SHA-256
+**toutes** les méthodes de connexion sauf la passkey — code e-mail/SMS, Apple, Google — s'arrêtent après
+l'identifiant : `Login` n'émet aucune session (ne réactive aucun compte désactivé) et répond `mfa_required` avec un `mfa_token` opaque à usage unique (5 minutes ; seul son SHA-256
 est conservé, `auth:{mfal:…}`). `CompleteLogin(mfa_token, code)` (edge **public** : le jeton fait
 preuve) prend ensuite soit six chiffres de l'application d'authentification du titulaire (TOTP RFC 6238,
 HMAC-SHA1, pas de 30 s, ±1 pas ; chaque pas ne sert **qu'une fois**, `auth:{mfa:<id>}:step:<n>`), soit
@@ -276,8 +279,8 @@ base32 à saisir) ; elle attend, scellée, son premier code (`auth:{mfa:<id>}:en
 recommencer la remplace ; `AUT-5022` si déjà active). `ConfirmMfaEnrollment(code)` prend ce premier code
 (même limite de tentatives et pas à usage unique qu'à la connexion), active la connexion en deux étapes
 chez `account`, renvoie **10 codes de secours, affichés une seule fois** (seuls leurs HMAC sont
-conservés), et **déconnecte les autres sessions du compte** (`mfa_changed`, comme un changement de mot de
-passe : un intrus déjà connecté ailleurs doit passer le second facteur) ; aucun enrôlement en attente
+conservés), et **déconnecte les autres sessions du compte** (`mfa_changed` : un intrus déjà connecté
+ailleurs doit passer le second facteur) ; aucun enrôlement en attente
 donne `AUT-5021`. `RegenerateBackupCodes` remplace les codes (les anciens cessent de fonctionner) et
 déconnecte aussi les autres sessions ; `DisableMfa` la désactive (`AUT-5020` si elle l'est déjà) sans déconnecter personne : les sessions déjà émises n'y perdent rien. Chaque
 changement est envoyé par e-mail à l'adresse du compte (activée, désactivée, nouveaux codes de secours),
@@ -319,15 +322,15 @@ instant, donc audit n'en garde qu'un.
 5 minutes, `auth:{pkauth:<hash>}` ; découvrable, sans liste d'autorisation). L'assertion va ensuite à
 `Login` (grant `passkey` : le **premier facteur, sans seconde étape même avec la connexion en deux
 étapes activée** — une passkey vaut deux facteurs), à `CompleteLogin { passkey }` (la seconde étape
-après un mot de passe, à la place d'un code) ou à `VerifyCredentials { passkey }` (step-up). **Le compte
+après un code, Apple ou Google, à la place d'un code de deux étapes) ou à `VerifyCredentials { passkey }` (step-up). **Le compte
 n'est jamais trouvé à partir d'un identifiant de passkey** (les identifiants ne sont uniques que par
 compte) : c'est le user handle de l'assertion — ou, pour une seconde étape ou un step-up, le compte
 auquel appartient l'étape, auquel un user handle doit correspondre — et la passkey doit être une de
 *ce* compte ; sans handle ni compte, c'est refusé. La signature est vérifiée avec la clé enregistrée
 (le compteur doit avancer, sauf s'ils valent tous deux zéro), le compteur et la dernière utilisation de
 la passkey sont mis à jour, et tout écart donne `AUT-5028` (la raison est journalisée). Une session par
-passkey représente la première liaison d'identité du compte (si bien que `ChangePassword` et un step-up
-par mot de passe fonctionnent depuis elle). Les suites habituelles d'une connexion s'appliquent (alerte
+passkey représente la première liaison d'identité du compte (la passkey elle-même quand le compte n'en
+a aucune). Les suites habituelles d'une connexion s'appliquent (alerte
 de nouvel appareil, compte désactivé repris, invité retiré).
 
 **Le staff se connecte uniquement par passkey (#880).** Un compte staff — toute autorisation venue
@@ -335,7 +338,7 @@ d'`account` en dehors du rôle membre `user` (un rôle staff comme `admin` ou `s
 permission fine comme `audit:read`, une dérogation ; une autorisation inconnue compte comme staff) —
 n'obtient ses autorisations staff **que dans une session ouverte avec une passkey enrôlée staff**
 (`Login { passkey }`, ou `CompleteLogin { passkey }` après un premier facteur). Connecté autrement
-(Apple / Google, un code e-mail ou SMS, un mot de passe, une passkey membre), le même compte obtient une
+(Apple / Google, un code e-mail ou SMS, une passkey membre), le même compte obtient une
 session membre : `user`, `read:public` et ses profils. Chaque session enregistre comment elle a été
 ouverte (`sessions.sign_in_method` + `passkey_credential_id`, migration 0009) ; chaque `Refresh` et
 `VerifyCredentials` relit cette passkey, si bien que la supprimer met fin aux autorisations staff au
@@ -360,8 +363,9 @@ affichée dans ce terminal), refusé définitivement dès qu'une passkey staff e
 `PrivilegedAction` ; les autorisations sont effacées avec le compte.
 
 **Step-up.** Un jeton émis juste après une preuve d'identifiant — `Login` / `CompleteLogin`, ou
-`VerifyCredentials` (re-prouver le mot de passe, ou donner un code de deux étapes : le step-up d'un
-compte sans mot de passe ; `AUT-5020` si la connexion en deux étapes est désactivée) — porte
+`VerifyCredentials` (une passkey, ou un code de deux étapes ; `AUT-5020` pour un code si la connexion
+en deux étapes est désactivée — un tel compte fait son step-up avec une passkey ou en se reconnectant ;
+une session staff avec sa passkey uniquement, `AUT-5031`) — porte
 `auth_time` ; un jeton rafraîchi non. Les RPC destructives ailleurs appellent
 `transport::grpc::edge::require_recent_auth` (`auth_time` de moins de 5 min, mesh exempté) et
 répondent sinon `PERMISSION_DENIED` `step_up_required…` ; `account` protège `DeactivateAccount` /
@@ -378,21 +382,26 @@ d'un titulaire de 13 à 17 ans démarre privé.
 
 Hexagonal / DDD (`domain` → `application` → `infrastructure`), bus CQRS commande/requête, PostgreSQL
 pour le registre durable des sessions, Redis Cluster pour la carte de génération / blacklist du
-chemin chaud, Kafka pour les événements. L'IdP est masqué derrière un `IdentityProviderPort`
-(Port/Adapter), si bien qu'aucun type Keycloak ne fuite au-dessus de `infrastructure`.
+chemin chaud, Kafka pour les événements. Chaque identifiant est vérifié en interne derrière un port
+(Port/Adapter) : `FederatedTokenVerifier` (JWKS Apple / Google), le store et les expéditeurs de codes à
+usage unique (Redis, SES / SNS), le dépôt des passkeys (WebAuthn vérifié dans `domain`), si bien
+qu'aucun type de fournisseur ne fuite au-dessus de `infrastructure`.
 
 ```
-            ┌──────────────────────── auth-service ───────────────────────┐
- client ──► │ Login/Refresh/Logout ─► bus CQRS ─► ports :                 │
-            │   IdentityProviderPort ─┐   SessionRepo/RefreshRepo (PG)     │
-            │   AccountDirectoryPort ─┤   SessionCachePort (Redis gen/blk) │
-            │   TokenMinterPort ──────┘   SubjectLinkRepo (PG)             │
-            └───────┬───────────────────────────┬─────────────────────────┘
-       courtage login│                           │émet le jeton d'edge (ES256 ; PASETO en suivi)
+            ┌──────────────────────── auth-service ──────────────────────────┐
+ client ──► │ Login/SignUp/Refresh/Logout ─► bus CQRS ─► ports :             │
+            │   FederatedTokenVerifier ─┐   SessionRepo/RefreshRepo (PG)     │
+            │   VerificationStore ──────┤   SessionCachePort (Redis gen/blk) │
+            │   PasskeyRepository ──────┤   SubjectLinkRepo (PG)             │
+            │   AccountDirectoryPort ───┤                                    │
+            │   TokenMinterPort ────────┘                                    │
+            └───────┬───────────────────────────┬────────────────────────────┘
+ vérifie l'identif. │                            │émet le jeton d'edge (ES256 ; PASETO en suivi)
                     ▼                            ▼
-              Keycloak (IdP)            les services aval vérifient LOCALEMENT via auth-context
-                    │                            │  (vérif. signature pur CPU + contrôle O(1)
-              résout l'identité ──► account      │   facultatif de `gen` Redis pour logout instantané)
+   JWKS Apple/Google · codes (Redis,    les services aval vérifient LOCALEMENT via auth-context
+   SES/SNS) · passkeys (PG, interne)             │  (vérif. signature pur CPU + contrôle O(1)
+                    │                            │   facultatif de `gen` Redis pour logout instantané)
+              résout l'identité ──► account
 ```
 
 **Chemin chaud à jeton scindé.** 99 % des appels API = vérification de signature seule, aucune E/S.
@@ -417,7 +426,7 @@ staff, échec ouvert ailleurs. Seul `/refresh` (faible QPS) touche PostgreSQL.
 | SLI | Objectif | Fenêtre | Mesuré par |
 |---|---|---|---|
 | Disponibilité (non-5xx / non-`UNAVAILABLE`) | `<TODO 99.95%>` | 30j glissants | `<grpc_server_handled_total par code>` |
-| Latence `Login` p99 | `< <TODO> ms` | 1h | `<latence rpc par méthode>` (dominée par l'aller-retour IdP) |
+| Latence `Login` p99 | `< <TODO> ms` | 1h | `<latence rpc par méthode>` (dominée par l'aller-retour `account` ; les clés des fournisseurs sont en cache) |
 | Latence `Refresh` p99 | `< <TODO> ms` | 1h | `<latence rpc>` (une rotation Postgres) |
 | Latence `Introspect` p99 | `< <TODO> ms` | 1h | `<latence rpc>` (vérif CPU + ≤1 lecture Redis) |
 | Durabilité | aucune écriture session/refresh acquittée perdue | — | Postgres `LocalQuorum`/fsync |
@@ -435,7 +444,8 @@ staff, échec ouvert ailleurs. Seul `/refresh` (faible QPS) touche PostgreSQL.
 
 | Dépendance | Rôle | Si en panne → | Dégradation |
 |---|---|---|---|
-| Keycloak (IdP) | vérification des identifiants au `Login` | `Login` échoue (`UNAVAILABLE`) | **Dur** pour les nouvelles connexions ; refresh/introspect intacts |
+| JWKS Apple / Google | clés de signature des id_tokens (récupérées au démarrage, rafraîchies en arrière-plan) | un `kid` inconnu ne peut être récupéré → `AUT-5001` (`UNAVAILABLE`) | **Souple** — les clés en cache vérifient toujours ; codes et passkeys intacts |
+| Amazon SES / SNS | envoi des codes à usage unique et des avis | les envois de codes échouent (`AUT-5014`) | **Dur** pour la seule connexion par code ; Apple / Google / passkeys intacts |
 | `account` (gRPC) | résolution compte + gating actif au `Login` (un compte désactivé par son titulaire est réactivé : `ResumeDeactivatedAccount`, `reactivated = true`) | `Login` échoue | **Dur** pour les nouvelles connexions |
 | PostgreSQL | registre sessions + refresh + liens | écritures `Refresh`/`Logout` échouent | **Dur** pour refresh/révocation |
 | Redis Cluster | carte de génération + blacklist (chemin chaud) | contrôles de révocation dégradés | **Souple** — la génération se reconstruit depuis Postgres ; une entrée blacklist manquée expire avec le jeton |
@@ -456,11 +466,9 @@ staff, échec ouvert ailleurs. Seul `/refresh` (faible QPS) touche PostgreSQL.
 | `AUTH_SIGNING_PRIVATE_PEM` / `AUTH_SIGNING_PUBLIC_PEM` | **Requis.** Paire de clés ES256 du jeton d'edge (PEM) | — |
 | `AUTH_SIGNING_KID` · `AUTH_TOKEN_ISSUER` · `AUTH_TOKEN_AUDIENCE` | `kid` / `iss` / `aud` du jeton d'edge | `auth-es256-1` · `https://auth.core-platform` · `core-platform` |
 | `AUTH_ACCESS_TTL_SECS` · `AUTH_SESSION_TTL_SECS` · `AUTH_ABSOLUTE_TTL_SECS` · `AUTH_REFRESH_TTL_SECS` | Durées de vie jeton / session | `600` · `1800` · `28800` · `604800` |
-| `AUTH_KEYCLOAK_TOKEN_ENDPOINT` · `AUTH_KEYCLOAK_CLIENT_ID` · `AUTH_KEYCLOAK_CLIENT_SECRET` · `AUTH_KEYCLOAK_SCOPE` | Courtier IdP | — · — · — · `openid` |
-| `AUTH_KEYCLOAK_ADMIN_URL` · `AUTH_KEYCLOAK_ADMIN_CLIENT_ID` · `AUTH_KEYCLOAK_ADMIN_CLIENT_SECRET` | Gestion des identifiants (`ChangePassword`, `VerifyCredentials`) : la base admin du realm (`…/admin/realms/<realm>`) et un client confidentiel à service account doté de `realm-management` `view-users` + `manage-users`. Absent → ces RPC répondent `UNAVAILABLE` (`AUT-5005`). | — |
 | `AUTH_ACCOUNT_GRPC_ENDPOINT` | Endpoint du service `account` | `http://localhost:50059` |
 | `AUTH_ACCOUNT_RPC_TIMEOUT_MS` · `AUTH_ACCOUNT_CONNECT_TIMEOUT_MS` | Deadlines par requête / de connexion sur le canal `account` (chemin chaud du login — échouer vite, ne jamais bloquer) | `2000` · `2000` |
-| `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Deadlines de requête / de connexion des appels HTTP Keycloak (échange de token) | `5000` · `2000` |
+| `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Deadlines de requête / de connexion des appels HTTP sortants (Amazon SNS). Noms historiques, conservés ; les anciennes variables du courtier IdP ont disparu (#881). | `5000` · `2000` |
 | `AUTH_GUEST_SESSIONS_ENABLED` | Interrupteur de `StartGuestSession`. **Désactivé par défaut** : il écrit une session par appel sans identifiant, donc à laisser éteint partout où les contrôles anti-abus (limites par IP / par appareil, App Attest) ne sont pas devant lui. Éteint → `AUT-1005` (`PERMISSION_DENIED`). | `false` |
 | `AUTH_APP_ATTEST_MODE` · `AUTH_APP_ATTEST_APP_IDS` · `AUTH_APP_ATTEST_ENVIRONMENTS` · `AUTH_APP_ATTEST_GUESTS_PER_DEVICE_PER_DAY` | App Attest devant `StartGuestSession` : `off` / `observe` / `enforce` ; les `<team id>.<bundle id>` acceptés (séparés par des virgules ; obligatoires sauf `off`) ; `production` et/ou `development` ; sessions invité par appareil attesté et par jour UTC. | `off` · — · `production` · `5` |
 | `AUTH_FEDERATED_NONCE_REQUIRED` | Un `SignUp` / `Login` par id_token doit consommer un nonce de `StartFederatedSignIn` (sinon `AUT-5008`). Désactivé : un nonce créé par le client est seulement journalisé — à activer quand tous les clients appellent `StartFederatedSignIn`. | `false` |
@@ -495,17 +503,18 @@ jeton émis ici est accepté par le même décodeur `auth-context` que chaque se
 
 La suite `integration-auth` (`tests/auth_it/`) démarre **PostgreSQL** + **Redis** réels via le
 harnais partagé `test-support` et pilote la composition root de production via le handler gRPC. Les
-dépendances *externes* d'auth (l'IdP et le service `account`) sont stubbées au niveau de leurs ports.
-Scénarios : cycle de vie (login → introspect → logout), rotation refresh + détection de réutilisation
-→ révocation de génération, logout global, et allers-retours d'écriture durable. **Keycloak n'est pas
-conteneurisé** — l'adaptateur OIDC est testé unitairement, et la suite live se concentre sur la
-machinerie session/jeton au-dessus des stores propres à auth.
+dépendances *externes* d'auth (le vérificateur de jetons Apple / Google et le service `account`) sont
+stubbées au niveau de leurs ports ; les membres se connectent par id_token. Scénarios : cycle de vie
+(login → introspect → logout), rotation refresh + détection de réutilisation → révocation de
+génération, logout global, et allers-retours d'écriture durable. Le vérificateur JWKS est testé
+unitairement, et la suite live se concentre sur la machinerie session/jeton au-dessus des stores
+propres à auth.
 
 ## 🔥 Modes de défaillance &nbsp;·&nbsp; OPS
 
 | Symptôme | Cause racine probable | Mitigation |
 |---|---|---|
-| Tous les `Login` → `UNAVAILABLE` | Keycloak ou `account` injoignable | vérifier la santé IdP / `account` ; refresh + introspect fonctionnent toujours |
+| Tous les `Login` → `UNAVAILABLE` | `account` injoignable (ou, pour Apple / Google seulement, leurs JWKS avec un `kid` inconnu, `AUT-5001`) | vérifier la santé d'`account` et la sortie vers les fournisseurs ; refresh + introspect fonctionnent toujours |
 | Pic de `Refresh` → `UNAUTHENTICATED` | **réutilisation** de refresh token (vol) ou logout global | attendu en cas de réutilisation — la génération de session est révoquée ; investiguer l'IP/appareil source |
 | Jetons d'edge acceptés après logout | miss blacklist/génération Redis | les jetons meurent quand même au TTL (≤ `AUTH_ACCESS_TTL_SECS`) ; vérifier Redis et la clé de génération |
 | `Introspect` renvoie `active:false` pour un jeton frais | dérive d'horloge, ou un bump de génération (logout global) | vérifier NTP ; confirmer la génération courante du compte dans Redis |
@@ -514,9 +523,10 @@ machinerie session/jeton au-dessus des stores propres à auth.
 
 ## 🚀 Déploiement &nbsp;·&nbsp; OPS
 
-- **Le throttling / lockout n'est *pas* le rôle de ce service.** La protection brute-force des
-  identifiants vit dans Keycloak (modèle fédéré) ; la limitation de débit en ingress est la couche
-  `[traffic]` du runtime partagé. Auth n'ajoute aucun throttle redondant.
+- **La protection brute-force est celle d'auth, par identifiant.** Il n'y a aucun mot de passe à
+  deviner : les codes à usage unique sont bornés par adresse et IP client (voir E-mail sans mot de
+  passe), les codes de deux étapes par compte (`AUT-5018`), les id_tokens et les passkeys sont des
+  signatures. La limitation de débit en ingress est la couche `[traffic]` du runtime partagé.
 - **Rotation des clés de signature (sans interruption).** Les jetons d'edge sont ES256, vérifiés par
   un **trousseau de clés** :
   1. Générer une nouvelle paire P-256 ; la définir comme `AUTH_SIGNING_PRIVATE_PEM` /
@@ -543,7 +553,14 @@ machinerie session/jeton au-dessus des stores propres à auth.
 
 Espace de noms canonique `AUT-XXXX` — voir [`src/error.rs`](src/error.rs) pour le catalogue faisant
 foi (1xxx session · 2xxx refresh/rotation · 3xxx liaison de sujet · 4xxx émission de jeton · 5xxx
-courtage IdP · 6xxx annuaire de comptes · 9xxx domaine/parsing). Les codes de stockage (`DB-*`) et de
-validation (`VAL-*`) sont délégués de manière transparente.
+identifiants (id_tokens, codes, deux étapes, passkeys) · 6xxx annuaire de comptes · 9xxx
+domaine/parsing). Les codes de stockage (`DB-*`) et de validation (`VAL-*`) sont délégués de manière
+transparente.
+
+**Retirés, jamais réutilisés (#881) :** `AUT-5002` (IdpAuthenticationFailed), `AUT-5004`
+(ClaimsNormalizationFailed), `AUT-5005` (CredentialManagementUnavailable), `AUT-5006`
+(PasswordRejected), `AUT-5007` (VerificationMethodUnavailable) — ils appartenaient aux mots de passe
+et à l'ancien courtier IdP externe. `AUT-5001` (IdpUnavailable) reste : clés d'Apple / de Google
+injoignables.
 
 [`project_auth_service_blueprint`]: ../../../docs/ <!-- TODO : lier le document de conception une fois publié -->

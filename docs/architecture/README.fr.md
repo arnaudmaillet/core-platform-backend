@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: df371b28733b4e8866f7d328f50029102768d1a6f6b8d684ed158c35fbf25d4a
-  translated_at: 2026-10-04
+  source_sha256: 7960afd8f8dd32fee05ec0d3913e466bec81384e8850cd2a942864fbb6b50adc
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -24,7 +24,7 @@ livrée — services fantômes, mauvaise stack, 7 services manquants.
 
 ## Ce qui est modélisé
 
-- **System Context** — la plateforme et ses dépendances externes (Keycloak, S3/MinIO, CloudFront, APNs/FCM, KMS/témoin).
+- **System Context** — la plateforme et ses dépendances externes (clés de connexion Apple / Google, Amazon SES / SNS, S3/MinIO, CloudFront, APNs/FCM, KMS/témoin). Il n'y a pas d'IdP externe : `auth` vérifie lui-même chaque identifiant (ADR-0018).
 - **Containers** — les 17 services (realtime scindé en gateway + dispatcher), les technologies de datastore partagées (ScyllaDB / PostgreSQL / Redis / OpenSearch) et le backbone d'événements Kafka.
 - **Dynamic** — le flux « post publié → fan-out » comme exemple travaillé.
 - La forme du service encode le rôle (service / worker / edge) ; la couleur encode la classe de sous-domaine (**Core** rouge, **Supporting** bleu), les deux tirés de `CONTEXT_MAP.md`. Les arêtes async (via Kafka) sont en pointillés ; les arêtes gRPC sync sont pleines.

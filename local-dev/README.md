@@ -148,8 +148,9 @@ overlay; its WSS gateway (`:8443`) always verifies the token.
 
 ## Verified working end-to-end
 
-- ✅ Real login (until #881: auth → Keycloak password grant → ES256 token). Since #881
-  the seeded users sign in with an email code; not yet re-run end to end locally.
+- ⏳ Real login by email code (#881): the seeded users sign in with a code printed to
+  auth-server's log; not yet re-run end to end locally (the password login it replaces
+  was verified before).
 - ✅ Timeline fan-out — alice's following-feed returns bob's + carol's 10 posts.
 - ✅ Search — OpenSearch indexed 3 profiles + 15 posts; queries return hits.
 - ✅ Accounts (Active), profiles, follows, published posts.

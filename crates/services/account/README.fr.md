@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 6358b6fd206d861121556b3232246ac600510cb1e94e9ae41a6b8bd94137d8ac
-  translated_at: 2026-10-10
+  source_sha256: 08f04523095039b3744b8f203f4c65b8d4f046bd005fde4ad3e8d3fab877f389
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -30,7 +30,7 @@ i18n:
 ## 🎯 Vue d'ensemble & rôle du service
 
 `account` gère l'intégralité du **cycle de vie privé d'une personne physique** sur la plateforme :
-vérification d'identité, identifiants, conformité KYC, droits RGPD et contrôle d'accès par rôles. C'est
+vérification d'identité, MFA, conformité KYC, droits RGPD et contrôle d'accès par rôles. C'est
 le registre de référence de l'existence et du statut d'un compte — le middleware d'authentification de
 la passerelle résout chaque requête contre lui.
 
@@ -130,7 +130,6 @@ service AccountService {
   rpc VerifyPhone (VerifyPhoneRequest) returns (CommandResponse);   // mesh uniquement : auth, après un code SMS
   rpc ChangeEmail (ChangeEmailRequest) returns (CommandResponse);   // mesh uniquement : auth, après un code envoyé à la nouvelle adresse (#651)
   rpc ChangePhone (ChangePhoneRequest) returns (CommandResponse);   // mesh uniquement : idem, par SMS — les deux posent et vérifient d'un coup ; ACC-1003/1004 si déjà prise
-  rpc ChangePassword (ChangePasswordRequest) returns (CommandResponse);
   rpc EnrollMfa (EnrollMfaRequest) returns (CommandResponse);
   rpc RevokeMfa (RevokeMfaRequest) returns (CommandResponse);
   rpc GetMfaSecret (GetMfaSecretRequest) returns (MfaSecretView);
@@ -141,8 +140,7 @@ service AccountService {
   rpc ReactivateAccount (ReactivateAccountRequest) returns (CommandResponse);
   rpc DeactivateAccount (DeactivateAccountRequest) returns (CommandResponse);
   rpc ResumeDeactivatedAccount (ResumeDeactivatedAccountRequest) returns (CommandResponse); // auth, au Login
-  rpc RecordLogin (RecordLoginRequest) returns (CommandResponse);
-  rpc RecordFailedLogin (RecordFailedLoginRequest) returns (CommandResponse);
+  rpc RecordLogin (RecordLoginRequest) returns (CommandResponse);               // auth : last_login_at
   rpc RequestGdprDeletion (RequestGdprDeletionRequest) returns (CommandResponse);
   rpc CancelGdprDeletion (CancelGdprDeletionRequest) returns (CommandResponse);  // pendant le délai de grâce ; se reconnecter annule aussi
   rpc AnonymizeAccount (AnonymizeAccountRequest) returns (CommandResponse);
@@ -177,11 +175,15 @@ service AccountService {
 > **Contrat de sérialisation / enum :** les enums sont **basés sur 1** (pas de zéro `UNSPECIFIED`).
 > `AccountStatus` `PENDING_VERIFICATION=1…DELETED=5` ; `KycStatus` `NOT_STARTED=1…REJECTED=5` ;
 > `AccountRole` `USER=1…SUPER_ADMIN=6`. **Valeurs par défaut côté handler** pour les champs absents du
-> proto : `RecordFailedLogin.max_attempts=5`, `lockout_duration_secs=900`,
-> `RequestGdprDeletion.retention_days=30`.
+> proto : `RequestGdprDeletion.retention_days=30`.
 
-**Sécurité à la frontière :** mots de passe stockés en Argon2id uniquement (jamais le clair accepté) ;
-les champs secrets suppriment `Display`/`Debug` et portent `#[serde(skip)]`.
+**Pas de mot de passe (#881).** Personne ne se connecte avec un mot de passe : account ne stocke aucune
+empreinte de mot de passe et ne tient aucun état de verrouillage après échecs de connexion
+(`ChangePassword` et `RecordFailedLogin` ont disparu ; `CreateAccountRequest.password_hash` = 4 est
+réservé). Les preuves de connexion (Apple, Google, codes à usage unique, passkeys) relèvent d'auth.
+
+**Sécurité à la frontière :** les champs secrets (matériel MFA) suppriment `Display`/`Debug` et portent
+`#[serde(skip)]`.
 
 **Retrouver ses contacts (#661).** `FindProfilesByContacts(account_id, email_sha256[], phone_sha256[])`
 reçoit les empreintes SHA-256 des contacts d'un carnet d'adresses — emails en minuscules et sans espaces,
@@ -266,7 +268,7 @@ dans son propre `ListMyReports`). Pages : 50 par défaut,
 **Export de données RGPD (#653, art. 15/20).** `RequestDataExport` marque l'export en attente ; la
 **passe d'export** (`ExportDueData`) construit alors, pour chaque compte en attente, un ZIP de fichiers
 JSON — le dossier de compte du titulaire (coordonnées, consentements, réglages de connexion ; **ni**
-empreinte de mot de passe, ni matériel MFA, ni champ interne), les fichiers des autres services
+matériel MFA, ni champ interne), les fichiers des autres services
 (`ExportSources` : profils, posts, commentaires, likes, recherches récentes, graphe social, conversations, liens vers les
 médias), un `README.txt` — le stocke en privé (`exports/<compte>/<id>.zip`, `S3ExportStore` : clés
 statiques, `ACCOUNT_EXPORT_*`) et inscrit sa **clé d'objet** dans le dossier RGPD — jamais un lien signé,
@@ -333,7 +335,7 @@ Les codes stables vont de `ACC-1xxx` (lifecycle) à `ACC-9xxx` (identifiers), vi
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet`, `SupervisionStarted`, `SupervisionEnded`, `SupervisionLimitsSet`, `SupervisionLimitsCleared` (#670 ; `account_id` = l'ado) | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged` (plus émis, #881 ; conservé tant qu'`audit` le décode encore), `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet`, `SupervisionStarted`, `SupervisionEnded`, `SupervisionLimitsSet`, `SupervisionLimitsCleared` (#670 ; `account_id` = l'ado) | `account_id` | `profile` (suspend/deactivate/delete → masquer ; activate → restaurer) |
 
 **Consomme :** rien — `account` est un producteur d'événements pur.
 
@@ -351,9 +353,9 @@ Les codes stables vont de `ACC-1xxx` (lifecycle) à `ACC-9xxx` (identifiers), vi
 | Contention d'écriture sur un compte chaud | `ConcurrentModification` (`ABORTED`) | le CAS rejette l'écrivain périmé ; le client réessaie | aucune — comportement correct ; investiguer les tempêtes de retry |
 | Kafka indisponible | projections aval périmées | **Souple** — les commits réussissent, événements bufferisés/abandonnés | vérifier les brokers ; rejeu côté aval |
 
-**Backpressure & limites.** `ListAccountsByStatus` est paginée. Le verrouillage après échecs de
-connexion (`max_attempts` défaut 5, `lockout_duration_secs` défaut 900) freine le credential-stuffing à
-la couche domaine.
+**Backpressure & limites.** `ListAccountsByStatus` est paginée. Il n'y a pas de verrouillage après
+échecs de connexion : sans mot de passe (#881), il n'y a pas d'identifiants à « stuffer » ; la limitation
+des tentatives de connexion relève d'auth.
 
 ---
 
