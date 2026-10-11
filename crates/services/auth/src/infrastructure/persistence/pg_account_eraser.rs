@@ -97,6 +97,13 @@ impl AccountEraser for PgAccountEraser {
                     .map_err(storage)?
                     .rows_affected();
             }
+            // The staff grants this account issued to others (#880) keep no
+            // trace of it; the issuer stays on the audit plane.
+            sqlx::query("UPDATE staff_enrollment_grants SET issued_by = NULL WHERE issued_by = $1")
+                .bind(account)
+                .execute(&mut *tx)
+                .await
+                .map_err(storage)?;
             tx.commit().await.map_err(storage)?;
             erased.guests += guests.len() as u64;
         }
