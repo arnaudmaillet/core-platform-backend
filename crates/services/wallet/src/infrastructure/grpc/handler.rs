@@ -9,9 +9,11 @@ use tonic::{Request, Response, Status};
 use transport::grpc::edge;
 use transport::grpc::mesh::{MeshCallerGate, MeshGateMode};
 
-use crate::application::port::{ClaimOutcome, PackOutcome, SettlementRecord, SpendOutcome, StakeOutcome, StakePositionRecord};
+use crate::application::port::{
+    ClaimOutcome, PackOutcome, SettlementRecord, SpendOutcome, StakeOutcome, StakePositionRecord, StakeStatus,
+};
 use crate::application::wallets::StakeBatch;
-use crate::application::{Wallets, WalletView};
+use crate::application::{MyStake, StakeVerdict, Wallets, WalletView};
 use crate::domain::{StakeAsk, StakeTarget};
 use crate::config::WalletConfig;
 use crate::domain::{Currency, Transaction, TransactionKind};
@@ -203,6 +205,29 @@ impl WalletServiceHandler {
         }))
     }
 
+    /// The caller's own stakes (#886). Edge: the caller's account.
+    pub async fn list_my_stakes(
+        &self,
+        request: Request<proto::ListMyStakesRequest>,
+    ) -> Result<Response<proto::ListMyStakesResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let status = match proto::StakeStatusFilter::try_from(req.status).unwrap_or_default() {
+            proto::StakeStatusFilter::Unspecified => StakeStatus::All,
+            proto::StakeStatusFilter::Active => StakeStatus::Active,
+            proto::StakeStatusFilter::Settled => StakeStatus::Settled,
+        };
+        let page = self
+            .wallets
+            .my_stakes(&req.account_id, status, i64::from(req.page_size), &req.page_token)
+            .await
+            .map_err(to_status)?;
+        Ok(Response::new(proto::ListMyStakesResponse {
+            stakes:          page.stakes.iter().map(my_stake_to_proto).collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+        }))
+    }
+
     pub async fn claim_reward(
         &self,
         request: Request<proto::ClaimRewardRequest>,
@@ -308,6 +333,28 @@ fn transaction_to_proto(t: &Transaction) -> proto::WalletTransaction {
         } as i32,
         created_at:     Some(timestamp(t.created_at)),
         ref_id:         t.ref_id.clone().unwrap_or_default(),
+    }
+}
+
+fn my_stake_to_proto(s: &MyStake) -> proto::MyStake {
+    use proto::my_stake::Target;
+    let r = &s.record;
+    proto::MyStake {
+        target:     Some(match &r.target {
+            StakeTarget::Post(id) => Target::PostId(id.clone()),
+            StakeTarget::Comment(id) => Target::CommentId(id.clone()),
+        }),
+        points:     r.points,
+        first_at:   Some(timestamp(r.first_at)),
+        last_at:    Some(timestamp(r.last_at)),
+        settles_at: Some(timestamp(s.settles_at)),
+        settled_at: r.settled_at.map(timestamp),
+        verdict:    match s.verdict {
+            StakeVerdict::Unsettled => proto::StakeVerdict::Unspecified,
+            StakeVerdict::Pending => proto::StakeVerdict::Pending,
+            StakeVerdict::Rewarded => proto::StakeVerdict::Rewarded,
+            StakeVerdict::NotRewarded => proto::StakeVerdict::NotRewarded,
+        } as i32,
     }
 }
 

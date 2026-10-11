@@ -222,3 +222,37 @@ message ListStakePositionsResponse {
     // Empty on the last page.
     string                 next_page_token = 2;
 }
+
+message ListMyStakesRequest {
+    // The caller's account (edge: must be the token's).
+    string            account_id = 1;
+    StakeStatusFilter status     = 2;
+    // Default 50, capped at 100.
+    int32             page_size  = 3;
+    // The `next_page_token` of the previous page (empty: the first).
+    string            page_token = 4;
+}
+
+// One of the caller's stakes: all its likes on one post or comment (#886).
+message MyStake {
+    oneof target {
+        string post_id    = 1;
+        string comment_id = 2;
+    }
+    // Points staked on it, all batches together.
+    int64                     points     = 3;
+    google.protobuf.Timestamp first_at   = 4;
+    google.protobuf.Timestamp last_at    = 5;
+    // When it settles: a day after its first stake (server policy).
+    google.protobuf.Timestamp settles_at = 6;
+    // Set once settled.
+    google.protobuf.Timestamp settled_at = 7;
+    StakeVerdict              verdict    = 8;
+}
+
+message ListMyStakesResponse {
+    // Newest first stake first.
+    repeated MyStake stakes          = 1;
+    // Empty on the last page.
+    string           next_page_token = 2;
+}

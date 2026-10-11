@@ -281,6 +281,45 @@ pub trait WalletStore: Send + Sync + 'static {
         after: Option<&StakeTarget>,
         limit: i64,
     ) -> Result<Vec<StakePositionRecord>, WalletError>;
+
+    /// The account's stakes for the app (#886), newest first stake first, up
+    /// to `limit` after `before` (exclusive).
+    async fn my_stakes(
+        &self,
+        account: &AccountId,
+        status: StakeStatus,
+        before: Option<&StakeCursor>,
+        limit: i64,
+    ) -> Result<Vec<MyStakeRecord>, WalletError>;
+}
+
+/// Which of an account's stakes to list (#886).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StakeStatus {
+    All,
+    /// Not settled yet.
+    Active,
+    Settled,
+}
+
+/// Where a page of an account's stakes resumes: the last stake returned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StakeCursor {
+    pub first_at: DateTime<Utc>,
+    pub target:   StakeTarget,
+}
+
+/// One of an account's stakes as the app lists it (#886): no gems — while
+/// settlement is shadow mode, the app never shows gems the balance lacks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MyStakeRecord {
+    pub target:     StakeTarget,
+    pub points:     i64,
+    pub first_at:   DateTime<Utc>,
+    pub last_at:    DateTime<Utc>,
+    pub settled_at: Option<DateTime<Utc>>,
+    /// The day's outcome once its envelope is computed: 1 in the top, 0 not.
+    pub outcome:    Option<i16>,
 }
 
 /// An account's stakes on one target, and their settlement (the GDPR
