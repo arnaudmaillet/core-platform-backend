@@ -147,6 +147,15 @@ fn sign_in_key(challenge: &[u8]) -> String {
     data_encoding::HEXLOWER.encode(&Sha256::digest(challenge))
 }
 
+/// A passkey assertion that checked out: whose account, which passkey, and
+/// whether it is staff-enrolled (#880).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedPasskey {
+    pub account_id:     AccountId,
+    pub credential_id:  Vec<u8>,
+    pub staff_enrolled: bool,
+}
+
 /// Signing in with a passkey: the challenge, then the assertion's check.
 pub struct PasskeySignIn {
     rp:         RelyingParty,
@@ -157,6 +166,11 @@ pub struct PasskeySignIn {
 impl PasskeySignIn {
     pub fn new(rp: RelyingParty, passkeys: Arc<dyn PasskeyRepository>, challenges: Arc<dyn FederatedNonceStore>) -> Self {
         Self { rp, passkeys, challenges }
+    }
+
+    /// Where the passkeys are kept (a staff session's passkey is re-read, #880).
+    pub fn repository(&self) -> &Arc<dyn PasskeyRepository> {
+        &self.passkeys
     }
 
     /// A challenge for an assertion (single use, five minutes).
@@ -172,14 +186,14 @@ impl PasskeySignIn {
     }
 
     /// Checks `assertion` (its challenge used up either way) and returns the
-    /// account it signs in. `expected`: the account a second step or a
-    /// step-up belongs to — the passkey must be that account's.
+    /// account it signs in and the passkey. `expected`: the account a second
+    /// step or a step-up belongs to — the passkey must be that account's.
     pub async fn verify(
         &self,
         assertion: &PasskeyAssertion,
         expected: Option<&AccountId>,
         now: DateTime<Utc>,
-    ) -> Result<AccountId, AuthError> {
+    ) -> Result<VerifiedPasskey, AuthError> {
         let challenge = URL_SAFE_NO_PAD
             .decode(assertion.challenge.trim_end_matches('='))
             .map_err(|_| AuthError::PasskeyChallengeInvalid)?;
@@ -218,7 +232,11 @@ impl PasskeySignIn {
             AuthError::PasskeyAssertionFailed
         })?;
         self.passkeys.record_use(&account_id, &assertion.credential_id, used.sign_count, used.backed_up, now).await?;
-        Ok(account_id)
+        Ok(VerifiedPasskey {
+            account_id,
+            credential_id: assertion.credential_id.clone(),
+            staff_enrolled: passkey.staff_enrolled,
+        })
     }
 }
 
@@ -328,6 +346,7 @@ impl PasskeyHandler {
             // Postgres keeps microseconds: the response and every later read agree.
             created_at:      now.trunc_subsecs(6),
             last_used_at:    None,
+            staff_enrolled:  false,
         };
         self.passkeys.add(&account_id, &stored, MAX_PASSKEYS).await?;
         notify_security_change(self.codes.clone(), Arc::clone(&self.directory), account_id, MfaChange::PasskeyAdded);
@@ -571,14 +590,14 @@ mod tests {
         let handle = session.account_id.as_uuid().as_bytes().to_vec();
 
         let ok = assertion(&sign_in, &mut auth, handle.clone(), PASSKEY).await;
-        assert_eq!(sign_in.verify(&ok, None, t0()).await.unwrap(), session.account_id);
+        assert_eq!(sign_in.verify(&ok, None, t0()).await.unwrap().account_id, session.account_id);
         assert_eq!(w.passkeys.list(&session.account_id).await.unwrap()[0].last_used_at, Some(t0()));
         // Single use.
         assert!(matches!(sign_in.verify(&ok, None, t0()).await, Err(AuthError::PasskeyChallengeInvalid)));
 
         // The second step / step-up of the same account: with or without a handle.
         let step = assertion(&sign_in, &mut auth, Vec::new(), PASSKEY).await;
-        assert_eq!(sign_in.verify(&step, Some(&session.account_id), t0()).await.unwrap(), session.account_id);
+        assert_eq!(sign_in.verify(&step, Some(&session.account_id), t0()).await.unwrap().account_id, session.account_id);
 
         // No handle and no account: refused (an id never names an account).
         let anonymous = assertion(&sign_in, &mut auth, Vec::new(), PASSKEY).await;

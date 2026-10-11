@@ -48,6 +48,8 @@ impl SessionRepository for PgSessionRepository {
         let p_expires = session.expires_at();
         let p_absolute = session.absolute_expiry();
         let p_revoked_at = session.revoked_at();
+        let p_method = session.sign_in().method().map(|m| m.as_str());
+        let p_passkey = session.sign_in().passkey_credential_id().map(<[u8]>::to_vec);
         let new_version = session.version();
         let id_uuid = id.as_uuid();
 
@@ -61,8 +63,8 @@ impl SessionRepository for PgSessionRepository {
                                 id, account_id, issuer, subject, generation, status,
                                 device_user_agent, device_ip, device_id,
                                 issued_at, expires_at, absolute_expiry, revoked_at, version,
-                                kind
-                            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+                                kind, sign_in_method, passkey_credential_id
+                            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
                             "#,
                         )
                         .bind(id_uuid)
@@ -80,6 +82,8 @@ impl SessionRepository for PgSessionRepository {
                         .bind(p_revoked_at)
                         .bind(0i64)
                         .bind(p_kind)
+                        .bind(p_method)
+                        .bind(p_passkey)
                         .execute(&mut **tx)
                         .await
                         .map(|_| ())

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::application::port::{
-    AuthnGrant, CredentialAdmin, IdentityProvider, SessionCache, SessionRepository,
+    AuthnGrant, CredentialAdmin, IdentityProvider, PasskeyRepository, SessionCache, SessionRepository,
 };
 use crate::domain::aggregate::Session;
 use crate::domain::value_object::{AccountId, SessionId, SessionKind};
@@ -38,6 +38,19 @@ pub(crate) async fn caller_session(
         return Err(AuthError::SessionRevoked);
     }
     Ok(session)
+}
+
+/// Whether `session` is a staff session (#880): opened with a passkey that is
+/// still the account's and staff-enrolled. Re-read every time a token is
+/// minted, so removing the passkey ends the staff grants at the next refresh.
+pub(crate) async fn is_staff_session(
+    passkeys: Option<&Arc<dyn PasskeyRepository>>,
+    session: &Session,
+) -> Result<bool, AuthError> {
+    let (Some(passkeys), Some(credential_id)) = (passkeys, session.sign_in().passkey_credential_id()) else {
+        return Ok(false);
+    };
+    Ok(passkeys.find(&session.account_id(), credential_id).await?.is_some_and(|p| p.staff_enrolled))
 }
 
 /// Proves `password` for the IdP subject behind `session`: a password grant

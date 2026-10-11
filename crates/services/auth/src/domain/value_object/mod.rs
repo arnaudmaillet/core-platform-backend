@@ -13,6 +13,7 @@ pub mod refresh_token_status;
 pub mod revocation_reason;
 pub mod session_id;
 pub mod session_kind;
+pub mod session_sign_in;
 pub mod session_status;
 pub mod totp;
 pub mod webauthn;
@@ -26,7 +27,7 @@ pub use federated::{
 };
 pub use generation::Generation;
 pub use idp_subject::IdpSubject;
-pub use permission::{Permission, READ_PUBLIC};
+pub use permission::{Permission, MEMBER_ROLE, READ_PUBLIC};
 pub use profile_id::ProfileId;
 pub use refresh_token_hash::RefreshTokenHash;
 pub use refresh_token_id::RefreshTokenId;
@@ -34,6 +35,7 @@ pub use refresh_token_status::RefreshTokenStatus;
 pub use revocation_reason::RevocationReason;
 pub use session_id::SessionId;
 pub use session_kind::SessionKind;
+pub use session_sign_in::{SessionMethod, SessionSignIn};
 pub use session_status::SessionStatus;
 pub use totp::{
     generate_backup_codes, normalize_backup_code, step_of, totp_digits, TotpSecret, BACKUP_CODE_COUNT, TOTP_PERIOD_SECS,

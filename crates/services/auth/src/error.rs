@@ -55,6 +55,10 @@ use thiserror::Error;
 /// | AUT-5028 | PasskeyAssertionFailed       | 401  | Low      | No        |
 /// | AUT-5029 | PasskeysUnavailable          | 503  | Medium   | No        |
 /// | AUT-5030 | AppAuthorizationNotFound     | 404  | Low      | No        |
+/// | AUT-5031 | StaffStepUpNeedsPasskey      | 403  | Low      | No        |
+/// | AUT-5032 | StaffEnrollmentGrantInvalid  | 403  | Medium   | No        |
+/// | AUT-5033 | StaffEnrollmentForbidden     | 403  | **High** | No        |
+/// | AUT-5034 | StaffBootstrapClosed         | 409  | Medium   | No        |
 /// | AUT-1005 | GuestSessionsDisabled        | 403  | Low      | No        |
 /// | AUT-1006 | DeviceAttestationRequired    | 403  | Low      | No        |
 /// | AUT-1007 | DeviceAttestationInvalid     | 403  | Medium   | No        |
@@ -267,6 +271,25 @@ pub enum AuthError {
     #[error("passkeys are unavailable")]
     PasskeysUnavailable,
 
+    /// A staff session steps up with its passkey only (#880): a code or a
+    /// password is refused.
+    #[error("a staff session steps up with a passkey")]
+    StaffStepUpNeedsPasskey,
+
+    /// A staff passkey registration whose enrollment grant is unknown, another
+    /// account's, expired or already used (#880).
+    #[error("the staff enrollment grant is not valid")]
+    StaffEnrollmentGrantInvalid,
+
+    /// Issuing a staff enrollment grant needs an admin in a staff passkey
+    /// session, for another account (#880).
+    #[error("this caller may not issue a staff enrollment grant")]
+    StaffEnrollmentForbidden,
+
+    /// The staff bootstrap is off, or a staff passkey already exists (#880).
+    #[error("the staff bootstrap is closed")]
+    StaffBootstrapClosed,
+
     // ── Account directory (AUT-6xxx) ──────────────────────────────────────────
     #[error("account is not active; current status: '{current}'")]
     AccountNotActive { current: String },
@@ -381,6 +404,10 @@ impl AppError for AuthError {
             AuthError::PasskeyAssertionFailed => "AUT-5028",
             AuthError::PasskeysUnavailable => "AUT-5029",
             AuthError::AppAuthorizationNotFound => "AUT-5030",
+            AuthError::StaffStepUpNeedsPasskey => "AUT-5031",
+            AuthError::StaffEnrollmentGrantInvalid => "AUT-5032",
+            AuthError::StaffEnrollmentForbidden => "AUT-5033",
+            AuthError::StaffBootstrapClosed => "AUT-5034",
 
             AuthError::AccountNotActive { .. } => "AUT-6001",
             AuthError::AccountDirectoryUnavailable => "AUT-6002",
@@ -444,7 +471,12 @@ impl AppError for AuthError {
             AuthError::AccountNotActive { .. }
             | AuthError::GuestSessionsDisabled
             | AuthError::DeviceAttestationRequired
-            | AuthError::DeviceAttestationInvalid { .. } => StatusCode::FORBIDDEN,
+            | AuthError::DeviceAttestationInvalid { .. }
+            | AuthError::StaffStepUpNeedsPasskey
+            | AuthError::StaffEnrollmentGrantInvalid
+            | AuthError::StaffEnrollmentForbidden => StatusCode::FORBIDDEN,
+
+            AuthError::StaffBootstrapClosed => StatusCode::CONFLICT,
 
             AuthError::DeviceGuestQuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
 
@@ -482,13 +514,16 @@ impl AppError for AuthError {
             | AuthError::CredentialManagementUnavailable
             | AuthError::AccountDirectoryUnavailable
             | AuthError::SmsBudgetExhausted
-            | AuthError::MfaUnavailable => Severity::High,
+            | AuthError::MfaUnavailable
+            | AuthError::StaffEnrollmentForbidden => Severity::High,
 
             AuthError::InvalidSessionTransition { .. }
             | AuthError::RefreshTokenAlreadyRotated
             | AuthError::ClaimsNormalizationFailed(_)
             | AuthError::ProfileDirectoryUnavailable
             | AuthError::AccountNotActive { .. }
+            | AuthError::StaffEnrollmentGrantInvalid
+            | AuthError::StaffBootstrapClosed
             | AuthError::DomainViolation { .. } => Severity::Medium,
 
             _ => Severity::Low,

@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::domain::event::{DomainEvent, SessionIssued, SessionRevoked};
 use crate::domain::value_object::{
     AccessTokenClaims, AccountId, DeviceFingerprint, Generation, IdpSubject, Permission,
-    RevocationReason, SessionId, SessionKind, SessionStatus, ProfileId};
+    RevocationReason, SessionId, SessionKind, SessionSignIn, SessionStatus, ProfileId};
 use crate::error::AuthError;
 
 /// Parameters to establish a new [`Session`].
@@ -18,6 +18,8 @@ pub struct SessionIssueParams {
     /// The account's current generation at issue time.
     pub generation: Generation,
     pub device: DeviceFingerprint,
+    /// How it was opened (#880).
+    pub sign_in: SessionSignIn,
     pub issued_at: DateTime<Utc>,
     /// Sliding expiry; must be after `issued_at` and at/under `absolute_expiry`.
     pub expires_at: DateTime<Utc>,
@@ -51,6 +53,10 @@ pub struct Session {
     generation: Generation,
     status: SessionStatus,
     device: DeviceFingerprint,
+    /// How it was opened (#880): a staff account's privileged grants need a
+    /// staff-enrolled passkey here.
+    #[serde(default)]
+    sign_in: SessionSignIn,
     issued_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
     absolute_expiry: DateTime<Utc>,
@@ -102,6 +108,7 @@ impl Session {
             generation: params.generation,
             status: SessionStatus::Active,
             device: params.device,
+            sign_in: params.sign_in,
             issued_at: params.issued_at,
             expires_at: params.expires_at,
             absolute_expiry: params.absolute_expiry,
@@ -121,6 +128,7 @@ impl Session {
         generation: Generation,
         status: SessionStatus,
         device: DeviceFingerprint,
+        sign_in: SessionSignIn,
         issued_at: DateTime<Utc>,
         expires_at: DateTime<Utc>,
         absolute_expiry: DateTime<Utc>,
@@ -135,6 +143,7 @@ impl Session {
             generation,
             status,
             device,
+            sign_in,
             issued_at,
             expires_at,
             absolute_expiry,
@@ -172,6 +181,11 @@ impl Session {
 
     pub fn device(&self) -> &DeviceFingerprint {
         &self.device
+    }
+
+    /// How the session was opened (#880).
+    pub fn sign_in(&self) -> &SessionSignIn {
+        &self.sign_in
     }
 
     pub fn issued_at(&self) -> DateTime<Utc> {
@@ -340,6 +354,7 @@ mod tests {
             subject: IdpSubject::new("iss", "sub").unwrap(),
             generation: Generation::INITIAL,
             device: DeviceFingerprint::default(),
+            sign_in: SessionSignIn::none(),
             issued_at: now,
             expires_at: now + Duration::minutes(30),
             absolute_expiry: now + Duration::hours(8),

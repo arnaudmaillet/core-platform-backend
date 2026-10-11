@@ -35,6 +35,7 @@ struct PasskeyRow {
     backed_up:       bool,
     created_at:      DateTime<Utc>,
     last_used_at:    Option<DateTime<Utc>>,
+    staff_enrolled:  bool,
 }
 
 impl From<PasskeyRow> for StoredPasskey {
@@ -49,6 +50,7 @@ impl From<PasskeyRow> for StoredPasskey {
             backed_up:       row.backed_up,
             created_at:      row.created_at,
             last_used_at:    row.last_used_at,
+            staff_enrolled:  row.staff_enrolled,
         }
     }
 }
@@ -59,7 +61,7 @@ impl PasskeyRepository for PgPasskeyRepository {
     async fn list(&self, account_id: &AccountId) -> Result<Vec<StoredPasskey>, AuthError> {
         let rows = sqlx::query_as::<_, PasskeyRow>(
             "SELECT credential_id, public_key, sign_count, name, aaguid, backup_eligible, backed_up, created_at, \
-             last_used_at FROM passkeys WHERE account_id = $1 ORDER BY created_at, credential_id",
+             last_used_at, staff_enrolled FROM passkeys WHERE account_id = $1 ORDER BY created_at, credential_id",
         )
         .bind(account_id.as_uuid())
         .fetch_all(self.tx.pool_for(account_id)?)
@@ -91,8 +93,8 @@ impl PasskeyRepository for PgPasskeyRepository {
                     }
                     let inserted = sqlx::query(
                         "INSERT INTO passkeys (account_id, credential_id, public_key, sign_count, name, aaguid, \
-                         backup_eligible, backed_up, created_at, last_used_at) \
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING",
+                         backup_eligible, backed_up, created_at, last_used_at, staff_enrolled) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT DO NOTHING",
                     )
                     .bind(account)
                     .bind(&passkey.credential_id)
@@ -104,6 +106,7 @@ impl PasskeyRepository for PgPasskeyRepository {
                     .bind(passkey.backed_up)
                     .bind(passkey.created_at)
                     .bind(passkey.last_used_at)
+                    .bind(passkey.staff_enrolled)
                     .execute(&mut **tx)
                     .await
                     .map_err(storage)?
@@ -121,7 +124,7 @@ impl PasskeyRepository for PgPasskeyRepository {
     async fn find(&self, account_id: &AccountId, credential_id: &[u8]) -> Result<Option<StoredPasskey>, AuthError> {
         let row = sqlx::query_as::<_, PasskeyRow>(
             "SELECT credential_id, public_key, sign_count, name, aaguid, backup_eligible, backed_up, created_at, \
-             last_used_at FROM passkeys WHERE account_id = $1 AND credential_id = $2",
+             last_used_at, staff_enrolled FROM passkeys WHERE account_id = $1 AND credential_id = $2",
         )
         .bind(account_id.as_uuid())
         .bind(credential_id)

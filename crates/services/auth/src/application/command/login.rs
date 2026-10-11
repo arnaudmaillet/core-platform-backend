@@ -7,7 +7,7 @@ use rand::RngCore;
 use validate_core::{FieldViolation, Validate};
 
 use crate::application::command::FederatedNonces;
-use crate::application::command::member_session::MemberSessions;
+use crate::application::command::member_session::{MemberSessions, SessionOrigin};
 use crate::application::command::mfa::MfaVerifier;
 use crate::application::command::passkeys::{PasskeyAssertion, PasskeySignIn};
 use crate::application::command::verification::VerificationCodes;
@@ -21,7 +21,7 @@ use crate::application::port::{
 use crate::domain::aggregate::SubjectLink;
 use crate::application::port::VerificationChannel;
 use crate::domain::value_object::{
-    AccountId, DeviceFingerprint, IdpSubject, EMAIL_CODE_ISSUER, PASSKEY_ISSUER, PHONE_CODE_ISSUER,
+    AccountId, DeviceFingerprint, IdpSubject, SessionMethod, EMAIL_CODE_ISSUER, PASSKEY_ISSUER, PHONE_CODE_ISSUER,
 };
 use crate::error::AuthError;
 
@@ -272,13 +272,14 @@ impl LoginHandler {
         let correlation_id = envelope.correlation_id;
 
         // 1–2. Who is signing in, and their account.
-        let mut by_passkey = false;
+        let mut by_passkey: Option<super::passkeys::VerifiedPasskey> = None;
         let (subject, account_id, needs_link) = match cmd.grant {
             // A passkey (#808): the assertion names its account (user handle).
             AuthnGrant::Passkey(assertion) => {
                 let passkeys = self.passkeys.as_ref().ok_or(AuthError::PasskeysUnavailable)?;
-                let account_id = passkeys.verify(&assertion, None, now).await?;
-                by_passkey = true;
+                let verified = passkeys.verify(&assertion, None, now).await?;
+                let account_id = verified.account_id;
+                by_passkey = Some(verified);
                 (self.passkey_subject(&account_id, &assertion).await?, account_id, false)
             }
             // A native id_token: verified here. Its account was linked at
@@ -336,18 +337,25 @@ impl LoginHandler {
         if let AccountActivation::Inactive { reason } = &snapshot.activation {
             return Err(AuthError::AccountNotActive { current: reason.clone() });
         }
+        // How the session is opened (#880): a passkey session stands for the
+        // account's first link, so the passkey itself is what counts.
+        let origin = match &by_passkey {
+            Some(passkey) => SessionOrigin::passkey(passkey),
+            None => SessionOrigin::by(SessionMethod::of_subject(&subject)),
+        };
         let proven = ProvenSignIn {
             account_id,
             subject,
             needs_link,
             device: cmd.device,
             guest_refresh_token: cmd.guest_refresh_token,
+            origin,
         };
 
         // 4. Two-step sign-in on: nothing happens until the second factor —
         //    no session, no resumed account, no first link (#649). A passkey
         //    is both factors already (possession + device unlock).
-        if snapshot.mfa_enrolled && !by_passkey {
+        if snapshot.mfa_enrolled && by_passkey.is_none() {
             let mfa = self.mfa.as_ref().ok_or(AuthError::MfaUnavailable)?;
             return self.challenge(mfa, proven, now).await.map(LoginOutcome::SecondFactorRequired);
         }
@@ -367,13 +375,18 @@ impl LoginHandler {
         let mfa = self.mfa.as_ref().ok_or(AuthError::MfaUnavailable)?;
         let token_hash = challenge_hash(&cmd.mfa_token);
         let pending = mfa.store().pending_login(&token_hash).await?.ok_or(AuthError::MfaChallengeInvalid)?;
-        match &cmd.passkey {
+        // A passkey second step opens a passkey session (#880): phishing the
+        // first factor is not enough without it.
+        let second = match &cmd.passkey {
             Some(assertion) => {
                 let passkeys = self.passkeys.as_ref().ok_or(AuthError::PasskeysUnavailable)?;
-                passkeys.verify(assertion, Some(&pending.account_id), now).await?;
+                Some(passkeys.verify(assertion, Some(&pending.account_id), now).await?)
             }
-            None => mfa.check(&pending.account_id, &cmd.code, now).await?,
-        }
+            None => {
+                mfa.check(&pending.account_id, &cmd.code, now).await?;
+                None
+            }
+        };
         // Single use: of two completions racing, one issues a session.
         let pending = mfa.store().take_pending_login(&token_hash).await?.ok_or(AuthError::MfaChallengeInvalid)?;
 
@@ -382,12 +395,18 @@ impl LoginHandler {
         if let AccountActivation::Inactive { reason } = &snapshot.activation {
             return Err(AuthError::AccountNotActive { current: reason.clone() });
         }
+        let subject = IdpSubject::new(pending.issuer, pending.subject)?;
+        let origin = match &second {
+            Some(passkey) => SessionOrigin::passkey(passkey),
+            None => SessionOrigin::by(SessionMethod::of_subject(&subject)),
+        };
         let proven = ProvenSignIn {
             account_id: pending.account_id,
-            subject: IdpSubject::new(pending.issuer, pending.subject)?,
+            subject,
             needs_link: pending.needs_link,
             device: pending.device,
             guest_refresh_token: pending.guest_refresh_token,
+            origin,
         };
         self.finish(proven, snapshot, now, envelope.correlation_id).await
     }
@@ -427,7 +446,7 @@ impl LoginHandler {
         now: DateTime<Utc>,
         correlation_id: uuid::Uuid,
     ) -> Result<IssuedSession, AuthError> {
-        let ProvenSignIn { account_id, subject, needs_link, device, guest_refresh_token } = proven;
+        let ProvenSignIn { account_id, subject, needs_link, device, guest_refresh_token, origin } = proven;
         // Signing back in is how a holder undoes their own deactivation: the
         // credential was just proven, so the account resumes (a suspension is
         // never lifted here).
@@ -460,7 +479,7 @@ impl LoginHandler {
         let (user_agent, ip) = (device.user_agent().map(str::to_owned), device.ip_address().map(str::to_owned));
         let issued = self
             .members
-            .issue(account_id, subject, device, permissions, age_bracket, now, correlation_id)
+            .issue(account_id, subject, device, permissions, origin, age_bracket, now, correlation_id)
             .await?;
         if new_device {
             self.announce_new_device(account_id, user_agent, ip);
@@ -490,6 +509,7 @@ struct ProvenSignIn {
     needs_link: bool,
     device: DeviceFingerprint,
     guest_refresh_token: Option<String>,
+    origin: SessionOrigin,
 }
 
 /// What a sign-in comes to.

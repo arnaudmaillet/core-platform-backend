@@ -14,7 +14,7 @@ use crate::application::port::{
 use crate::domain::aggregate::{RefreshToken, RefreshTokenIssueParams, Session, SessionIssueParams};
 use crate::domain::value_object::{
     AccountId, AgeBracket, DeviceFingerprint, IdpSubject, Permission, RevocationReason, SessionId,
-    SessionKind, SessionStatus,
+    SessionKind, SessionMethod, SessionSignIn, SessionStatus,
 };
 use crate::error::AuthError;
 
@@ -25,6 +25,26 @@ pub struct MemberSession {
     pub access_token:      String,
     pub refresh_token:     String,
     pub access_expires_in: i64,
+}
+
+/// How a member session was opened, as far as minting is concerned (#880).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionOrigin {
+    pub sign_in:       SessionSignIn,
+    /// Opened with a staff-enrolled passkey: the account's staff grants ride.
+    pub staff_passkey: bool,
+}
+
+impl SessionOrigin {
+    /// Opened with a credential other than a passkey: member grants only.
+    pub fn by(method: SessionMethod) -> Self {
+        Self { sign_in: SessionSignIn::by(method), staff_passkey: false }
+    }
+
+    /// Opened with this passkey.
+    pub fn passkey(passkey: &super::passkeys::VerifiedPasskey) -> Self {
+        Self { sign_in: SessionSignIn::by_passkey(passkey.credential_id.clone()), staff_passkey: passkey.staff_enrolled }
+    }
 }
 
 /// Issues member sessions and retires guest sessions.
@@ -43,13 +63,16 @@ impl MemberSessions {
     /// A session of kind `Member` under the account's current generation, its
     /// refresh token, and an edge token carrying `read:public`, the account's
     /// profiles (`pids`) and a fresh `auth_time` (a credential was just proven).
+    /// `grants` are `account`'s; the staff ones ride only when `origin` is a
+    /// staff-enrolled passkey (#880).
     #[allow(clippy::too_many_arguments)]
     pub async fn issue(
         &self,
         account_id: AccountId,
         subject: IdpSubject,
         device: DeviceFingerprint,
-        permissions: Vec<Permission>,
+        grants: Vec<Permission>,
+        origin: SessionOrigin,
         age_bracket: Option<AgeBracket>,
         now: DateTime<Utc>,
         correlation_id: Uuid,
@@ -61,6 +84,7 @@ impl MemberSessions {
             subject,
             generation,
             device,
+            sign_in: origin.sign_in,
             issued_at: now,
             expires_at: now + self.policy.session_ttl,
             absolute_expiry: now + self.policy.absolute_ttl,
@@ -85,8 +109,9 @@ impl MemberSessions {
         // services can bind profile-keyed actors to the caller. Fail-safe: an
         // outage mints a token with no profile grants, never a failed login.
         let profile_ids = profile_ids_or_empty(&self.profiles, &account_id).await;
-        // Every member may read public content (the edge's `read:public` routes).
-        let permissions = Permission::with_read_public(permissions);
+        // Every member may read public content (the edge's `read:public` routes);
+        // staff grants only in a staff passkey session (#880).
+        let permissions = Permission::for_session(grants, origin.staff_passkey);
         let mut claims = session.mint_access_token(now, self.policy.access_ttl, permissions, profile_ids)?;
         // The credential was proved just now: the token counts as a recent
         // authentication for step-up-gated RPCs (until it is refreshed).

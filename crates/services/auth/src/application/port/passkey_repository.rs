@@ -18,6 +18,9 @@ pub struct StoredPasskey {
     pub backed_up:       bool,
     pub created_at:      DateTime<Utc>,
     pub last_used_at:    Option<DateTime<Utc>>,
+    /// Registered with a staff enrollment grant (#880): only a session opened
+    /// with it carries the account's staff permissions.
+    pub staff_enrolled:  bool,
 }
 
 /// An account's passkeys (Postgres, on the account's shard).

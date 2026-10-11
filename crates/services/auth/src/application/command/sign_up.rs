@@ -19,7 +19,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use cqrs::Envelope;
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::command::member_session::MemberSessions;
+use crate::application::command::member_session::{MemberSessions, SessionOrigin};
 use crate::application::command::verification::VerificationCodes;
 use crate::application::ensure_valid;
 use crate::application::port::{
@@ -28,7 +28,7 @@ use crate::application::port::{
 };
 use crate::domain::aggregate::SubjectLink;
 use crate::domain::value_object::{
-    AccountId, DeviceFingerprint, FederatedProvider, IdpSubject, SignInMethod, EMAIL_CODE_ISSUER,
+    AccountId, DeviceFingerprint, FederatedProvider, IdpSubject, SessionMethod, SignInMethod, EMAIL_CODE_ISSUER,
     PHONE_CODE_ISSUER,
 };
 use crate::application::port::VerificationChannel;
@@ -288,7 +288,16 @@ impl SignUpHandler {
         }
         let issued = self
             .members
-            .issue(account_id, subject, cmd.device, snapshot.permissions, snapshot.age_bracket, now, correlation_id)
+            .issue(
+                account_id,
+                subject.clone(),
+                cmd.device,
+                snapshot.permissions,
+                SessionOrigin::by(SessionMethod::of_subject(&subject)),
+                snapshot.age_bracket,
+                now,
+                correlation_id,
+            )
             .await?;
 
         // 6. The guest this device was is now this member.

@@ -48,6 +48,9 @@ pub struct RefreshHandler {
     minter: Arc<dyn TokenMinter>,
     publisher: Arc<dyn EventPublisher>,
     policy: SessionPolicy,
+    /// Where a passkey session's passkey is re-read (#880); `None`: no staff
+    /// grants are ever minted on refresh.
+    passkeys: Option<Arc<dyn crate::application::port::PasskeyRepository>>,
 }
 
 impl RefreshHandler {
@@ -62,7 +65,13 @@ impl RefreshHandler {
         publisher: Arc<dyn EventPublisher>,
         policy: SessionPolicy,
     ) -> Self {
-        Self { directory, profiles, sessions, refresh_tokens, cache, minter, publisher, policy }
+        Self { directory, profiles, sessions, refresh_tokens, cache, minter, publisher, policy, passkeys: None }
+    }
+
+    /// Re-reads a passkey session's passkey at each rotation (#880).
+    pub fn with_passkeys(mut self, passkeys: Arc<dyn crate::application::port::PasskeyRepository>) -> Self {
+        self.passkeys = Some(passkeys);
+        self
     }
 
     pub async fn handle(
@@ -127,7 +136,10 @@ impl RefreshHandler {
                 let snapshot = self.directory.lookup(&account_id).await?;
                 match snapshot.activation {
                     AccountActivation::Active => {
-                        (Permission::with_read_public(snapshot.permissions), snapshot.age_bracket)
+                        // Staff grants only while the session's passkey is
+                        // still a staff one (#880).
+                        let staff = super::credentials::is_staff_session(self.passkeys.as_ref(), &session).await?;
+                        (Permission::for_session(snapshot.permissions, staff), snapshot.age_bracket)
                     }
                     // Only a fresh login resumes a deactivated account.
                     AccountActivation::Deactivated => {

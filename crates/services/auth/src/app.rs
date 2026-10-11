@@ -187,7 +187,7 @@ impl App {
             },
         )
         .with_codes(Arc::clone(&deps.codes)));
-        let refresh = Arc::new(RefreshHandler::new(
+        let refresh = RefreshHandler::new(
             Arc::clone(&deps.directory),
             Arc::clone(&deps.profiles),
             Arc::clone(&deps.sessions),
@@ -196,7 +196,12 @@ impl App {
             Arc::clone(&deps.minter),
             Arc::clone(&deps.publisher),
             deps.policy.clone(),
-        ));
+        );
+        // A staff session's passkey is re-read at every rotation (#880).
+        let refresh = Arc::new(match &deps.passkeys {
+            Some(passkeys) => refresh.with_passkeys(Arc::clone(&passkeys.repository)),
+            None => refresh,
+        });
         let logout = Arc::new(LogoutHandler::new(
             Arc::clone(&deps.sessions),
             Arc::clone(&deps.refresh_tokens),

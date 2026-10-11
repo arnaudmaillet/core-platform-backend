@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use cqrs::Envelope;
 use validate_core::{FieldViolation, Validate};
 
-use super::credentials::{caller_session, prove_password, STEP_UP_WINDOW_SECS};
+use super::credentials::{caller_session, is_staff_session, prove_password, STEP_UP_WINDOW_SECS};
 use super::mfa::MfaVerifier;
 use crate::application::ensure_valid;
 use crate::application::policy::SessionPolicy;
@@ -130,6 +130,14 @@ impl VerifyCredentialsHandler {
         let session_id = SessionId::try_from(cmd.session_id.as_str())?;
 
         let session = caller_session(&self.sessions, &self.cache, &account_id, &session_id, now).await?;
+        // A staff session (#880) steps up with a passkey only: a code can be
+        // relayed by a look-alike site, a passkey cannot. A passkey step-up
+        // never makes a non-staff session staff — that is decided by how the
+        // session was opened.
+        let staff = is_staff_session(self.passkeys.as_ref().map(|p| p.repository()), &session).await?;
+        if staff && !matches!(cmd.credential, StepUpCredential::Passkey(_)) {
+            return Err(AuthError::StaffStepUpNeedsPasskey);
+        }
         match cmd.credential {
             StepUpCredential::Password(password) => {
                 prove_password(&self.admin, &self.idp, &session, password).await?;
@@ -148,7 +156,7 @@ impl VerifyCredentialsHandler {
         let snapshot = self.directory.lookup(&account_id).await?;
         let age_bracket = snapshot.age_bracket;
         let permissions = match snapshot.activation {
-            AccountActivation::Active => Permission::with_read_public(snapshot.permissions),
+            AccountActivation::Active => Permission::for_session(snapshot.permissions, staff),
             AccountActivation::Deactivated => {
                 return Err(AuthError::AccountNotActive { current: "deactivated".into() });
             }

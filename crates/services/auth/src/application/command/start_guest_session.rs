@@ -14,7 +14,7 @@ use crate::application::port::{
     TokenMinter,
 };
 use crate::domain::aggregate::{RefreshToken, RefreshTokenIssueParams, Session, SessionIssueParams};
-use crate::domain::value_object::{AccountId, DeviceFingerprint, IdpSubject, Permission, SessionKind};
+use crate::domain::value_object::{AccountId, DeviceFingerprint, IdpSubject, Permission, SessionKind, SessionSignIn};
 use crate::error::AuthError;
 
 /// The synthetic IdP issuer of guest sessions (sessions carry an IdP subject;
@@ -141,6 +141,7 @@ impl StartGuestSessionHandler {
             subject,
             generation,
             device: cmd.device,
+            sign_in: SessionSignIn::none(),
             issued_at: now,
             expires_at: now + self.policy.session_ttl,
             absolute_expiry: now + self.policy.absolute_ttl,

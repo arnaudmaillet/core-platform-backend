@@ -39,12 +39,12 @@ pub use logout::{LogoutCommand, LogoutHandler, LogoutOutcome};
 pub use logout_all_sessions::{
     LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutAllSessionsOutcome,
 };
-pub use member_session::{MemberSession, MemberSessions};
+pub use member_session::{MemberSession, MemberSessions, SessionOrigin};
 pub use mfa::{MfaPolicy, MfaVerifier};
 pub use mfa_settings::{BackupCodes, MfaCaller, MfaSettingsHandler, StartedMfaEnrolment, ENROLMENT_TTL_SECS};
 pub use passkeys::{
     PasskeyAssertion, PasskeyHandler, PasskeyRegistration, PasskeyRegistrationOptions, PasskeySignIn,
-    PasskeySignInOptions, PasskeyView, MAX_PASSKEYS, PASSKEY_CHALLENGE_TTL_SECS,
+    PasskeySignInOptions, PasskeyView, VerifiedPasskey, MAX_PASSKEYS, PASSKEY_CHALLENGE_TTL_SECS,
 };
 pub use refresh::{RefreshCommand, RefreshHandler};
 pub use sign_up::{SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome};
