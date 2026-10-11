@@ -54,4 +54,11 @@ impl WalletService for WalletServiceHandler {
     ) -> Result<Response<proto::ListStakePositionsResponse>, Status> {
         self.list_stake_positions(request).await
     }
+
+    async fn list_my_stakes(
+        &self,
+        request: Request<proto::ListMyStakesRequest>,
+    ) -> Result<Response<proto::ListMyStakesResponse>, Status> {
+        self.list_my_stakes(request).await
+    }
 }

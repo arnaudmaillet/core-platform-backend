@@ -169,7 +169,7 @@ last settlements land), the positions settled that day share a fixed pool —
 
 | Caller | Uses | Impact if `wallet` is down |
 |---|---|---|
-| the app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack` | balance, claim and pack unavailable; the rest of the app works |
+| the app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack`, `Stake`, `ListMyStakes` | balance, claim, pack, likes and the stakes list unavailable; the rest of the app works |
 | geo-discovery | `SpendGems` | country unlocks refused (fail-closed); the map works |
 | account | `ExportWallet`, `ListStakePositions`, `ListWalletTransactions` | GDPR exports retried next pass |
 | post, comment, social-graph (downstream) | `GetPost`, `GetComment`, `CheckAccess` | likes refused (`WAL-6001`, retried by the app) |
@@ -193,6 +193,7 @@ service WalletService {
   rpc SpendGems (SpendGemsRequest) returns (SpendGemsResponse);   // mesh only
   rpc ExportWallet (ExportWalletRequest) returns (ExportWalletResponse);                 // mesh only
   rpc ListStakePositions (ListStakePositionsRequest) returns (ListStakePositionsResponse); // mesh only
+  rpc ListMyStakes      (ListMyStakesRequest)      returns (ListMyStakesResponse);      // edge: the caller's account
 }
 ```
 
@@ -202,6 +203,12 @@ All but `SpendGems` are on the edge (`authenticated`), bound to the caller's `ac
 `ExportWallet` (the wallet read **without opening one**; absent when the account never had one) and
 `ListStakePositions` (each stake position with its settlement and envelope share, paged by target,
 token `kind:id`, ≤ 500 a page) are mesh only too: account's GDPR export (#653, #665).
+`ListMyStakes` (#886) is the app's view of the same positions, on the edge for the caller's account:
+newest first stake first, filtered `ACTIVE` / `SETTLED` (or both), ≤ 100 a page (50 by default), token
+`<first_at µs>:<kind>:<id>`. Each stake has its points, `settles_at` (first stake +
+`WALLET_SETTLEMENT_DELAY_SECS`), `settled_at` once settled, and a `StakeVerdict`: `PENDING` until the
+day's envelope is computed, then `REWARDED` / `NOT_REWARDED`. **No gems while settlement is shadow
+mode** (product decision 2026-10-11): the app never shows gems the balance does not hold.
 **Mesh callers are checked (#852, `MESH_CALLER_GATE`):** `SpendGems` takes **geo-discovery** only, and
 the end user's edge token it forwards (`authorization`) must name the account's owner, an adult; the
 export reads (and `ListWalletTransactions` over the mesh) take **account** only — the caller's

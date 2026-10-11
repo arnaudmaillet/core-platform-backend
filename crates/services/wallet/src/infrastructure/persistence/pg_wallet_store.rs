@@ -11,8 +11,8 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::application::port::{
-    ClaimOutcome, ClaimResult, EnvelopeSummary, GemSpend, SettlementRecord, StakePositionRecord, OutboxEvent, PackOutcome, SpendOutcome, StakeAnnouncement, StakeOutcome,
-    StakeResult, TransactionCursor, WalletStore,
+    ClaimOutcome, ClaimResult, EnvelopeSummary, GemSpend, MyStakeRecord, SettlementRecord, StakePositionRecord, OutboxEvent, PackOutcome,
+    SpendOutcome, StakeAnnouncement, StakeCursor, StakeOutcome, StakeResult, StakeStatus, TransactionCursor, WalletStore,
 };
 use crate::domain::event::{StakeCommitted, WalletEvent};
 use crate::domain::{
@@ -823,6 +823,41 @@ impl WalletStore for PgWalletStore {
         Ok(rows.into_iter().filter_map(PositionRow::into_record).collect())
     }
 
+    #[instrument(name = "wallet.stakes.mine", skip(self, before))]
+    async fn my_stakes(
+        &self,
+        account: &AccountId,
+        status: StakeStatus,
+        before: Option<&StakeCursor>,
+        limit: i64,
+    ) -> Result<Vec<MyStakeRecord>, WalletError> {
+        let status = match status {
+            StakeStatus::All => "all",
+            StakeStatus::Active => "active",
+            StakeStatus::Settled => "settled",
+        };
+        let rows: Vec<MyStakeRow> = sqlx::query_as(
+            "SELECT s.target_kind, s.target_id, s.total, s.first_at, s.last_at, \
+               COALESCE(t.settled_at, s.settled_at) AS settled_at, t.outcome \
+             FROM stakes s LEFT JOIN settlements t \
+               ON t.account_id = s.account_id AND t.target_kind = s.target_kind AND t.target_id = s.target_id \
+             WHERE s.account_id = $1 \
+               AND ($2 = 'all' OR ($2 = 'active') = (s.settled_at IS NULL)) \
+               AND ($3::timestamptz IS NULL OR (s.first_at, s.target_kind, s.target_id) < ($3, $4, $5)) \
+             ORDER BY s.first_at DESC, s.target_kind DESC, s.target_id DESC LIMIT $6",
+        )
+        .bind(account.as_uuid())
+        .bind(status)
+        .bind(before.map(|c| c.first_at))
+        .bind(before.map_or("", |c| c.target.kind()))
+        .bind(before.map_or("", |c| c.target.id()))
+        .bind(limit)
+        .fetch_all(self.pool(account)?)
+        .await
+        .map_err(storage)?;
+        Ok(rows.into_iter().filter_map(MyStakeRow::into_record).collect())
+    }
+
     #[instrument(name = "wallet.envelope.complete", skip(self, summary))]
     async fn complete_envelope_day(&self, day: NaiveDate, summary: &EnvelopeSummary) -> Result<(), WalletError> {
         sqlx::query(
@@ -846,6 +881,37 @@ impl WalletStore for PgWalletStore {
 /// Midnight (UTC) at the start of `day`.
 fn day_start(day: NaiveDate) -> DateTime<Utc> {
     day.and_time(chrono::NaiveTime::MIN).and_utc()
+}
+
+/// One of an account's stakes with its settlement's time and outcome (#886).
+#[derive(sqlx::FromRow)]
+struct MyStakeRow {
+    target_kind: String,
+    target_id:   String,
+    total:       i64,
+    first_at:    DateTime<Utc>,
+    last_at:     DateTime<Utc>,
+    settled_at:  Option<DateTime<Utc>>,
+    outcome:     Option<i16>,
+}
+
+impl MyStakeRow {
+    /// `None` for a row the service cannot read (never guessed).
+    fn into_record(self) -> Option<MyStakeRecord> {
+        let target = match self.target_kind.as_str() {
+            "post" => StakeTarget::Post(self.target_id),
+            "comment" => StakeTarget::Comment(self.target_id),
+            _ => return None,
+        };
+        Some(MyStakeRecord {
+            target,
+            points: self.total,
+            first_at: self.first_at,
+            last_at: self.last_at,
+            settled_at: self.settled_at,
+            outcome: self.outcome,
+        })
+    }
 }
 
 /// A stake position joined with its settlement, as stored.

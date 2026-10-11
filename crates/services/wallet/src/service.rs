@@ -56,6 +56,8 @@ impl Service for WalletService {
         authenticated("/wallet.v1.WalletService/BuyStakePack"),
         // Likes (#665): the caller's account and profile.
         authenticated("/wallet.v1.WalletService/Stake"),
+        // The caller's own stakes (#886): its account.
+        authenticated("/wallet.v1.WalletService/ListMyStakes"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -228,7 +230,7 @@ mod tests {
 
     #[test]
     fn the_edge_exposes_the_callers_own_wallet_only() {
-        assert_eq!(WalletService::EDGE_POLICY.len(), 5);
+        assert_eq!(WalletService::EDGE_POLICY.len(), 6);
         assert!(service_runtime::edge::validate_policy(WalletService::EDGE_POLICY).is_ok());
         // Another service's gem spend, and an account's export, never reach
         // the app.

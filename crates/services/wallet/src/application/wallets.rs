@@ -7,8 +7,9 @@ use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use uuid::Uuid;
 
 use crate::application::port::{
-    AudienceCheck, ClaimOutcome, EnvelopeSummary, EventPublisher, GemSpend, LikePositions, OutboxEvent, PackOutcome, SpendOutcome, StakeAnnouncement,
-    StakeOutcome, StakePositionRecord, StakeResult, TargetDirectory, TransactionCursor, WalletStore,
+    AudienceCheck, ClaimOutcome, EnvelopeSummary, EventPublisher, GemSpend, LikePositions, MyStakeRecord, OutboxEvent, PackOutcome,
+    SpendOutcome, StakeAnnouncement, StakeCursor, StakeOutcome, StakePositionRecord, StakeResult, StakeStatus, TargetDirectory,
+    TransactionCursor, WalletStore,
 };
 use crate::config::WalletConfig;
 use crate::domain::{
@@ -73,6 +74,60 @@ pub struct StakePositionPage {
 /// Default and maximum stake-position page sizes (the GDPR export).
 pub const DEFAULT_POSITIONS_PAGE: i64 = 100;
 pub const MAX_POSITIONS_PAGE: i64 = 500;
+
+/// Default and maximum page sizes of the caller's own stakes (#886).
+pub const DEFAULT_MY_STAKES_PAGE: i64 = 50;
+pub const MAX_MY_STAKES_PAGE: i64 = 100;
+
+/// A stake's verdict as the app shows it (#886): never gems while settlement
+/// is shadow mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StakeVerdict {
+    /// Not settled yet.
+    Unsettled,
+    /// Settled; the day's result is not computed yet.
+    Pending,
+    Rewarded,
+    NotRewarded,
+}
+
+/// One of the caller's stakes, with when it settles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MyStake {
+    pub record:     MyStakeRecord,
+    pub settles_at: DateTime<Utc>,
+    pub verdict:    StakeVerdict,
+}
+
+/// One page of the caller's stakes; `next_page_token` is `None` on the last.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MyStakesPage {
+    pub stakes:          Vec<MyStake>,
+    pub next_page_token: Option<String>,
+}
+
+/// `<first_at µs>:<kind>:<id>` — the last stake of a page.
+fn stake_cursor_token(record: &MyStakeRecord) -> String {
+    format!("{}:{}", record.first_at.timestamp_micros(), record.target.reference())
+}
+
+fn parse_stake_cursor(token: &str) -> Result<Option<StakeCursor>, WalletError> {
+    if token.is_empty() {
+        return Ok(None);
+    }
+    let invalid = || WalletError::InvalidPageToken { value: token.to_owned() };
+    let mut parts = token.splitn(3, ':');
+    let (Some(micros), Some(kind), Some(id)) = (parts.next(), parts.next(), parts.next()) else {
+        return Err(invalid());
+    };
+    let first_at = micros.parse().ok().and_then(DateTime::from_timestamp_micros).ok_or_else(invalid)?;
+    let target = match kind {
+        "post" => StakeTarget::Post(id.to_owned()),
+        "comment" => StakeTarget::Comment(id.to_owned()),
+        _ => return Err(invalid()),
+    };
+    Ok(Some(StakeCursor { first_at, target }))
+}
 
 /// Longest `ref_id` a spend may name.
 const MAX_REF_LEN: usize = 64;
@@ -421,6 +476,39 @@ impl Wallets {
         let account = AccountId::parse(account)?;
         let now = ledger_time(now);
         Ok(self.store.peek(&account).await?.map(|wallet| self.view(wallet, now)))
+    }
+
+    /// One page of the caller's own stakes (#886), newest first stake first:
+    /// each with when it settles and, once settled, its verdict — no gems.
+    pub async fn my_stakes(
+        &self,
+        account: &str,
+        status: StakeStatus,
+        page_size: i64,
+        page_token: &str,
+    ) -> Result<MyStakesPage, WalletError> {
+        let account = AccountId::parse(account)?;
+        let before = parse_stake_cursor(page_token)?;
+        let limit = match page_size {
+            n if n <= 0 => DEFAULT_MY_STAKES_PAGE,
+            n => n.min(MAX_MY_STAKES_PAGE),
+        };
+        let records = self.store.my_stakes(&account, status, before.as_ref(), limit).await?;
+        let next_page_token = (records.len() as i64 == limit).then(|| records.last().map(stake_cursor_token)).flatten();
+        let delay = self.config.settlement.delay;
+        let stakes = records
+            .into_iter()
+            .map(|record| {
+                let verdict = match (record.settled_at, record.outcome) {
+                    (None, _) => StakeVerdict::Unsettled,
+                    (Some(_), None) => StakeVerdict::Pending,
+                    (Some(_), Some(outcome)) if outcome > 0 => StakeVerdict::Rewarded,
+                    (Some(_), Some(_)) => StakeVerdict::NotRewarded,
+                };
+                MyStake { settles_at: record.first_at + delay, verdict, record }
+            })
+            .collect();
+        Ok(MyStakesPage { stakes, next_page_token })
     }
 
     /// One page of the account's stake positions and their settlements,
@@ -829,6 +917,43 @@ pub(crate) mod fakes {
             Ok(positions)
         }
 
+        async fn my_stakes(
+            &self,
+            account: &AccountId,
+            status: StakeStatus,
+            before: Option<&StakeCursor>,
+            limit: i64,
+        ) -> Result<Vec<MyStakeRecord>, WalletError> {
+            let order = |at: DateTime<Utc>, t: &StakeTarget| (at, t.kind().to_owned(), t.id().to_owned());
+            let stakes = self.stakes.lock().unwrap();
+            let settlements = self.settlements.lock().unwrap();
+            let allocations = self.allocations.lock().unwrap();
+            let mut mine: Vec<MyStakeRecord> = self
+                .positions
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|((a, _), _)| a == account)
+                .map(|(slot, (target, first_at, _))| MyStakeRecord {
+                    target:     target.clone(),
+                    points:     stakes.get(slot).map_or(0, |(total, _)| *total),
+                    first_at:   *first_at,
+                    last_at:    *first_at,
+                    settled_at: settlements.get(slot).map(|s| s.settled_at),
+                    outcome:    allocations.get(slot).map(|(_, a)| a.outcome),
+                })
+                .filter(|r| match status {
+                    StakeStatus::All => true,
+                    StakeStatus::Active => r.settled_at.is_none(),
+                    StakeStatus::Settled => r.settled_at.is_some(),
+                })
+                .filter(|r| before.is_none_or(|c| order(r.first_at, &r.target) < order(c.first_at, &c.target)))
+                .collect();
+            mine.sort_by_key(|r| std::cmp::Reverse(order(r.first_at, &r.target)));
+            mine.truncate(limit as usize);
+            Ok(mine)
+        }
+
         async fn record_settlement(&self, settlement: &crate::domain::Settlement) -> Result<(), WalletError> {
             let slot = (settlement.account, settlement.target.reference());
             self.settlements.lock().unwrap().entry(slot).or_insert_with(|| settlement.clone());
@@ -1204,6 +1329,52 @@ mod tests {
         // Erasure takes the settlements with the wallet.
         w.erase(&me_id).await.unwrap();
         assert!(!store.settlements.lock().unwrap().contains_key(&(me_id, "post:post-1".to_owned())));
+    }
+
+    /// #886: the caller's own stakes, newest first, filtered and paged; each
+    /// says when it settles and, once settled, its verdict — never gems.
+    #[tokio::test]
+    async fn the_caller_lists_its_own_stakes_newest_first_with_verdicts_and_no_gems() {
+        use crate::domain::{Allocation, DuePosition, Observed, SettlementPolicy};
+        let (targets, audience, publisher) =
+            (Arc::new(MemTargets::default()), Arc::new(MemAudience::default()), Arc::new(MemPublisher::default()));
+        let store = Arc::new(MemoryStore::default());
+        let wallets = Wallets::new(Arc::clone(&store) as _, WalletConfig::default()).with_stakes(
+            Arc::clone(&targets) as _,
+            Arc::clone(&audience) as _,
+            Arc::clone(&publisher) as _,
+        );
+        let me = Uuid::now_v7().to_string();
+        let account = AccountId::parse(&me).unwrap();
+        funded(&wallets, &me).await;
+        for (hour, target) in [(10, "post-a"), (11, "post-b"), (12, "post-c")] {
+            targets.lock_insert(target, "author", true);
+            wallets.stake(&me, batch(target, StakeAsk::Points(5), &key(), at(8, hour)), &[], at(8, hour)).await.unwrap();
+        }
+        // post-a settled and rewarded; post-b settled, its day not computed.
+        for target in ["post-a", "post-b"] {
+            let due = DuePosition { account, target: StakeTarget::Post(target.into()), points: 5, first_at: at(8, 10) };
+            let observed = Observed { total: 5, count_on_arrival: Some(1), count_now: 9 };
+            store.record_settlement(&SettlementPolicy::default().settle(due, observed, at(9, 12))).await.unwrap();
+        }
+        let rewarded = Allocation { outcome: 1, score: 0.5, provisional_gems: 7 };
+        store.allocations.lock().unwrap().insert((account, "post:post-a".into()), (at(9, 12).date_naive(), rewarded));
+
+        let all = wallets.my_stakes(&me, StakeStatus::All, 2, "").await.unwrap();
+        let names = |page: &MyStakesPage| page.stakes.iter().map(|s| s.record.target.id().to_owned()).collect::<Vec<_>>();
+        assert_eq!(names(&all), ["post-c", "post-b"], "newest first stake first");
+        assert_eq!(all.stakes[0].settles_at, at(8, 12) + WalletConfig::default().settlement.delay);
+        assert_eq!((all.stakes[0].verdict, all.stakes[1].verdict), (StakeVerdict::Unsettled, StakeVerdict::Pending));
+        let rest = wallets.my_stakes(&me, StakeStatus::All, 2, all.next_page_token.as_deref().unwrap()).await.unwrap();
+        assert_eq!((names(&rest), rest.stakes[0].verdict, rest.next_page_token), (vec!["post-a".to_owned()], StakeVerdict::Rewarded, None));
+
+        let active = wallets.my_stakes(&me, StakeStatus::Active, 0, "").await.unwrap();
+        assert_eq!(names(&active), ["post-c"]);
+        let settled = wallets.my_stakes(&me, StakeStatus::Settled, 0, "").await.unwrap();
+        assert_eq!(names(&settled), ["post-b", "post-a"]);
+        assert!(wallets.my_stakes(&me, StakeStatus::All, 2, "bogus").await.is_err());
+        let other = Uuid::now_v7().to_string();
+        assert!(wallets.my_stakes(&other, StakeStatus::All, 0, "").await.unwrap().stakes.is_empty(), "another account sees none");
     }
 
     /// The GDPR export (#653, #665): the wallet read without opening one,

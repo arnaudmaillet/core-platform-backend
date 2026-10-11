@@ -87,3 +87,24 @@ enum StakeOutcome {
     // One's own post or comment (any profile of the account).
     STAKE_OUTCOME_OWN_CONTENT          = 9;
 }
+
+// Which of the caller's stakes to list (#886).
+enum StakeStatusFilter {
+    // Both.
+    STAKE_STATUS_FILTER_UNSPECIFIED = 0;
+    // Not settled yet.
+    STAKE_STATUS_FILTER_ACTIVE      = 1;
+    STAKE_STATUS_FILTER_SETTLED     = 2;
+}
+
+// A stake's verdict (#886).
+enum StakeVerdict {
+    // Not settled yet.
+    STAKE_VERDICT_UNSPECIFIED  = 0;
+    // Settled; the day's result is not computed yet.
+    STAKE_VERDICT_PENDING      = 1;
+    // The target made the day's top: the stake is rewarded (gems once minting
+    // is on).
+    STAKE_VERDICT_REWARDED     = 2;
+    STAKE_VERDICT_NOT_REWARDED = 3;
+}

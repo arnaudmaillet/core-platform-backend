@@ -56,4 +56,11 @@ service WalletService {
     // staked on, and the position's settlement once it settled — paged by
     // target, for the GDPR data export.
     rpc ListStakePositions(ListStakePositionsRequest) returns (ListStakePositionsResponse);
+
+    // The caller's own stakes, for the wallet sheet (#886): each post or
+    // comment it staked on, active (with when it settles) or settled (with the
+    // day's verdict), newest first, paged. Edge: the caller's account. While
+    // settlement is shadow mode no gems are shown — the app never displays gems
+    // the balance does not hold.
+    rpc ListMyStakes(ListMyStakesRequest) returns (ListMyStakesResponse);
 }

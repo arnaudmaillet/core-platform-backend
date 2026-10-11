@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 41bac7722b3b6588b90c1a98f7754b6e92e1326a866697b4c0114ca500677f53
+  source_sha256: 9167b6c1728f50d7e528bb3e420f66eacc3169b41e462f7b80a3573d165060aa
   translated_at: 2026-10-11
   status: complete
 ---
@@ -189,7 +189,7 @@ un pool fixe — `WALLET_CURATOR_ENVELOPE_DAILY`, 1000 gems (charte économique 
 
 | Appelant | Utilise | Impact si `wallet` tombe |
 |---|---|---|
-| l'app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack` | solde, réclamation et pack indisponibles ; le reste de l'app fonctionne |
+| l'app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack`, `Stake`, `ListMyStakes` | solde, réclamation, pack, likes et liste des mises indisponibles ; le reste de l'app fonctionne |
 | geo-discovery | `SpendGems` | déblocages de pays refusés (fail-closed) ; la carte fonctionne |
 | account | `ExportWallet`, `ListStakePositions`, `ListWalletTransactions` | exports RGPD réessayés au passage suivant |
 | post, comment, social-graph (en aval) | `GetPost`, `GetComment`, `CheckAccess` | likes refusés (`WAL-6001`, renvoyés par l'app) |
@@ -213,6 +213,7 @@ service WalletService {
   rpc SpendGems (SpendGemsRequest) returns (SpendGemsResponse);   // mesh seulement
   rpc ExportWallet (ExportWalletRequest) returns (ExportWalletResponse);                 // mesh seulement
   rpc ListStakePositions (ListStakePositionsRequest) returns (ListStakePositionsResponse); // mesh seulement
+  rpc ListMyStakes      (ListMyStakesRequest)      returns (ListMyStakesResponse);      // edge : le compte de l'appelant
 }
 ```
 
@@ -222,7 +223,13 @@ Tous sauf `SpendGems` sont sur l'edge (`authenticated`), liés au `account_id` d
 `ExportWallet` (le wallet lu **sans en ouvrir un** ; absent quand le compte n'en a jamais eu) et
 `ListStakePositions` (chaque position de mise avec son règlement et sa part d'enveloppe, paginée par
 cible, jeton `kind:id`, ≤ 500 par page) sont aussi réservés au mesh : l'export RGPD d'account (#653,
-#665). **Les appelants mesh sont vérifiés (#852, `MESH_CALLER_GATE`) :** `SpendGems` n'accepte que
+#665). `ListMyStakes` (#886) est la vue de l'app sur ces mêmes positions, sur l'edge pour le compte de
+l'appelant : la première mise la plus récente d'abord, filtrées `ACTIVE` / `SETTLED` (ou les deux),
+≤ 100 par page (50 par défaut), jeton `<first_at µs>:<kind>:<id>`. Chaque mise porte ses points,
+`settles_at` (première mise + `WALLET_SETTLEMENT_DELAY_SECS`), `settled_at` une fois réglée, et un
+`StakeVerdict` : `PENDING` tant que l'enveloppe du jour n'est pas calculée, puis `REWARDED` /
+`NOT_REWARDED`. **Aucune gem tant que le règlement est en mode shadow** (décision produit du
+2026-10-11) : l'app n'affiche jamais de gems absentes du solde. **Les appelants mesh sont vérifiés (#852, `MESH_CALLER_GATE`) :** `SpendGems` n'accepte que
 **geo-discovery**, et le jeton edge de l'utilisateur qu'il transmet (`authorization`) doit désigner le
 propriétaire du compte, majeur ; les lectures d'export (et `ListWalletTransactions` sur le mesh)
 n'acceptent qu'**account** — le jeton de ServiceAccount de l'appelant, `x-mesh-token`. `off` tant que

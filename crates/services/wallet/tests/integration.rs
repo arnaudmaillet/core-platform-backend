@@ -509,3 +509,55 @@ async fn the_export_reads_without_opening_and_joins_the_settlements() {
     assert_eq!((settlement.outcome, settlement.provisional_gems, settlement.envelope_day), (None, None, None), "no envelope yet");
     assert!(all.iter().filter(|p| p.target != targets[1]).all(|p| p.settlement.is_none() && p.points == 7));
 }
+
+/// #886 over Postgres: the caller's own stakes, newest first stake first,
+/// paged by (first_at, target), filtered active / settled, with the settlement
+/// time and the day's outcome joined — and nobody else's.
+#[tokio::test]
+async fn my_stakes_page_newest_first_and_filter_by_settlement() {
+    use chrono::TimeDelta;
+    use wallet::application::port::{StakeCursor, StakeStatus};
+    use wallet::domain::{DuePosition, Observed, SettlementPolicy};
+
+    let pool = pool().await;
+    let store = store(&pool);
+    let account = AccountId::from_uuid(Uuid::now_v7());
+    fund(&pool, &store, &account, 500).await;
+    let start = Utc::now() - TimeDelta::hours(3);
+    let targets: Vec<StakeTarget> = (0..3).map(|i| StakeTarget::Post(format!("p{i}-{}", Uuid::now_v7()))).collect();
+    for (i, target) in targets.iter().enumerate() {
+        let key = IdempotencyKey::for_operation(Operation::Stake, &Uuid::now_v7().to_string()).unwrap();
+        let at = start + TimeDelta::minutes(10 * i as i64);
+        store
+            .stake(&account, &key, target, StakeAsk::Points(4), &announcement(), &StakePolicy::default(), &StakePackPolicy::default(), 0, at)
+            .await
+            .unwrap();
+    }
+    // The oldest settles; its day's outcome lands later.
+    let due = DuePosition { account, target: targets[0].clone(), points: 4, first_at: start };
+    let observed = Observed { total: 4, count_on_arrival: Some(2), count_now: 20 };
+    store.record_settlement(&SettlementPolicy::default().settle(due, observed, start + TimeDelta::hours(25))).await.unwrap();
+
+    let first = store.my_stakes(&account, StakeStatus::All, None, 2).await.unwrap();
+    assert_eq!(first.iter().map(|s| &s.target).collect::<Vec<_>>(), [&targets[2], &targets[1]], "newest first");
+    let cursor = StakeCursor { first_at: first[1].first_at, target: first[1].target.clone() };
+    let rest = store.my_stakes(&account, StakeStatus::All, Some(&cursor), 2).await.unwrap();
+    assert_eq!(rest.len(), 1);
+    assert_eq!((&rest[0].target, rest[0].points, rest[0].outcome), (&targets[0], 4, None));
+    assert!(rest[0].settled_at.is_some(), "the settlement is joined");
+
+    let active = store.my_stakes(&account, StakeStatus::Active, None, 10).await.unwrap();
+    assert_eq!(active.len(), 2);
+    assert!(active.iter().all(|s| s.settled_at.is_none()));
+    sqlx::query("UPDATE settlements SET outcome = 1 WHERE account_id = $1 AND target_id = $2")
+        .bind(account.as_uuid())
+        .bind(targets[0].id())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let settled = store.my_stakes(&account, StakeStatus::Settled, None, 10).await.unwrap();
+    assert_eq!((settled.len(), settled[0].outcome), (1, Some(1)));
+
+    let stranger = AccountId::from_uuid(Uuid::now_v7());
+    assert!(store.my_stakes(&stranger, StakeStatus::All, None, 10).await.unwrap().is_empty());
+}
