@@ -37,7 +37,8 @@ impl Default for WalletConfig {
 impl WalletConfig {
     /// `WALLET_CLAIM_INTERVAL_SECS` (3600), `WALLET_CLAIM_BASE_POINTS` (25),
     /// `WALLET_DAILY_CLAIM_CAP` (200), `WALLET_STARTER_GEMS` (100),
-    /// `WALLET_STAKE_PACK_SHOTS` (3), `WALLET_STAKE_PACK_PRICE` (50 gems),
+    /// `WALLET_POINTS_CAP` (2000, the balance a claim never takes past; 0 keeps
+    /// the default), `WALLET_STAKE_PACK_SHOTS` (3), `WALLET_STAKE_PACK_PRICE` (50 gems),
     /// `WALLET_POINTS_PER_SHOT` (100), `WALLET_STAKE_TARGET_CAP` (250),
     /// `WALLET_STAKE_HOURLY_CAP` (1000), `WALLET_STAKE_MAX_BATCH_AGE_SECS`
     /// (86400), `WALLET_SETTLEMENT_DELAY_SECS` (86400; a position's full
@@ -63,6 +64,7 @@ impl WalletConfig {
                 daily_cap:   number("WALLET_DAILY_CLAIM_CAP")
                     .and_then(|v| i32::try_from(v).ok())
                     .unwrap_or(defaults.claim.daily_cap),
+                points_cap:  number("WALLET_POINTS_CAP").filter(|v| *v > 0).unwrap_or(defaults.claim.points_cap),
             },
             starter_gems: number("WALLET_STARTER_GEMS").unwrap_or(defaults.starter_gems),
             stake_pack: StakePackPolicy {
@@ -116,5 +118,9 @@ mod tests {
         });
         assert_eq!(config.starter_gems, 0);
         assert_eq!(config.claim.daily_cap, 200, "a negative value keeps the default");
+        assert_eq!(config.claim.points_cap, 2_000);
+        let capped = |v: &str| WalletConfig::from_lookup(|name| (name == "WALLET_POINTS_CAP").then(|| v.into())).claim.points_cap;
+        assert_eq!(capped("500"), 500);
+        assert_eq!(capped("0"), 2_000, "a zero cap keeps the default");
     }
 }

@@ -279,6 +279,7 @@ impl WalletStore for PgWalletStore {
             }
             ClaimDecision::TooEarly { .. } => (ClaimOutcome::TooEarly, 0),
             ClaimDecision::DailyCapReached { .. } => (ClaimOutcome::DailyCapReached, 0),
+            ClaimDecision::BalanceFull => (ClaimOutcome::BalanceFull, 0),
         };
         tx.commit().await.map_err(storage)?;
         Ok(ClaimResult { outcome, awarded, wallet })

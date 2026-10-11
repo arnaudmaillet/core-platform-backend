@@ -18,6 +18,8 @@ pub enum ClaimOutcome {
     Claimed,
     TooEarly,
     DailyCapReached,
+    /// The balance is at `WALLET_POINTS_CAP` (#887): nothing credited.
+    BalanceFull,
 }
 
 /// A claim's result and the wallet after it.
