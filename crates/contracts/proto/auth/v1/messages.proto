@@ -444,6 +444,9 @@ message FinishPasskeyRegistrationRequest {
     bytes  attestation_object = 3;
     // The holder's name for it (≤ 64 chars); empty ⇒ "Passkey".
     string name               = 4;
+    // A staff enrollment grant (#880): the passkey becomes a staff passkey.
+    // Empty: a member passkey.
+    string staff_enrollment_grant = 5;
 }
 
 message Passkey {
@@ -455,6 +458,20 @@ message Passkey {
     google.protobuf.Timestamp last_used_at  = 4;
     // Synced across the holder's devices (e.g. iCloud Keychain).
     bool                      synced        = 5;
+    // A staff passkey (#880): sessions opened with it carry staff permissions.
+    bool                      staff         = 6;
+}
+
+message IssueStaffPasskeyEnrollmentRequest {
+    // The staff member's account (not the caller's).
+    string account_id = 1;
+}
+
+message IssueStaffPasskeyEnrollmentResponse {
+    // The grant: a secret handed to the staff member once, presented as
+    // FinishPasskeyRegistrationRequest.staff_enrollment_grant.
+    string                    grant      = 1;
+    google.protobuf.Timestamp expires_at = 2;
 }
 
 message StartPasskeySignInRequest {}

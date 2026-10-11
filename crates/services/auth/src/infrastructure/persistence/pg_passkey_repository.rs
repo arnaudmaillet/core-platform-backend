@@ -169,4 +169,18 @@ impl PasskeyRepository for PgPasskeyRepository {
             .rows_affected();
         Ok(removed > 0)
     }
+
+    #[instrument(name = "auth.passkey.any_staff", skip(self))]
+    async fn any_staff_enrolled(&self) -> Result<bool, AuthError> {
+        for pool in self.tx.all_pools() {
+            let any: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM passkeys WHERE staff_enrolled)")
+                .fetch_one(pool)
+                .await
+                .map_err(storage)?;
+            if any {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }

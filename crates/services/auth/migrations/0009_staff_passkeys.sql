@@ -16,6 +16,8 @@ CREATE INDEX IF NOT EXISTS passkeys_staff_enrolled ON passkeys (account_id) WHER
 -- the SHA-256 of the grant is kept. `issued_by` is null for the bootstrap.
 CREATE TABLE IF NOT EXISTS staff_enrollment_grants (
     grant_hash TEXT        PRIMARY KEY,
+    -- Names the grant in audit (the grant itself is a secret).
+    grant_id   UUID        NOT NULL,
     account_id UUID        NOT NULL,
     issued_by  UUID,
     issued_at  TIMESTAMPTZ NOT NULL,

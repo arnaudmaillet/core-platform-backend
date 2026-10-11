@@ -1,11 +1,13 @@
 pub mod app_authorization;
 pub mod session_issued;
 pub mod session_revoked;
+pub mod staff_enrollment;
 pub mod subject_linked;
 
 pub use app_authorization::{AppAuthorizationRevoked, AppAuthorized};
 pub use session_issued::SessionIssued;
 pub use session_revoked::SessionRevoked;
+pub use staff_enrollment::{StaffEnrollmentGranted, StaffPasskeyEnrolled};
 pub use subject_linked::SubjectLinked;
 
 use serde::{Deserialize, Serialize};
@@ -26,6 +28,8 @@ pub enum DomainEvent {
     SubjectLinked(SubjectLinked),
     AppAuthorized(AppAuthorized),
     AppAuthorizationRevoked(AppAuthorizationRevoked),
+    StaffEnrollmentGranted(StaffEnrollmentGranted),
+    StaffPasskeyEnrolled(StaffPasskeyEnrolled),
 }
 
 impl DomainEvent {
@@ -37,6 +41,8 @@ impl DomainEvent {
             Self::SubjectLinked(_) => "auth.subject_linked",
             Self::AppAuthorized(_) => "auth.app_authorized",
             Self::AppAuthorizationRevoked(_) => "auth.app_authorization_revoked",
+            Self::StaffEnrollmentGranted(_) => "auth.staff_enrollment_granted",
+            Self::StaffPasskeyEnrolled(_) => "auth.staff_passkey_enrolled",
         }
     }
 }

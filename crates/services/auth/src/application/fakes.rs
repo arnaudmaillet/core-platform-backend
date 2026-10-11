@@ -1474,6 +1474,10 @@ impl super::port::PasskeyRepository for InMemoryPasskeyRepository {
         rows.retain(|(a, p)| !(a == account_id && p.credential_id == credential_id));
         Ok(rows.len() < before)
     }
+
+    async fn any_staff_enrolled(&self) -> Result<bool, AuthError> {
+        Ok(self.rows.lock().unwrap().iter().any(|(_, p)| p.staff_enrolled))
+    }
 }
 
 /// Server-issued sign-in nonces, in memory.
@@ -1560,5 +1564,30 @@ impl super::port::AppAuthorizationRepository for InMemoryAppAuthorizationReposit
 
     async fn is_active(&self, account_id: &AccountId, app_id: &str) -> Result<bool, AuthError> {
         Ok(self.rows.lock().unwrap().iter().any(|(a, g, revoked)| a == account_id && g.app_id == app_id && revoked.is_none()))
+    }
+}
+
+/// Staff enrollment grants (#880), in memory: (grant hash → grant, used).
+#[derive(Default)]
+pub struct InMemoryStaffGrants {
+    rows: Mutex<HashMap<String, (super::port::StaffGrant, bool)>>,
+}
+
+#[async_trait]
+impl super::port::StaffEnrollmentGrants for InMemoryStaffGrants {
+    async fn issue(&self, grant: &super::port::StaffGrant, grant_hash: &str) -> Result<(), AuthError> {
+        self.rows.lock().unwrap().insert(grant_hash.to_owned(), (grant.clone(), false));
+        Ok(())
+    }
+
+    async fn redeem(&self, account_id: &AccountId, grant_hash: &str, now: DateTime<Utc>) -> Result<Option<Uuid>, AuthError> {
+        let mut rows = self.rows.lock().unwrap();
+        Ok(match rows.get_mut(grant_hash) {
+            Some((grant, used)) if !*used && grant.account_id == *account_id && now < grant.expires_at => {
+                *used = true;
+                Some(grant.grant_id)
+            }
+            _ => None,
+        })
     }
 }

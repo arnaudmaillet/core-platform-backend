@@ -17,12 +17,14 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
+    StaffEnrollment,
     AccountErasure, AccountRevocation, AppAuthorizations, ExportReadyNotifier, AttestMode, GuestAttestation, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
     LogoutAllSessionsHandler, LogoutHandler, MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler,
     MfaPolicy, MfaSettingsHandler, MfaVerifier, PasskeyHandler, PasskeySignIn, StartGuestSessionHandler,
     VerificationCodes,
     VerifyCredentialsHandler,
 };
+use crate::application::port::StaffEnrollmentGrants;
 use crate::application::port::{
     AccountDirectory, AppAuthorizationRepository, CredentialAdmin, EventPublisher, FederatedNonceStore, FederatedTokenVerifier, GuestRegistry,
     IdentityProvider, PasskeyRepository,
@@ -51,6 +53,7 @@ use crate::infrastructure::idp::{
     JwksFederatedTokenVerifier, KeycloakCredentialAdmin, KeycloakIdentityProvider,
     UnconfiguredCredentialAdmin,
 };
+use crate::infrastructure::persistence::PgStaffGrants;
 use crate::infrastructure::persistence::{
     PgAccountEraser, PgAppAuthorizationRepository, PgGuestRegistry, PgPasskeyRepository, PgRefreshTokenRepository, PgSessionRepository,
     PgSubjectLinkRepository,
@@ -103,6 +106,8 @@ pub struct PasskeyDeps {
     pub registrations: Arc<dyn FederatedNonceStore>,
     /// Sign-in challenges (single use, anyone's).
     pub sign_ins:      Arc<dyn FederatedNonceStore>,
+    /// Staff enrollment grants (#880).
+    pub staff_grants:  Arc<dyn StaffEnrollmentGrants>,
 }
 
 /// Backend connection configs. `kafka` is optional: absent ⇒ the log publisher.
@@ -304,17 +309,25 @@ impl App {
             Arc::clone(&deps.publisher),
         )));
         let handler = match deps.passkeys {
-            Some(passkeys) => handler.with_passkeys(Arc::new(
-                PasskeyHandler::new(
-                    passkeys.relying_party,
-                    passkeys.repository,
-                    passkeys.registrations,
-                    Arc::clone(&deps.sessions),
-                    Arc::clone(&deps.cache),
+            Some(passkeys) => handler
+                .with_staff_enrollment(Arc::new(StaffEnrollment::new(
+                    Arc::clone(&passkeys.staff_grants),
+                    Arc::clone(&passkeys.repository),
                     Arc::clone(&deps.directory),
-                )
-                .with_codes(deps.codes),
-            )),
+                    Arc::clone(&deps.publisher),
+                )))
+                .with_passkeys(Arc::new(
+                    PasskeyHandler::new(
+                        passkeys.relying_party,
+                        passkeys.repository,
+                        passkeys.registrations,
+                        Arc::clone(&deps.sessions),
+                        Arc::clone(&deps.cache),
+                        Arc::clone(&deps.directory),
+                    )
+                    .with_codes(deps.codes)
+                    .with_staff_grants(passkeys.staff_grants, Arc::clone(&deps.publisher)),
+                )),
             None => handler,
         };
         match deps.attestation {
@@ -508,6 +521,7 @@ impl App {
                         repository: Arc::new(PgPasskeyRepository::new(tx.clone())),
                         registrations: Arc::new(RedisNonceStore::with_namespace(redis.clone(), "pkreg")),
                         sign_ins: Arc::new(RedisNonceStore::with_namespace(redis.clone(), "pkauth")),
+                        staff_grants: Arc::new(PgStaffGrants::new(tx.clone())),
                     })
                 }
                 None => {

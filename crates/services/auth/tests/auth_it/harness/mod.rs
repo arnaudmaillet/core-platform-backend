@@ -357,6 +357,7 @@ impl Harness {
                     redis.clone(),
                     "pkauth",
                 )),
+                staff_grants: Arc::new(auth::infrastructure::persistence::PgStaffGrants::new(tx.clone())),
             }),
             app_authorizations: Arc::new(auth::infrastructure::persistence::PgAppAuthorizationRepository::new(tx.clone())),
             policy: SessionPolicy::new(

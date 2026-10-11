@@ -51,6 +51,8 @@ pub struct AuthServiceHandler {
     /// Third-party app authorisations (#667).
     apps: Option<Arc<AppAuthorizations>>,
     passkey_sign_in: Option<Arc<PasskeySignIn>>,
+    /// Staff passkey enrollment grants (#880).
+    staff: Option<Arc<crate::application::command::StaffEnrollment>>,
     nonces: Option<Arc<FederatedNonces>>,
     attestation: Option<Arc<GuestAttestation>>,
     /// Proxies appending to `X-Forwarded-For` in front of the edge
@@ -88,6 +90,7 @@ impl AuthServiceHandler {
             passkeys: None,
             apps: None,
             passkey_sign_in: None,
+            staff: None,
             nonces: None,
             attestation: None,
             trusted_proxy_hops: transport::grpc::client_ip::DEFAULT_TRUSTED_PROXY_HOPS,
@@ -302,6 +305,42 @@ impl AuthServiceHandler {
         self
     }
 
+    /// Enables IssueStaffPasskeyEnrollment (#880).
+    pub fn with_staff_enrollment(mut self, staff: Arc<crate::application::command::StaffEnrollment>) -> Self {
+        self.staff = Some(staff);
+        self
+    }
+
+    /// Mesh only (#880): a staff enrollment grant for another account. The
+    /// caller is its own bearer token, introspected here: active, and an
+    /// `admin` / `super_admin` — roles only a staff passkey session carries.
+    pub async fn issue_staff_passkey_enrollment(
+        &self,
+        request: Request<proto::IssueStaffPasskeyEnrollmentRequest>,
+    ) -> Result<Response<proto::IssueStaffPasskeyEnrollmentResponse>, Status> {
+        let staff = self.staff.as_deref().ok_or_else(|| Status::unavailable("staff enrollment is not configured"))?;
+        let token = edge::bearer_token(request.metadata()).ok_or_else(|| Status::unauthenticated("a token is required"))?;
+        let now = Utc::now();
+        let view = self
+            .introspect
+            .handle_at(Envelope::new(Uuid::now_v7(), IntrospectQuery { access_token: token }), now)
+            .await
+            .map_err(auth_error_to_status)?;
+        let caller = view.account_id.filter(|_| view.active).ok_or_else(|| Status::unauthenticated("invalid token"))?;
+        let issuer = crate::application::command::StaffIssuer {
+            account_id:  crate::domain::value_object::AccountId::try_from(caller.as_str()).map_err(auth_error_to_status)?,
+            permissions: view.permissions,
+        };
+        let issued = staff
+            .issue(&issuer, &request.get_ref().account_id, now, Uuid::now_v7())
+            .await
+            .map_err(auth_error_to_status)?;
+        Ok(Response::new(proto::IssueStaffPasskeyEnrollmentResponse {
+            grant:      issued.grant,
+            expires_at: Some(to_timestamp(issued.expires_at)),
+        }))
+    }
+
     /// Enables StartPasskeySignIn (#808).
     pub fn with_passkey_sign_in(mut self, sign_in: Arc<PasskeySignIn>) -> Self {
         self.passkey_sign_in = Some(sign_in);
@@ -363,6 +402,7 @@ impl AuthServiceHandler {
             client_data_json:   req.client_data_json,
             attestation_object: req.attestation_object,
             name:               req.name,
+            staff_enrollment_grant: Some(req.staff_enrollment_grant).filter(|g| !g.is_empty()),
         };
         let made = handler
             .finish_registration(
@@ -944,6 +984,7 @@ fn passkey_to_proto(p: PasskeyView) -> proto::Passkey {
         created_at:    Some(to_timestamp(p.created_at)),
         last_used_at:  p.last_used_at.map(to_timestamp),
         synced:        p.synced,
+        staff:         p.staff,
     }
 }
 

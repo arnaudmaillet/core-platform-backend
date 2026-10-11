@@ -29,9 +29,10 @@ use super::credentials::caller_session;
 use super::mfa_settings::{notify_security_change, MfaCaller};
 use super::verification::VerificationCodes;
 use crate::application::port::{
-    AccountDirectory, FederatedNonceStore, MfaChange, PasskeyRepository, SessionCache, SessionRepository,
-    StoredPasskey,
+    AccountDirectory, EventPublisher, FederatedNonceStore, MfaChange, PasskeyRepository, SessionCache, SessionRepository,
+    StaffEnrollmentGrants, StoredPasskey,
 };
+use crate::domain::event::{DomainEvent, StaffPasskeyEnrolled};
 use crate::domain::value_object::webauthn::{verify_assertion, verify_registration, RelyingParty};
 use crate::domain::value_object::{AccountId, SessionId};
 use crate::error::AuthError;
@@ -63,7 +64,7 @@ pub struct PasskeyRegistrationOptions {
 }
 
 /// The authenticator's response to a registration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PasskeyRegistration {
     /// The challenge the options carried.
     pub challenge:          String,
@@ -71,6 +72,18 @@ pub struct PasskeyRegistration {
     pub attestation_object: Vec<u8>,
     /// The holder's name for it; empty ⇒ "Passkey".
     pub name:               String,
+    /// A staff enrollment grant (#880): the passkey becomes a staff passkey.
+    /// A secret: never logged.
+    pub staff_enrollment_grant: Option<String>,
+}
+
+impl std::fmt::Debug for PasskeyRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PasskeyRegistration")
+            .field("name", &self.name)
+            .field("staff", &self.staff_enrollment_grant.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// A passkey as the holder sees it.
@@ -83,6 +96,8 @@ pub struct PasskeyView {
     pub last_used_at:  Option<DateTime<Utc>>,
     /// Synced across the holder's devices (e.g. iCloud Keychain).
     pub synced:        bool,
+    /// A staff passkey (#880).
+    pub staff:         bool,
 }
 
 impl From<&StoredPasskey> for PasskeyView {
@@ -93,6 +108,7 @@ impl From<&StoredPasskey> for PasskeyView {
             created_at:    p.created_at,
             last_used_at:  p.last_used_at,
             synced:        p.backed_up,
+            staff:         p.staff_enrolled,
         }
     }
 }
@@ -249,6 +265,9 @@ pub struct PasskeyHandler {
     directory:     Arc<dyn AccountDirectory>,
     /// The email transport for change notices; `None`: none are sent.
     codes:         Option<Arc<VerificationCodes>>,
+    /// Staff enrollment grants and where enrollments are published (#880);
+    /// `None`: a registration with a grant is refused.
+    staff:         Option<(Arc<dyn StaffEnrollmentGrants>, Arc<dyn EventPublisher>)>,
 }
 
 impl PasskeyHandler {
@@ -260,7 +279,13 @@ impl PasskeyHandler {
         cache: Arc<dyn SessionCache>,
         directory: Arc<dyn AccountDirectory>,
     ) -> Self {
-        Self { rp, passkeys, registrations, sessions, cache, directory, codes: None }
+        Self { rp, passkeys, registrations, sessions, cache, directory, codes: None, staff: None }
+    }
+
+    /// Accepts staff enrollment grants at registration (#880).
+    pub fn with_staff_grants(mut self, grants: Arc<dyn StaffEnrollmentGrants>, publisher: Arc<dyn EventPublisher>) -> Self {
+        self.staff = Some((grants, publisher));
+        self
     }
 
     /// Emails every change to the account's address.
@@ -335,6 +360,19 @@ impl PasskeyHandler {
             tracing::info!(%reason, account.id = %account_id.as_str(), "passkey registration refused");
             AuthError::PasskeyRejected
         })?;
+        // A staff passkey (#880): the grant is used up here, once the
+        // authenticator's response checked out.
+        let staff_grant = match &registration.staff_enrollment_grant {
+            None => None,
+            Some(grant) => {
+                let (grants, _) = self.staff.as_ref().ok_or(AuthError::StaffEnrollmentGrantInvalid)?;
+                let grant_id = grants
+                    .redeem(&account_id, &super::staff_enrollment::grant_hash(grant), now)
+                    .await?
+                    .ok_or(AuthError::StaffEnrollmentGrantInvalid)?;
+                Some(grant_id)
+            }
+        };
         let stored = StoredPasskey {
             credential_id:   made.credential_id,
             public_key:      made.public_key,
@@ -346,9 +384,14 @@ impl PasskeyHandler {
             // Postgres keeps microseconds: the response and every later read agree.
             created_at:      now.trunc_subsecs(6),
             last_used_at:    None,
-            staff_enrolled:  false,
+            staff_enrolled:  staff_grant.is_some(),
         };
         self.passkeys.add(&account_id, &stored, MAX_PASSKEYS).await?;
+        if let (Some(grant_id), Some((_, publisher))) = (staff_grant, &self.staff) {
+            let enrolled = StaffPasskeyEnrolled { account_id, grant_id, occurred_at: now, correlation_id: envelope.correlation_id };
+            publisher.publish(&DomainEvent::StaffPasskeyEnrolled(enrolled)).await?;
+            tracing::info!(account.id = %account_id.as_str(), grant.id = %grant_id, "staff passkey enrolled");
+        }
         notify_security_change(self.codes.clone(), Arc::clone(&self.directory), account_id, MfaChange::PasskeyAdded);
         Ok(PasskeyView::from(&stored))
     }
@@ -450,6 +493,7 @@ mod tests {
                         client_data_json:   SoftAuthenticator::client_data("webauthn.create", &challenge, ORIGIN),
                         attestation_object: auth.attestation(RP_ID, PASSKEY),
                         name:               "  My   iPhone ".into(),
+                        staff_enrollment_grant: None,
                     })),
                     t0(),
                 )
@@ -531,6 +575,7 @@ mod tests {
             client_data_json:   SoftAuthenticator::client_data("webauthn.create", &challenge, ORIGIN),
             attestation_object: auth.attestation(RP_ID, PASSKEY),
             name:               String::new(),
+            staff_enrollment_grant: None,
         };
 
         let stolen = w

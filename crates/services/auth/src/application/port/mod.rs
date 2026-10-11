@@ -19,6 +19,7 @@ pub mod profile_directory;
 pub mod refresh_token_repository;
 pub mod session_cache;
 pub mod session_repository;
+pub mod staff_enrollment;
 pub mod subject_link_repository;
 pub mod token_minter;
 pub mod verification;
@@ -40,6 +41,7 @@ pub use profile_directory::{profile_ids_or_empty, ProfileDirectory};
 pub use refresh_token_repository::RefreshTokenRepository;
 pub use session_cache::SessionCache;
 pub use session_repository::{DeviceHistory, RECENT_SESSIONS, SessionRepository};
+pub use staff_enrollment::{StaffEnrollmentGrants, StaffGrant};
 pub use subject_link_repository::SubjectLinkRepository;
 pub use token_minter::{GeneratedRefresh, TokenMinter};
 pub use verification::{
