@@ -41,6 +41,11 @@ impl SessionOrigin {
         Self { sign_in: SessionSignIn::by(method), staff_passkey: false }
     }
 
+    /// Opened with the identity `subject` proved (not a passkey).
+    pub fn of_subject(subject: &crate::domain::value_object::IdpSubject) -> Self {
+        Self { sign_in: SessionSignIn::from_parts(SessionMethod::of_subject(subject), None), staff_passkey: false }
+    }
+
     /// Opened with this passkey.
     pub fn passkey(passkey: &super::passkeys::VerifiedPasskey) -> Self {
         Self { sign_in: SessionSignIn::by_passkey(passkey.credential_id.clone()), staff_passkey: passkey.staff_enrolled }

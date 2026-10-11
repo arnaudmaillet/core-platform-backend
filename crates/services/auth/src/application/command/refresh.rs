@@ -175,7 +175,6 @@ impl RefreshHandler {
             access_token,
             refresh_token: new_plaintext,
             access_expires_in: claims.expires_in_secs(now),
-            first_link: false,
             reactivated: false,
         })
     }
@@ -209,7 +208,6 @@ mod tests {
     use super::*;
     use crate::application::command::{LoginCommand, LoginHandler};
     use crate::application::fakes::{t0, Fixture};
-    use crate::application::port::AuthnGrant;
     use crate::domain::value_object::Generation;
     use chrono::Duration;
     use uuid::Uuid;
@@ -218,7 +216,7 @@ mod tests {
         let env = Envelope::new(
             Uuid::now_v7(),
             LoginCommand {
-                grant: AuthnGrant::Password { username: "u".into(), password: "p".into() },
+                grant: crate::application::fakes::member_grant(),
                 device: DeviceFingerprint::default(),
                 guest_refresh_token: None,
                 client_ip: None,
@@ -250,7 +248,6 @@ mod tests {
         assert_eq!(second.session_id, first.session_id);
         assert_ne!(second.refresh_token, first.refresh_token, "refresh token rotates");
         assert!(!second.access_token.is_empty());
-        assert!(!second.first_link);
     }
 
     #[tokio::test]

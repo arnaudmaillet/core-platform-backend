@@ -487,7 +487,7 @@ mod tests {
 
         async fn login(&self) -> IssuedSession {
             let cmd = LoginCommand {
-                grant: AuthnGrant::Password { username: "user".into(), password: "pw".into() },
+                grant: crate::application::fakes::member_grant(),
                 device: DeviceFingerprint::default(),
                 guest_refresh_token: None,
                 client_ip: None,
@@ -588,7 +588,7 @@ mod tests {
     async fn a_challenge_is_single_use_and_only_its_own_accounts() {
         let w = World::new();
         let mine = w.login().await;
-        w.fx.idp.set_subject("sub-456");
+        w.fx.federated.set_subject("sub-456");
         let theirs = w.login().await;
         assert_ne!(mine.account_id, theirs.account_id);
         let auth = SoftAuthenticator::new();
@@ -716,7 +716,7 @@ mod tests {
         };
         assert_eq!(issued.account_id, session.account_id);
         let stored = w.fx.sessions.find_by_id(&issued.session_id).await.unwrap().unwrap();
-        assert_eq!(stored.subject().issuer(), "https://idp.test", "the account's link, so a password step-up works");
+        assert_eq!(stored.subject().issuer(), crate::domain::value_object::APPLE_ISSUER, "the account's first link");
         let refused = assertion(&sign_in, &mut auth, Vec::new(), PASSKEY).await;
         assert!(matches!(
             login.handle(Envelope::new(Uuid::now_v7(), grant(refused)), t0()).await,
@@ -725,7 +725,7 @@ mod tests {
 
         // The second step after a password.
         let password = LoginCommand {
-            grant: AuthnGrant::Password { username: "user".into(), password: "pw".into() },
+            grant: crate::application::fakes::member_grant(),
             device: device.clone(),
             guest_refresh_token: None,
             client_ip: None,

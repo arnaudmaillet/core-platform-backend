@@ -14,7 +14,6 @@ pub enum SessionMethod {
     Passkey,
     Apple,
     Google,
-    Password,
     EmailCode,
     PhoneCode,
 }
@@ -25,7 +24,6 @@ impl SessionMethod {
             Self::Passkey => "passkey",
             Self::Apple => "apple",
             Self::Google => "google",
-            Self::Password => "password",
             Self::EmailCode => "email_code",
             Self::PhoneCode => "phone_code",
         }
@@ -36,22 +34,21 @@ impl SessionMethod {
             "passkey" => Self::Passkey,
             "apple" => Self::Apple,
             "google" => Self::Google,
-            "password" => Self::Password,
             "email_code" => Self::EmailCode,
             "phone_code" => Self::PhoneCode,
             _ => return None,
         })
     }
 
-    /// The method behind a proven identity (its issuer).
-    pub fn of_subject(subject: &IdpSubject) -> Self {
-        match SignInMethod::from_issuer(subject.issuer()) {
+    /// The method behind a proven identity (its issuer); `None` for an
+    /// issuer that signs nothing in.
+    pub fn of_subject(subject: &IdpSubject) -> Option<Self> {
+        SignInMethod::from_issuer(subject.issuer()).map(|method| match method {
             SignInMethod::Apple => Self::Apple,
             SignInMethod::Google => Self::Google,
-            SignInMethod::Password => Self::Password,
             SignInMethod::EmailCode => Self::EmailCode,
             SignInMethod::PhoneCode => Self::PhoneCode,
-        }
+        })
     }
 }
 
@@ -108,7 +105,6 @@ mod tests {
             SessionMethod::Passkey,
             SessionMethod::Apple,
             SessionMethod::Google,
-            SessionMethod::Password,
             SessionMethod::EmailCode,
             SessionMethod::PhoneCode,
         ] {

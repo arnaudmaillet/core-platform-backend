@@ -17,8 +17,6 @@ pub enum RevocationReason {
     RefreshReuse,
     /// Operator / security action.
     Administrative,
-    /// The holder changed their password and signed their other devices out.
-    PasswordChanged,
     /// A guest session ended because its device signed up or signed in: the
     /// guest became the member.
     GuestUpgraded,
@@ -41,7 +39,6 @@ impl RevocationReason {
             Self::GlobalLogout => "global_logout",
             Self::RefreshReuse => "refresh_reuse",
             Self::Administrative => "administrative",
-            Self::PasswordChanged => "password_changed",
             Self::GuestUpgraded => "guest_upgraded",
             Self::MfaChanged => "mfa_changed",
             Self::AccountSuspended => "account_suspended",
@@ -66,7 +63,6 @@ impl TryFrom<&str> for RevocationReason {
             "global_logout" => Ok(Self::GlobalLogout),
             "refresh_reuse" => Ok(Self::RefreshReuse),
             "administrative" => Ok(Self::Administrative),
-            "password_changed" => Ok(Self::PasswordChanged),
             "guest_upgraded" => Ok(Self::GuestUpgraded),
             "mfa_changed" => Ok(Self::MfaChanged),
             "account_suspended" => Ok(Self::AccountSuspended),

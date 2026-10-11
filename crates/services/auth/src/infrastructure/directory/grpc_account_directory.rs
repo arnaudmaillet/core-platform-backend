@@ -42,26 +42,6 @@ fn identity_id(subject: &IdpSubject) -> String {
 
 #[async_trait]
 impl AccountDirectory for GrpcAccountDirectory {
-    #[instrument(name = "auth.directory.resolve", skip(self), fields(subject = %subject))]
-    async fn resolve_or_provision(&self, subject: &IdpSubject) -> Result<AccountId, AuthError> {
-        let mut client = self.client.clone();
-        let response = client
-            .get_account_by_identity_id(GetAccountByIdentityIdRequest {
-                identity_id: identity_id(subject),
-            })
-            .await;
-
-        match response {
-            Ok(view) => AccountId::try_from(view.into_inner().id.as_str()),
-            // Auto-provisioning from IdP claims (which requires the email/profile,
-            // i.e. extending NormalizedClaims) is a product decision deferred to a
-            // follow-up; for now an unknown subject cannot establish a session.
-            Err(status) if status.code() == Code::NotFound => {
-                Err(AuthError::AccountNotActive { current: "account_not_provisioned".into() })
-            }
-            Err(_) => Err(AuthError::AccountDirectoryUnavailable),
-        }
-    }
 
     #[instrument(name = "auth.directory.lookup", skip(self), fields(account.id = %account_id))]
     async fn lookup(&self, account_id: &AccountId) -> Result<AccountSnapshot, AuthError> {

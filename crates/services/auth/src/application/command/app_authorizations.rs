@@ -174,7 +174,6 @@ mod tests {
     use super::*;
     use crate::application::command::{IssuedSession, LoginCommand};
     use crate::application::fakes::{t0, Fixture, InMemoryAppAuthorizationRepository};
-    use crate::application::port::AuthnGrant;
     use crate::domain::value_object::DeviceFingerprint;
 
     struct World {
@@ -196,7 +195,7 @@ mod tests {
 
         async fn login(&self) -> IssuedSession {
             let cmd = LoginCommand {
-                grant: AuthnGrant::Password { username: "user".into(), password: "pw".into() },
+                grant: crate::application::fakes::member_grant(),
                 device: DeviceFingerprint::default(),
                 guest_refresh_token: None,
                 client_ip: None,

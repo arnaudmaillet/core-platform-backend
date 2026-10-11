@@ -1,14 +1,12 @@
-//! Shared steps of the credential use-cases (`ChangePassword`,
-//! `VerifyCredentials`): resolve the caller's live session, and prove a password
-//! for the IdP subject behind it.
+//! Shared steps of the credential use-cases (`VerifyCredentials`, passkeys,
+//! two-step settings): resolve the caller's live session, and whether it is a
+//! staff session.
 
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use crate::application::port::{
-    AuthnGrant, CredentialAdmin, IdentityProvider, PasskeyRepository, SessionCache, SessionRepository,
-};
+use crate::application::port::{PasskeyRepository, SessionCache, SessionRepository};
 use crate::domain::aggregate::Session;
 use crate::domain::value_object::{AccountId, SessionId, SessionKind};
 use crate::error::AuthError;
@@ -53,19 +51,3 @@ pub(crate) async fn is_staff_session(
     Ok(passkeys.find(&session.account_id(), credential_id).await?.is_some_and(|p| p.staff_enrolled))
 }
 
-/// Proves `password` for the IdP subject behind `session`: a password grant
-/// under the subject's own login name, which must come back as that subject.
-pub(crate) async fn prove_password(
-    admin: &Arc<dyn CredentialAdmin>,
-    idp: &Arc<dyn IdentityProvider>,
-    session: &Session,
-    password: String,
-) -> Result<(), AuthError> {
-    let subject = session.subject();
-    let username = admin.login_name(subject).await?;
-    let claims = idp.authenticate(AuthnGrant::Password { username, password }).await?;
-    if claims.issuer != subject.issuer() || claims.subject != subject.subject() {
-        return Err(AuthError::IdpAuthenticationFailed);
-    }
-    Ok(())
-}

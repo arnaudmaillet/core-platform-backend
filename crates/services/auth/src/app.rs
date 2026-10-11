@@ -18,7 +18,7 @@ use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
     StaffEnrollment,
-    AccountErasure, AccountRevocation, AppAuthorizations, ExportReadyNotifier, AttestMode, GuestAttestation, ChangeContactHandler, ChangePasswordHandler, FederatedNonces, GuestRetention, LoginHandler,
+    AccountErasure, AccountRevocation, AppAuthorizations, ExportReadyNotifier, AttestMode, GuestAttestation, ChangeContactHandler, FederatedNonces, GuestRetention, LoginHandler,
     LogoutAllSessionsHandler, LogoutHandler, MemberSessions, NonceBoundVerifier, RefreshHandler, SignUpHandler,
     MfaPolicy, MfaSettingsHandler, MfaVerifier, PasskeyHandler, PasskeySignIn, StartGuestSessionHandler,
     VerificationCodes,
@@ -26,8 +26,8 @@ use crate::application::command::{
 };
 use crate::application::port::StaffEnrollmentGrants;
 use crate::application::port::{
-    AccountDirectory, AppAuthorizationRepository, CredentialAdmin, EventPublisher, FederatedNonceStore, FederatedTokenVerifier, GuestRegistry,
-    IdentityProvider, PasskeyRepository,
+    AccountDirectory, AppAuthorizationRepository, EventPublisher, FederatedNonceStore, FederatedTokenVerifier, GuestRegistry,
+    PasskeyRepository,
     ProfileDirectory,
     RefreshTokenRepository,
     SessionCache, SessionRepository, SubjectLinkRepository, TokenMinter,
@@ -49,10 +49,7 @@ use crate::infrastructure::event::outbox_relay::OutboxRelay;
 use crate::infrastructure::event::pg_outbox_publisher::PgOutboxPublisher;
 use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 use crate::infrastructure::grpc::handler::AuthServiceHandler;
-use crate::infrastructure::idp::{
-    JwksFederatedTokenVerifier, KeycloakCredentialAdmin, KeycloakIdentityProvider,
-    UnconfiguredCredentialAdmin,
-};
+use crate::infrastructure::idp::JwksFederatedTokenVerifier;
 use crate::infrastructure::persistence::PgStaffGrants;
 use crate::infrastructure::persistence::{
     PgAccountEraser, PgAppAuthorizationRepository, PgGuestRegistry, PgPasskeyRepository, PgRefreshTokenRepository, PgSessionRepository,
@@ -62,9 +59,6 @@ use crate::infrastructure::token::Es256TokenMinter;
 
 /// The nine ports the application layer depends on, plus the token policy.
 pub struct AppDeps {
-    pub idp: Arc<dyn IdentityProvider>,
-    /// The IdP's credential management (`ChangePassword`).
-    pub credentials: Arc<dyn CredentialAdmin>,
     pub directory: Arc<dyn AccountDirectory>,
     pub profiles: Arc<dyn ProfileDirectory>,
     pub links: Arc<dyn SubjectLinkRepository>,
@@ -156,7 +150,6 @@ impl App {
             Arc::new(PasskeySignIn::new(p.relying_party.clone(), Arc::clone(&p.repository), Arc::clone(&p.sign_ins)))
         });
         let login = LoginHandler::new(
-            Arc::clone(&deps.idp),
             Arc::clone(&deps.directory),
             Arc::clone(&deps.profiles),
             Arc::clone(&deps.links),
@@ -224,18 +217,7 @@ impl App {
         let introspect =
             Arc::new(IntrospectHandler::new(Arc::clone(&deps.minter), Arc::clone(&deps.cache)));
         let list_sessions = Arc::new(ListSessionsHandler::new(Arc::clone(&deps.sessions)));
-        let change_password = Arc::new(ChangePasswordHandler::new(
-            Arc::clone(&deps.idp),
-            Arc::clone(&deps.credentials),
-            Arc::clone(&deps.sessions),
-            Arc::clone(&deps.refresh_tokens),
-            Arc::clone(&deps.cache),
-            Arc::clone(&deps.publisher),
-            deps.policy.clone(),
-        ));
         let verify_credentials = VerifyCredentialsHandler::new(
-            Arc::clone(&deps.idp),
-            Arc::clone(&deps.credentials),
             Arc::clone(&deps.directory),
             Arc::clone(&deps.profiles),
             Arc::clone(&deps.sessions),
@@ -270,7 +252,6 @@ impl App {
             introspect,
             list_sessions,
             start_guest,
-            change_password,
             verify_credentials,
         )
         .with_sign_up(sign_up)
@@ -278,7 +259,6 @@ impl App {
             Arc::clone(&deps.codes),
             Arc::clone(&deps.directory),
             Arc::clone(&deps.links),
-            Arc::clone(&deps.credentials),
             Arc::clone(&deps.sessions),
             Arc::clone(&deps.cache),
             Arc::clone(&deps.publisher),
@@ -375,11 +355,11 @@ impl App {
             .connect_timeout(config.profile_connect_timeout)
             .connect_lazy();
 
-        // reqwest's default client has no request timeout; the token exchange
-        // must fail fast when the IdP hangs.
-        let idp_client = reqwest::Client::builder()
-            .timeout(config.idp_http_timeout)
-            .connect_timeout(config.idp_connect_timeout)
+        // reqwest's default client has no request timeout; an outbound call
+        // (SNS) must fail fast when the far end hangs.
+        let http_client = reqwest::Client::builder()
+            .timeout(config.http_timeout)
+            .connect_timeout(config.http_connect_timeout)
             .build()?;
 
         // Build the concrete minter first: the JWKS is published from the same
@@ -387,16 +367,6 @@ impl App {
         // JWKS-agnostic — a PASETO minter would distribute keys differently).
         let minter = Es256TokenMinter::from_key_ring(config.signing, config.retiring_keys)?;
         let jwks_json = minter.jwks_json()?;
-
-        let credentials: Arc<dyn CredentialAdmin> = if config.keycloak_admin.is_configured() {
-            Arc::new(KeycloakCredentialAdmin::new(idp_client.clone(), config.keycloak_admin))
-        } else {
-            tracing::warn!(
-                "AUTH_KEYCLOAK_ADMIN_URL / _CLIENT_ID / _CLIENT_SECRET not set — \
-                 ChangePassword and VerifyCredentials answer UNAVAILABLE (AUT-5005)"
-            );
-            Arc::new(UnconfiguredCredentialAdmin)
-        };
 
         // One-time codes: SMTP (Amazon SES) when configured, a log line for local
         // runs, otherwise off (StartVerification fails FAILED_PRECONDITION).
@@ -411,7 +381,7 @@ impl App {
         };
         // SMS codes: SNS when configured; the local `log` sender covers SMS too.
         let sms_sender: Option<Arc<dyn CodeSender>> = match (config.sms_sender.as_str(), &config.sns) {
-            ("sns", Some(sns)) => Some(Arc::new(SnsCodeSender::new(idp_client.clone(), sns.clone()))),
+            ("sns", Some(sns)) => Some(Arc::new(SnsCodeSender::new(http_client.clone(), sns.clone()))),
             ("sns", None) => return Err("AUTH_SMS_SENDER=sns needs AUTH_SNS_REGION".into()),
             _ if config.verification_sender == "log" => Some(Arc::new(LogCodeSender)),
             _ => None,
@@ -437,8 +407,6 @@ impl App {
         let erasure = Arc::new(AccountErasure::new(
             Arc::new(PgAccountEraser::new(tx.clone())),
             Arc::new(RedisSessionCache::new(redis.clone())),
-            Arc::new(PgSubjectLinkRepository::new(tx.clone())),
-            Arc::clone(&credentials),
         ));
         let guest_retention = GuestRetention::new(
             Arc::new(PgGuestRegistry::new(tx.clone())),
@@ -477,8 +445,6 @@ impl App {
             Arc::clone(&directory),
         ));
         let deps = AppDeps {
-            idp: Arc::new(KeycloakIdentityProvider::new(idp_client, config.keycloak)),
-            credentials,
             directory,
             profiles: Arc::new(GrpcProfileDirectory::new(profile_channel)),
             links: Arc::new(PgSubjectLinkRepository::new(tx.clone())),
@@ -558,8 +524,6 @@ mod tests {
     /// `App::build` produces, minus the real backends.
     fn handler_from_fakes(fx: &Fixture) -> AuthServiceHandler {
         App::compose(AppDeps {
-            idp: fx.idp.clone(),
-            credentials: fx.credentials.clone(),
             directory: fx.directory.clone(),
             profiles: fx.profiles.clone(),
             links: fx.links.clone(),
@@ -570,7 +534,8 @@ mod tests {
             publisher: fx.publisher.clone(),
             guests: fx.guests.clone(),
             guest_sessions_enabled: true,
-            federated: Arc::new(JwksFederatedTokenVerifier::new()),
+            // Members sign in with Apple (#881): the stub links on first sight.
+            federated: fx.federated.clone(),
             codes: Arc::new(VerificationCodes::new(
                 Arc::new(crate::application::fakes::InMemoryVerificationStore::default()),
                 Arc::new(crate::application::fakes::RecordingCodeSender::default()),
@@ -578,7 +543,7 @@ mod tests {
             )),
             nonces: Arc::new(FederatedNonces::new(
                 Arc::new(crate::application::fakes::InMemoryNonceStore::default()),
-                true,
+                false,
             )),
             attestation: None,
             mfa: Arc::clone(&fx.mfa),
@@ -600,17 +565,17 @@ mod tests {
                 ip_address: String::new(),
                 device_id: "dev-1".into(),
             }),
-            grant_type: proto::GrantType::Password as i32,
-            credential: Some(proto::login_request::Credential::Password(proto::PasswordGrant {
-                username: "user".into(),
-                password: "secret".into(),
+            grant_type: proto::GrantType::IdToken as i32,
+            credential: Some(proto::login_request::Credential::IdToken(proto::IdTokenGrant {
+                provider: proto::FederatedProvider::Apple as i32,
+                id_token: "id-token".into(),
+                nonce: "nonce".into(),
             })),
             guest_refresh_token: String::new(),
         });
 
         let response = handler.login(request).await.unwrap().into_inner();
         assert!(!response.account_id.is_empty());
-        assert!(response.first_link);
         let tokens = response.tokens.expect("token pair present");
         assert_eq!(tokens.token_type, "Bearer");
         assert!(!tokens.access_token.is_empty());

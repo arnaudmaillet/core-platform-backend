@@ -2,9 +2,8 @@
 //! address with a one-time code (`StartVerification` to it, then the code
 //! here), on a session that proved a credential recently (the edge's step-up).
 //! Everything that signs them in follows the address: the account's contact
-//! (`account.ChangeEmail` / `ChangePhone`), the IdP user's email for a
-//! password account, and the passwordless sign-in link (`urn:core-platform:
-//! email|phone`). The address on file before is told, so a takeover is visible
+//! (`account.ChangeEmail` / `ChangePhone`) and the code sign-in link
+//! (`urn:core-platform:email|phone`). The address on file before is told, so a takeover is visible
 //! to the real owner.
 
 use std::sync::Arc;
@@ -15,13 +14,10 @@ use cqrs::Envelope;
 use super::credentials::caller_session;
 use super::verification::VerificationCodes;
 use crate::application::port::{
-    AccountDirectory, CredentialAdmin, EventPublisher, SessionCache, SessionRepository,
-    SubjectLinkRepository, VerificationChannel,
+    AccountDirectory, EventPublisher, SessionCache, SessionRepository, SubjectLinkRepository, VerificationChannel,
 };
 use crate::domain::aggregate::SubjectLink;
-use crate::domain::value_object::{
-    AccountId, IdpSubject, SessionId, APPLE_ISSUER, EMAIL_CODE_ISSUER, GOOGLE_ISSUERS, PHONE_CODE_ISSUER,
-};
+use crate::domain::value_object::{AccountId, IdpSubject, SessionId, EMAIL_CODE_ISSUER, PHONE_CODE_ISSUER};
 use crate::error::AuthError;
 
 #[derive(Clone)]
@@ -62,21 +58,10 @@ fn code_issuer(channel: VerificationChannel) -> &'static str {
     }
 }
 
-/// A link our IdP (Keycloak) manages: not a passwordless code link, not Apple
-/// or Google (their email is theirs).
-fn idp_managed(subject: &IdpSubject) -> bool {
-    let issuer = subject.issuer();
-    issuer != EMAIL_CODE_ISSUER
-        && issuer != PHONE_CODE_ISSUER
-        && issuer != APPLE_ISSUER
-        && !GOOGLE_ISSUERS.contains(&issuer)
-}
-
 pub struct ChangeContactHandler {
     codes:     Arc<VerificationCodes>,
     accounts:  Arc<dyn AccountDirectory>,
     links:     Arc<dyn SubjectLinkRepository>,
-    admin:     Arc<dyn CredentialAdmin>,
     sessions:  Arc<dyn SessionRepository>,
     cache:     Arc<dyn SessionCache>,
     publisher: Arc<dyn EventPublisher>,
@@ -88,12 +73,11 @@ impl ChangeContactHandler {
         codes: Arc<VerificationCodes>,
         accounts: Arc<dyn AccountDirectory>,
         links: Arc<dyn SubjectLinkRepository>,
-        admin: Arc<dyn CredentialAdmin>,
         sessions: Arc<dyn SessionRepository>,
         cache: Arc<dyn SessionCache>,
         publisher: Arc<dyn EventPublisher>,
     ) -> Self {
-        Self { codes, accounts, links, admin, sessions, cache, publisher }
+        Self { codes, accounts, links, sessions, cache, publisher }
     }
 
     pub async fn handle(
@@ -132,30 +116,9 @@ impl ChangeContactHandler {
         }
 
         let links = self.links.find_by_account(&account_id).await?;
-        // The IdP first: if it refuses (the address is another IdP user's),
-        // nothing has moved.
-        let mut idp_moved: Vec<&IdpSubject> = Vec::new();
-        if channel == VerificationChannel::Email {
-            for link in links.iter().filter(|l| idp_managed(l.subject())) {
-                self.admin.set_email(link.subject(), &destination).await?;
-                idp_moved.push(link.subject());
-            }
-        }
-        if let Err(error) = self.accounts.change_contact(&account_id, channel, &destination).await {
-            // The account refused (a race on the address since the check): put
-            // the IdP back, so the two never disagree (best effort; a retry
-            // with a fresh code heals the rest).
-            if let Some(old) = before.email.as_deref() {
-                for subject in idp_moved {
-                    if let Err(restore) = self.admin.set_email(subject, old).await {
-                        tracing::error!(%restore, "IdP email not restored after a refused account change");
-                    }
-                }
-            }
-            return Err(error);
-        }
+        self.accounts.change_contact(&account_id, channel, &destination).await?;
 
-        // A passwordless account signs in by the new address, not the old one:
+        // A code account signs in by the new address, not the old one:
         // the new link first, so a failure leaves the old one working.
         let issuer = code_issuer(channel);
         for old in links.iter().filter(|l| l.subject().issuer() == issuer) {
@@ -208,7 +171,6 @@ mod tests {
             Arc::clone(&codes),
             Arc::clone(&fx.directory) as _,
             Arc::clone(&fx.links) as _,
-            Arc::clone(&fx.credentials) as _,
             Arc::clone(&fx.sessions) as _,
             Arc::clone(&fx.cache) as _,
             Arc::clone(&fx.publisher) as _,
@@ -216,15 +178,13 @@ mod tests {
         World { fx, sender, codes, handler }
     }
 
-    /// A member signed in with a password (the IdP link `https://idp.test`),
-    /// who also signs in with codes at `old@example.com`.
+    /// A member signed in with Apple, who also signs in with codes at
+    /// `old@example.com`.
     async fn member(w: &World) -> (AccountId, SessionId) {
         use crate::application::command::LoginCommand;
-        use crate::application::port::AuthnGrant;
         use crate::domain::value_object::DeviceFingerprint;
-        w.fx.idp.with_password("pw");
         let cmd = LoginCommand {
-            grant: AuthnGrant::Password { username: "user".into(), password: "pw".into() },
+            grant: crate::application::fakes::member_grant(),
             device: DeviceFingerprint::default(),
             guest_refresh_token: None,
             client_ip: None,
@@ -267,10 +227,8 @@ mod tests {
 
         let changed = w.handler.handle(change(&me, proof), t0()).await.unwrap();
         assert_eq!(changed.destination, "new@example.com");
-        // The account, the IdP user, and the code link follow the address.
+        // The account and the code link follow the address.
         assert_eq!(w.fx.directory.contact_of(&me.0).email.as_deref(), Some("new@example.com"));
-        let idp = IdpSubject::new("https://idp.test", "sub-123").unwrap();
-        assert_eq!(w.fx.credentials.emails_set(), vec![(idp, "new@example.com".to_owned())]);
         let new_link = IdpSubject::new(EMAIL_CODE_ISSUER, "new@example.com").unwrap();
         let old_link = IdpSubject::new(EMAIL_CODE_ISSUER, "old@example.com").unwrap();
         assert!(w.fx.links.find_by_subject(&new_link).await.unwrap().is_some(), "codes to the new address sign in");
@@ -287,7 +245,6 @@ mod tests {
 
         w.handler.handle(change(&me, proof), t0()).await.unwrap();
         assert_eq!(w.fx.directory.contact_of(&me.0).phone.as_deref(), Some("+33612345678"));
-        assert!(w.fx.credentials.emails_set().is_empty(), "the IdP keeps its email");
         assert_eq!(w.sender.contact_notices(), vec![(VerificationChannel::Sms, "old@example.com".to_owned())]);
     }
 
@@ -307,24 +264,19 @@ mod tests {
         assert!(matches!(err, AuthError::VerificationCodeInvalid), "{err:?}");
 
         assert_eq!(w.fx.directory.contact_of(&me.0).email.as_deref(), Some("old@example.com"));
-        assert!(w.fx.credentials.emails_set().is_empty());
         assert!(w.sender.contact_notices().is_empty());
     }
 
     #[tokio::test]
-    async fn a_refused_account_change_puts_the_idp_email_back() {
+    async fn a_refused_account_change_moves_nothing() {
         let w = world();
         let me = member(&w).await;
         let proof = code_to(&w, VerificationChannel::Email, "new@example.com").await;
         w.fx.directory.refuse_contact_changes();
 
         assert!(w.handler.handle(change(&me, proof), t0()).await.is_err());
-        let idp = IdpSubject::new("https://idp.test", "sub-123").unwrap();
-        assert_eq!(
-            w.fx.credentials.emails_set(),
-            vec![(idp.clone(), "new@example.com".to_owned()), (idp, "old@example.com".to_owned())],
-            "moved, then put back"
-        );
+        let old_link = IdpSubject::new(EMAIL_CODE_ISSUER, "old@example.com").unwrap();
+        assert!(w.fx.links.find_by_subject(&old_link).await.unwrap().is_some(), "the old code link stays");
         assert!(w.sender.contact_notices().is_empty(), "nothing changed: nobody is told");
     }
 

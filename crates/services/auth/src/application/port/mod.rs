@@ -7,7 +7,6 @@
 pub mod account_directory;
 pub mod app_authorization_repository;
 pub mod account_eraser;
-pub mod credential_admin;
 pub mod event_publisher;
 pub mod federated_nonce_store;
 pub mod federated_token_verifier;
@@ -29,12 +28,11 @@ pub use account_directory::{
     AccountActivation, AccountDirectory, AccountSnapshot, ContactDetails, EmailHolder, NewAccount, SignUpConsent,
 };
 pub use account_eraser::{AccountEraser, ErasedAccount};
-pub use credential_admin::CredentialAdmin;
 pub use event_publisher::EventPublisher;
 pub use federated_nonce_store::FederatedNonceStore;
 pub use federated_token_verifier::{FederatedIdentity, FederatedTokenVerifier};
 pub use guest_registry::{GuestRecord, GuestRegistry};
-pub use identity_provider::{AuthnGrant, IdentityProvider, NormalizedClaims};
+pub use identity_provider::AuthnGrant;
 pub use mfa::{MfaChange, MfaSecret, MfaSeedCipher, MfaStore, PendingLogin};
 pub use passkey_repository::{PasskeyRepository, StoredPasskey};
 pub use profile_directory::{profile_ids_or_empty, ProfileDirectory};

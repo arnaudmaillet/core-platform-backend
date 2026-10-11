@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use transport::grpc::edge;
 use crate::application::command::{
-    AppAuthorizations, AppGrant, ChangeContactCommand, ChangeContactHandler, ChangePasswordCommand, ChangePasswordHandler, FederatedNonces, GuestAttestation, CompleteLoginCommand, IssuedSession, LoginCommand, LoginHandler, LoginOutcome, MfaCaller,
+    AppAuthorizations, AppGrant, ChangeContactCommand, ChangeContactHandler, FederatedNonces, GuestAttestation, CompleteLoginCommand, IssuedSession, LoginCommand, LoginHandler, LoginOutcome, MfaCaller,
     MfaSettingsHandler, PasskeyAssertion, PasskeyHandler, PasskeyRegistration, PasskeySignIn, PasskeyView,
     LogoutAllSessionsCommand, LogoutAllSessionsHandler, LogoutCommand, LogoutHandler,
     RefreshCommand, RefreshHandler, SignUpCommand, SignUpCredential, SignUpHandler, SignUpOutcome,
@@ -41,7 +41,6 @@ pub struct AuthServiceHandler {
     introspect: Arc<IntrospectHandler>,
     list_sessions: Arc<ListSessionsHandler>,
     start_guest: Arc<StartGuestSessionHandler>,
-    change_password: Arc<ChangePasswordHandler>,
     verify_credentials: Arc<VerifyCredentialsHandler>,
     sign_up: Option<Arc<SignUpHandler>>,
     codes: Option<Arc<VerificationCodes>>,
@@ -70,7 +69,6 @@ impl AuthServiceHandler {
         introspect: Arc<IntrospectHandler>,
         list_sessions: Arc<ListSessionsHandler>,
         start_guest: Arc<StartGuestSessionHandler>,
-        change_password: Arc<ChangePasswordHandler>,
         verify_credentials: Arc<VerifyCredentialsHandler>,
     ) -> Self {
         Self {
@@ -81,7 +79,6 @@ impl AuthServiceHandler {
             introspect,
             list_sessions,
             start_guest,
-            change_password,
             verify_credentials,
             sign_up: None,
             codes: None,
@@ -589,29 +586,6 @@ impl AuthServiceHandler {
         Ok(Response::new(proto::SignUpResponse { outcome: Some(outcome) }))
     }
 
-    /// Edge `authenticated`: the account and session are the caller's (`sub`,
-    /// `sid`). A mesh call has no holder to prove a password for.
-    pub async fn change_password(
-        &self,
-        request: Request<proto::ChangePasswordRequest>,
-    ) -> Result<Response<proto::ChangePasswordResponse>, Status> {
-        let (account_id, session_id) = caller(&request)?;
-        let req = request.into_inner();
-        let cmd = ChangePasswordCommand {
-            account_id,
-            session_id,
-            current_password: req.current_password,
-            new_password: req.new_password,
-            sign_out_other_sessions: req.sign_out_other_sessions,
-        };
-        let out = self
-            .change_password
-            .handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now())
-            .await
-            .map_err(auth_error_to_status)?;
-        Ok(Response::new(proto::ChangePasswordResponse { sessions_revoked: out.sessions_revoked }))
-    }
-
     /// Edge `authenticated` step-up: see `auth.v1.VerifyCredentials`.
     pub async fn verify_credentials(
         &self,
@@ -620,7 +594,6 @@ impl AuthServiceHandler {
         use proto::verify_credentials_request::Credential;
         let (account_id, session_id) = caller(&request)?;
         let credential = match request.into_inner().credential {
-            Some(Credential::Password(p)) => StepUpCredential::Password(p),
             Some(Credential::MfaCode(c)) => StepUpCredential::MfaCode(c),
             Some(Credential::Passkey(a)) => StepUpCredential::Passkey(assertion_from_proto(a)),
             None => return Err(Status::invalid_argument("a credential is required")),
@@ -857,16 +830,6 @@ fn grant_from_proto(
     credential: Option<proto::login_request::Credential>,
 ) -> Result<AuthnGrant, Status> {
     match credential {
-        Some(proto::login_request::Credential::AuthorizationCode(g)) => {
-            Ok(AuthnGrant::AuthorizationCode {
-                code: g.code,
-                redirect_uri: g.redirect_uri,
-                code_verifier: g.code_verifier,
-            })
-        }
-        Some(proto::login_request::Credential::Password(g)) => {
-            Ok(AuthnGrant::Password { username: g.username, password: g.password })
-        }
         Some(proto::login_request::Credential::IdToken(g)) => Ok(AuthnGrant::IdToken {
             provider: provider_from_proto(g.provider)?,
             id_token: g.id_token,
@@ -888,13 +851,13 @@ fn provider_from_proto(provider: i32) -> Result<FederatedProvider, Status> {
     }
 }
 
-fn method_to_proto(method: SignInMethod) -> proto::SignInMethod {
+fn method_to_proto(method: Option<SignInMethod>) -> proto::SignInMethod {
     match method {
-        SignInMethod::Apple => proto::SignInMethod::Apple,
-        SignInMethod::Google => proto::SignInMethod::Google,
-        SignInMethod::Password => proto::SignInMethod::Password,
-        SignInMethod::EmailCode => proto::SignInMethod::EmailCode,
-        SignInMethod::PhoneCode => proto::SignInMethod::PhoneCode,
+        Some(SignInMethod::Apple) => proto::SignInMethod::Apple,
+        Some(SignInMethod::Google) => proto::SignInMethod::Google,
+        Some(SignInMethod::EmailCode) => proto::SignInMethod::EmailCode,
+        Some(SignInMethod::PhoneCode) => proto::SignInMethod::PhoneCode,
+        None => proto::SignInMethod::Unspecified,
     }
 }
 
@@ -917,7 +880,6 @@ fn login_response(issued: &IssuedSession) -> proto::LoginResponse {
     proto::LoginResponse {
         account_id: issued.account_id.as_str(),
         tokens: Some(token_pair(issued)),
-        first_link: issued.first_link,
         reactivated: issued.reactivated,
         ..Default::default()
     }

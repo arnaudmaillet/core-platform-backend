@@ -40,8 +40,6 @@ pub struct PendingLogin {
     pub account_id:          AccountId,
     pub issuer:              String,
     pub subject:             String,
-    /// The subject → account link is still to be made.
-    pub needs_link:          bool,
     pub device:              DeviceFingerprint,
     pub guest_refresh_token: Option<String>,
     pub started_at:          DateTime<Utc>,

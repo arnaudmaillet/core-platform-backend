@@ -14,14 +14,13 @@ use crate::application::command::verification::VerificationCodes;
 use crate::application::ensure_valid;
 use crate::application::policy::SessionPolicy;
 use crate::application::port::{
-    AccountActivation, AccountDirectory, AccountSnapshot, AuthnGrant, EventPublisher, FederatedTokenVerifier, GuestRegistry,
-    IdentityProvider, PendingLogin, ProfileDirectory, RefreshTokenRepository, SessionCache, SessionRepository,
-    SubjectLinkRepository, TokenMinter,
+    AccountActivation, AccountDirectory, AccountSnapshot, AuthnGrant, FederatedTokenVerifier, GuestRegistry,
+    PendingLogin, ProfileDirectory, RefreshTokenRepository, SessionCache, SessionRepository, SubjectLinkRepository,
+    TokenMinter, EventPublisher,
 };
-use crate::domain::aggregate::SubjectLink;
 use crate::application::port::VerificationChannel;
 use crate::domain::value_object::{
-    AccountId, DeviceFingerprint, IdpSubject, SessionMethod, EMAIL_CODE_ISSUER, PASSKEY_ISSUER, PHONE_CODE_ISSUER,
+    AccountId, DeviceFingerprint, IdpSubject, EMAIL_CODE_ISSUER, PASSKEY_ISSUER, PHONE_CODE_ISSUER,
 };
 use crate::error::AuthError;
 
@@ -42,34 +41,6 @@ impl Validate for LoginCommand {
     fn validate(&self) -> Result<(), Vec<FieldViolation>> {
         let mut v = Vec::new();
         match &self.grant {
-            AuthnGrant::AuthorizationCode { code, redirect_uri, .. } => {
-                if code.trim().is_empty() {
-                    v.push(FieldViolation::new("code", "AUT-VAL-001", "code must not be empty"));
-                }
-                if redirect_uri.trim().is_empty() {
-                    v.push(FieldViolation::new(
-                        "redirect_uri",
-                        "AUT-VAL-002",
-                        "redirect_uri must not be empty",
-                    ));
-                }
-            }
-            AuthnGrant::Password { username, password } => {
-                if username.trim().is_empty() {
-                    v.push(FieldViolation::new(
-                        "username",
-                        "AUT-VAL-003",
-                        "username must not be empty",
-                    ));
-                }
-                if password.is_empty() {
-                    v.push(FieldViolation::new(
-                        "password",
-                        "AUT-VAL-004",
-                        "password must not be empty",
-                    ));
-                }
-            }
             AuthnGrant::IdToken { id_token, nonce, .. } => {
                 if id_token.trim().is_empty() {
                     v.push(FieldViolation::new("id_token", "AUT-VAL-030", "id_token must not be empty"));
@@ -114,19 +85,16 @@ pub struct IssuedSession {
     pub access_token: String,
     pub refresh_token: String,
     pub access_expires_in: i64,
-    /// True when this call established the IdP-subject → account link.
-    pub first_link: bool,
     /// True when this login resumed an account its holder had deactivated.
     pub reactivated: bool,
 }
 
-/// Orchestrates login: authenticate → resolve/link account → gate active → issue
-/// session + tokens. Persists durably, then publishes events.
+/// Orchestrates login: prove an identity (id_token, code, passkey) → its linked
+/// account → gate active → issue session + tokens. No identity is linked here:
+/// one with no account is told to sign up (#881).
 pub struct LoginHandler {
-    idp: Arc<dyn IdentityProvider>,
     directory: Arc<dyn AccountDirectory>,
     links: Arc<dyn SubjectLinkRepository>,
-    publisher: Arc<dyn EventPublisher>,
     members: MemberSessions,
     /// Native Sign in with Apple / Google; `None` refuses id_token grants.
     federated: Option<Arc<dyn FederatedTokenVerifier>>,
@@ -146,7 +114,6 @@ pub struct LoginHandler {
 impl LoginHandler {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        idp: Arc<dyn IdentityProvider>,
         directory: Arc<dyn AccountDirectory>,
         profiles: Arc<dyn ProfileDirectory>,
         links: Arc<dyn SubjectLinkRepository>,
@@ -158,10 +125,8 @@ impl LoginHandler {
         policy: SessionPolicy,
     ) -> Self {
         Self {
-            idp,
             directory,
             links,
-            publisher: Arc::clone(&publisher),
             members: MemberSessions { profiles, sessions, refresh_tokens, cache, minter, publisher, policy },
             federated: None,
             nonces: None,
@@ -273,14 +238,14 @@ impl LoginHandler {
 
         // 1–2. Who is signing in, and their account.
         let mut by_passkey: Option<super::passkeys::VerifiedPasskey> = None;
-        let (subject, account_id, needs_link) = match cmd.grant {
+        let (subject, account_id) = match cmd.grant {
             // A passkey (#808): the assertion names its account (user handle).
             AuthnGrant::Passkey(assertion) => {
                 let passkeys = self.passkeys.as_ref().ok_or(AuthError::PasskeysUnavailable)?;
                 let verified = passkeys.verify(&assertion, None, now).await?;
                 let account_id = verified.account_id;
                 by_passkey = Some(verified);
-                (self.passkey_subject(&account_id, &assertion).await?, account_id, false)
+                (self.passkey_subject(&account_id, &assertion).await?, account_id)
             }
             // A native id_token: verified here. Its account was linked at
             // SignUp; an identity with none is told to sign up.
@@ -296,7 +261,7 @@ impl LoginHandler {
                 if let Some(nonces) = &self.nonces {
                     nonces.redeem(&nonce).await?;
                 }
-                (subject, link.account_id(), false)
+                (subject, link.account_id())
             }
             // A one-time code proving the address of a passwordless account.
             AuthnGrant::Code { challenge_id, code } => {
@@ -314,21 +279,7 @@ impl LoginHandler {
                 let subject = IdpSubject::new(issuer, proven.destination)?;
                 let link = self.links.find_by_subject(&subject).await?.ok_or(AuthError::NoAccountForIdentity)?;
                 codes.spend(&challenge_id).await?;
-                (subject, link.account_id(), false)
-            }
-            // Broker the credential to the IdP and normalize the identity. The
-            // link itself is only established *after* the active gate, so an
-            // inactive account never produces a spurious SubjectLinked event.
-            grant => {
-                let claims = self.idp.authenticate(grant).await?;
-                let subject = IdpSubject::new(claims.issuer, claims.subject)?;
-                match self.links.find_by_subject(&subject).await? {
-                    Some(link) => (subject, link.account_id(), false),
-                    None => {
-                        let account_id = self.directory.resolve_or_provision(&subject).await?;
-                        (subject, account_id, true)
-                    }
-                }
+                (subject, link.account_id())
             }
         };
 
@@ -341,12 +292,11 @@ impl LoginHandler {
         // account's first link, so the passkey itself is what counts.
         let origin = match &by_passkey {
             Some(passkey) => SessionOrigin::passkey(passkey),
-            None => SessionOrigin::by(SessionMethod::of_subject(&subject)),
+            None => SessionOrigin::of_subject(&subject),
         };
         let proven = ProvenSignIn {
             account_id,
             subject,
-            needs_link,
             device: cmd.device,
             guest_refresh_token: cmd.guest_refresh_token,
             origin,
@@ -398,12 +348,11 @@ impl LoginHandler {
         let subject = IdpSubject::new(pending.issuer, pending.subject)?;
         let origin = match &second {
             Some(passkey) => SessionOrigin::passkey(passkey),
-            None => SessionOrigin::by(SessionMethod::of_subject(&subject)),
+            None => SessionOrigin::of_subject(&subject),
         };
         let proven = ProvenSignIn {
             account_id: pending.account_id,
             subject,
-            needs_link: pending.needs_link,
             device: pending.device,
             guest_refresh_token: pending.guest_refresh_token,
             origin,
@@ -427,7 +376,6 @@ impl LoginHandler {
             account_id: proven.account_id,
             issuer: proven.subject.issuer().to_owned(),
             subject: proven.subject.subject().to_owned(),
-            needs_link: proven.needs_link,
             device: proven.device,
             guest_refresh_token: proven.guest_refresh_token,
             started_at: now,
@@ -446,7 +394,7 @@ impl LoginHandler {
         now: DateTime<Utc>,
         correlation_id: uuid::Uuid,
     ) -> Result<IssuedSession, AuthError> {
-        let ProvenSignIn { account_id, subject, needs_link, device, guest_refresh_token, origin } = proven;
+        let ProvenSignIn { account_id, subject, device, guest_refresh_token, origin } = proven;
         // Signing back in is how a holder undoes their own deactivation: the
         // credential was just proven, so the account resumes (a suspension is
         // never lifted here).
@@ -461,17 +409,6 @@ impl LoginHandler {
                 return Err(AuthError::AccountNotActive { current: reason });
             }
         };
-
-        // Establish the immutable subject → account link on first login.
-        let mut first_link = false;
-        if needs_link {
-            let mut link = SubjectLink::establish(subject.clone(), account_id, now, correlation_id);
-            self.links.save(&link).await?;
-            for event in &link.drain_events() {
-                self.publisher.publish(event).await?;
-            }
-            first_link = true;
-        }
 
         // Issue the session, its refresh token and the edge access token —
         // after reading whether this device ever signed in to the account.
@@ -496,7 +433,6 @@ impl LoginHandler {
             access_token: issued.access_token,
             refresh_token: issued.refresh_token,
             access_expires_in: issued.access_expires_in,
-            first_link,
             reactivated,
         })
     }
@@ -506,7 +442,6 @@ impl LoginHandler {
 struct ProvenSignIn {
     account_id: AccountId,
     subject: IdpSubject,
-    needs_link: bool,
     device: DeviceFingerprint,
     guest_refresh_token: Option<String>,
     origin: SessionOrigin,
@@ -568,14 +503,11 @@ mod tests {
     use crate::domain::value_object::Generation;
     use uuid::Uuid;
 
-    fn password_login() -> Envelope<LoginCommand> {
+    fn member_login() -> Envelope<LoginCommand> {
         Envelope::new(
             Uuid::now_v7(),
             LoginCommand {
-                grant: AuthnGrant::Password {
-                    username: "user".into(),
-                    password: "secret".into(),
-                },
+                grant: crate::application::fakes::member_grant(),
                 device: DeviceFingerprint::default(),
                 guest_refresh_token: None,
                 client_ip: None,
@@ -584,38 +516,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn first_login_links_account_and_issues_tokens() {
+    async fn a_linked_identity_signs_in_and_gets_tokens() {
         let fx = Fixture::new();
-        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
+        let issued = fx.login_handler().handle(member_login(), t0()).await.unwrap().issued().unwrap();
 
-        assert!(issued.first_link);
         assert!(!issued.access_token.is_empty());
         assert!(!issued.refresh_token.is_empty());
         assert_eq!(issued.access_expires_in, 600); // 10-minute access TTL
         assert_eq!(fx.sessions.count(), 1);
-        // SubjectLinked then SessionIssued, in that order.
-        assert_eq!(fx.publisher.event_types(), vec!["auth.subject_linked", "auth.session_issued"]);
+        // A sign-in links nothing (#881): only the session is published.
+        assert_eq!(fx.publisher.event_types(), vec!["auth.session_issued"]);
     }
 
     #[tokio::test]
-    async fn second_login_same_subject_does_not_relink() {
+    async fn the_same_identity_signs_in_to_the_same_account() {
         let fx = Fixture::new();
-        let first = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
-        let second = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
+        let first = fx.login_handler().handle(member_login(), t0()).await.unwrap().issued().unwrap();
+        let second = fx.login_handler().handle(member_login(), t0()).await.unwrap().issued().unwrap();
 
-        assert!(first.first_link);
-        assert!(!second.first_link, "subject already linked");
         assert_eq!(first.account_id, second.account_id);
         assert_eq!(fx.sessions.count(), 2);
-        // Only one subject_linked across both logins.
-        let linked = fx.publisher.event_types().iter().filter(|t| **t == "auth.subject_linked").count();
-        assert_eq!(linked, 1);
     }
 
     #[tokio::test]
     async fn login_rejected_for_inactive_account() {
         let fx = Fixture::new();
-        let subject = IdpSubject::new("https://idp.test", "sub-123").unwrap();
+        let subject = IdpSubject::new(crate::domain::value_object::APPLE_ISSUER, "sub-123").unwrap();
         let account = AccountId::from_uuid(Uuid::now_v7());
         fx.directory.with_account(
             &subject,
@@ -624,7 +550,7 @@ mod tests {
             vec![],
         );
 
-        let err = fx.login_handler().handle(password_login(), t0()).await.unwrap_err();
+        let err = fx.login_handler().handle(member_login(), t0()).await.unwrap_err();
         assert!(matches!(err, AuthError::AccountNotActive { .. }));
         // No session, and crucially no SubjectLinked event for an inactive account.
         assert_eq!(fx.sessions.count(), 0);
@@ -635,18 +561,18 @@ mod tests {
     #[tokio::test]
     async fn login_resumes_a_self_deactivated_account() {
         let fx = Fixture::new();
-        let subject = IdpSubject::new("https://idp.test", "sub-123").unwrap();
+        let subject = IdpSubject::new(crate::domain::value_object::APPLE_ISSUER, "sub-123").unwrap();
         let account = AccountId::from_uuid(Uuid::now_v7());
         fx.directory.with_account(&subject, account, AccountActivation::Deactivated, vec![]);
 
-        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
+        let issued = fx.login_handler().handle(member_login(), t0()).await.unwrap().issued().unwrap();
 
         assert!(issued.reactivated, "the app welcomes the holder back");
         assert_eq!(fx.directory.resumed(), vec![account]);
         assert_eq!(fx.sessions.count(), 1);
 
         // The next login finds it active: nothing more to resume.
-        let again = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
+        let again = fx.login_handler().handle(member_login(), t0()).await.unwrap().issued().unwrap();
         assert!(!again.reactivated);
         assert_eq!(fx.directory.resumed(), vec![account]);
     }
@@ -654,12 +580,12 @@ mod tests {
     #[tokio::test]
     async fn login_fails_when_the_account_cannot_be_resumed() {
         let fx = Fixture::new();
-        let subject = IdpSubject::new("https://idp.test", "sub-123").unwrap();
+        let subject = IdpSubject::new(crate::domain::value_object::APPLE_ISSUER, "sub-123").unwrap();
         let account = AccountId::from_uuid(Uuid::now_v7());
         fx.directory.with_account(&subject, account, AccountActivation::Deactivated, vec![]);
         fx.directory.refuse_resume();
 
-        let err = fx.login_handler().handle(password_login(), t0()).await.unwrap_err();
+        let err = fx.login_handler().handle(member_login(), t0()).await.unwrap_err();
 
         assert!(matches!(err, AuthError::AccountNotActive { .. }));
         assert_eq!(fx.sessions.count(), 0);
@@ -667,11 +593,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_propagates_idp_failure() {
-        let mut fx = Fixture::new();
-        fx.idp = std::sync::Arc::new(crate::application::fakes::StubIdentityProvider::failing());
-        let err = fx.login_handler().handle(password_login(), t0()).await.unwrap_err();
-        assert!(matches!(err, AuthError::IdpAuthenticationFailed));
+    async fn login_propagates_a_refused_id_token() {
+        let fx = Fixture::new();
+        fx.federated.fail();
+        let err = fx.login_handler().handle(member_login(), t0()).await.unwrap_err();
+        assert!(matches!(err, AuthError::IdTokenRejected { .. }));
+        assert_eq!(fx.sessions.count(), 0);
     }
 
     #[tokio::test]
@@ -680,10 +607,10 @@ mod tests {
         let env = Envelope::new(
             Uuid::now_v7(),
             LoginCommand {
-                grant: AuthnGrant::AuthorizationCode {
-                    code: "".into(),
-                    redirect_uri: "".into(),
-                    code_verifier: "v".into(),
+                grant: AuthnGrant::IdToken {
+                    provider: crate::domain::value_object::FederatedProvider::Apple,
+                    id_token: "".into(),
+                    nonce: "n".into(),
                 },
                 device: DeviceFingerprint::default(),
                 guest_refresh_token: None,
@@ -698,13 +625,13 @@ mod tests {
     async fn login_mints_the_owned_profiles_into_the_token() {
         use crate::domain::value_object::ProfileId;
         let fx = Fixture::new();
-        let subject = IdpSubject::new("https://idp.test", "sub-123").unwrap();
+        let subject = IdpSubject::new(crate::domain::value_object::APPLE_ISSUER, "sub-123").unwrap();
         let account = AccountId::from_uuid(Uuid::now_v7());
         let profiles = vec![ProfileId::from_uuid(Uuid::now_v7()), ProfileId::from_uuid(Uuid::now_v7())];
         fx.directory.with_account(&subject, account, AccountActivation::Active, vec![]);
         fx.profiles.with_profiles(account, profiles.clone());
 
-        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
+        let issued = fx.login_handler().handle(member_login(), t0()).await.unwrap().issued().unwrap();
         let claims = fx.minter.verify_access(&issued.access_token).await.unwrap();
         assert_eq!(claims.account_id, account);
         assert_eq!(claims.profile_ids, profiles);
@@ -715,7 +642,7 @@ mod tests {
         let mut fx = Fixture::new();
         fx.profiles = std::sync::Arc::new(crate::application::fakes::StubProfileDirectory::failing());
 
-        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
+        let issued = fx.login_handler().handle(member_login(), t0()).await.unwrap().issued().unwrap();
         let claims = fx.minter.verify_access(&issued.access_token).await.unwrap();
         assert!(claims.profile_ids.is_empty(), "outage degrades to no profile grants");
         assert_eq!(fx.sessions.count(), 1, "the session is still issued");
@@ -724,7 +651,7 @@ mod tests {
     #[tokio::test]
     async fn session_is_issued_under_current_generation() {
         let fx = Fixture::new();
-        let issued = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
+        let issued = fx.login_handler().handle(member_login(), t0()).await.unwrap().issued().unwrap();
         let session = fx.sessions.find_by_id(&issued.session_id).await.unwrap().unwrap();
         assert_eq!(session.generation(), Generation::INITIAL);
     }
@@ -739,7 +666,6 @@ mod tests {
         use crate::application::port::ContactDetails;
 
         let fx = Fixture::new();
-        fx.idp.with_password("pw");
         let sender = Arc::new(RecordingCodeSender::default());
         let codes = Arc::new(VerificationCodes::new(
             Arc::new(InMemoryVerificationStore::default()),
@@ -751,7 +677,7 @@ mod tests {
             Envelope::new(
                 Uuid::now_v7(),
                 LoginCommand {
-                    grant: AuthnGrant::Password { username: "user".into(), password: "pw".into() },
+                    grant: crate::application::fakes::member_grant(),
                     device: DeviceFingerprint::new(
                         Some("App/1.0 iPhone".into()),
                         Some("203.0.113.7".into()),
@@ -793,14 +719,14 @@ mod tests {
     async fn two_step_sign_in_waits_for_the_code_then_issues_once() {
         use crate::domain::value_object::step_of;
         let fx = Fixture::new();
-        let first = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
+        let first = fx.login_handler().handle(member_login(), t0()).await.unwrap().issued().unwrap();
         let account = first.account_id;
         let seed = fx.enroll_mfa(account);
         fx.directory.set_activation(&account, AccountActivation::Deactivated);
         let sessions_before = fx.sessions.count();
 
         let LoginOutcome::SecondFactorRequired(challenge) =
-            fx.login_handler().handle(password_login(), t0()).await.unwrap()
+            fx.login_handler().handle(member_login(), t0()).await.unwrap()
         else {
             panic!("a second factor is required")
         };
@@ -833,10 +759,9 @@ mod tests {
     #[tokio::test]
     async fn two_step_sign_in_fails_closed_without_the_key() {
         let fx = Fixture::new();
-        let first = fx.login_handler().handle(password_login(), t0()).await.unwrap().issued().unwrap();
+        let first = fx.login_handler().handle(member_login(), t0()).await.unwrap().issued().unwrap();
         fx.enroll_mfa(first.account_id);
         let bare = super::LoginHandler::new(
-            Arc::clone(&fx.idp) as _,
             Arc::clone(&fx.directory) as _,
             Arc::clone(&fx.profiles) as _,
             Arc::clone(&fx.links) as _,
@@ -846,8 +771,9 @@ mod tests {
             Arc::clone(&fx.minter) as _,
             Arc::clone(&fx.publisher) as _,
             fx.policy.clone(),
-        );
-        let err = bare.handle(password_login(), t0()).await.unwrap_err();
+        )
+        .with_federated(Arc::clone(&fx.federated) as _, Arc::clone(&fx.guests) as _);
+        let err = bare.handle(member_login(), t0()).await.unwrap_err();
         assert!(matches!(err, AuthError::MfaUnavailable), "{err:?}");
     }
 }

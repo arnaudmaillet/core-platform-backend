@@ -28,7 +28,7 @@ use crate::application::port::{
 };
 use crate::domain::aggregate::SubjectLink;
 use crate::domain::value_object::{
-    AccountId, DeviceFingerprint, FederatedProvider, IdpSubject, SessionMethod, SignInMethod, EMAIL_CODE_ISSUER,
+    AccountId, DeviceFingerprint, FederatedProvider, IdpSubject, SignInMethod, EMAIL_CODE_ISSUER,
     PHONE_CODE_ISSUER,
 };
 use crate::application::port::VerificationChannel;
@@ -137,7 +137,8 @@ pub enum SignUpOutcome {
         access_expires_in: i64,
     },
     /// The identity, or its verified email, has an account: sign in with this.
-    ExistingAccount { method: SignInMethod },
+    /// `method`: how that account signs in; `None` when none can be told.
+    ExistingAccount { method: Option<SignInMethod> },
 }
 
 pub struct SignUpHandler {
@@ -224,7 +225,7 @@ impl SignUpHandler {
 
         // 2. This very identity already has an account: sign in instead.
         if self.links.find_by_subject(&subject).await?.is_some() {
-            return Ok(SignUpOutcome::ExistingAccount { method: identity.method });
+            return Ok(SignUpOutcome::ExistingAccount { method: Some(identity.method) });
         }
 
         // An account needs an email or a phone number.
@@ -248,8 +249,7 @@ impl SignUpHandler {
                 .find_by_account(&holder.account_id)
                 .await?
                 .first()
-                .map(|link| SignInMethod::from_issuer(link.subject().issuer()))
-                .unwrap_or(SignInMethod::Password);
+                .and_then(|link| SignInMethod::from_issuer(link.subject().issuer()));
             return Ok(SignUpOutcome::ExistingAccount { method });
         }
 
@@ -293,7 +293,7 @@ impl SignUpHandler {
                 subject.clone(),
                 cmd.device,
                 snapshot.permissions,
-                SessionOrigin::by(SessionMethod::of_subject(&subject)),
+                SessionOrigin::of_subject(&subject),
                 snapshot.age_bracket,
                 now,
                 correlation_id,
@@ -435,7 +435,7 @@ mod tests {
 
         // Signing up again with the same identity: sign in instead.
         let again = handler(&fx, &verifier).handle(sign_up("t1", adult_dob(), None), t0()).await.unwrap();
-        assert!(matches!(again, SignUpOutcome::ExistingAccount { method: SignInMethod::Apple }));
+        assert!(matches!(again, SignUpOutcome::ExistingAccount { method: Some(SignInMethod::Apple) }));
         assert_eq!(fx.directory.provisioned().len(), 1);
     }
 
@@ -450,7 +450,7 @@ mod tests {
 
         verifier.knows("t2", FederatedProvider::Apple, "apple-2", Some("Bob@Example.com"), false);
         let outcome = handler(&fx, &verifier).handle(sign_up("t2", adult_dob(), None), t0()).await.unwrap();
-        assert!(matches!(outcome, SignUpOutcome::ExistingAccount { method: SignInMethod::Password }));
+        assert!(matches!(outcome, SignUpOutcome::ExistingAccount { method: None }));
         assert!(fx.directory.provisioned().is_empty(), "no duplicate");
 
         // The same address through a private relay is someone new to us.
@@ -577,10 +577,20 @@ mod tests {
         };
         let issued = handler.handle(login(None), t0()).await.unwrap().issued().unwrap();
         assert_eq!(issued.account_id, account_id);
-        assert!(!issued.first_link, "linked at sign-up");
 
         // Without a verifier, id_token grants are refused.
-        let err = fx.login_handler().handle(login(None), t0()).await.unwrap_err();
+        let bare = crate::application::command::LoginHandler::new(
+            Arc::clone(&fx.directory) as _,
+            Arc::clone(&fx.profiles) as _,
+            Arc::clone(&fx.links) as _,
+            Arc::clone(&fx.sessions) as _,
+            Arc::clone(&fx.refresh_tokens) as _,
+            Arc::clone(&fx.cache) as _,
+            Arc::clone(&fx.minter) as _,
+            Arc::clone(&fx.publisher) as _,
+            fx.policy.clone(),
+        );
+        let err = bare.handle(login(None), t0()).await.unwrap_err();
         assert!(matches!(err, AuthError::FederatedProviderNotConfigured { .. }));
     }
 
@@ -629,7 +639,7 @@ mod tests {
         let again = codes.start(start("mia@example.com")).await.unwrap();
         let (_, code, _) = sender.last().unwrap();
         let outcome = handler.handle(by_code(again.challenge_id, code), t0()).await.unwrap();
-        assert!(matches!(outcome, SignUpOutcome::ExistingAccount { method: SignInMethod::EmailCode }));
+        assert!(matches!(outcome, SignUpOutcome::ExistingAccount { method: Some(SignInMethod::EmailCode) }));
 
         // Signing back in with a code.
         let login = fx.login_handler().with_codes(Arc::clone(&codes));
@@ -810,6 +820,6 @@ mod tests {
         let again = codes.start(by_sms("+33611223344")).await.unwrap();
         let (_, code, _) = sender.last().unwrap();
         let outcome = handler.handle(sign_up_with(again.challenge_id, code), t0()).await.unwrap();
-        assert!(matches!(outcome, SignUpOutcome::ExistingAccount { method: SignInMethod::PhoneCode }));
+        assert!(matches!(outcome, SignUpOutcome::ExistingAccount { method: Some(SignInMethod::PhoneCode) }));
     }
 }
