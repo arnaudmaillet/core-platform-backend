@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 6da2bbf14111803c4bd771b13b818bde4f1f7f7665d7ea9c84793eb7e640a3ee
-  translated_at: 2026-10-10
+  source_sha256: 06256797825659106a03ffc4d1d0227d2540eec3f42f0867f3013f36622d64f5
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -111,7 +111,9 @@ La surface synchrone est délibérément en **lecture seule** : `Search` (fédé
 rafraîchissement agrège les `hashtags` des documents post recherchables (les mêmes exclusions qu'une
 recherche : modération, propriétaire, découverte, fenêtre de posts) — les 5 000 tags les plus utilisés,
 chacun avec son total et ses posts des dernières 24 heures et des 7 derniers jours — et tient un document
-`hashtags` par tag : `post_count`, une `popularity` de volume (`ln(1+total) + ln(1+semaine)`, sur laquelle
+`hashtags` par tag : `post_count` (chaque post recherchable portant le tag, **auteurs privés compris** :
+un compte, jamais leur contenu — un compromis accepté, les posts du tag eux-mêmes restent filtrés par
+lecteur), une `popularity` de volume (`ln(1+total) + ln(1+semaine)`, sur laquelle
 se classent le tri POPULARITY de Search et Suggest) et un `trending` de vélocité (`3 × jour + reste de la
 semaine` ; 0 pour un tag inutilisé cette semaine). Seuls les tags qui changent sont réécrits ; un tag qui
 n'est plus utilisé perd son document, donc supprimer, masquer ou faire sortir de sa fenêtre un post

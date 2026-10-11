@@ -99,7 +99,9 @@ The synchronous surface is deliberately **read-only**: `Search` (federated, filt
 **Hashtags (#831)** have no event of their own: every `SEARCH_HASHTAG_REFRESH_SECS` (60) a refresh
 aggregates the searchable post documents' `hashtags` (the same exclusions as a search: moderation,
 owner, discovery, post window) — the 5 000 most used tags, each with its total and its posts of the last
-24 hours and 7 days — and keeps one `hashtags` document per tag: `post_count`, a volume `popularity`
+24 hours and 7 days — and keeps one `hashtags` document per tag: `post_count` (every searchable post
+carrying the tag, **private authors' included**: a count, never their content — an accepted trade-off,
+the tag's posts themselves stay viewer-filtered), a volume `popularity`
 (`ln(1+total) + ln(1+week)`, Search's POPULARITY and Suggest rank by it) and a velocity `trending`
 (`3 × day + rest of week`; 0 for a tag unused this week). Only changed tags are written; a tag no longer
 used loses its document, so deleting, hiding or windowing a post lowers its tags' counts at the next
