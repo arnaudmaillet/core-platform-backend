@@ -8,8 +8,9 @@ use crate::error::RealtimeError;
 ///
 /// A `Session` is created once, at the WebSocket handshake, from the verified
 /// edge token — and is then immutable for the connection's life. Authentication
-/// is never re-checked per frame; only the token's `expires_at` bounds the
-/// session (see [`Session::is_expired`]). This is the linchpin of the plane's
+/// is never re-checked per frame; the token's `expires_at` bounds the session
+/// (see [`Session::is_expired`]), and the gateway re-checks its revocation on
+/// the heartbeat (#903, [`Session::token`]). This is the linchpin of the plane's
 /// security model: every authorization decision is made against this fixed
 /// identity, so a frame can never act as another user.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,6 +19,18 @@ pub struct Session {
     pub device_id: DeviceId,
     /// Absolute expiry of the edge token that authenticated this session.
     pub expires_at: DateTime<Utc>,
+    /// The token's `auth` session and revocation generation (`sid`, `gen`):
+    /// what the gateway re-checks against `auth`'s revocation state while the
+    /// socket lives (#903). `None` for a token without them.
+    #[serde(default)]
+    pub token: Option<TokenIds>,
+}
+
+/// The ids a verified edge token is revoked by.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenIds {
+    pub session_id: String,
+    pub generation: i64,
 }
 
 impl Session {
@@ -26,7 +39,14 @@ impl Session {
             user_id,
             device_id,
             expires_at,
+            token: None,
         }
+    }
+
+    /// Records the token's `sid` and `gen` (#903).
+    pub fn with_token(mut self, session_id: impl Into<String>, generation: i64) -> Self {
+        self.token = Some(TokenIds { session_id: session_id.into(), generation });
+        self
     }
 
     /// Whether the session's edge token has lapsed as of `now`. When true, the

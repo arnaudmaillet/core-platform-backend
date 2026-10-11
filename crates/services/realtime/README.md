@@ -67,7 +67,7 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), Kafka for ing
 
 > **Invariants** (and where enforced):
 > - **The plane stores nothing.** It owns the connection and the ephemeral routing registry, never content. A registry miss (recipient offline) is a no-op — durability and the locked-phone push path belong to `chat` / `notification` — domain + application.
-> - **Authenticate once, at the handshake.** The edge token is verified at the WS upgrade via `auth-context`; never re-verified per frame (that would reintroduce the per-message mesh cost the plane exists to kill) — infrastructure boundary.
+> - **Authenticate once, at the handshake.** The edge token is verified at the WS upgrade via `auth-context`; never re-verified per frame (that would reintroduce the per-message mesh cost the plane exists to kill) — infrastructure boundary. Its **revocation** is re-checked on the heartbeat (#903): one cached lookup per socket per tick, not per frame.
 > - **The only authorization is channel-scope ownership.** A connection may subscribe only to channels scoped to its pinned identity (Alice → `dm:alice`, never `dm:bob`). Fine-grained "is this content visible" was authorized upstream when the event was emitted — domain.
 > - **A slow consumer is shed, not buffered.** Each connection has a bounded send queue; on overflow the plane drops/disconnects rather than letting one bad network balloon node memory — infrastructure.
 > - **Fail-open, always.** A lost live event is never a lost message; the client re-syncs from the SoR via its sequence token on reconnect — application.
@@ -218,6 +218,7 @@ Library-only. Will implement [`service_runtime::Service`](../../platform/service
 | `REDIS_URL` | **Yes** | — | connection/presence registry + node-hop Pub/Sub |
 | `KAFKA_BROKERS` | **Yes** (dispatcher) | — | upstream event ingestion |
 | `<auth-context verification config>` | **Yes** | — | edge-token (ES256) verification at handshake |
+| `EDGE_REVOCATION_REDIS_HOSTS` | No (recommended) | — | `auth`'s Redis (see `service-runtime`, #903): a token `auth` revoked is refused at the handshake (`RTM-1001`), and a live socket is re-checked on every heartbeat and closed (`ReauthRequired`, `RTM-1001`) once its token is revoked — sign-out, suspension, revoked role. Fail open (TIER-1): an unreadable state keeps the socket. Unset ⇒ a revoked token keeps its socket |
 
 ### Compile-time features
 - `integration-realtime` *(Phase 6)* — gates the live, container-backed integration suite (real Redis + Kafka).

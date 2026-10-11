@@ -33,6 +33,7 @@ use thiserror::Error;
 /// | AUD-3003 | SubjectScopeViolation         | 403  | **High** | No        |
 /// | AUD-3004 | CallerUnauthenticated         | 401  | **High** | No        |
 /// | AUD-3005 | RecordForbidden               | 403  | **High** | No        |
+/// | AUD-3006 | CallerCheckUnavailable        | 503  | **High** | **Yes**   |
 /// | AUD-4001 | LedgerStoreUnavailable        | 503  | **High** | **Yes**   |
 /// | AUD-4002 | ArchiveUnavailable            | 503  | **High** | **Yes**   |
 /// | AUD-4003 | KeyVaultUnavailable           | 503  | **High** | **Yes**   |
@@ -143,6 +144,11 @@ pub enum AuditError {
     #[error("recording on the privileged audit lane is forbidden for this caller")]
     RecordForbidden,
 
+    /// The caller's token verified, but whether `auth` revoked it since could
+    /// not be read (#903). The privileged surface fails CLOSED; retry.
+    #[error("the audit caller's token revocation state is unavailable")]
+    CallerCheckUnavailable,
+
     // ── Storage-plane availability · the durability core (AUD-4xxx) ───────────
     /// The append-only ledger store (Postgres, UPDATE/DELETE revoked) is
     /// unreachable — the record cannot be durably committed.
@@ -238,6 +244,7 @@ impl AppError for AuditError {
             AuditError::SubjectScopeViolation => "AUD-3003",
             AuditError::CallerUnauthenticated => "AUD-3004",
             AuditError::RecordForbidden => "AUD-3005",
+            AuditError::CallerCheckUnavailable => "AUD-3006",
 
             AuditError::LedgerStoreUnavailable => "AUD-4001",
             AuditError::ArchiveUnavailable => "AUD-4002",
@@ -283,7 +290,8 @@ impl AppError for AuditError {
             AuditError::LedgerStoreUnavailable
             | AuditError::ArchiveUnavailable
             | AuditError::KeyVaultUnavailable
-            | AuditError::AnchorWitnessUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            | AuditError::AnchorWitnessUnavailable
+            | AuditError::CallerCheckUnavailable => StatusCode::SERVICE_UNAVAILABLE,
 
             AuditError::DurabilityNotConfirmed => StatusCode::GATEWAY_TIMEOUT,
 
@@ -315,6 +323,7 @@ impl AppError for AuditError {
             | AuditError::SubjectScopeViolation
             | AuditError::CallerUnauthenticated
             | AuditError::RecordForbidden
+            | AuditError::CallerCheckUnavailable
             | AuditError::LedgerStoreUnavailable
             | AuditError::ArchiveUnavailable
             | AuditError::KeyVaultUnavailable
@@ -348,6 +357,7 @@ impl AppError for AuditError {
             | AuditError::KeyVaultUnavailable
             | AuditError::AnchorWitnessUnavailable
             | AuditError::DurabilityNotConfirmed
+            | AuditError::CallerCheckUnavailable
             | AuditError::ChainHeadConflict { .. }
             | AuditError::CryptoShredFailed { .. }
             | AuditError::EventConsumeFailed(_) => true,
@@ -378,6 +388,7 @@ impl AppError for AuditError {
             | AuditError::ArchiveUnavailable
             | AuditError::KeyVaultUnavailable
             | AuditError::AnchorWitnessUnavailable
+            | AuditError::CallerCheckUnavailable
             | AuditError::DurabilityNotConfirmed => {
                 "The compliance audit plane is temporarily unavailable."
             }

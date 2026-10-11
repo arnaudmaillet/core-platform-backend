@@ -7,6 +7,7 @@
 //! it: the gateway uses every field; the dispatcher uses only the registry + node
 //! channel for fan-out.
 
+use transport::grpc::revocation::{RevocationFailure, Revocations};
 use std::sync::Arc;
 
 use auth_context::{spawn_edge_decoder, AuthContextConfig, JwtDecoder, OidcClaimsExtractor};
@@ -28,6 +29,9 @@ pub struct Adapters {
     /// A dedicated subscriber connection for the gateway's node-channel
     /// (`SSUBSCRIBE`) loop.
     pub subscriber: RedisSubscriber,
+    /// `auth`'s revocation state (#903), when `EDGE_REVOCATION_REDIS_HOSTS` is
+    /// set: checked at the handshake and on every heartbeat. Fail open (TIER-1).
+    pub revocations: Option<Revocations>,
 }
 
 impl Adapters {
@@ -40,11 +44,14 @@ impl Adapters {
             config.registry_ttl.as_millis() as i64,
         ));
         let node_channel: Arc<dyn NodeChannel> = Arc::new(RedisNodeChannel::new(redis.clone()));
-        let verifier: Arc<dyn TokenVerifier> =
-            Arc::new(AuthContextTokenVerifier::new(
-                build_decoder(&config.auth),
-                config.device_claim.clone(),
-            ));
+        let revocations = service_runtime::edge_revocation()
+            .map(|check| Revocations::new(check, RevocationFailure::Open));
+        let mut verifier = AuthContextTokenVerifier::new(build_decoder(&config.auth), config.device_claim.clone());
+        match &revocations {
+            Some(revocations) => verifier = verifier.with_revocations(revocations.clone()),
+            None => tracing::warn!("EDGE_REVOCATION_REDIS_HOSTS unset: a revoked token keeps its socket (#903)"),
+        }
+        let verifier: Arc<dyn TokenVerifier> = Arc::new(verifier);
 
         Ok(Self {
             registry,
@@ -52,6 +59,7 @@ impl Adapters {
             verifier,
             redis,
             subscriber,
+            revocations,
         })
     }
 }

@@ -94,6 +94,11 @@ impl Connection {
         &self.node_id
     }
 
+    /// The pinned identity (and the token ids it is re-checked by, #903).
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+
     pub fn user_id(&self) -> &UserId {
         &self.session.user_id
     }
