@@ -182,8 +182,18 @@ async fn handle_socket(socket: WebSocket, state: GatewayState, token: String) {
     if let Err(error) = state.reap.evict(&user_id, &connection_id).await {
         tracing::warn!(%error, "registry evict failed on teardown");
     }
-    writer.abort();
+    // Let the writer flush what is queued (a last `ReauthRequired`, #903): it
+    // ends once every sender is gone; past a second it is stopped.
+    drop(tx);
+    drop(handle);
+    let stop = writer.abort_handle();
+    if tokio::time::timeout(WRITER_DRAIN, writer).await.is_err() {
+        stop.abort();
+    }
 }
+
+/// How long a closing socket's writer may take to flush its queue.
+const WRITER_DRAIN: Duration = Duration::from_secs(1);
 
 /// `true` when the socket's token was revoked in `auth` since its handshake
 /// (#903). Unconfigured, a token without ids, or an unreadable state (realtime
