@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 32ea774c6e972899401c31975cffafb4d9d5a0545be827451307d3c7bab6f541
+  source_sha256: 8e48f3b77b2c8d1c3555ef471294ffe2a3e68629d1fcbfb85d4ef079196766e9
   translated_at: 2026-10-11
   status: complete
 ---
@@ -48,9 +48,10 @@ courts et vérifiables localement (vérifiés en pur CPU par la bibliothèque `a
 service aval) plus des **refresh tokens** longs, côté serveur, à usage unique, avec rotation
 obligatoire et détection de réutilisation. La déconnexion globale s'appuie sur un compteur de
 **génération** par session dans Redis Cluster ; la révocation est donc une seule écriture — jamais
-une écriture amplifiée sur tous les lecteurs. Le refresh et `Introspect` la voient aussitôt ; les
-services qui vérifient les jetons d'edge localement acceptent un jeton révoqué jusqu'à son expiration
-(≤ `AUTH_ACCESS_TTL_SECS`) tant que le contrôle de révocation à l'edge n'est pas en place (#884).
+une écriture amplifiée sur tous les lecteurs. Le refresh et `Introspect` la voient aussitôt ; l'edge
+client et les portes staff de chaque service la voient sous `EDGE_REVOCATION_CACHE_MS` (5 s) quand
+`EDGE_REVOCATION_REDIS_HOSTS` les fait pointer sur ce Redis (#884, `service-runtime`), et sinon
+acceptent un jeton révoqué jusqu'à son expiration (≤ `AUTH_ACCESS_TTL_SECS`).
 
 **Objectifs fondamentaux :** (1) aucune lecture en base sur le chemin chaud ; (2) réutilisation d'un
 refresh token = compromission ⇒ révocation de toute la génération de session ; (3) **100 %
@@ -212,8 +213,8 @@ d'accès, avec ses refresh tokens. Une suspension ou une désactivation n'est ap
 titulaire qui s'est reconnecté, depuis l'événement garde ses nouvelles sessions ; quand `account` ne
 peut être interrogé, le compte est déconnecté quand même (échec fermé). Un rôle retiré est toujours appliqué, pour que les permissions qu'il accordait meurent
 avec les jetons qui les portaient, et non au prochain refresh. Les jetons d'accès déjà émis sont
-refusés aussitôt par `Refresh` et `Introspect`, ailleurs à `exp` tant que le contrôle de révocation à
-l'edge n'est pas en place.
+refusés aussitôt par `Refresh` et `Introspect`, et par l'edge client et les portes staff dans la
+fenêtre du cache de révocation (voir le chemin chaud plus bas).
 
 ### Identifiants et step-up
 
@@ -366,9 +367,13 @@ chemin chaud, Kafka pour les événements. L'IdP est masqué derrière un `Ident
 ```
 
 **Chemin chaud à jeton scindé.** 99 % des appels API = vérification de signature seule, aucune E/S.
-La révocation est un incrément de `generation` écrit dans `auth:sess:{account}:gen` sur Redis ;
-`Refresh` et `Introspect` rejettent un jeton d'edge portant une `gen` périmée (l'edge à vérification
-locale pas encore, #884). Seul `/refresh` (faible QPS) touche PostgreSQL.
+La révocation est un incrément de `generation` écrit dans `auth:{acct:<id>}:gen` sur Redis, plus un
+marqueur par session `auth:{sess:<id>}:revoked` pour la durée de vie du jeton d'accès (le format vit
+dans `auth_context::edge::revocation`, partagé avec les lecteurs). `Refresh` et `Introspect` rejettent
+un jeton d'edge portant une `gen` périmée ou un `sid` en blacklist ; l'edge client et les portes staff
+de chaque service aussi quand c'est configuré (#884) : deux lectures Redis par session, en cache 5 s
+dans le processus, échec fermé en TIER-0 (`Service::EDGE_REVOCATION_FAIL_CLOSED`) et pour les appels
+staff, échec ouvert ailleurs. Seul `/refresh` (faible QPS) touche PostgreSQL.
 
 > **Invariants** (et où ils sont appliqués) : TTL du jeton d'edge ⊆ TTL de session ⊆ plafond absolu ;
 > la rotation du refresh est obligatoire et à usage unique, et toute réutilisation révoque la

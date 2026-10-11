@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: bdca5951f1b9abc2862027ff413d6fce0841c66fb246b7f8a1f92b3065a8dee1
-  translated_at: 2026-10-10
+  source_sha256: 96561dfc764b9cda3409f1d1a3f028a0ada52a413dad76a9d6c7965b21303f3e
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -81,6 +81,8 @@ pub trait Service: Sized {
     const NAME: &'static str;
     const VERSION: &'static str;
     const GRPC_SERVICE_NAME: &'static str;     // the concrete server's NamedService::NAME (health key)
+    const EDGE_POLICY: EdgePolicy = &[];       // the RPCs exposed on the client edge
+    const EDGE_REVOCATION_FAIL_CLOSED: bool = false; // TIER-0: refuse when revocation is unreadable (#884)
 
     async fn build(infra: Arc<InfraRegistry>) -> anyhow::Result<Self>;   // composition root
     fn health_probes(&self) -> Vec<Arc<dyn HealthProbe>> { vec![] }       // default: none
@@ -133,10 +135,22 @@ Voir l'impl `Service` et le binaire en §API publique — c'est toute la surface
 | `MESH_JWKS_CA_FILE` · `MESH_JWKS_BEARER_FILE` | non défini | la CA du JWKS du cluster et le jeton bearer envoyé à chaque récupération |
 | `MESH_NAMESPACE` | le namespace du pod | les appelants doivent être dans ce namespace (par défaut : le `namespace` du ServiceAccount monté) |
 | `MESH_TOKEN_FILE` | non défini | côté appelant (`MeshTokenInterceptor::from_env`) : le jeton projeté du pod ; non défini → rien n'est envoyé |
+| `EDGE_REVOCATION_REDIS_HOSTS` | non défini (pas de contrôle) | le Redis d'`auth` (#884) : défini, tout jeton vérifié sur l'edge client et dans `staff_gate_from_env()` est refusé dès qu'`auth` l'a révoqué (génération incrémentée, session en blacklist). Non défini ⇒ un jeton révoqué fonctionne jusqu'à `exp` (un avertissement au boot) |
+| `EDGE_REVOCATION_REDIS_TOPOLOGY` · `_TLS` · `_PASSWORD` · … | comme `REDIS_*` | le reste des réglages de ce Redis, chaque variable `REDIS_*` sous le préfixe `EDGE_REVOCATION_` |
+| `EDGE_REVOCATION_CACHE_MS` | `5000` | combien de temps un état de révocation lu est réutilisé : le délai avant qu'une révocation atteigne chaque pod. Aussi combien de temps une lecture échouée fait répondre « indisponible » sans interroger Redis |
+| `EDGE_REVOCATION_REDIS_COMMAND_TIMEOUT_MS` | `250` | le timeout de commande de ce Redis (court : le contrôle est sur chaque requête edge) |
 
 Les `*_GRPC_ADDR` + tuning par service vivent dans le README de chaque service. La télémétrie honore
 `RUST_LOG` / `OTEL_*` au boot ; les dials live sont ensuite pilotés par la section `[telemetry]`
 d'`infrastructure.toml`. Aucune feature cargo.
+
+**Révocation des jetons d'edge (#884)** — avec `EDGE_REVOCATION_REDIS_HOSTS` défini, `serve` construit le
+contrôle avant `Service::build` (pour que `staff_gate_from_env()` l'obtienne aussi) : deux lectures par session
+(les clés de génération et de blacklist d'`auth`, `auth_context::edge::revocation`), en cache dans le
+processus. Quand elles échouent, l'edge suit `Service::EDGE_REVOCATION_FAIL_CLOSED` (`UNAVAILABLE`, et une
+erreur au boot si le Redis ne peut être construit ; sinon admis jusqu'à `exp` avec un avertissement) et la
+porte staff échoue toujours fermée. Un refus est compté dans
+`infra_edge_rejected_total{reason="revoked_token"|"revocation_unavailable"}`.
 
 **Retuning à chaud** — comme le runtime lance le watcher de config, un push d'`infrastructure.toml` retune
 la flotte sans redémarrage (`[telemetry]` filtre de log + sampling ; `[traffic]` rps/quotas ;

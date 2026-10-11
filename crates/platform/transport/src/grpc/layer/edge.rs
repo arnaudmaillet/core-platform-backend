@@ -18,7 +18,10 @@
 //!    the `auth` JWKS. Missing / malformed / expired / wrong issuer or audience ⇒
 //!    `UNAUTHENTICATED` (the reason is never revealed beyond "expired" vs the
 //!    rest, and nothing token-bearing is logged). [`EdgeAccess::Permission`] adds a
-//!    `PERMISSION_DENIED` gate on the `perms` claim.
+//!    `PERMISSION_DENIED` gate on the `perms` claim. With [`Revocations`]
+//!    attached (#884), a verified token whose generation was bumped or whose
+//!    session was blacklisted in `auth` is `UNAUTHENTICATED` too; when that state
+//!    cannot be read, the posture decides (`UNAVAILABLE`, or admitted until `exp`).
 //! 6. On success the identity header is set to the token subject, an
 //!    [`EdgePrincipal`] extension is attached, and the handler runs inside the
 //!    `auth-context` task-local principal scope.
@@ -28,7 +31,8 @@
 //! Every rejection increments `infra_edge_rejected` (Prometheus:
 //! `infra_edge_rejected_total`) labelled by `route` (policy-known methods only —
 //! unknown paths collapse to `<unlisted>` to bound cardinality) and `reason`
-//! (`unlisted` | `missing_token` | `invalid_token` | `expired_token` | `forbidden` | `guest`).
+//! (`unlisted` | `missing_token` | `invalid_token` | `expired_token` | `revoked_token` |
+//! `revocation_unavailable` | `forbidden` | `guest`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -42,6 +46,7 @@ use tonic::{body::Body, Status};
 use tower::{Layer, Service};
 
 use crate::grpc::edge::{EdgeAccess, EdgeAnonymous, EdgePolicy, EdgePrincipal};
+use crate::grpc::revocation::Revocations;
 use crate::grpc::server::config::DEFAULT_IDENTITY_HEADER;
 
 /// Instrument name; the Prometheus exporter appends `_total`.
@@ -56,7 +61,8 @@ fn reject_counter() -> Counter<u64> {
         .u64_counter(REJECT_METRIC)
         .with_description(
             "Requests rejected at the client edge, labelled by route and reason \
-             (unlisted|missing_token|invalid_token|expired_token|forbidden|guest).",
+             (unlisted|missing_token|invalid_token|expired_token|revoked_token|\
+             revocation_unavailable|forbidden|guest).",
         )
         .build()
 }
@@ -65,6 +71,7 @@ fn reject_counter() -> Counter<u64> {
 pub struct EdgeGuard {
     decoder: Arc<EdgeDecoder>,
     policy: HashMap<&'static str, EdgeAccess>,
+    revocations: Option<Revocations>,
 }
 
 impl EdgeGuard {
@@ -74,7 +81,19 @@ impl EdgeGuard {
         Self {
             decoder,
             policy: policy.iter().map(|r| (r.method, r.access)).collect(),
+            revocations: None,
         }
+    }
+
+    /// Also refuses a revoked token (#884).
+    pub fn with_revocations(mut self, revocations: Revocations) -> Self {
+        self.revocations = Some(revocations);
+        self
+    }
+
+    /// The revocation check, when attached.
+    pub fn revocations(&self) -> Option<&Revocations> {
+        self.revocations.as_ref()
     }
 
     /// Number of exposed methods.
@@ -215,6 +234,15 @@ where
                     return Ok(status.into_http());
                 }
             };
+
+            // Revoked in `auth` since it was minted (#884).
+            if let Some(revocations) = &guard.revocations
+                && let Err(refusal) = revocations.admit(&principal.raw_claims).await
+            {
+                counter.add(1, &reject_attrs(&method, refusal.reason()));
+                tracing::debug!(rpc.method = %method, reason = refusal.reason(), "edge: token refused");
+                return Ok(refusal.status().into_http());
+            }
 
             // A guest (anonymous, read-only) never reaches an `authenticated`
             // method: those act as an account. It reaches `permission` rules.

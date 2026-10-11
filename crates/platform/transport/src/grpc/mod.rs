@@ -4,6 +4,7 @@ pub mod edge;
 pub mod error;
 pub mod layer;
 pub mod mesh;
+pub mod revocation;
 pub mod server;
 
 pub use error::GrpcTransportError;

@@ -41,7 +41,12 @@ impl TopologyKind {
     /// Defaults to [`TopologyKind::Standalone`] when the variable is absent
     /// or contains an unrecognised value.
     pub fn from_env() -> Self {
-        match std::env::var("REDIS_TOPOLOGY").as_deref() {
+        Self::from_env_prefixed("")
+    }
+
+    /// [`Self::from_env`] reading `<prefix>REDIS_TOPOLOGY`.
+    pub fn from_env_prefixed(prefix: &str) -> Self {
+        match std::env::var(format!("{prefix}REDIS_TOPOLOGY")).as_deref() {
             Ok("cluster")  => TopologyKind::Cluster,
             Ok("sentinel") => TopologyKind::Sentinel,
             _              => TopologyKind::Standalone,

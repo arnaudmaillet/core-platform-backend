@@ -40,6 +40,9 @@ impl Service for AuthService {
     /// else on this service is mesh-only. See `transport::grpc::edge`.
     // Login/Refresh/StartGuestSession are the only anonymous RPCs in the fleet
     // (they *produce* the session). Introspect is INTERNAL and stays mesh-only.
+    /// TIER-0: a token whose revocation cannot be checked is refused (#884).
+    const EDGE_REVOCATION_FAIL_CLOSED: bool = true;
+
     const EDGE_POLICY: EdgePolicy = &[
         public("/auth.v1.AuthService/Login"),
         // The second step of a sign-in (#649): the mfa_token is the proof.

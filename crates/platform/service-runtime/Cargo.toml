@@ -13,6 +13,8 @@ telemetry    = { workspace = true }
 infra-config = { workspace = true }
 transport    = { workspace = true }
 auth-context = { workspace = true }
+redis-storage = { workspace = true }
+fred         = { workspace = true }
 
 tokio       = { workspace = true }
 async-trait = { workspace = true }
