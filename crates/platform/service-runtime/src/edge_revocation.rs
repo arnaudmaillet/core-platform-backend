@@ -12,6 +12,11 @@
 //! `EDGE_REVOCATION_` prefix (`EDGE_REVOCATION_REDIS_HOSTS`, `…_TOPOLOGY`,
 //! `…_TLS`, `…_PASSWORD`, see `redis_storage::RedisConfig::from_env_prefixed`).
 //! Unset ⇒ no check (a warning at boot): tokens die at `exp`, as before.
+//!
+//! The check sits on every edge request, so a Redis outage must not stall them:
+//! the command timeout defaults to 250 ms (`EDGE_REVOCATION_REDIS_COMMAND_TIMEOUT_MS`
+//! overrides it), and after a failed read the check answers "unavailable" at
+//! once for one cache window instead of waiting on Redis again.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -31,6 +36,8 @@ pub const EDGE_REVOCATION_HOSTS_ENV: &str = "EDGE_REVOCATION_REDIS_HOSTS";
 pub const EDGE_REVOCATION_CACHE_MS_ENV: &str = "EDGE_REVOCATION_CACHE_MS";
 
 const DEFAULT_CACHE: Duration = Duration::from_secs(5);
+/// The revocation Redis's default command timeout (the service's own is 3 s).
+const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_millis(250);
 /// Entries kept at most (sessions seen within the cache window).
 const CACHE_CAP: usize = 100_000;
 
@@ -70,16 +77,22 @@ impl RevocationState for RedisRevocationState {
 }
 
 /// A [`RevocationCheck`] over a [`RevocationState`], each read reused for `ttl`.
-/// A failed read is never cached.
+/// A failed read is never cached as a state; it opens a breaker for `ttl`
+/// during which every miss answers "unavailable" without a read.
 pub struct CachedRevocationCheck<S> {
-    state:   S,
-    ttl:     Duration,
-    entries: Mutex<HashMap<String, (State, Instant)>>,
+    state:      S,
+    ttl:        Duration,
+    entries:    Mutex<HashMap<String, (State, Instant)>>,
+    down_until: Mutex<Option<Instant>>,
 }
 
 impl<S: RevocationState> CachedRevocationCheck<S> {
     pub fn new(state: S, ttl: Duration) -> Self {
-        Self { state, ttl, entries: Mutex::new(HashMap::new()) }
+        Self { state, ttl, entries: Mutex::new(HashMap::new()), down_until: Mutex::new(None) }
+    }
+
+    fn breaker(&self) -> MutexGuard<'_, Option<Instant>> {
+        self.down_until.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// A poisoned lock still holds a consistent map; it is used as is.
@@ -94,7 +107,16 @@ impl<S: RevocationState> CachedRevocationCheck<S> {
         {
             return Ok(*state);
         }
-        let state = self.state.read(owner, session).await?;
+        if self.breaker().is_some_and(|until| Instant::now() < until) {
+            return Err(RevocationUnavailable);
+        }
+        let state = match self.state.read(owner, session).await {
+            Ok(state) => state,
+            Err(unavailable) => {
+                *self.breaker() = Some(Instant::now() + self.ttl);
+                return Err(unavailable);
+            }
+        };
         let mut entries = self.entries();
         if entries.len() >= CACHE_CAP {
             let ttl = self.ttl;
@@ -128,7 +150,11 @@ pub async fn from_env() -> anyhow::Result<Option<Arc<dyn RevocationCheck>>> {
         .and_then(|v| v.parse().ok())
         .map(Duration::from_millis)
         .unwrap_or(DEFAULT_CACHE);
-    let client = RedisClientBuilder::new(RedisConfig::from_env_prefixed(EDGE_REVOCATION_PREFIX))
+    let mut config = RedisConfig::from_env_prefixed(EDGE_REVOCATION_PREFIX);
+    if std::env::var(format!("{EDGE_REVOCATION_PREFIX}REDIS_COMMAND_TIMEOUT_MS")).is_err() {
+        config.command_timeout = DEFAULT_COMMAND_TIMEOUT;
+    }
+    let client = RedisClientBuilder::new(config)
         .build()
         .await
         .map_err(|e| anyhow::anyhow!("edge revocation Redis: {e}"))?;
@@ -185,10 +211,23 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(60)).await;
         assert!(check.is_revoked("a", "s", 1).await.unwrap(), "seen after the window");
 
+    }
+
+    /// After a failed read, misses answer "unavailable" without waiting on the
+    /// store for one window; then the store is asked again (and a recovered one
+    /// answers).
+    #[tokio::test]
+    async fn a_failed_read_opens_the_breaker_for_one_window() {
         let down = counted(None);
-        let check = CachedRevocationCheck::new(Arc::clone(&down), Duration::from_secs(60));
-        assert_eq!(check.is_revoked("a", "s", 1).await, Err(RevocationUnavailable));
-        assert_eq!(check.is_revoked("a", "s", 1).await, Err(RevocationUnavailable));
+        let check = CachedRevocationCheck::new(Arc::clone(&down), Duration::from_millis(50));
+        for session in ["s-1", "s-2", "s-3"] {
+            assert_eq!(check.is_revoked("a", session, 1).await, Err(RevocationUnavailable));
+        }
+        assert_eq!(down.reads.load(Ordering::SeqCst), 1, "one read, then the breaker answers");
+
+        *down.state.lock().unwrap() = Some((1, false));
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(!check.is_revoked("a", "s-1", 1).await.unwrap());
         assert_eq!(down.reads.load(Ordering::SeqCst), 2);
     }
 }

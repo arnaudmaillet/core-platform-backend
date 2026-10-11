@@ -125,7 +125,8 @@ See the `Service` impl and binary in §Public API — that is the whole integrat
 | `MESH_TOKEN_FILE` | unset | the caller side (`MeshTokenInterceptor::from_env`): this pod's projected token; unset → none sent |
 | `EDGE_REVOCATION_REDIS_HOSTS` | unset (no check) | `auth`'s Redis (#884): set, every verified token on the client edge and in `staff_gate_from_env()` is refused once `auth` revoked it (generation bumped, session blacklisted). Unset ⇒ a revoked token works until `exp` (a warning at boot) |
 | `EDGE_REVOCATION_REDIS_TOPOLOGY` · `_TLS` · `_PASSWORD` · … | as `REDIS_*` | the rest of that Redis's settings, every `REDIS_*` variable under the `EDGE_REVOCATION_` prefix |
-| `EDGE_REVOCATION_CACHE_MS` | `5000` | how long a read revocation state is reused: the delay before a revocation reaches every pod |
+| `EDGE_REVOCATION_CACHE_MS` | `5000` | how long a read revocation state is reused: the delay before a revocation reaches every pod. Also how long a failed read keeps the check answering "unavailable" without asking Redis |
+| `EDGE_REVOCATION_REDIS_COMMAND_TIMEOUT_MS` | `250` | that Redis's command timeout (short: the check sits on every edge request) |
 
 Per-service `*_GRPC_ADDR` + tuning live in each service's README. Telemetry honours `RUST_LOG` /
 `OTEL_*` at boot; live dials are then driven by the `[telemetry]` section of `infrastructure.toml`. No
