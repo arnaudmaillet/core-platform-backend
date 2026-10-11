@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 02a92d9fc6c9c98d7f3a504b6631dc51d1fccccc3cabdc657fa9f3706caad3b8
-  translated_at: 2026-06-28
+  source_sha256: 03e25537b1c6edec5fe5fb7334ca53a39dfa0d7c34dcc6e5233c9b2cee0d4d5b
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -42,7 +42,7 @@ Proposed --> Accepted --> Superseded by ADR-00MM
 | [0002](./0002-moderation-decision-enforcement-sor-with-fail-closed-screen.md) | Moderation est le SoR décision/enforcement avec une porte Screen étroite fail-closed | Accepté | moderation |
 | [0003](./0003-realtime-is-a-fail-open-system-of-connection.md) | Realtime est un System-of-Connection fail-open, jamais un record store | Accepté | realtime |
 | [0004](./0004-account-is-the-single-identity-sor.md) | Account est le SoR d'identité unique et possède une voie d'événements sortante | Accepté | account |
-| [0005](./0005-auth-federated-idp-with-platform-edge-tokens.md) | Auth fédère un IdP et émet des edge tokens ES256 plateforme avec révocation par génération | Accepté | auth |
+| [0005](./0005-auth-federated-idp-with-platform-edge-tokens.md) | Auth fédère un IdP et émet des edge tokens ES256 plateforme avec révocation par génération | Accepté (remplacé en partie par 0018) | auth |
 | [0006](./0006-chat-shadowing-pattern-member-vs-audience-plane.md) | Chat utilise le Shadowing Pattern — plans de visibilité Membre vs Audience séparés | Accepté | chat |
 | [0007](./0007-comment-flat-thread-two-table-tombstone-purge.md) | Comment utilise un fil plat nil-UUID, Scylla deux tables, suppression tombstone-vs-purge | Accepté | comment |
 | [0008](./0008-counter-magnitudes-are-a-reconcilable-soref.md) | Counter est un SoReference réconciliable pour les magnitudes, distinct de l'état d'arête | Accepté | counter |
@@ -55,6 +55,7 @@ Proposed --> Accepted --> Superseded by ADR-00MM
 | [0015](./0015-search-opensearch-single-store-external-versioning.md) | Search est un read-model OpenSearch avec versioning externe et lecture fail-open | Accepté | search |
 | [0016](./0016-social-graph-four-table-scylla-logged-batch.md) | Social-graph utilise un schéma Scylla 4 tables avec double-écritures logged-batch atomiques | Accepté | social-graph |
 | [0017](./0017-timeline-hybrid-push-pull-fanout.md) | Timeline utilise un fan-out hybride push/pull | Accepté | timeline |
+| [0018](./0018-passwordless-identity-passkeys-for-staff.md) | Identité sans mot de passe : Keycloak retiré, passkeys pour le staff | Accepté | auth ; account |
 
 <!-- Ajouter une ligne par ADR au fur et à mesure. -->
 

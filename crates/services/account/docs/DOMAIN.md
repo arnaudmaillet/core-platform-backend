@@ -40,7 +40,7 @@ references.
 |---|---|---|
 | Account | The authoritative user account record | `Account`, `AccountId` |
 | Identity id | The stable cross-system subject identifier | `IdentityId` |
-| Credential metadata | Password hash, MFA enrolment, recovery codes — *metadata*, not auth flow | `PasswordHash`, `MfaState`, `RecoveryCodeHash` |
+| Credential metadata | MFA enrolment, recovery codes — *metadata*, not auth flow (no passwords, #881) | `MfaState`, `RecoveryCodeHash` |
 | KYC status | Know-your-customer verification state | `KycStatus`, `KycStatusChanged` |
 | Role | Authorization role assigned to the account | `AccountRole`, `RoleAssigned`/`RoleRevoked` |
 | GDPR record | The lawful-data-handling state (consents, export/deletion requests) | `GdprRecord`, `ConsentPurpose`, `ConsentsUpdated`, `GdprDeletionRequested`, `GdprDataExportRequested` |
@@ -54,7 +54,7 @@ references.
 |---|---|---|
 | `Account` | aggregate root | Lifecycle state machine + uniqueness of email/identity |
 | `EmailAddress` / `PhoneNumber` / `CountryCode` | VO | Validity enforced at construction |
-| `PasswordHash` / `MfaState` / `RecoveryCodeHash` | VO | Credential metadata integrity |
+| `MfaState` / `RecoveryCodeHash` | VO | Credential metadata integrity |
 | `GdprRecord` | VO | Erasure/export request state |
 | `AccountStatus` / `AccountRole` / `KycStatus` | enum | Closed lifecycle / authorization / verification vocabularies |
 
@@ -140,7 +140,7 @@ still verifies — closing the erasure loop end to end.
 | Event (`account.v1.events`) | Means | Emitted when | Who reacts |
 |---|---|---|---|
 | `account_created` / `email_changed` / `email_verified` / `phone_changed` | PII-bearing lifecycle facts | the corresponding command commits | `audit` (PII sealed), `profile` |
-| `password_changed` / `mfa_enrolled` / `mfa_revoked` | security facts (no PII) | credential change | `audit` (Authentication) |
+| `mfa_enrolled` / `mfa_revoked` (and `password_changed`, no longer emitted since #881) | security facts (no PII) | credential change | `audit` (Authentication) |
 | `activated`/`deactivated`/`suspended`/`deleted`, `kyc_status_changed` | identity lifecycle | lifecycle transition | `audit` (Identity), `profile` |
 | `role_assigned` / `role_revoked` | authorization change | role grant/revoke | `audit` (Authorization) |
 | `gdpr_deletion_requested` / `gdpr_deletion_cancelled` / `gdpr_data_export_requested` | a lawful data right was invoked / withdrawn | user/DPO request | `audit` (evidence; the crypto-shred follows `deleted`) |

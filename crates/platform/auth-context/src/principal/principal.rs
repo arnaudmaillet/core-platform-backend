@@ -4,8 +4,8 @@ use std::fmt;
 /// Opaque, platform-canonical user identifier.
 ///
 /// The raw value is the `sub` claim string as received from the IdP.
-/// Auth0 subs look like `google-oauth2|123456` while Keycloak subs are UUID
-/// strings. Keep it as a `String` so both layouts work without a lossy
+/// Subs come in many shapes (`google-oauth2|123456`, UUID strings, the
+/// platform's account ids). Keep it as a `String` so both layouts work without a lossy
 /// coercion step at the boundary. Services that require a [`uuid::Uuid`]
 /// internally should call [`PrincipalId::try_as_uuid`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

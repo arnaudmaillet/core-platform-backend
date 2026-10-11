@@ -7,7 +7,7 @@ use crate::error::AuthError;
 /// A normalized identity-provider subject: the `(issuer, subject)` pair that
 /// uniquely identifies a principal at the IdP, independent of which IdP it is.
 ///
-/// `issuer` is the OIDC `iss` (e.g. a Keycloak realm URL); `subject` is the `sub`
+/// `issuer` is the identity's issuer (Apple's, Google's, or the code issuers); `subject` is its `sub`
 /// claim. Keying the [`SubjectLink`](crate::domain::aggregate::SubjectLink) on the
 /// pair — not on `sub` alone — is what makes IdP migration safe: links minted
 /// under the old issuer stay valid and unambiguous after a new issuer is added.

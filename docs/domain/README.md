@@ -47,7 +47,7 @@ CORE plus collapsed one-line DEEP sections.
 |---|---|---|---|
 | `account` | Account / Identity SoR | [`crates/services/account/docs/DOMAIN.md`](../../crates/services/account/docs/DOMAIN.md) | ✅ |
 | `audit` | Tamper-evident compliance evidence | [`crates/services/audit/docs/DOMAIN.md`](../../crates/services/audit/docs/DOMAIN.md) | ✅ |
-| `auth` | Authentication / session / IdP broker | [`crates/services/auth/docs/DOMAIN.md`](../../crates/services/auth/docs/DOMAIN.md) | ✅ |
+| `auth` | Authentication / session (passwordless: id_tokens, codes, passkeys) | [`crates/services/auth/docs/DOMAIN.md`](../../crates/services/auth/docs/DOMAIN.md) | ✅ |
 | `chat` | Conversations & messaging | [`crates/services/chat/docs/DOMAIN.md`](../../crates/services/chat/docs/DOMAIN.md) | ✅ |
 | `comment` | Comment threads | [`crates/services/comment/docs/DOMAIN.md`](../../crates/services/comment/docs/DOMAIN.md) | ✅ |
 | `counter` | Counter / analytics SoReference | [`crates/services/counter/docs/DOMAIN.md`](../../crates/services/counter/docs/DOMAIN.md) | ✅ |

@@ -11,7 +11,7 @@
 > | **Datastores** | PostgreSQL/CockroachDB (db `auth`) · Redis Cluster (sessions/blacklist) |
 > | **Async** | publishes `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked/AppAuthorized/AppAuthorizationRevoked) · consumes `account.v1.events` (`account_deleted` → GDPR erasure; `account_suspended` / `account_deactivated` / `role_revoked` → sign-out everywhere) |
 > | **Upstream callers** | gateway / edge, end-user clients (login & refresh) |
-> | **Downstream deps** | Keycloak (IdP), `account` (gRPC, identity SoR), PostgreSQL, Redis Cluster |
+> | **Downstream deps** | `account` (gRPC, identity SoR), PostgreSQL, Redis Cluster, Apple / Google JWKS (id_token keys), Amazon SES / SNS (codes) |
 > | **SLO** | `<TODO: 99.95%>` avail · login p99 `<TODO>` · refresh p99 `<TODO>` |
 
 > **✅ Status — all phases (0–7) complete.** Contract, domain, application, infrastructure,
@@ -24,10 +24,18 @@
 
 ## 🎯 Overview & Service Role
 
-`auth` is the platform's **issuance / session / IdP-broker** boundary. It owns the
-*authentication act and its lifecycle* — login brokering, session tracking, refresh-token
-rotation, revocation, and edge-token minting — plus the one piece of identity data that is an
-authentication concern: the IdP-subject ↔ `account_id` linkage.
+`auth` is the platform's **issuance / session** boundary. It owns the *authentication act and
+its lifecycle* — checking the credential, session tracking, refresh-token rotation, revocation,
+and edge-token minting — plus the one piece of identity data that is an authentication concern:
+the identity-subject ↔ `account_id` linkage.
+
+**Passwordless (#881, [ADR-0018](../../../docs/adr/0018-passwordless-identity-passkeys-for-staff.md)).**
+Nothing signs in with a password and auth talks to no external identity provider: it checks every
+credential itself. Members sign in with a native **Sign in with Apple / Google** id_token (verified
+against the provider's published keys, with a server-issued nonce), a **one-time code** sent to
+their email address or phone, or a **passkey**; staff sign in with a **staff passkey** only (#880).
+`Login` never creates an account or an identity link: an identity with no account is `AUT-6004` and
+goes to `SignUp`.
 
 The hard problem it solves is **authenticating hyperscale traffic without a datastore read per
 call**. A naive design checks a session table on every request and melts under load. `auth`
@@ -41,15 +49,16 @@ client edge and the staff gates of every service see it within `EDGE_REVOCATION_
 accept a revoked token until it expires (≤ `AUTH_ACCESS_TTL_SECS`).
 
 **Core objectives:** (1) no datastore read on the request hot path; (2) refresh-token reuse =
-compromise ⇒ revoke the whole session generation; (3) **100% IdP-agnostic** — the domain and
-application layers never name Keycloak; migrating to Cognito/Okta/custom is a new infrastructure
-adapter and zero domain change.
+compromise ⇒ revoke the whole session generation; (3) **no shared secret to steal or phish** —
+no passwords anywhere; every credential (provider-signed id_token, single-use code, passkey
+signature) is checked by auth itself, behind ports (`FederatedTokenVerifier`, the code store, the
+passkey repository), so a new provider is a new adapter and zero domain change.
 
 ### What this service does **not** own
 | Concern | Owner |
 |---|---|
 | Who a person *is* (identity record, KYC, GDPR, RBAC roles) | `account` service (identity SoR) |
-| Credentials (passwords, MFA, recovery) | Keycloak (IdP) — federated model |
+| The Apple ID / Google account behind a federated sign-in | Apple / Google — auth only verifies the id_tokens they sign |
 | Inbound token *verification* on the hot path | `auth-context` platform library |
 
 ---
@@ -102,7 +111,8 @@ created through `account` (`CreateAccount` → `VerifyEmail` when the provider v
 address → `UpdateConsents`; each step idempotent, so a retried sign-up finishes an interrupted one),
 the identity is linked (`subject_links`, `auth.subject_linked`) and a member session opens. **One
 person, one account:** if the identity, or its provider-verified email, already has an account, the
-answer is `existing_account{method}` (APPLE / GOOGLE / PASSWORD) instead — only the email inside a
+answer is `existing_account{method}` (`APPLE` / `GOOGLE` / `EMAIL_CODE` / `PHONE_CODE`, or
+unspecified) instead — only the email inside a
 verified token is ever looked up, and Apple private-relay addresses never match. The profile comes
 next (`profile.CreateProfile`, then `Refresh` so `pids` carry it). `Login` accepts the same
 id_token (`IdTokenGrant`) for returning users; an identity with no account gets `AUT-6004`
@@ -168,15 +178,12 @@ retried by `run_consumer`.
 
 When `account` deletes an account at the end of its grace period it publishes `account_deleted`;
 auth's consumer (`auth-account-events`, on the shared `run_consumer`: retry, DLQ, manual commit)
-then cuts the account's tokens (a new generation), deletes the account's **IdP user** (Keycloak
-Admin API, `DELETE users/{id}`: its email, username and password hash — for every link to the
-fleet's IdP; Apple / Google and code identities have none) **before** anything local, since the
-link is the only record of the IdP user id (an IdP failure aborts untouched and the event is
-retried; without the admin client configured, such erasures retry until it is), and hard-deletes
-what auth holds about it: its
+then cuts the account's tokens (a new generation) and hard-deletes what auth holds about it: its
 sessions and refresh tokens (device, IP), its identity links (for an email or phone code identity
-the subject **is** the address), and the guest it was before signing up with that guest's sessions
-(every shard; index `idx_guest_principals_upgraded`). Idempotent: a replay deletes nothing more.
+the subject **is** the address), its passkeys, app authorisations and staff enrollment grants, and
+the guest it was before signing up with that guest's sessions (every shard; index
+`idx_guest_principals_upgraded`). No identity lives anywhere else: Apple / Google are verified
+natively and there is no external IdP user to delete (#881). Idempotent: a replay deletes nothing more.
 Afterwards the identity is free: signing in with it again finds no account and may sign up.
 
 ### Suspension, deactivation, revoked role (#884)
@@ -194,13 +201,10 @@ staff gates within the revocation cache window (see the hot path below).
 
 ### Credentials and step-up
 
-The password lives at the IdP only. `ChangePassword` (edge **authenticated**, members) proves the
-current password with a password grant under the subject's login name, sets the new one through the
-Keycloak Admin API (`reset-password`, a confidential service-account client with `view-users` +
-`manage-users`), and optionally signs every **other** session out (`password_changed` revocations;
-the caller's stays). New passwords: 8–128 characters and not the current one (`AUT-VAL-024/025/026`),
-then the realm policy (`AUT-5006`, its rule in the message). Without the admin client configured the
-credential RPCs answer `UNAVAILABLE` (`AUT-5005`).
+There is no password to set, change or reset (#881): `ChangePassword` is gone from `auth.v1` and
+`account.v1`, and so are the password and authorization-code grants. Losing a device is recovered
+with a one-time code to the account's email or phone (or Apple / Google); a staff member who lost
+every staff passkey gets a new enrollment grant from an admin.
 
 **New-sign-in alerts (#649).** A sign-in from a device the account never used — its `device_id`
 (`DeviceContext`) absent from every session the account ever had, whatever their status — emails the
@@ -215,16 +219,15 @@ fails or slows a sign-in. Push alerts wait for APNs.
 **Changing one's email or phone (#651).** `ChangeContact(challenge_id, code)` (edge **authenticated**,
 members, behind the step-up below): the holder first sends a code to the new address with
 `StartVerification`, then proves it here. Everything that signs them in follows, in this order — the
-IdP user's email for a password account (Keycloak Admin API; its login name too when that was the
-email; another IdP user's address is `AUT-6006`), the account (`account.ChangeEmail` / `ChangePhone`,
-mesh; another account's address is `AUT-6006` / `AUT-6007`), and the passwordless code link
+account (`account.ChangeEmail` / `ChangePhone`, mesh; another account's address is `AUT-6006` /
+`AUT-6007`) and the code sign-in link
 (`urn:core-platform:email|phone`, re-keyed in `subject_links`: the new address signs in, the old one no
 longer does). Apple / Google links keep their own email. The email on file before is told (an email
 notice, never an SMS: a phone change tells the email); SMS codes keep their country list and budgets.
 
 **Two-step sign-in (#649).** For an account with it on (`account`'s `mfa_enrolled`), **every**
-sign-in method — password, email/SMS code, Apple, Google — stops after the credential: `Login` issues
-no session (and resumes no deactivated account, makes no first link) and answers `mfa_required` with an
+sign-in method but a passkey — email/SMS code, Apple, Google — stops after the credential: `Login` issues
+no session (and resumes no deactivated account) and answers `mfa_required` with an
 opaque, single-use `mfa_token` (5 minutes; only its SHA-256 is kept, `auth:{mfal:…}`). `CompleteLogin
 (mfa_token, code)` (edge **public**: the token is the proof) then takes either six digits from the
 holder's authenticator app (RFC 6238 TOTP, HMAC-SHA1, 30 s steps, ±1 step; each step works **once**,
@@ -246,7 +249,7 @@ email or phone as the label — or the base32 secret to type); it waits, sealed,
 (`auth:{mfa:<id>}:enrol`, 10 minutes; starting again replaces it; `AUT-5022` when already on).
 `ConfirmMfaEnrollment(code)` takes that first code (same attempt limit and one-use steps as sign-in),
 turns two-step sign-in on at `account`, returns **10 backup codes, shown once** (only their HMACs are
-kept), and **signs the account's other sessions out** (`mfa_changed`, like a password change: an
+kept), and **signs the account's other sessions out** (`mfa_changed`: an
 intruder already signed in elsewhere has to pass the second factor); no enrolment waiting is
 `AUT-5021`. `RegenerateBackupCodes` replaces the codes (the old ones stop working) and signs the other
 sessions out too; `DisableMfa` turns it off (`AUT-5020` when it is) and signs nobody out: the sessions already issued lose nothing by it. Each change is emailed to the
@@ -283,21 +286,21 @@ of consent, Art. 7(1)); a retry repeats its instant, so audit keeps one record.
 **Signing in with a passkey.** `StartPasskeySignIn` (public) hands out a challenge (single use, 5
 minutes, `auth:{pkauth:<hash>}`; discoverable, no allow list). The assertion then goes to `Login`
 (`passkey` grant: the **first factor, and no second step follows even with two-step sign-in on** — a
-passkey is two factors), `CompleteLogin { passkey }` (the second step after a password, instead of a
-code) or `VerifyCredentials { passkey }` (step-up). **The account is never found from a credential id**
+passkey is two factors), `CompleteLogin { passkey }` (the second step after a code, Apple or Google,
+instead of a two-step code) or `VerifyCredentials { passkey }` (step-up). **The account is never found from a credential id**
 (ids are only unique per account): it is the assertion's user handle — or, on a second step or a
 step-up, the account the step belongs to, which a user handle must match — and the credential must be
 one of *that* account's; no handle and no account is refused. The signature is checked against the
 stored key (counter must move forward unless both are zero), the passkey's counter and last use are
 updated, and anything off is `AUT-5028` (the reason is logged). A passkey session stands for the
-account's first identity link (so `ChangePassword` and a password step-up work from it). The usual
+account's first identity link (the passkey itself when the account has none). The usual
 sign-in follow-ups apply (new-device alert, deactivated account resumed, guest retired).
 
 **Staff sign in with passkeys only (#880).** A staff account — any grant from `account` besides the
 member role `user` (a staff role such as `admin` or `support_agent`, a fine-grained permission such as
 `audit:read`, an override; unknown grants count as staff) — gets its staff grants **only in a session
 opened with a staff-enrolled passkey** (`Login { passkey }`, or `CompleteLogin { passkey }` after a
-first factor). Signed in any other way (Apple / Google, an email or SMS code, a password, a member
+first factor). Signed in any other way (Apple / Google, an email or SMS code, a member
 passkey) the same account gets a member session: `user`, `read:public` and its profiles. Each session
 records how it was opened (`sessions.sign_in_method` + `passkey_credential_id`, migration 0009); every
 `Refresh` and `VerifyCredentials` re-reads that passkey, so removing it ends the staff grants at the
@@ -320,8 +323,9 @@ exists on any shard (`AUT-5034`). Every grant and every staff enrollment is publ
 `PrivilegedAction`; grants are erased with the account.
 
 **Step-up.** A token minted right after a credential proof — `Login` / `CompleteLogin`, or
-`VerifyCredentials` (re-prove the password, or give a two-step code: the step-up of an account without
-a password; `AUT-5020` when two-step sign-in is off) — carries
+`VerifyCredentials` (a passkey, or a two-step code; `AUT-5020` for a code when two-step sign-in is
+off — such an account steps up with a passkey or by signing in again; a staff session with its
+passkey only, `AUT-5031`) — carries
 `auth_time`; a refreshed one does not. Destructive RPCs elsewhere call
 `transport::grpc::edge::require_recent_auth` (`auth_time` ≤ 5 min old, mesh exempt) and answer
 `PERMISSION_DENIED` `step_up_required…` otherwise; `account` gates `DeactivateAccount` /
@@ -338,21 +342,26 @@ private.
 
 Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS command/query buses,
 PostgreSQL for the durable session ledger, Redis Cluster for the hot-path generation map /
-blacklist, Kafka for events. The IdP sits behind an `IdentityProviderPort` (Port/Adapter), so no
-Keycloak type leaks above `infrastructure`.
+blacklist, Kafka for events. Every credential is checked in-house behind a port (Port/Adapter):
+`FederatedTokenVerifier` (Apple / Google JWKS), the one-time-code store and senders (Redis, SES / SNS),
+the passkey repository (WebAuthn verified in `domain`), so no provider type leaks above
+`infrastructure`.
 
 ```
-            ┌──────────────────────── auth-service ───────────────────────┐
- client ──► │ Login/Refresh/Logout ─► CQRS bus ─► ports:                  │
-            │   IdentityProviderPort ─┐   SessionRepo/RefreshRepo (PG)     │
-            │   AccountDirectoryPort ─┤   SessionCachePort (Redis gen/blk) │
-            │   TokenMinterPort ──────┘   SubjectLinkRepo (PG)             │
-            └───────┬───────────────────────────┬─────────────────────────┘
-        broker login│                            │mints edge token (ES256; PASETO fast-follow)
+            ┌──────────────────────── auth-service ──────────────────────────┐
+ client ──► │ Login/SignUp/Refresh/Logout ─► CQRS bus ─► ports:              │
+            │   FederatedTokenVerifier ─┐   SessionRepo/RefreshRepo (PG)     │
+            │   VerificationStore ──────┤   SessionCachePort (Redis gen/blk) │
+            │   PasskeyRepository ──────┤   SubjectLinkRepo (PG)             │
+            │   AccountDirectoryPort ───┤                                    │
+            │   TokenMinterPort ────────┘                                    │
+            └───────┬───────────────────────────┬────────────────────────────┘
+   checks credential│                            │mints edge token (ES256; PASETO fast-follow)
                     ▼                            ▼
-              Keycloak (IdP)            downstream services verify LOCALLY via auth-context
-                    │                            │  (pure-CPU sig check + optional O(1)
-              resolves identity ──► account      │   Redis `gen` check for instant logout)
+   Apple/Google JWKS · codes (Redis,    downstream services verify LOCALLY via auth-context
+   SES/SNS) · passkeys (PG, in-house)            │  (pure-CPU sig check + optional O(1)
+                    │                            │   Redis `gen` check for instant logout)
+              resolves identity ──► account
 ```
 
 **Split-token hot path.** 99% of API calls = signature verify only, no I/O. Revocation is a
@@ -376,7 +385,7 @@ on TIER-0 (`Service::EDGE_REVOCATION_FAIL_CLOSED`) and for staff calls, fail ope
 | SLI | Objective | Window | Measured by |
 |---|---|---|---|
 | Availability (non-5xx / non-`UNAVAILABLE`) | `<TODO 99.95%>` | 30d rolling | `<grpc_server_handled_total by code>` |
-| `Login` latency p99 | `< <TODO> ms` | 1h | `<rpc latency by method>` (dominated by the IdP round-trip) |
+| `Login` latency p99 | `< <TODO> ms` | 1h | `<rpc latency by method>` (dominated by the `account` round-trip; provider keys are cached) |
 | `Refresh` latency p99 | `< <TODO> ms` | 1h | `<rpc latency>` (one Postgres rotation) |
 | `Introspect` latency p99 | `< <TODO> ms` | 1h | `<rpc latency>` (CPU verify + ≤1 Redis read) |
 | Durability | no acked session/refresh write lost | — | Postgres `LocalQuorum`/fsync |
@@ -394,7 +403,8 @@ on TIER-0 (`Service::EDGE_REVOCATION_FAIL_CLOSED`) and for staff calls, fail ope
 
 | Dependency | Purpose | If down → | Degradation |
 |---|---|---|---|
-| Keycloak (IdP) | credential verification on `Login` | `Login` fails (`UNAVAILABLE`) | **Hard** for new logins; refresh/introspect unaffected |
+| Apple / Google JWKS | id_token signature keys (fetched at boot, refreshed in the background) | an unknown `kid` cannot be fetched → `AUT-5001` (`UNAVAILABLE`) | **Soft** — cached keys keep verifying; codes and passkeys unaffected |
+| Amazon SES / SNS | sending one-time codes and notices | code sends fail (`AUT-5014`) | **Hard** for code sign-in only; Apple / Google / passkeys unaffected |
 | `account` (gRPC) | resolve account + gate active on `Login` (a self-deactivated account is resumed: `ResumeDeactivatedAccount`, `reactivated = true`) | `Login` fails | **Hard** for new logins |
 | PostgreSQL | session + refresh-token + link ledger | `Refresh`/`Logout` writes fail | **Hard** for refresh/revocation |
 | Redis Cluster | generation map + blacklist (hot path) | revocation checks degrade | **Soft** — generation rebuilds from Postgres; a missed blacklist entry expires with the token |
@@ -415,11 +425,9 @@ on TIER-0 (`Service::EDGE_REVOCATION_FAIL_CLOSED`) and for staff calls, fail ope
 | `AUTH_SIGNING_PRIVATE_PEM` / `AUTH_SIGNING_PUBLIC_PEM` | **Required.** ES256 edge-token key pair (PEM) | — |
 | `AUTH_SIGNING_KID` · `AUTH_TOKEN_ISSUER` · `AUTH_TOKEN_AUDIENCE` | Edge-token `kid` / `iss` / `aud` | `auth-es256-1` · `https://auth.core-platform` · `core-platform` |
 | `AUTH_ACCESS_TTL_SECS` · `AUTH_SESSION_TTL_SECS` · `AUTH_ABSOLUTE_TTL_SECS` · `AUTH_REFRESH_TTL_SECS` | Token / session lifetimes | `600` · `1800` · `28800` · `604800` |
-| `AUTH_KEYCLOAK_TOKEN_ENDPOINT` · `AUTH_KEYCLOAK_CLIENT_ID` · `AUTH_KEYCLOAK_CLIENT_SECRET` · `AUTH_KEYCLOAK_SCOPE` | IdP broker | — · — · — · `openid` |
-| `AUTH_KEYCLOAK_ADMIN_URL` · `AUTH_KEYCLOAK_ADMIN_CLIENT_ID` · `AUTH_KEYCLOAK_ADMIN_CLIENT_SECRET` | Credential management (`ChangePassword`, `VerifyCredentials`): the realm's admin base (`…/admin/realms/<realm>`) and a confidential service-account client with `realm-management` `view-users` + `manage-users`. Unset → those RPCs answer `UNAVAILABLE` (`AUT-5005`). | — |
 | `AUTH_ACCOUNT_GRPC_ENDPOINT` | `account` service endpoint | `http://localhost:50059` |
 | `AUTH_ACCOUNT_RPC_TIMEOUT_MS` · `AUTH_ACCOUNT_CONNECT_TIMEOUT_MS` | Per-request / connect deadlines on the `account` channel (login hot path — fail fast, never hang) | `2000` · `2000` |
-| `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Request / connect deadlines on Keycloak HTTP calls (token exchange) | `5000` · `2000` |
+| `AUTH_IDP_HTTP_TIMEOUT_MS` · `AUTH_IDP_CONNECT_TIMEOUT_MS` | Request / connect deadlines on outbound HTTP calls (Amazon SNS). Historical names, kept; the former IdP-broker variables are gone (#881). | `5000` · `2000` |
 | `AUTH_GUEST_SESSIONS_ENABLED` | `StartGuestSession` kill switch. **Off by default**: it writes a session per call with no credential, so keep it off wherever the abuse controls (per-IP / per-device limits, App Attest) are not in front of it. Off → `AUT-1005` (`PERMISSION_DENIED`). | `false` |
 | `AUTH_APP_ATTEST_MODE` · `AUTH_APP_ATTEST_APP_IDS` · `AUTH_APP_ATTEST_ENVIRONMENTS` · `AUTH_APP_ATTEST_GUESTS_PER_DEVICE_PER_DAY` | App Attest in front of `StartGuestSession`: `off` / `observe` / `enforce`; the accepted `<team id>.<bundle id>` (comma-separated; required unless off); `production` and/or `development`; guest sessions per attested device per UTC day. | `off` · — · `production` · `5` |
 | `AUTH_FEDERATED_NONCE_REQUIRED` | An id_token `SignUp` / `Login` must redeem a nonce from `StartFederatedSignIn` (else `AUT-5008`). Off: a client-made nonce is only logged — turn on once every client calls `StartFederatedSignIn`. | `false` |
@@ -454,17 +462,17 @@ minted here is accepted by the same `auth-context` decoder every downstream serv
 
 The `integration-auth` suite (`tests/auth_it/`) boots real **PostgreSQL** + **Redis** via the shared
 `test-support` harness and drives the production composition root through the gRPC handler. Auth's
-*external* deps (the IdP and the `account` service) are stubbed at their ports. Scenarios:
-lifecycle (login → introspect → logout), refresh rotation + reuse-detection → generation revoke,
-global logout, and durable-write round-trips. **Keycloak is not containerized** — the OIDC adapter
-is unit-tested directly, and the live suite focuses on the session/token machinery over auth's own
-stores.
+*external* deps (the Apple / Google token verifier and the `account` service) are stubbed at their
+ports; members sign in with id_tokens. Scenarios: lifecycle (login → introspect → logout), refresh
+rotation + reuse-detection → generation revoke, global logout, and durable-write round-trips. The
+JWKS verifier is unit-tested directly, and the live suite focuses on the session/token machinery
+over auth's own stores.
 
 ## 🔥 Failure Modes &nbsp;·&nbsp; OPS
 
 | Symptom | Likely root cause | Mitigation |
 |---|---|---|
-| All `Login` → `UNAVAILABLE` | Keycloak or `account` unreachable | check IdP / `account` health; refresh + introspect keep working |
+| All `Login` → `UNAVAILABLE` | `account` unreachable (or, for Apple / Google only, their JWKS with an unknown `kid`, `AUT-5001`) | check `account` health and egress to the providers; refresh + introspect keep working |
 | `Refresh` → `UNAUTHENTICATED` spike | refresh-token **reuse** (token theft) or a global logout | expected on reuse — the session generation is revoked; investigate the source IP/device |
 | Edge tokens accepted after logout | Redis blacklist/generation miss | tokens still die at TTL (≤ `AUTH_ACCESS_TTL_SECS`); verify Redis health and the generation key |
 | `Introspect` returns `active:false` for a fresh token | clock skew, or a generation bump (global logout) | check NTP; confirm the account's current generation in Redis |
@@ -473,9 +481,10 @@ stores.
 
 ## 🚀 Deployment &nbsp;·&nbsp; OPS
 
-- **Throttling / lockout is *not* this service's job.** Credential brute-force protection lives in
-  Keycloak (federated model); ingress rate-limiting is the shared runtime's `[traffic]` layer. Auth
-  adds no redundant throttle.
+- **Brute-force protection is auth's own, per credential.** There is no password to guess: one-time
+  codes are bounded per address and client IP (see Passwordless email), two-step codes per account
+  (`AUT-5018`), id_tokens and passkeys are signatures. Ingress rate-limiting is the shared runtime's
+  `[traffic]` layer.
 - **Signing-key rotation (zero-downtime).** Edge tokens are ES256, verified by a **key ring**:
   1. Generate a new P-256 keypair; set it as `AUTH_SIGNING_PRIVATE_PEM` / `AUTH_SIGNING_PUBLIC_PEM`
      with a fresh `AUTH_SIGNING_KID`.
@@ -500,8 +509,13 @@ stores.
 ## 📋 Error Codes
 
 Canonical `AUT-XXXX` namespace — see [`src/error.rs`](src/error.rs) for the authoritative catalogue
-(1xxx session · 2xxx refresh/rotation · 3xxx subject linkage · 4xxx token minting · 5xxx IdP broker ·
-6xxx account directory · 9xxx domain/parse). Storage (`DB-*`) and validation (`VAL-*`) codes are
-delegated transparently.
+(1xxx session · 2xxx refresh/rotation · 3xxx subject linkage · 4xxx token minting · 5xxx credentials
+(id_tokens, codes, two-step, passkeys) · 6xxx account directory · 9xxx domain/parse). Storage (`DB-*`)
+and validation (`VAL-*`) codes are delegated transparently.
+
+**Retired, never reused (#881):** `AUT-5002` (IdpAuthenticationFailed), `AUT-5004`
+(ClaimsNormalizationFailed), `AUT-5005` (CredentialManagementUnavailable), `AUT-5006`
+(PasswordRejected), `AUT-5007` (VerificationMethodUnavailable) — they belonged to passwords and the
+former external IdP broker. `AUT-5001` (IdpUnavailable) stays: Apple's / Google's keys unreachable.
 
 [`project_auth_service_blueprint`]: ../../../docs/ <!-- TODO: link the design doc when published -->

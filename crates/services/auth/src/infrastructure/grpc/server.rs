@@ -179,13 +179,6 @@ impl AuthService for AuthServiceHandler {
         self.change_contact(request).await
     }
 
-    async fn change_password(
-        &self,
-        request: Request<proto::ChangePasswordRequest>,
-    ) -> Result<Response<proto::ChangePasswordResponse>, Status> {
-        self.change_password(request).await
-    }
-
     async fn verify_credentials(
         &self,
         request: Request<proto::VerifyCredentialsRequest>,

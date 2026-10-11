@@ -12,7 +12,6 @@ pub struct AccountStatusView {
     pub account_id: String,
     pub status: AccountStatus,
     pub suspension_reason: Option<String>,
-    pub is_locked: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -57,7 +56,6 @@ impl QueryHandler<GetAccountStatusQuery> for GetAccountStatusHandler {
             account_id: id_str.clone(),
             status: account.status(),
             suspension_reason: account.suspension_reason().map(str::to_owned),
-            is_locked: account.is_locked(),
         })
     }
 }

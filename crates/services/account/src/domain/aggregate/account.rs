@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -6,13 +6,13 @@ use crate::domain::entity::{GdprRecord, MfaState};
 use crate::domain::event::{
     AccountActivated, AccountCreated, AccountDeactivated, AccountDeleted, AccountSuspended,
     ConsentChange, ConsentsUpdated, DateOfBirthSet, DomainEvent, EmailChanged, EmailVerified,
-    GdprDataExportCompleted, GdprDataExportRequested, GdprDeletionCancelled, GdprDeletionRequested, KycStatusChanged, MfaEnrolled, MfaRevoked, PasswordChanged, PhoneChanged, RoleAssigned,
+    GdprDataExportCompleted, GdprDataExportRequested, GdprDeletionCancelled, GdprDeletionRequested, KycStatusChanged, MfaEnrolled, MfaRevoked, PhoneChanged, RoleAssigned,
     RoleRevoked,
 };
 use crate::domain::value_object::{
     check_date_of_birth, AccountId, AccountRole, AccountStatus, AgeBracket, ConsentPurpose,
     CountryCode, EmailAddress, EncryptedBytes, IdentityId,
-    KycStatus, PasswordHash, PhoneNumber, RecoveryCodeHash,
+    KycStatus, PhoneNumber, RecoveryCodeHash,
 };
 use crate::error::AccountError;
 
@@ -22,8 +22,6 @@ pub struct AccountCreateParams {
     pub identity_id: IdentityId,
     /// `None` for a phone-only account (signed up with a verified phone number).
     pub email: Option<EmailAddress>,
-    /// Pre-hashed Argon2id password; `None` for SSO-only accounts.
-    pub password_hash: Option<PasswordHash>,
     pub phone: Option<PhoneNumber>,
     /// Primary role assigned at creation; defaults to `User` for self-registration.
     pub role: AccountRole,
@@ -39,7 +37,7 @@ pub struct AccountCreateParams {
 
 /// The Account aggregate root.
 ///
-/// Manages identity verification, credentials, MFA, KYC, GDPR compliance, and
+/// Manages identity verification, MFA, KYC, GDPR compliance, and
 /// role-based access control for a single physical person on the platform.
 /// Financial state is owned by the dedicated `ledger` microservice.
 ///
@@ -50,7 +48,6 @@ pub struct AccountCreateParams {
 ///
 /// - Status transitions are gated by [`AccountStatus::can_transition_to`].
 /// - `version` is incremented on every write.
-/// - `password_hash` is `None` for SSO-only accounts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
     id: AccountId,
@@ -70,11 +67,6 @@ pub struct Account {
     phone_verified: bool,
     phone_verified_at: Option<DateTime<Utc>>,
 
-    password_hash: Option<PasswordHash>,
-    password_changed_at: Option<DateTime<Utc>>,
-
-    failed_login_attempts: i32,
-    locked_until: Option<DateTime<Utc>>,
     last_login_at: Option<DateTime<Utc>>,
 
     mfa: MfaState,
@@ -133,10 +125,6 @@ impl Account {
             phone: params.phone,
             phone_verified: false,
             phone_verified_at: None,
-            password_hash: params.password_hash,
-            password_changed_at: None,
-            failed_login_attempts: 0,
-            locked_until: None,
             last_login_at: None,
             mfa: MfaState::default(),
             kyc_status: KycStatus::NotStarted,
@@ -170,10 +158,6 @@ impl Account {
         phone: Option<PhoneNumber>,
         phone_verified: bool,
         phone_verified_at: Option<DateTime<Utc>>,
-        password_hash: Option<PasswordHash>,
-        password_changed_at: Option<DateTime<Utc>>,
-        failed_login_attempts: i32,
-        locked_until: Option<DateTime<Utc>>,
         last_login_at: Option<DateTime<Utc>>,
         mfa: MfaState,
         kyc_status: KycStatus,
@@ -202,10 +186,6 @@ impl Account {
             phone,
             phone_verified,
             phone_verified_at,
-            password_hash,
-            password_changed_at,
-            failed_login_attempts,
-            locked_until,
             last_login_at,
             mfa,
             kyc_status,
@@ -274,26 +254,6 @@ impl Account {
         self.pending_events.push(DomainEvent::PhoneChanged(PhoneChanged {
             account_id: self.id,
             new_phone: self.phone.clone(),
-            occurred_at: now,
-            correlation_id,
-        }));
-        Ok(())
-    }
-
-    /// Replaces the stored password hash.
-    ///
-    /// Requires `Active` status. Emits [`PasswordChanged`].
-    pub fn change_password(
-        &mut self,
-        new_hash: PasswordHash,
-        correlation_id: Uuid,
-    ) -> Result<(), AccountError> {
-        self.require_active()?;
-        self.password_hash = Some(new_hash);
-        let now = self.touch_now();
-        self.password_changed_at = Some(now);
-        self.pending_events.push(DomainEvent::PasswordChanged(PasswordChanged {
-            account_id: self.id,
             occurred_at: now,
             correlation_id,
         }));
@@ -787,7 +747,6 @@ impl Account {
         self.phone = None;
         self.phone_verified = false;
         self.phone_verified_at = None;
-        self.password_hash = None;
         self.date_of_birth = None;
         self.mfa.revoke();
         // Every status may end in Deleted; one already there (an admin delete)
@@ -836,24 +795,10 @@ impl Account {
         self.date_of_birth.map(|dob| AgeBracket::on(dob, today))
     }
 
-    /// Records a successful login: resets the failure counter and updates `last_login_at`.
+    /// Records a successful sign-in: updates `last_login_at`.
     pub fn record_login(&mut self) {
-        self.failed_login_attempts = 0;
-        self.locked_until = None;
         let now = Utc::now();
         self.last_login_at = Some(now);
-        self.touch(now);
-    }
-
-    /// Increments the failed-login counter; applies a timed lockout when
-    /// `max_attempts` is exceeded.
-    pub fn record_failed_login(&mut self, max_attempts: u16, lockout_duration_secs: u64) {
-        self.failed_login_attempts += 1;
-        if self.failed_login_attempts as u16 >= max_attempts {
-            self.locked_until =
-                Some(Utc::now() + Duration::seconds(lockout_duration_secs as i64));
-        }
-        let now = Utc::now();
         self.touch(now);
     }
 
@@ -899,18 +844,6 @@ impl Account {
     pub fn phone_verified(&self) -> bool { self.phone_verified }
 
     pub fn phone_verified_at(&self) -> Option<DateTime<Utc>> { self.phone_verified_at }
-
-    pub fn password_hash(&self) -> Option<&PasswordHash> { self.password_hash.as_ref() }
-
-    pub fn password_changed_at(&self) -> Option<DateTime<Utc>> { self.password_changed_at }
-
-    pub fn failed_login_attempts(&self) -> i32 { self.failed_login_attempts }
-
-    pub fn locked_until(&self) -> Option<DateTime<Utc>> { self.locked_until }
-
-    pub fn is_locked(&self) -> bool {
-        self.locked_until.is_some_and(|until| until > Utc::now())
-    }
 
     pub fn last_login_at(&self) -> Option<DateTime<Utc>> { self.last_login_at }
 
@@ -1004,6 +937,7 @@ impl Account {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
     fn admin_account_with_overrides(overrides: Vec<String>) -> Account {
         Account::reconstitute(
@@ -1017,10 +951,6 @@ mod tests {
             None,
             None,
             false,
-            None,
-            None,
-            None,
-            0,
             None,
             None,
             MfaState::default(),
@@ -1078,10 +1008,6 @@ mod tests {
             false,
             None,
             None,
-            None,
-            0,
-            None,
-            None,
             MfaState::default(),
             KycStatus::NotStarted,
             None,
@@ -1111,10 +1037,6 @@ mod tests {
             None,
             None,
             false,
-            None,
-            None,
-            None,
-            0,
             None,
             None,
             MfaState::default(),

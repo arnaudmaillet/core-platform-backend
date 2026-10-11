@@ -12,8 +12,8 @@ use uuid::Uuid;
 
 use super::policy::SessionPolicy;
 use super::port::{
-    AccountActivation, AccountDirectory, AccountSnapshot, AuthnGrant, CredentialAdmin, EventPublisher,
-    GeneratedRefresh, IdentityProvider, NormalizedClaims, ProfileDirectory,
+    AccountActivation, AccountDirectory, AccountSnapshot, AuthnGrant, EventPublisher,
+    GeneratedRefresh, ProfileDirectory,
     RefreshTokenRepository, SessionCache, SessionRepository, SubjectLinkRepository, TokenMinter,
 };
 use crate::domain::aggregate::{RefreshToken, Session, SubjectLink};
@@ -29,56 +29,69 @@ pub fn t0() -> DateTime<Utc> {
     DateTime::parse_from_rfc3339("2026-06-25T12:00:00Z").unwrap().with_timezone(&Utc)
 }
 
-// ─── IdentityProvider ────────────────────────────────────────────────────────
+// ─── Native sign-in ──────────────────────────────────────────────────────────
 
-pub struct StubIdentityProvider {
-    claims: Mutex<Option<NormalizedClaims>>,
-    /// When set, a password grant must present exactly this password.
-    password: Mutex<Option<String>>,
+/// Every member test signs in with an Apple id_token (#881: no password, no
+/// IdP broker). The identity is treated as signed up already: the first time
+/// it is seen, an account is provisioned and linked to it.
+pub struct StubFederatedVerifier {
+    subject:   Mutex<Option<String>>,
+    links:     Arc<InMemorySubjectLinkRepository>,
+    directory: Arc<StubAccountDirectory>,
 }
 
-impl StubIdentityProvider {
-    pub fn returning(issuer: &str, subject: &str) -> Self {
-        Self {
-            claims: Mutex::new(Some(NormalizedClaims {
-                issuer: issuer.to_owned(),
-                subject: subject.to_owned(),
-            })),
-            password: Mutex::new(None),
-        }
+impl StubFederatedVerifier {
+    pub fn new(subject: &str, links: Arc<InMemorySubjectLinkRepository>, directory: Arc<StubAccountDirectory>) -> Self {
+        Self { subject: Mutex::new(Some(subject.to_owned())), links, directory }
     }
 
-    pub fn failing() -> Self {
-        Self { claims: Mutex::new(None), password: Mutex::new(None) }
+    /// Every later id_token is refused.
+    pub fn fail(&self) {
+        *self.subject.lock().unwrap() = None;
     }
 
-    /// Later grants come back as `subject` (another account).
+    /// Later id_tokens come back as `subject` (another account).
     pub fn set_subject(&self, subject: &str) {
-        if let Some(claims) = self.claims.lock().unwrap().as_mut() {
-            claims.subject = subject.to_owned();
-        }
-    }
-
-    /// Password grants succeed only with `password` from now on.
-    pub fn with_password(&self, password: &str) {
-        *self.password.lock().unwrap() = Some(password.to_owned());
+        *self.subject.lock().unwrap() = Some(subject.to_owned());
     }
 }
 
 #[async_trait]
-impl IdentityProvider for StubIdentityProvider {
-    async fn authenticate(&self, grant: AuthnGrant) -> Result<NormalizedClaims, AuthError> {
-        if let (AuthnGrant::Password { password, .. }, Some(expected)) =
-            (&grant, self.password.lock().unwrap().as_ref())
-            && password != expected
-        {
-            return Err(AuthError::IdpAuthenticationFailed);
-        }
-        self.claims
+impl super::port::FederatedTokenVerifier for StubFederatedVerifier {
+    async fn verify(
+        &self,
+        provider: crate::domain::value_object::FederatedProvider,
+        _id_token: &str,
+        _nonce: &str,
+    ) -> Result<super::port::FederatedIdentity, AuthError> {
+        let subject = self
+            .subject
             .lock()
             .unwrap()
             .clone()
-            .ok_or(AuthError::IdpAuthenticationFailed)
+            .ok_or_else(|| AuthError::IdTokenRejected { reason: "stub: refused".into() })?;
+        let identity = IdpSubject::new(crate::domain::value_object::APPLE_ISSUER, subject.clone())?;
+        if self.links.find_by_subject(&identity).await?.is_none() {
+            let account = self.directory.resolve_or_provision(&identity);
+            self.links.save(&SubjectLink::establish(identity, account, t0(), Uuid::now_v7())).await?;
+        }
+        Ok(super::port::FederatedIdentity {
+            provider,
+            issuer: crate::domain::value_object::APPLE_ISSUER.to_owned(),
+            subject,
+            email: None,
+            email_verified: false,
+            private_relay: false,
+        })
+    }
+}
+
+/// The grant every member test signs in with (see [`StubFederatedVerifier`]).
+pub fn member_grant() -> AuthnGrant {
+    AuthnGrant::IdToken {
+        provider: crate::domain::value_object::FederatedProvider::Apple,
+        id_token: "stub-id-token".into(),
+        nonce:    "stub-nonce".into(),
     }
 }
 
@@ -189,6 +202,27 @@ impl StubAccountDirectory {
         self.resumed.lock().unwrap().clone()
     }
 
+    /// The account an identity stands for, made (active, no grants) on first
+    /// sight — what a sign-up would have done.
+    pub fn resolve_or_provision(&self, subject: &IdpSubject) -> AccountId {
+        let mut subjects = self.subjects.lock().unwrap();
+        if let Some(id) = subjects.get(subject) {
+            return *id;
+        }
+        let id = AccountId::from_uuid(Uuid::now_v7());
+        subjects.insert(subject.clone(), id);
+        self.snapshots.lock().unwrap().insert(
+            id,
+            AccountSnapshot {
+                activation: AccountActivation::Active,
+                permissions: Vec::new(),
+                age_bracket: None,
+                mfa_enrolled: false,
+            },
+        );
+        id
+    }
+
     /// Sets a known account's grants (roles and permissions, as `account`
     /// returns them).
     pub fn set_permissions(&self, account_id: &AccountId, permissions: &[&str]) {
@@ -244,24 +278,6 @@ impl StubAccountDirectory {
 
 #[async_trait]
 impl AccountDirectory for StubAccountDirectory {
-    async fn resolve_or_provision(&self, subject: &IdpSubject) -> Result<AccountId, AuthError> {
-        let mut subjects = self.subjects.lock().unwrap();
-        if let Some(id) = subjects.get(subject) {
-            return Ok(*id);
-        }
-        let id = AccountId::from_uuid(Uuid::now_v7());
-        subjects.insert(subject.clone(), id);
-        self.snapshots.lock().unwrap().insert(
-            id,
-            AccountSnapshot {
-                activation: AccountActivation::Active,
-                permissions: Vec::new(),
-                age_bracket: None,
-                mfa_enrolled: false,
-            },
-        );
-        Ok(id)
-    }
 
     async fn lookup(&self, account_id: &AccountId) -> Result<AccountSnapshot, AuthError> {
         self.looked_up.lock().unwrap().push(*account_id);
@@ -799,74 +815,6 @@ impl EventPublisher for RecordingEventPublisher {
     }
 }
 
-// ─── CredentialAdmin ─────────────────────────────────────────────────────────
-
-/// Knows every subject as `user`; records each password set, or refuses them
-/// all with a policy reason.
-#[derive(Default)]
-pub struct StubCredentialAdmin {
-    set: Mutex<Vec<(IdpSubject, String)>>,
-    refuse: Mutex<Option<String>>,
-    deleted: Mutex<Vec<IdpSubject>>,
-    idp_down: std::sync::atomic::AtomicBool,
-    /// The emails set, per subject (#651).
-    emails: Mutex<Vec<(IdpSubject, String)>>,
-}
-
-impl StubCredentialAdmin {
-    /// The passwords set so far, per subject.
-    pub fn passwords_set(&self) -> Vec<(IdpSubject, String)> {
-        self.set.lock().unwrap().clone()
-    }
-
-    /// The emails set so far, per subject.
-    pub fn emails_set(&self) -> Vec<(IdpSubject, String)> {
-        self.emails.lock().unwrap().clone()
-    }
-
-    /// Refuse every new password as the IdP policy would.
-    pub fn refuse_with(&self, reason: &str) {
-        *self.refuse.lock().unwrap() = Some(reason.to_owned());
-    }
-
-    /// The IdP users deleted so far.
-    pub fn deleted_users(&self) -> Vec<IdpSubject> {
-        self.deleted.lock().unwrap().clone()
-    }
-
-    /// Makes the IdP unreachable (or reachable again).
-    pub fn idp_down(&self, down: bool) {
-        self.idp_down.store(down, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-#[async_trait]
-impl CredentialAdmin for StubCredentialAdmin {
-    async fn login_name(&self, _subject: &IdpSubject) -> Result<String, AuthError> {
-        Ok("user".to_owned())
-    }
-
-    async fn set_password(&self, subject: &IdpSubject, new_password: &str) -> Result<(), AuthError> {
-        if let Some(reason) = self.refuse.lock().unwrap().clone() {
-            return Err(AuthError::PasswordRejected { reason });
-        }
-        self.set.lock().unwrap().push((subject.clone(), new_password.to_owned()));
-        Ok(())
-    }
-
-    async fn delete_user(&self, subject: &IdpSubject) -> Result<(), AuthError> {
-        if self.idp_down.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(AuthError::IdpUnavailable);
-        }
-        self.deleted.lock().unwrap().push(subject.clone());
-        Ok(())
-    }
-
-    async fn set_email(&self, subject: &IdpSubject, email: &str) -> Result<(), AuthError> {
-        self.emails.lock().unwrap().push((subject.clone(), email.to_owned()));
-        Ok(())
-    }
-}
 
 // ─── Two-step sign-in (#649) ─────────────────────────────────────────────────
 
@@ -978,8 +926,8 @@ impl super::port::MfaStore for InMemoryMfaStore {
 /// the fakes as `Arc<dyn Port>`; tests keep the concrete `Arc`s to assert on
 /// recorded state (published events, generation, stored sessions).
 pub struct Fixture {
-    pub idp: Arc<StubIdentityProvider>,
-    pub credentials: Arc<StubCredentialAdmin>,
+    /// Every member signs in with an Apple id_token (#881).
+    pub federated: Arc<StubFederatedVerifier>,
     pub directory: Arc<StubAccountDirectory>,
     pub profiles: Arc<StubProfileDirectory>,
     pub links: Arc<InMemorySubjectLinkRepository>,
@@ -1014,12 +962,12 @@ impl Fixture {
             Arc::clone(&mfa_store) as _,
             super::command::MfaPolicy::default(),
         ));
+        let links = Arc::new(InMemorySubjectLinkRepository::new());
         Self {
-            idp: Arc::new(StubIdentityProvider::returning("https://idp.test", "sub-123")),
-            credentials: Arc::new(StubCredentialAdmin::default()),
+            federated: Arc::new(StubFederatedVerifier::new("sub-123", Arc::clone(&links), Arc::clone(&directory))),
             directory,
             profiles: Arc::new(StubProfileDirectory::new()),
-            links: Arc::new(InMemorySubjectLinkRepository::new()),
+            links,
             sessions: Arc::new(InMemorySessionRepository::new()),
             refresh_tokens: Arc::new(InMemoryRefreshTokenRepository::new()),
             cache: Arc::new(InMemorySessionCache::new()),
@@ -1060,7 +1008,6 @@ impl Fixture {
 
     pub fn login_handler(&self) -> super::command::LoginHandler {
         super::command::LoginHandler::new(
-            Arc::clone(&self.idp) as _,
             Arc::clone(&self.directory) as _,
             Arc::clone(&self.profiles) as _,
             Arc::clone(&self.links) as _,
@@ -1072,6 +1019,7 @@ impl Fixture {
             self.policy.clone(),
         )
         .with_mfa(Arc::clone(&self.mfa))
+        .with_federated(Arc::clone(&self.federated) as _, Arc::clone(&self.guests) as _)
     }
 
     pub fn refresh_handler(&self) -> super::command::RefreshHandler {
@@ -1118,22 +1066,8 @@ impl Fixture {
         super::query::ListSessionsHandler::new(Arc::clone(&self.sessions) as _)
     }
 
-    pub fn change_password_handler(&self) -> super::command::ChangePasswordHandler {
-        super::command::ChangePasswordHandler::new(
-            Arc::clone(&self.idp) as _,
-            Arc::clone(&self.credentials) as _,
-            Arc::clone(&self.sessions) as _,
-            Arc::clone(&self.refresh_tokens) as _,
-            Arc::clone(&self.cache) as _,
-            Arc::clone(&self.publisher) as _,
-            self.policy.clone(),
-        )
-    }
-
     pub fn verify_credentials_handler(&self) -> super::command::VerifyCredentialsHandler {
         super::command::VerifyCredentialsHandler::new(
-            Arc::clone(&self.idp) as _,
-            Arc::clone(&self.credentials) as _,
             Arc::clone(&self.directory) as _,
             Arc::clone(&self.profiles) as _,
             Arc::clone(&self.sessions) as _,

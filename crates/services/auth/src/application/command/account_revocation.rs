@@ -92,14 +92,14 @@ mod tests {
     use super::*;
     use crate::application::command::{IssuedSession, LoginCommand, RefreshCommand};
     use crate::application::fakes::{t0, Fixture};
-    use crate::application::port::{AccountActivation, AuthnGrant, SessionCache, SessionRepository};
+    use crate::application::port::{AccountActivation, SessionCache, SessionRepository};
     use crate::domain::value_object::DeviceFingerprint;
 
     async fn login(fx: &Fixture) -> IssuedSession {
         let env = Envelope::new(
             Uuid::now_v7(),
             LoginCommand {
-                grant: AuthnGrant::Password { username: "u".into(), password: "p".into() },
+                grant: crate::application::fakes::member_grant(),
                 device: DeviceFingerprint::default(),
                 guest_refresh_token: None,
                 client_ip: None,

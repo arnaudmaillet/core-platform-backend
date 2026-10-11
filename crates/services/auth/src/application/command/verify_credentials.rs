@@ -4,13 +4,13 @@ use chrono::{DateTime, Utc};
 use cqrs::Envelope;
 use validate_core::{FieldViolation, Validate};
 
-use super::credentials::{caller_session, is_staff_session, prove_password, STEP_UP_WINDOW_SECS};
+use super::credentials::{caller_session, is_staff_session, STEP_UP_WINDOW_SECS};
 use super::mfa::MfaVerifier;
 use crate::application::ensure_valid;
 use crate::application::policy::SessionPolicy;
 use crate::application::port::{
-    profile_ids_or_empty, AccountActivation, AccountDirectory, CredentialAdmin, IdentityProvider,
-    ProfileDirectory, SessionCache, SessionRepository, TokenMinter,
+    profile_ids_or_empty, AccountActivation, AccountDirectory, ProfileDirectory, SessionCache, SessionRepository,
+    TokenMinter,
 };
 use crate::domain::value_object::{AccountId, Permission, SessionId};
 use crate::error::AuthError;
@@ -18,7 +18,6 @@ use crate::error::AuthError;
 /// What the holder proves to step up.
 #[derive(Clone)]
 pub enum StepUpCredential {
-    Password(String),
     /// A TOTP or backup code, for an account with two-step sign-in on (#649)
     /// — the step-up of an account without a password, too.
     MfaCode(String),
@@ -55,7 +54,7 @@ impl Validate for VerifyCredentialsCommand {
             ));
         }
         let empty = match &self.credential {
-            StepUpCredential::Password(p) | StepUpCredential::MfaCode(p) => p.is_empty(),
+            StepUpCredential::MfaCode(p) => p.is_empty(),
             StepUpCredential::Passkey(a) => a.challenge.is_empty() || a.signature.is_empty(),
         };
         if empty {
@@ -74,12 +73,10 @@ pub struct SteppedUpToken {
     pub step_up_expires_in: i64,
 }
 
-/// Re-proves a credential with the IdP and re-mints the caller's access token
+/// Re-proves a credential (a two-step code or a passkey) and re-mints the caller's access token
 /// with `auth_time = now`, which step-up-gated RPCs elsewhere require to be
 /// recent. The session and its refresh token are unchanged.
 pub struct VerifyCredentialsHandler {
-    idp: Arc<dyn IdentityProvider>,
-    admin: Arc<dyn CredentialAdmin>,
     directory: Arc<dyn AccountDirectory>,
     profiles: Arc<dyn ProfileDirectory>,
     sessions: Arc<dyn SessionRepository>,
@@ -105,10 +102,7 @@ impl VerifyCredentialsHandler {
         self
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        idp: Arc<dyn IdentityProvider>,
-        admin: Arc<dyn CredentialAdmin>,
         directory: Arc<dyn AccountDirectory>,
         profiles: Arc<dyn ProfileDirectory>,
         sessions: Arc<dyn SessionRepository>,
@@ -116,7 +110,7 @@ impl VerifyCredentialsHandler {
         minter: Arc<dyn TokenMinter>,
         policy: SessionPolicy,
     ) -> Self {
-        Self { idp, admin, directory, profiles, sessions, cache, minter, policy, mfa: None, passkeys: None }
+        Self { directory, profiles, sessions, cache, minter, policy, mfa: None, passkeys: None }
     }
 
     pub async fn handle(
@@ -139,9 +133,6 @@ impl VerifyCredentialsHandler {
             return Err(AuthError::StaffStepUpNeedsPasskey);
         }
         match cmd.credential {
-            StepUpCredential::Password(password) => {
-                prove_password(&self.admin, &self.idp, &session, password).await?;
-            }
             StepUpCredential::MfaCode(code) => {
                 let mfa = self.mfa.as_ref().ok_or(AuthError::MfaUnavailable)?;
                 mfa.check(&account_id, &code, now).await?;
@@ -185,14 +176,13 @@ mod tests {
     use super::*;
     use crate::application::command::{IssuedSession, LoginCommand};
     use crate::application::fakes::{t0, Fixture};
-    use crate::application::port::AuthnGrant;
     use crate::domain::value_object::DeviceFingerprint;
     use chrono::Duration;
     use uuid::Uuid;
 
     async fn login(fx: &Fixture) -> IssuedSession {
         let cmd = LoginCommand {
-            grant: AuthnGrant::Password { username: "user".into(), password: "secret-1".into() },
+            grant: crate::application::fakes::member_grant(),
             device: DeviceFingerprint::default(),
             guest_refresh_token: None,
             client_ip: None,
@@ -212,45 +202,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_proved_password_re_mints_this_sessions_token_with_auth_time_now() {
+    async fn an_unenrolled_mfa_code_proves_nothing() {
         let fx = Fixture::new();
-        fx.idp.with_password("secret-1");
         let session = login(&fx).await;
-        let later = t0() + Duration::minutes(7);
-
-        let token = fx
+        let err = fx
             .verify_credentials_handler()
-            .handle(verify(&session, StepUpCredential::Password("secret-1".into())), later)
-            .await
-            .unwrap();
-
-        let claims = fx.minter.verify_access(&token.access_token).await.unwrap();
-        assert_eq!(claims.session_id, session.session_id);
-        assert_eq!(claims.auth_time, Some(later));
-        assert_eq!(token.step_up_expires_in, STEP_UP_WINDOW_SECS);
-    }
-
-    #[tokio::test]
-    async fn a_wrong_password_or_an_unenrolled_mfa_code_proves_nothing() {
-        let fx = Fixture::new();
-        fx.idp.with_password("secret-1");
-        let session = login(&fx).await;
-        let handler = fx.verify_credentials_handler();
-
-        let err = handler
-            .handle(verify(&session, StepUpCredential::Password("nope".into())), t0())
-            .await
-            .unwrap_err();
-        assert!(matches!(err, AuthError::IdpAuthenticationFailed));
-        let err = handler
             .handle(verify(&session, StepUpCredential::MfaCode("123456".into())), t0())
             .await
             .unwrap_err();
         assert!(matches!(err, AuthError::MfaNotEnabled), "{err:?}");
     }
 
-    /// #649: with two-step sign-in on, its code is a step-up — for an account
-    /// without a password, the only one. A code works once.
+    /// #649: with two-step sign-in on, its code is a step-up (it re-mints
+    /// this session's token with `auth_time` = now). A code works once.
     #[tokio::test]
     async fn a_two_step_code_steps_up_once() {
         use crate::domain::value_object::step_of;

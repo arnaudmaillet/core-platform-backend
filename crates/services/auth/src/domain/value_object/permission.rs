@@ -6,9 +6,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// This mirrors the `Permission` shape the `auth-context` library produces on the
 /// inbound path, so the claims this service mints and the claims downstream
-/// services read are the same vocabulary. Normalization from IdP-specific shapes
-/// (Keycloak `realm_access.roles`, Okta `groups`, …) happens in the
-/// infrastructure adapter; the domain only ever sees the normalized form.
+/// services read are the same vocabulary: `account`'s roles and fine-grained
+/// grants, plus `read:public`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Permission(String);

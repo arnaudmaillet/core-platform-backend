@@ -85,10 +85,6 @@ pub struct EmailHolder {
 /// responsibility — auth only asks for the resulting internal id.
 #[async_trait]
 pub trait AccountDirectory: Send + Sync + 'static {
-    /// Resolves the internal account id for an IdP subject, provisioning the
-    /// account record on first sight (idempotent in the `account` service).
-    async fn resolve_or_provision(&self, subject: &IdpSubject) -> Result<AccountId, AuthError>;
-
     /// Fetches the account's activation state and current permissions. Fails with
     /// [`AuthError::AccountDirectoryUnavailable`] if the SoR is unreachable.
     async fn lookup(&self, account_id: &AccountId) -> Result<AccountSnapshot, AuthError>;

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: 6afbb7254950fc0347b965a00dbf286070a29055e716587cf70d5222744c6ab4
-  translated_at: 2026-10-04
+  source_sha256: 9b78340af232fad23c77b203197c23b948498521b28dcb7c2a65d58987ed421f
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -51,7 +51,7 @@ réelle ; tous les autres détiennent des références dérivées, non faisant-a
 |---|---|---|
 | Account | L'enregistrement de compte utilisateur faisant autorité | `Account`, `AccountId` |
 | Identity id | L'identifiant de sujet stable inter-systèmes | `IdentityId` |
-| Credential metadata | Hash de mot de passe, enrôlement MFA, codes de récupération — *métadonnées*, pas le flux d'auth | `PasswordHash`, `MfaState`, `RecoveryCodeHash` |
+| Credential metadata | Enrôlement MFA, codes de récupération — *métadonnées*, pas le flux d'auth (pas de mot de passe, #881) | `MfaState`, `RecoveryCodeHash` |
 | KYC status | L'état de vérification know-your-customer | `KycStatus`, `KycStatusChanged` |
 | Role | Le rôle d'autorisation assigné au compte | `AccountRole`, `RoleAssigned`/`RoleRevoked` |
 | GDPR record | L'état de traitement licite des données (consentements, demandes export/suppression) | `GdprRecord`, `ConsentPurpose`, `ConsentsUpdated`, `GdprDeletionRequested`, `GdprDataExportRequested` |
@@ -65,7 +65,7 @@ réelle ; tous les autres détiennent des références dérivées, non faisant-a
 |---|---|---|
 | `Account` | racine d'agrégat | Machine à états du cycle de vie + unicité email/identité |
 | `EmailAddress` / `PhoneNumber` / `CountryCode` | VO | Validité imposée à la construction |
-| `PasswordHash` / `MfaState` / `RecoveryCodeHash` | VO | Intégrité des métadonnées d'identifiants |
+| `MfaState` / `RecoveryCodeHash` | VO | Intégrité des métadonnées d'identifiants |
 | `GdprRecord` | VO | État des demandes d'effacement/export |
 | `AccountStatus` / `AccountRole` / `KycStatus` | enum | Vocabulaires fermés cycle de vie / autorisation / vérification |
 
@@ -154,7 +154,7 @@ vérifie toujours — fermant la boucle d'effacement de bout en bout.
 | Événement (`account.v1.events`) | Signifie | Émis quand | Qui réagit |
 |---|---|---|---|
 | `account_created` / `email_changed` / `email_verified` / `phone_changed` | faits de cycle de vie porteurs de PII | la commande correspondante commite | `audit` (PII scellée), `profile` |
-| `password_changed` / `mfa_enrolled` / `mfa_revoked` | faits de sécurité (sans PII) | changement d'identifiant | `audit` (Authentication) |
+| `mfa_enrolled` / `mfa_revoked` (et `password_changed`, plus émis depuis #881) | faits de sécurité (sans PII) | changement d'identifiant | `audit` (Authentication) |
 | `activated`/`deactivated`/`suspended`/`deleted`, `kyc_status_changed` | cycle de vie de l'identité | transition de cycle de vie | `audit` (Identity), `profile` |
 | `role_assigned` / `role_revoked` | changement d'autorisation | octroi/révocation de rôle | `audit` (Authorization) |
 | `gdpr_deletion_requested` / `gdpr_deletion_cancelled` / `gdpr_data_export_requested` | un droit licite sur les données a été invoqué / retiré | demande utilisateur/DPO | `audit` (preuve ; le crypto-shred suit `deleted`) |

@@ -1,7 +1,6 @@
 pub mod account_revocation;
 pub mod app_authorizations;
 pub mod change_contact;
-pub mod change_password;
 mod credentials;
 pub mod federated_nonce;
 pub mod erase_account;
@@ -25,7 +24,6 @@ pub mod verify_credentials;
 pub use account_revocation::{AccountChange, AccountRevocation};
 pub use app_authorizations::{AppAuthorizations, AppGrant};
 pub use change_contact::{ChangeContactCommand, ChangeContactHandler, ChangedContact};
-pub use change_password::{ChangePasswordCommand, ChangePasswordHandler, ChangePasswordOutcome};
 pub use credentials::STEP_UP_WINDOW_SECS;
 pub use federated_nonce::{FederatedNonces, NonceBoundVerifier, StartedFederatedSignIn, FEDERATED_NONCE_TTL_SECS};
 pub use erase_account::AccountErasure;

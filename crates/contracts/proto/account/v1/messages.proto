@@ -97,8 +97,9 @@ message CreateAccountRequest {
     string  identity_id          = 1;
     string  email                = 2;
     string  phone                = 3;
-    // Pre-hashed credential. The service NEVER accepts plaintext passwords.
-    string  password_hash        = 4;
+    // (#881: no passwords)
+    reserved 4;
+    reserved "password_hash";
     string  country_of_residence = 5;
     // UUID of the admin account that created this account; empty for self-registration.
     string  created_by           = 6;
@@ -131,12 +132,6 @@ message ChangePhoneRequest {
     string account_id = 1;
     // E.164 (e.g. +33612345678).
     string phone      = 2;
-}
-
-message ChangePasswordRequest {
-    string account_id       = 1;
-    // New Argon2id hash — plaintext must never cross the gRPC boundary.
-    string new_password_hash = 2;
 }
 
 message EnrollMfaRequest {
@@ -192,10 +187,6 @@ message ResumeDeactivatedAccountRequest {
 }
 
 message RecordLoginRequest {
-    string account_id = 1;
-}
-
-message RecordFailedLoginRequest {
     string account_id = 1;
 }
 

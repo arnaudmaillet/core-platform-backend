@@ -18,10 +18,11 @@ async fn login_from(h: &Harness, user: &str, device_id: &str) -> String {
             ip_address: String::new(),
             device_id: device_id.into(),
         }),
-        grant_type: proto::GrantType::Password as i32,
-        credential: Some(proto::login_request::Credential::Password(proto::PasswordGrant {
-            username: user.to_owned(),
-            password: "pw".to_owned(),
+        grant_type: proto::GrantType::IdToken as i32,
+        credential: Some(proto::login_request::Credential::IdToken(proto::IdTokenGrant {
+            provider: proto::FederatedProvider::Apple as i32,
+            id_token: user.to_owned(),
+            nonce: "it-nonce".to_owned(),
         })),
         guest_refresh_token: String::new(),
     });

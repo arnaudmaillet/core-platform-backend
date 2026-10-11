@@ -20,7 +20,8 @@ workspace "Core Platform" "Social platform backend — corrected C4, derived fro
         user = person "Client Apps" "End users on mobile / web." "User"
 
         # --- External systems -------------------------------------------------------------------
-        keycloak     = softwareSystem "Keycloak (IdP)" "Federated identity provider for credentials." "External"
+        signInProviders = softwareSystem "Apple / Google sign-in" "Sign in with Apple / Google: id_tokens auth verifies natively against the providers' published JWKS." "External"
+        messaging    = softwareSystem "Email / SMS (Amazon SES / SNS)" "One-time sign-in codes and security notices." "External"
         objectStore  = softwareSystem "Object Store (S3 / MinIO)" "Media bytes + audit WORM archive (Object Lock)." "External"
         cdn          = softwareSystem "CDN (CloudFront)" "Media delivery edge." "External"
         push         = softwareSystem "Push (APNs / FCM)" "Offline device push." "External"
@@ -38,7 +39,7 @@ workspace "Core Platform" "Social platform backend — corrected C4, derived fro
             # --- Identity & Access (Supporting / TIER-0) ---------------------------------------
             group "Identity & Access" {
                 account = container "account" "Identity SoR — accounts, credentials metadata, KYC, roles, GDPR state." "Rust/tonic" "Service,Supporting"
-                auth    = container "auth" "Authentication — sessions, refresh, federated IdP broker, ES256 edge tokens." "Rust/tonic" "Service,Supporting"
+                auth    = container "auth" "Authentication — checks every credential itself (Apple / Google id_tokens, one-time codes, passkeys; no passwords), sessions, refresh, ES256 edge tokens." "Rust/tonic" "Service,Supporting"
                 profile = container "profile" "Public persona over the account SoR — handle, bio, tier, dual-axis visibility." "Rust/tonic" "Service,Supporting"
             }
 
@@ -141,7 +142,8 @@ workspace "Core Platform" "Social platform backend — corrected C4, derived fro
             realtimeGateway -> realtimeDispatcher "node-hop delivery (via Redis pub/sub)" "Redis" "Async"
 
             # === External =======================================================================
-            auth -> keycloak "federates credentials (OIDC)"
+            auth -> signInProviders "fetches JWKS to verify id_tokens"
+            auth -> messaging "sends one-time codes + security notices"
             media -> objectStore "asset bytes (control plane)"
             media -> cdn "delivery resolution"
             audit -> objectStore "WORM archive (Object Lock)"

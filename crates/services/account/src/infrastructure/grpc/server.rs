@@ -54,15 +54,6 @@ where
         self.verify_phone(request).await
     }
 
-    // ── Credentials ───────────────────────────────────────────────────────────
-
-    async fn change_password(
-        &self,
-        request: Request<proto::ChangePasswordRequest>,
-    ) -> Result<Response<proto::CommandResponse>, Status> {
-        self.change_password(request).await
-    }
-
     // ── MFA ───────────────────────────────────────────────────────────────────
 
     async fn enroll_mfa(
@@ -146,13 +137,6 @@ where
         request: Request<proto::RecordLoginRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
         self.record_login(request).await
-    }
-
-    async fn record_failed_login(
-        &self,
-        request: Request<proto::RecordFailedLoginRequest>,
-    ) -> Result<Response<proto::CommandResponse>, Status> {
-        self.record_failed_login(request).await
     }
 
     // ── GDPR / compliance ─────────────────────────────────────────────────────

@@ -26,12 +26,8 @@ use thiserror::Error;
 /// | AUT-4002 | SigningKeyUnavailable        | 503  | **High** | **Yes**   |
 /// | AUT-4003 | InvalidTokenGeneration       | 401  | Low      | No        |
 /// | AUT-5001 | IdpUnavailable               | 503  | High     | **Yes**   |
-/// | AUT-5002 | IdpAuthenticationFailed      | 401  | Low      | No        |
+/// | (AUT-5002, AUT-5004…5007: retired with passwords and the external IdP, #881 — never reused) |  |  |  |  |
 /// | AUT-5003 | IdpTokenRejected             | 401  | Low      | No        |
-/// | AUT-5004 | ClaimsNormalizationFailed    | 502  | Medium   | No        |
-/// | AUT-5005 | CredentialManagementUnavailable | 503 | High   | **Yes**   |
-/// | AUT-5006 | PasswordRejected             | 422  | Low      | No        |
-/// | AUT-5007 | VerificationMethodUnavailable | 422 | Low      | No        |
 /// | AUT-5008 | IdTokenRejected              | 401  | Low      | No        |
 /// | AUT-5009 | FederatedProviderNotConfigured | 422 | Medium  | No        |
 /// | AUT-5010 | IdTokenWithoutEmail          | 422  | Low      | No        |
@@ -148,28 +144,13 @@ pub enum AuthError {
     #[error("identity provider is unavailable")]
     IdpUnavailable,
 
-    #[error("identity provider rejected the credentials")]
-    IdpAuthenticationFailed,
 
     #[error("identity provider rejected the presented token")]
     IdpTokenRejected,
 
-    #[error("failed to normalize identity-provider claims: {0}")]
-    ClaimsNormalizationFailed(String),
 
-    /// The IdP's credential management (setting a password) is unreachable or
-    /// not configured (`AUTH_KEYCLOAK_ADMIN_*`).
-    #[error("credential management is unavailable")]
-    CredentialManagementUnavailable,
 
-    /// The IdP refused the new password under its password policy.
-    #[error("the new password was rejected: {reason}")]
-    PasswordRejected { reason: String },
 
-    /// A step-up method the account cannot use (e.g. an MFA code with no MFA
-    /// enrolled).
-    #[error("this verification method is not available for the account")]
-    VerificationMethodUnavailable,
 
     /// An Apple / Google id_token failed verification (signature, issuer,
     /// audience, expiry or nonce). The reason is logged, never returned.
@@ -375,12 +356,7 @@ impl AppError for AuthError {
             AuthError::InvalidTokenGeneration => "AUT-4003",
 
             AuthError::IdpUnavailable => "AUT-5001",
-            AuthError::IdpAuthenticationFailed => "AUT-5002",
             AuthError::IdpTokenRejected => "AUT-5003",
-            AuthError::ClaimsNormalizationFailed(_) => "AUT-5004",
-            AuthError::CredentialManagementUnavailable => "AUT-5005",
-            AuthError::PasswordRejected { .. } => "AUT-5006",
-            AuthError::VerificationMethodUnavailable => "AUT-5007",
             AuthError::IdTokenRejected { .. } => "AUT-5008",
             AuthError::FederatedProviderNotConfigured { .. } => "AUT-5009",
             AuthError::IdTokenWithoutEmail => "AUT-5010",
@@ -449,7 +425,6 @@ impl AppError for AuthError {
             | AuthError::RefreshTokenReuseDetected
             | AuthError::RefreshTokenAlreadyRotated
             | AuthError::InvalidTokenGeneration
-            | AuthError::IdpAuthenticationFailed
             | AuthError::IdpTokenRejected
             | AuthError::IdTokenRejected { .. }
             | AuthError::VerificationCodeInvalid
@@ -482,11 +457,9 @@ impl AppError for AuthError {
 
             AuthError::TokenSigningFailed => StatusCode::INTERNAL_SERVER_ERROR,
 
-            AuthError::ClaimsNormalizationFailed(_) => StatusCode::BAD_GATEWAY,
 
             AuthError::SigningKeyUnavailable
             | AuthError::IdpUnavailable
-            | AuthError::CredentialManagementUnavailable
             | AuthError::AccountDirectoryUnavailable
             | AuthError::ProfileDirectoryUnavailable
             | AuthError::VerificationSendFailed
@@ -511,7 +484,6 @@ impl AppError for AuthError {
             | AuthError::TokenSigningFailed
             | AuthError::SigningKeyUnavailable
             | AuthError::IdpUnavailable
-            | AuthError::CredentialManagementUnavailable
             | AuthError::AccountDirectoryUnavailable
             | AuthError::SmsBudgetExhausted
             | AuthError::MfaUnavailable
@@ -519,7 +491,6 @@ impl AppError for AuthError {
 
             AuthError::InvalidSessionTransition { .. }
             | AuthError::RefreshTokenAlreadyRotated
-            | AuthError::ClaimsNormalizationFailed(_)
             | AuthError::ProfileDirectoryUnavailable
             | AuthError::AccountNotActive { .. }
             | AuthError::StaffEnrollmentGrantInvalid
@@ -537,7 +508,6 @@ impl AppError for AuthError {
             AuthError::ConcurrentModification
             | AuthError::SigningKeyUnavailable
             | AuthError::IdpUnavailable
-            | AuthError::CredentialManagementUnavailable
             | AuthError::AccountDirectoryUnavailable
             | AuthError::VerificationSendFailed
             | AuthError::ProfileDirectoryUnavailable => true,
@@ -575,12 +545,7 @@ impl AppError for AuthError {
             AuthError::TokenSigningFailed | AuthError::SigningKeyUnavailable => "We could not issue a session right now. Please try again.",
             AuthError::InvalidTokenGeneration => "Your session is no longer valid; please sign in again.",
             AuthError::IdpUnavailable => "The sign-in service is temporarily unavailable.",
-            AuthError::IdpAuthenticationFailed => "The credentials provided are incorrect.",
             AuthError::IdpTokenRejected => "Your sign-in could not be verified; please sign in again.",
-            AuthError::ClaimsNormalizationFailed(_) => "We could not complete sign-in. Please try again.",
-            AuthError::CredentialManagementUnavailable => "Passwords cannot be changed right now. Please try again later.",
-            AuthError::PasswordRejected { .. } => "This password does not meet the requirements.",
-            AuthError::VerificationMethodUnavailable => "This verification method is not available for your account.",
             AuthError::AccountNotActive { .. } => "This account cannot sign in at this time.",
             AuthError::AccountDirectoryUnavailable => "The account service is temporarily unavailable.",
             AuthError::ProfileDirectoryUnavailable => "The profile service is temporarily unavailable.",

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: dae6d224db32d8b2b4de7232dc2f90a60cd785064883668885e26266ea7c7c8f
-  translated_at: 2026-10-04
+  source_sha256: 87085058a74d9fc9b37dbfea3c15136d047e6cbb03d67018c723a6eaa4f4b60e
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -119,7 +119,7 @@ documentés séparément afin qu'aucune équipe n'ait à lire les rouages de l'a
 ## Conventions utilisées dans toute la documentation
 
 - **DEFERRED** — délibérément pas encore construit ; une dépendance externe/organisationnelle
-  (KMS/HSM, Keycloak, témoin WORM cross-account) ou une décision produit à trancher.
+  (KMS/HSM, témoin WORM cross-account) ou une décision produit à trancher.
 - **STUB** — échafaudé mais non câblé à un backend live (p. ex. `prod`).
 - Les invocations en ligne de commande sont exactes et copiables-collables ; elles
   supposent une exécution depuis la racine du dépôt sauf `cd` explicite.

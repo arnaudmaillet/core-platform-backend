@@ -239,7 +239,7 @@ mod tests {
     use crate::application::command::{IssuedSession, LoginCommand, LoginOutcome, CompleteLoginCommand};
     use crate::application::command::verification::VerificationPolicy;
     use crate::application::fakes::{t0, Fixture, InMemoryVerificationStore, RecordingCodeSender};
-    use crate::application::port::{AuthnGrant, ContactDetails};
+    use crate::application::port::ContactDetails;
     use crate::domain::value_object::{step_of, DeviceFingerprint};
     use uuid::Uuid;
 
@@ -274,7 +274,7 @@ mod tests {
 
         async fn login(&self) -> LoginOutcome {
             let cmd = LoginCommand {
-                grant: AuthnGrant::Password { username: "user".into(), password: "pw".into() },
+                grant: crate::application::fakes::member_grant(),
                 device: DeviceFingerprint::default(),
                 guest_refresh_token: None,
                 client_ip: None,

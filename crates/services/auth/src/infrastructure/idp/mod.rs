@@ -1,14 +1,7 @@
-//! Identity-provider adapter. Keycloak today; the OIDC/OAuth2 specifics live
-//! entirely here, behind the [`IdentityProvider`](crate::application::port::IdentityProvider)
-//! port. Swapping to Cognito/Okta/custom is a sibling module — no change above
-//! `infrastructure`.
+//! Third-party identity verification: native Sign in with Apple / Google
+//! id_tokens, checked here against the provider's published keys. There is no
+//! external IdP broker any more (#881): every credential is checked by auth.
 
 pub mod federated_token_verifier;
-pub mod keycloak_credential_admin;
-pub mod keycloak_identity_provider;
 
 pub use federated_token_verifier::{JwksFederatedTokenVerifier, ProviderKeys};
-pub use keycloak_credential_admin::{
-    KeycloakAdminConfig, KeycloakCredentialAdmin, UnconfiguredCredentialAdmin,
-};
-pub use keycloak_identity_provider::{KeycloakConfig, KeycloakIdentityProvider};

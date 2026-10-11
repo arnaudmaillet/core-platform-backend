@@ -4,12 +4,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AccountError;
 
-/// The external IdP subject claim (`sub`) that uniquely identifies the
-/// authenticated identity behind this account.
+/// The identity that uniquely identifies the authenticated holder behind
+/// this account: the `issuer:subject` of an Apple, Google or one-time-code
+/// identity, as auth forms it.
 ///
-/// Auth0 subs look like `"google-oauth2|123456"`, Keycloak subs are UUID
-/// strings. The value is kept opaque so both layouts work without coercion.
-/// It is immutable after account creation.
+/// The value is kept opaque (the subject layout is the issuer's), so any
+/// issuer works without coercion. It is immutable after account creation.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct IdentityId(String);
 

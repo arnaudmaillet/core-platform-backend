@@ -78,7 +78,7 @@ producer's `DOMAIN.md §8`.
 | Event | Means (past-tense business fact) | Emitted when | Consumers & why |
 |---|---|---|---|
 | `account_created` / `email_changed` / `email_verified` / `phone_changed` | a PII-bearing account lifecycle fact occurred | the matching command commits | `audit` (PII sealed in crypto-shred envelope), `profile` (persona) |
-| `password_changed` / `mfa_enrolled` / `mfa_revoked` | a security/credential fact (no PII) | credential change | `audit` (Authentication category) |
+| `password_changed` / `mfa_enrolled` / `mfa_revoked` | a security/credential fact (no PII); `password_changed` is **no longer emitted** (#881: no passwords) — kept while audit still decodes it | credential change | `audit` (Authentication category) |
 | `activated` / `deactivated` / `suspended` / `deleted` / `kyc_status_changed` | an identity-lifecycle transition (`deleted`: anonymized by the GDPR janitor, or an admin delete) | lifecycle change | `audit` (Identity; `deleted` → **crypto-shreds the subject**, closing the Art. 17 loop), `profile`, `wallet` (`deleted` → erases the wallet), `engagement` (`deleted` → forgets who liked, the like counts kept, #665) |
 | `role_assigned` / `role_revoked` | an authorization grant changed | role grant/revoke | `audit` (Authorization) |
 | `gdpr_deletion_requested` | the right to erasure (Art. 17) was invoked; erasure scheduled 30 days out (an active account is deactivated meanwhile) | user/DPO request | `audit` (DataErasure evidence) |
@@ -95,7 +95,7 @@ producer's `DOMAIN.md §8`.
 |---|---|---|---|
 | `session_issued` | an authenticated session was established | login / token issuance | `audit` (Authentication) |
 | `session_revoked` | a session was invalidated | logout / revoke / generation bump | `audit` (Authentication) |
-| `subject_linked` | an IdP subject was bound to an account | account-link flow | internal |
+| `subject_linked` | a sign-in identity (an Apple / Google subject, an email address or a phone number) was bound to an account | `SignUp`; `ChangeContact` re-keying a code identity | internal |
 | `staff_enrollment_granted` | a staff passkey enrollment grant was issued (#880; `granted_by` absent for the one-off bootstrap; the grant itself never leaves auth) | `IssueStaffPasskeyEnrollment` / `auth-server bootstrap-staff` | `audit` (PrivilegedAction) |
 | `staff_passkey_enrolled` | a passkey became a staff passkey with a grant (#880): sessions opened with it carry staff permissions | `FinishPasskeyRegistration` with a grant | `audit` (PrivilegedAction) |
 

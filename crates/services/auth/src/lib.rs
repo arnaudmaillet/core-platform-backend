@@ -1,4 +1,4 @@
-//! `auth` — the platform's issuance / session / IdP-broker boundary.
+//! `auth` — the platform's issuance / session boundary.
 //!
 //! This service owns the **authentication act and its lifecycle** (sessions,
 //! refresh-token rotation, revocation, edge-token minting, and the IdP-subject ↔
@@ -11,9 +11,9 @@
 //!   library every service uses to validate an edge token on the hot path. `auth`
 //!   *mints* the tokens `auth-context` verifies.
 //!
-//! Credentials (passwords / MFA) live in the IdP (Keycloak) under the federated
-//! model — so no credential type appears in this crate. See
-//! `project_auth_service_blueprint` for the full design.
+//! Nothing signs in with a password and there is no external IdP (#881):
+//! auth checks every credential itself — Apple / Google id_tokens against the
+//! provider's keys, one-time codes, passkeys (staff: staff passkeys only).
 //!
 //! ## Module roadmap (built phase by phase)
 //! Phase 0 (now): [`error`] — the canonical `AUT-XXXX` namespace.

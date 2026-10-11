@@ -33,7 +33,6 @@ pub struct AccountView {
     pub permissions: Vec<String>,
     pub country_of_residence: Option<String>,
     pub last_login_at: Option<DateTime<Utc>>,
-    pub is_locked: bool,
     pub mfa_enforced: bool,
     /// Two-step sign-in is on (#649).
     pub mfa_enrolled: bool,
@@ -73,7 +72,6 @@ impl From<&Account> for AccountView {
                 .collect(),
             country_of_residence: a.country_of_residence().map(|c| c.as_str().to_owned()),
             last_login_at: a.last_login_at(),
-            is_locked: a.is_locked(),
             mfa_enforced: a.mfa().enforced(),
             mfa_enrolled: a.mfa().is_enrolled(),
             mfa_recovery_codes_remaining: if a.mfa().is_enrolled() { a.mfa().recovery_codes().len() } else { 0 },

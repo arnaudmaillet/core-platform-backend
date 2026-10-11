@@ -89,7 +89,7 @@ impl<'a> TokenFactory<'a> {
         self.valid(sub, issuer, "wrong-audience", "openid")
     }
 
-    /// A valid token with Keycloak-style `realm_access.roles`.
+    /// A valid token with `realm_access.roles`.
     pub fn with_realm_roles(
         &self,
         sub: &str,

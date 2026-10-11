@@ -103,7 +103,6 @@ mod tests {
     use super::*;
     use crate::application::command::{LoginCommand, LogoutAllSessionsCommand, LogoutCommand};
     use crate::application::fakes::{t0, Fixture};
-    use crate::application::port::AuthnGrant;
     use crate::domain::value_object::DeviceFingerprint;
     use chrono::Duration;
     use uuid::Uuid;
@@ -112,7 +111,7 @@ mod tests {
         let env = Envelope::new(
             Uuid::now_v7(),
             LoginCommand {
-                grant: AuthnGrant::Password { username: "u".into(), password: "p".into() },
+                grant: crate::application::fakes::member_grant(),
                 device: DeviceFingerprint::default(),
                 guest_refresh_token: None,
                 client_ip: None,

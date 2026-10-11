@@ -3,7 +3,6 @@
 pub mod account_erasure;
 mod account_revocation;
 mod app_authorizations;
-pub mod credentials;
 pub mod device_attestation;
 mod edge_revocation;
 pub mod federated_nonce;

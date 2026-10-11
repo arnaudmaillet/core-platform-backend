@@ -487,7 +487,7 @@ mod tests {
 
         async fn login(&self) -> IssuedSession {
             let cmd = LoginCommand {
-                grant: AuthnGrant::Password { username: "user".into(), password: "pw".into() },
+                grant: crate::application::fakes::member_grant(),
                 device: DeviceFingerprint::default(),
                 guest_refresh_token: None,
                 client_ip: None,
@@ -588,7 +588,7 @@ mod tests {
     async fn a_challenge_is_single_use_and_only_its_own_accounts() {
         let w = World::new();
         let mine = w.login().await;
-        w.fx.idp.set_subject("sub-456");
+        w.fx.federated.set_subject("sub-456");
         let theirs = w.login().await;
         assert_ne!(mine.account_id, theirs.account_id);
         let auth = SoftAuthenticator::new();
@@ -687,7 +687,7 @@ mod tests {
     }
 
     /// A passkey signs in without a second step, even with two-step sign-in
-    /// on; it is also the second step after a password, and a step-up.
+    /// on; it is also the second step after a first factor, and a step-up.
     #[tokio::test]
     async fn a_passkey_signs_in_completes_a_second_step_and_steps_up() {
         use crate::application::command::{CompleteLoginCommand, LoginOutcome, StepUpCredential, VerifyCredentialsCommand};
@@ -716,16 +716,16 @@ mod tests {
         };
         assert_eq!(issued.account_id, session.account_id);
         let stored = w.fx.sessions.find_by_id(&issued.session_id).await.unwrap().unwrap();
-        assert_eq!(stored.subject().issuer(), "https://idp.test", "the account's link, so a password step-up works");
+        assert_eq!(stored.subject().issuer(), crate::domain::value_object::APPLE_ISSUER, "the account's first link");
         let refused = assertion(&sign_in, &mut auth, Vec::new(), PASSKEY).await;
         assert!(matches!(
             login.handle(Envelope::new(Uuid::now_v7(), grant(refused)), t0()).await,
             Err(AuthError::PasskeyAssertionFailed)
         ));
 
-        // The second step after a password.
+        // The second step after a first factor.
         let password = LoginCommand {
-            grant: AuthnGrant::Password { username: "user".into(), password: "pw".into() },
+            grant: crate::application::fakes::member_grant(),
             device: device.clone(),
             guest_refresh_token: None,
             client_ip: None,
@@ -797,8 +797,8 @@ mod tests {
         let account = session.account_id;
         w.fx.directory.set_permissions(&account, &["user", "admin", "audit:read"]);
 
-        let by_password = w.login().await;
-        assert_eq!(grants_in(&w, &by_password.access_token).await, ["user", "read:public"], "a password session is a member's");
+        let by_id_token = w.login().await;
+        assert_eq!(grants_in(&w, &by_id_token.access_token).await, ["user", "read:public"], "an Apple session is a member's");
 
         // A passkey registered without a grant (e.g. before the role): a member passkey.
         let mut member_key = SoftAuthenticator::new();

@@ -11,7 +11,6 @@ async fn login_introspect_then_logout_invalidates_the_token() {
     let user = random_user();
 
     let login = h.login(&user).await.expect("login");
-    assert!(login.first_link, "first login establishes the subject link");
     let tokens = login.tokens.expect("token pair");
     assert_eq!(tokens.token_type, "Bearer");
     assert!(!tokens.access_token.is_empty());
@@ -45,8 +44,6 @@ async fn second_login_same_user_reuses_the_account_link() {
     let first = h.login(&user).await.expect("first login");
     let second = h.login(&user).await.expect("second login");
 
-    assert!(first.first_link);
-    assert!(!second.first_link, "subject already linked");
     assert_eq!(first.account_id, second.account_id);
     assert_eq!(h.count_subject_links(&first.account_id).await, 1, "exactly one link");
     assert_eq!(h.count_active_sessions(&first.account_id).await, 2, "two sessions");

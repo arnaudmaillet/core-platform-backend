@@ -19,7 +19,7 @@
 ## 🎯 Overview & Service Role
 
 `account` manages the complete **private lifecycle of a physical person** on the platform: identity
-verification, credentials, KYC compliance, GDPR rights, and role-based access control. It is the
+verification, MFA, KYC compliance, GDPR rights, and role-based access control. It is the
 authoritative system of record for account existence and status — the gateway's auth middleware
 resolves every request against it.
 
@@ -115,7 +115,6 @@ service AccountService {
   rpc VerifyPhone (VerifyPhoneRequest) returns (CommandResponse);   // mesh only: auth, after an SMS code
   rpc ChangeEmail (ChangeEmailRequest) returns (CommandResponse);   // mesh only: auth, after a code to the new address (#651)
   rpc ChangePhone (ChangePhoneRequest) returns (CommandResponse);   // mesh only: idem, by SMS — both set + verify at once; ACC-1003/1004 if taken
-  rpc ChangePassword (ChangePasswordRequest) returns (CommandResponse);
   rpc EnrollMfa (EnrollMfaRequest) returns (CommandResponse);
   rpc RevokeMfa (RevokeMfaRequest) returns (CommandResponse);
   rpc GetMfaSecret (GetMfaSecretRequest) returns (MfaSecretView);
@@ -126,8 +125,7 @@ service AccountService {
   rpc ReactivateAccount (ReactivateAccountRequest) returns (CommandResponse);
   rpc DeactivateAccount (DeactivateAccountRequest) returns (CommandResponse);
   rpc ResumeDeactivatedAccount (ResumeDeactivatedAccountRequest) returns (CommandResponse); // auth, on Login
-  rpc RecordLogin (RecordLoginRequest) returns (CommandResponse);
-  rpc RecordFailedLogin (RecordFailedLoginRequest) returns (CommandResponse);
+  rpc RecordLogin (RecordLoginRequest) returns (CommandResponse);               // auth: last_login_at
   rpc RequestGdprDeletion (RequestGdprDeletionRequest) returns (CommandResponse);
   rpc CancelGdprDeletion (CancelGdprDeletionRequest) returns (CommandResponse);  // within the grace period; signing in cancels too
   rpc AnonymizeAccount (AnonymizeAccountRequest) returns (CommandResponse);
@@ -162,11 +160,15 @@ service AccountService {
 > **Wire / enum contract:** enums are **1-based** (no `UNSPECIFIED` zero). `AccountStatus`
 > `PENDING_VERIFICATION=1…DELETED=5`; `KycStatus` `NOT_STARTED=1…REJECTED=5`; `AccountRole`
 > `USER=1…SUPER_ADMIN=6`. **Handler defaults** for fields absent in proto:
-> `RecordFailedLogin.max_attempts=5`, `lockout_duration_secs=900`,
 > `RequestGdprDeletion.retention_days=30`.
 
-**Security at the boundary:** passwords stored as Argon2id only (plaintext never accepted); secret fields
-suppress `Display`/`Debug` and carry `#[serde(skip)]`.
+**No passwords (#881).** Nothing signs in with a password: account stores no password hash and keeps
+no failed-login lockout state (`ChangePassword` and `RecordFailedLogin` are gone;
+`CreateAccountRequest.password_hash` = 4 is reserved). Sign-in proofs (Apple, Google, one-time codes,
+passkeys) are auth's.
+
+**Security at the boundary:** secret fields (MFA material) suppress `Display`/`Debug` and carry
+`#[serde(skip)]`.
 
 **Finding one's contacts (#661).** `FindProfilesByContacts(account_id, email_sha256[], phone_sha256[])`
 takes SHA-256 hashes of an address book's contacts — lower-cased, trimmed email addresses and E.164
@@ -241,7 +243,7 @@ most. social-graph or moderation unreachable ⇒ `ACC-3008` (`UNAVAILABLE`, retr
 
 **GDPR data export (#653, Art. 15/20).** `RequestDataExport` marks the export pending; the **export
 pass** (`ExportDueData`) then builds, per pending account, a ZIP of JSON files — the holder's own
-account record (contact details, consents, sign-in settings; **no** password hash, MFA material or
+account record (contact details, consents, sign-in settings; **no** MFA material or
 internal fields), the other services' files (`ExportSources`: profiles, posts, comments, likes, recent
 searches, the social graph, conversations, media links), a `README.txt` — stores it privately
 (`exports/<account>/<id>.zip`, `S3ExportStore`: static keys, `ACCOUNT_EXPORT_*`) and records its **object
@@ -306,7 +308,7 @@ Stable codes are `ACC-1xxx` (lifecycle) … `ACC-9xxx` (identifiers), via the sh
 
 | Topic | Carries (event kinds) | Key | Consumers |
 |---|---|---|---|
-| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged`, `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet`, `SupervisionStarted`, `SupervisionEnded`, `SupervisionLimitsSet`, `SupervisionLimitsCleared` (#670; `account_id` = the teen) | `account_id` | `profile` (suspend/deactivate/delete → mask; activate → restore) |
+| `account.v1.events` | `AccountCreated`, `AccountActivated`, `AccountSuspended`, `AccountDeactivated`, `AccountDeleted`, `EmailChanged`, `EmailVerified`, `PhoneChanged`, `PasswordChanged` (no longer emitted, #881; kept while `audit` still decodes it), `KycStatusChanged`, `MfaEnrolled`, `MfaRevoked`, `GdprDeletionRequested`, `GdprDataExportRequested`, `GdprDeletionCancelled`, `GdprDataExportCompleted`, `ConsentsUpdated`, `DateOfBirthSet`, `SupervisionStarted`, `SupervisionEnded`, `SupervisionLimitsSet`, `SupervisionLimitsCleared` (#670; `account_id` = the teen) | `account_id` | `profile` (suspend/deactivate/delete → mask; activate → restore) |
 
 **Consumes:** none — `account` is a pure event producer.
 
@@ -324,8 +326,8 @@ Stable codes are `ACC-1xxx` (lifecycle) … `ACC-9xxx` (identifiers), via the sh
 | Write contention on hot account | `ConcurrentModification` (`ABORTED`) | CAS rejects the stale writer; client retries | none — correct behavior; investigate retry storms |
 | Kafka unavailable | downstream projections stale | **Soft** — commits succeed, events buffered/dropped | check brokers; downstream replays |
 
-**Backpressure & limits.** `ListAccountsByStatus` is paginated. Failed-login lockout (`max_attempts`
-default 5, `lockout_duration_secs` default 900) throttles credential-stuffing at the domain layer.
+**Backpressure & limits.** `ListAccountsByStatus` is paginated. There is no failed-login lockout:
+with no passwords (#881) there are no credentials to stuff; sign-in throttling is auth's.
 
 ---
 

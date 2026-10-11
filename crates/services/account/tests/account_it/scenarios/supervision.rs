@@ -68,7 +68,6 @@ async fn account(h: &TestHarness, years: i32) -> String {
         identity_id: identity.clone(),
         email: harness::random_email(),
         phone: None,
-        password_hash: None,
         country_of_residence: None,
         role: None,
         created_by: None,

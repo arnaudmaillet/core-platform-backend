@@ -8,7 +8,6 @@ pub mod email_address;
 pub mod encrypted_bytes;
 pub mod identity_id;
 pub mod kyc_status;
-pub mod password_hash;
 pub mod phone_number;
 pub mod recovery_code_hash;
 
@@ -22,6 +21,5 @@ pub use email_address::EmailAddress;
 pub use encrypted_bytes::EncryptedBytes;
 pub use identity_id::IdentityId;
 pub use kyc_status::KycStatus;
-pub use password_hash::PasswordHash;
 pub use phone_number::PhoneNumber;
 pub use recovery_code_hash::RecoveryCodeHash;

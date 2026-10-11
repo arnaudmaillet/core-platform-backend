@@ -7,7 +7,7 @@ use crate::{AuthError, ClaimsExtractor, CurrentPrincipal, Permission, PrincipalI
 // ── Raw claim types ──────────────────────────────────────────────────────────
 
 /// Standard OIDC JWT payload, extended to cover the proprietary role/scope
-/// layouts used by Keycloak, Auth0, and Okta.
+/// layouts in common use (`scope`, `realm_access.roles`, `permissions`).
 ///
 /// Unknown claims fall through into [`extra`][OidcClaims::extra] via `#[serde(flatten)]`
 /// so no information is silently dropped.
@@ -37,10 +37,10 @@ pub struct OidcClaims {
     /// Space-separated scope string (standard OIDC and Auth0).
     pub scope: Option<String>,
 
-    /// Keycloak realm-level roles.
+    /// Realm-level roles (`realm_access.roles` layout).
     pub realm_access: Option<RealmAccess>,
 
-    /// Keycloak per-resource (client) roles, keyed by client ID.
+    /// Per-resource (client) roles, keyed by client ID (`resource_access` layout).
     pub resource_access: Option<HashMap<String, RealmAccess>>,
 
     /// Auth0-style flat permissions array.
@@ -58,7 +58,7 @@ pub struct OidcClaims {
     pub extra: HashMap<String, serde_json::Value>,
 }
 
-/// Keycloak realm or resource access block containing a `roles` array.
+/// A realm or resource access block containing a `roles` array.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RealmAccess {
     pub roles: Option<Vec<String>>,
@@ -75,7 +75,7 @@ pub enum RoleSource {
     /// Space-separated `scope` claim (standard OIDC, Auth0).
     Scope,
 
-    /// `realm_access.roles` array (Keycloak).
+    /// `realm_access.roles` array.
     RealmAccessRoles,
 
     /// `permissions` array (Auth0).
@@ -101,7 +101,8 @@ pub struct OidcExtractorConfig {
     /// Ordered list of sources from which permissions are aggregated.
     ///
     /// Default: `[Scope, RealmAccessRoles, PermissionsClaim]` — covers standard
-    /// OIDC, Keycloak, and Auth0 without any configuration change.
+    /// OIDC scopes, `realm_access.roles` and a flat `permissions` array without any
+    /// configuration change.
     pub role_sources: Vec<RoleSource>,
 }
 
@@ -145,7 +146,8 @@ impl OidcExtractorConfig {
 
 /// Default [`ClaimsExtractor`] for standard OIDC-compliant providers.
 ///
-/// Supports Keycloak, Auth0, Okta, and any custom issuer that follows the OIDC
+/// Supports the common claim layouts (`scope`, `realm_access.roles`, a flat
+/// `permissions` array) and any custom issuer that follows the OIDC
 /// core specification. The permission aggregation strategy is fully configurable
 /// via [`OidcExtractorConfig`].
 ///

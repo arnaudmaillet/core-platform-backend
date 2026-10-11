@@ -105,7 +105,7 @@ separately so neither team has to read the other's internals.
 ## Conventions used across all docs
 
 - **DEFERRED** — deliberately not built yet; an external/organizational dependency
-  (KMS/HSM, Keycloak, cross-account WORM witness) or a tracked product decision.
+  (KMS/HSM, cross-account WORM witness) or a tracked product decision.
 - **STUB** — scaffolded but not wired to a live backend (e.g. `prod`).
 - Exact command-line invocations are copy-pasteable and assume you run them from
   the repo root unless a `cd` is shown.

@@ -4,11 +4,10 @@
 use chrono::Duration;
 
 use crate::application::SessionPolicy;
-use crate::infrastructure::idp::{KeycloakAdminConfig, KeycloakConfig};
 use crate::infrastructure::token::{EsKeyMaterial, EsVerifyingKey};
 
-/// Fully-resolved auth configuration (token policy, signing material, IdP broker,
-/// and the `account` service endpoint). Backend connection configs (Postgres /
+/// Fully-resolved auth configuration (token policy, signing material, and the
+/// `account` service endpoint). Backend connection configs (Postgres /
 /// Redis / Kafka) are resolved separately via their own `from_env`.
 pub struct AuthConfig {
     pub policy: SessionPolicy,
@@ -16,11 +15,6 @@ pub struct AuthConfig {
     /// Retiring keys still accepted for verification + published in the JWKS
     /// during a rotation window. Empty in steady state.
     pub retiring_keys: Vec<EsVerifyingKey>,
-    pub keycloak: KeycloakConfig,
-    /// The Keycloak Admin API client `ChangePassword` uses
-    /// (`AUTH_KEYCLOAK_ADMIN_URL` / `_CLIENT_ID` / `_CLIENT_SECRET`). Unset ⇒
-    /// changing a password answers UNAVAILABLE; everything else works.
-    pub keycloak_admin: KeycloakAdminConfig,
     /// gRPC endpoint of the `account` service, e.g. `http://account:50059`.
     pub account_endpoint: String,
     /// Per-request deadline on `account` RPCs. This sits on the login hot path,
@@ -36,10 +30,11 @@ pub struct AuthConfig {
     pub profile_rpc_timeout: std::time::Duration,
     /// Connect deadline when dialing the `profile` channel.
     pub profile_connect_timeout: std::time::Duration,
-    /// Total request deadline for Keycloak HTTP calls (token exchange).
-    pub idp_http_timeout: std::time::Duration,
-    /// Connect deadline for Keycloak HTTP calls.
-    pub idp_connect_timeout: std::time::Duration,
+    /// Total request deadline for outbound HTTP calls (SNS)
+    /// (`AUTH_IDP_HTTP_TIMEOUT_MS`, a historical name).
+    pub http_timeout: std::time::Duration,
+    /// Connect deadline for outbound HTTP calls (`AUTH_IDP_CONNECT_TIMEOUT_MS`).
+    pub http_connect_timeout: std::time::Duration,
     /// `AUTH_GUEST_SESSIONS_ENABLED` (default **false**): `StartGuestSession`
     /// writes a session per call with no credential, so it stays off wherever
     /// the abuse controls (per-IP / per-device limits, App Attest — B5) are not
@@ -107,20 +102,6 @@ impl AuthConfig {
             audience: env_or("AUTH_TOKEN_AUDIENCE", "core-platform"),
         };
 
-        let keycloak = KeycloakConfig {
-            token_endpoint: env_or("AUTH_KEYCLOAK_TOKEN_ENDPOINT", String::new()),
-            client_id: env_or("AUTH_KEYCLOAK_CLIENT_ID", String::new()),
-            client_secret: env_or("AUTH_KEYCLOAK_CLIENT_SECRET", String::new()),
-            scope: env_or("AUTH_KEYCLOAK_SCOPE", "openid".to_owned()),
-        };
-
-        let keycloak_admin = KeycloakAdminConfig {
-            admin_url: env_or("AUTH_KEYCLOAK_ADMIN_URL", String::new()),
-            token_endpoint: keycloak.token_endpoint.clone(),
-            client_id: env_or("AUTH_KEYCLOAK_ADMIN_CLIENT_ID", String::new()),
-            client_secret: env_or("AUTH_KEYCLOAK_ADMIN_CLIENT_SECRET", String::new()),
-        };
-
         // Optional single retiring key for a rotation window.
         let retiring_keys = match (
             std::env::var("AUTH_SIGNING_RETIRING_PUBLIC_PEM").ok(),
@@ -136,16 +117,14 @@ impl AuthConfig {
             policy,
             signing,
             retiring_keys,
-            keycloak,
-            keycloak_admin,
             account_endpoint: env_or("AUTH_ACCOUNT_GRPC_ENDPOINT", "http://localhost:50059"),
             account_rpc_timeout: env_ms("AUTH_ACCOUNT_RPC_TIMEOUT_MS", 2_000),
             account_connect_timeout: env_ms("AUTH_ACCOUNT_CONNECT_TIMEOUT_MS", 2_000),
             profile_endpoint: env_or("AUTH_PROFILE_GRPC_ENDPOINT", "http://localhost:50052"),
             profile_rpc_timeout: env_ms("AUTH_PROFILE_RPC_TIMEOUT_MS", 2_000),
             profile_connect_timeout: env_ms("AUTH_PROFILE_CONNECT_TIMEOUT_MS", 2_000),
-            idp_http_timeout: env_ms("AUTH_IDP_HTTP_TIMEOUT_MS", 5_000),
-            idp_connect_timeout: env_ms("AUTH_IDP_CONNECT_TIMEOUT_MS", 2_000),
+            http_timeout: env_ms("AUTH_IDP_HTTP_TIMEOUT_MS", 5_000),
+            http_connect_timeout: env_ms("AUTH_IDP_CONNECT_TIMEOUT_MS", 2_000),
             trusted_proxy_hops: std::env::var("GRPC_TRUSTED_PROXY_HOPS")
                 .ok()
                 .and_then(|v| v.trim().parse().ok())

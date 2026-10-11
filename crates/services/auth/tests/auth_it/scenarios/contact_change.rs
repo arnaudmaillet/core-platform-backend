@@ -73,7 +73,6 @@ async fn a_changed_email_moves_the_idp_user_and_re_keys_the_code_link() {
         Arc::clone(&codes),
         Arc::clone(&h.directory) as _,
         Arc::clone(&links) as _,
-        Arc::clone(&h.credentials) as _,
         Arc::new(PgSessionRepository::new(tx)) as _,
         Arc::new(RedisSessionCache::new(h.redis.clone())) as _,
         Arc::new(LogEventPublisher) as _,
@@ -100,8 +99,6 @@ async fn a_changed_email_moves_the_idp_user_and_re_keys_the_code_link() {
     };
     handler.handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now()).await.expect("change email");
 
-    // The password account's IdP user follows (the login's subject is the user).
-    assert_eq!(h.credentials.emails.lock().unwrap().clone(), vec![(user.clone(), new_email.clone())]);
     // Postgres: codes to the new address sign in; the old address no longer does.
     let new_link = IdpSubject::new(EMAIL_CODE_ISSUER, new_email.clone()).unwrap();
     assert_eq!(links.find_by_subject(&new_link).await.unwrap().map(|l| l.account_id()), Some(account));

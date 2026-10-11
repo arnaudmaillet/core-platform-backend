@@ -31,7 +31,7 @@ Proposed --> Accepted --> Superseded by ADR-00MM
 | [0002](./0002-moderation-decision-enforcement-sor-with-fail-closed-screen.md) | Moderation is the decision/enforcement SoR with a narrow fail-closed Screen gate | Accepted | moderation |
 | [0003](./0003-realtime-is-a-fail-open-system-of-connection.md) | Realtime is a fail-open System-of-Connection, never a record store | Accepted | realtime |
 | [0004](./0004-account-is-the-single-identity-sor.md) | Account is the single identity SoR and owns an outbound event lane | Accepted | account |
-| [0005](./0005-auth-federated-idp-with-platform-edge-tokens.md) | Auth federates an IdP and issues platform ES256 edge tokens with generation-based revocation | Accepted | auth |
+| [0005](./0005-auth-federated-idp-with-platform-edge-tokens.md) | Auth federates an IdP and issues platform ES256 edge tokens with generation-based revocation | Accepted (superseded in part by 0018) | auth |
 | [0006](./0006-chat-shadowing-pattern-member-vs-audience-plane.md) | Chat uses the Shadowing Pattern — separate Member and Audience visibility planes | Accepted | chat |
 | [0007](./0007-comment-flat-thread-two-table-tombstone-purge.md) | Comment uses a nil-UUID flat thread, two-table Scylla, tombstone-vs-purge deletion | Accepted | comment |
 | [0008](./0008-counter-magnitudes-are-a-reconcilable-soref.md) | Counter is a reconcilable SoReference for magnitudes, distinct from edge state | Accepted | counter |
@@ -44,6 +44,7 @@ Proposed --> Accepted --> Superseded by ADR-00MM
 | [0015](./0015-search-opensearch-single-store-external-versioning.md) | Search is an OpenSearch read-model with external versioning and a fail-open read path | Accepted | search |
 | [0016](./0016-social-graph-four-table-scylla-logged-batch.md) | Social-graph uses a 4-table Scylla schema with logged-batch atomic dual-writes | Accepted | social-graph |
 | [0017](./0017-timeline-hybrid-push-pull-fanout.md) | Timeline uses a hybrid push/pull fan-out | Accepted | timeline |
+| [0018](./0018-passwordless-identity-passkeys-for-staff.md) | Passwordless identity: Keycloak retired, passkeys for staff | Accepted | auth; account |
 
 <!-- Add one row per ADR as it lands. -->
 

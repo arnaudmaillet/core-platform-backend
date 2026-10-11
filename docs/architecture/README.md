@@ -13,7 +13,7 @@ shipped — phantom services, wrong stack, 7 missing services.
 
 ## What's modelled
 
-- **System Context** — the platform and its external dependencies (Keycloak, S3/MinIO, CloudFront, APNs/FCM, KMS/witness).
+- **System Context** — the platform and its external dependencies (Apple / Google sign-in keys, Amazon SES / SNS, S3/MinIO, CloudFront, APNs/FCM, KMS/witness). There is no external IdP: `auth` checks every credential itself (ADR-0018).
 - **Containers** — the 17 services (realtime split into its gateway + dispatcher), the shared datastore technologies (ScyllaDB / PostgreSQL / Redis / OpenSearch), and the Kafka event backbone.
 - **Dynamic** — the "post published → fan-out" flow as a worked example.
 - Service shape encodes role (service / worker / edge); colour encodes subdomain class (**Core** red, **Supporting** blue), both taken from `CONTEXT_MAP.md`. Async edges (through Kafka) are dashed; sync gRPC edges are solid.

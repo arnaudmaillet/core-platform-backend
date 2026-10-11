@@ -38,8 +38,6 @@ impl FederatedProvider {
 pub enum SignInMethod {
     Apple,
     Google,
-    /// The IdP's own credential (email / username + password).
-    Password,
     /// A one-time code sent to the email address.
     EmailCode,
     /// A one-time code sent by SMS to the phone number.
@@ -47,19 +45,19 @@ pub enum SignInMethod {
 }
 
 impl SignInMethod {
-    /// The method behind an IdP subject's issuer: Apple's, Google's, or else the
-    /// fleet's own IdP (password).
-    pub fn from_issuer(issuer: &str) -> Self {
+    /// The method behind an identity's issuer; `None` for any other issuer
+    /// (there are no password identities any more, #881).
+    pub fn from_issuer(issuer: &str) -> Option<Self> {
         if issuer == APPLE_ISSUER {
-            Self::Apple
+            Some(Self::Apple)
         } else if GOOGLE_ISSUERS.contains(&issuer) {
-            Self::Google
+            Some(Self::Google)
         } else if issuer == EMAIL_CODE_ISSUER {
-            Self::EmailCode
+            Some(Self::EmailCode)
         } else if issuer == PHONE_CODE_ISSUER {
-            Self::PhoneCode
+            Some(Self::PhoneCode)
         } else {
-            Self::Password
+            None
         }
     }
 }
@@ -79,10 +77,10 @@ mod tests {
 
     #[test]
     fn issuers_map_to_methods() {
-        assert_eq!(SignInMethod::from_issuer(APPLE_ISSUER), SignInMethod::Apple);
-        assert_eq!(SignInMethod::from_issuer("accounts.google.com"), SignInMethod::Google);
-        assert_eq!(SignInMethod::from_issuer("https://accounts.google.com"), SignInMethod::Google);
-        assert_eq!(SignInMethod::from_issuer("https://sso.example/realms/core"), SignInMethod::Password);
-        assert_eq!(SignInMethod::from_issuer(EMAIL_CODE_ISSUER), SignInMethod::EmailCode);
+        assert_eq!(SignInMethod::from_issuer(APPLE_ISSUER), Some(SignInMethod::Apple));
+        assert_eq!(SignInMethod::from_issuer("accounts.google.com"), Some(SignInMethod::Google));
+        assert_eq!(SignInMethod::from_issuer("https://accounts.google.com"), Some(SignInMethod::Google));
+        assert_eq!(SignInMethod::from_issuer(EMAIL_CODE_ISSUER), Some(SignInMethod::EmailCode));
+        assert_eq!(SignInMethod::from_issuer("https://sso.example/realms/core"), None, "no password identities");
     }
 }

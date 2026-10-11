@@ -19,8 +19,7 @@ use uuid::Uuid;
 
 use auth::app::{App, AppDeps};
 use auth::application::port::{
-    AccountActivation, AccountDirectory, AccountSnapshot, AuthnGrant, CredentialAdmin,
-    EventPublisher, IdentityProvider, NormalizedClaims, ProfileDirectory,
+    AccountActivation, AccountDirectory, AccountSnapshot, EventPublisher, ProfileDirectory,
 };
 use auth::application::SessionPolicy;
 use auth::domain::value_object::{AccountId, IdpSubject, Permission, ProfileId};
@@ -52,53 +51,38 @@ fn ephemeral_es256_pem() -> (Vec<u8>, Vec<u8>) {
 
 // ── Stub external services ───────────────────────────────────────────────────
 
-/// IdP stub: echoes the password-grant username back as the subject (fixed
-/// issuer), so "log in as alice" deterministically maps to one subject/account.
-struct StubIdp;
-
-#[async_trait]
-impl IdentityProvider for StubIdp {
-    async fn authenticate(&self, grant: AuthnGrant) -> Result<NormalizedClaims, AuthError> {
-        let subject = match grant {
-            AuthnGrant::Password { username, .. } => username,
-            AuthnGrant::AuthorizationCode { code, .. } => code,
-            AuthnGrant::IdToken { .. } | AuthnGrant::Code { .. } | AuthnGrant::Passkey(_) => {
-                return Err(AuthError::IdpAuthenticationFailed)
-            }
-        };
-        Ok(NormalizedClaims { issuer: "https://idp.test".to_owned(), subject })
-    }
-}
-
-/// IdP credential-management stub, consistent with [`StubIdp`]: a subject's
-/// login name is the subject itself; each password set is recorded.
-#[derive(Default)]
-pub struct StubCredentials {
-    pub set: Mutex<Vec<(String, String)>>,
-    pub deleted: Mutex<Vec<String>>,
-    /// (subject, email) of every IdP email set (#651).
-    pub emails: Mutex<Vec<(String, String)>>,
+/// Sign in with Apple stub (#881: no password, no IdP broker): the id_token
+/// *is* the subject, so "sign in as alice" deterministically maps to one
+/// subject/account. The identity counts as signed up: the first time it is
+/// seen, its account is provisioned and linked in Postgres.
+struct StubFederated {
+    links:     Arc<PgSubjectLinkRepository>,
+    directory: Arc<StubDirectory>,
 }
 
 #[async_trait]
-impl CredentialAdmin for StubCredentials {
-    async fn login_name(&self, subject: &IdpSubject) -> Result<String, AuthError> {
-        Ok(subject.subject().to_owned())
-    }
-
-    async fn set_password(&self, subject: &IdpSubject, new_password: &str) -> Result<(), AuthError> {
-        self.set.lock().unwrap().push((subject.subject().to_owned(), new_password.to_owned()));
-        Ok(())
-    }
-
-    async fn delete_user(&self, subject: &IdpSubject) -> Result<(), AuthError> {
-        self.deleted.lock().unwrap().push(subject.subject().to_owned());
-        Ok(())
-    }
-
-    async fn set_email(&self, subject: &IdpSubject, email: &str) -> Result<(), AuthError> {
-        self.emails.lock().unwrap().push((subject.subject().to_owned(), email.to_owned()));
-        Ok(())
+impl auth::application::port::FederatedTokenVerifier for StubFederated {
+    async fn verify(
+        &self,
+        provider: auth::domain::value_object::FederatedProvider,
+        id_token: &str,
+        _nonce: &str,
+    ) -> Result<auth::application::port::FederatedIdentity, AuthError> {
+        use auth::application::port::SubjectLinkRepository;
+        let subject = IdpSubject::new(auth::domain::value_object::APPLE_ISSUER, id_token)?;
+        if self.links.find_by_subject(&subject).await?.is_none() {
+            let account = self.directory.account_for(&subject);
+            let link = auth::domain::aggregate::SubjectLink::establish(subject, account, chrono::Utc::now(), Uuid::now_v7());
+            self.links.save(&link).await?;
+        }
+        Ok(auth::application::port::FederatedIdentity {
+            provider,
+            issuer: auth::domain::value_object::APPLE_ISSUER.to_owned(),
+            subject: id_token.to_owned(),
+            email: None,
+            email_verified: false,
+            private_relay: false,
+        })
     }
 }
 
@@ -119,6 +103,12 @@ pub struct StubDirectory {
 }
 
 impl StubDirectory {
+    /// The account an identity stands for, made on first sight (what a
+    /// sign-up would have done).
+    pub fn account_for(&self, subject: &IdpSubject) -> AccountId {
+        *self.accounts.lock().unwrap().entry(subject.clone()).or_insert_with(|| AccountId::from_uuid(Uuid::now_v7()))
+    }
+
     pub fn new() -> Self {
         Self {
             accounts: Mutex::new(HashMap::new()),
@@ -131,13 +121,6 @@ impl StubDirectory {
 
 #[async_trait]
 impl AccountDirectory for StubDirectory {
-    async fn resolve_or_provision(&self, subject: &IdpSubject) -> Result<AccountId, AuthError> {
-        let mut accounts = self.accounts.lock().unwrap();
-        Ok(*accounts
-            .entry(subject.clone())
-            .or_insert_with(|| AccountId::from_uuid(Uuid::now_v7())))
-    }
-
     async fn lookup(&self, account_id: &AccountId) -> Result<AccountSnapshot, AuthError> {
         let activation = if self.suspended.lock().unwrap().contains(account_id) {
             AccountActivation::Inactive { reason: "suspended".into() }
@@ -211,7 +194,7 @@ impl AccountDirectory for StubDirectory {
     }
 
     async fn provision(&self, account: &auth::application::port::NewAccount) -> Result<AccountId, AuthError> {
-        self.resolve_or_provision(&account.subject).await
+        Ok(self.account_for(&account.subject))
     }
 
     async fn find_by_email(&self, _email: &str) -> Result<Option<auth::application::port::EmailHolder>, AuthError> {
@@ -260,7 +243,6 @@ impl ProfileDirectory for StubProfiles {
 pub struct Harness {
     pub handler: AuthServiceHandler,
     pub pool: PgPool,
-    pub credentials: Arc<StubCredentials>,
     /// The `account` stub (contacts, #651).
     pub directory: Arc<StubDirectory>,
     /// The live Redis, for adapter-level scenarios (one-time codes).
@@ -308,7 +290,6 @@ impl Harness {
         })
         .expect("it: minter");
 
-        let credentials = Arc::new(StubCredentials::default());
         let directory = Arc::new(StubDirectory::new());
         // Two-step sign-in (#649) over the real cipher and the live Redis.
         let seed_cipher = Arc::new(
@@ -321,8 +302,6 @@ impl Harness {
             auth::application::command::MfaPolicy::default(),
         ));
         let deps = AppDeps {
-            idp: Arc::new(StubIdp),
-            credentials: credentials.clone(),
             directory: directory.clone(),
             profiles: Arc::new(StubProfiles),
             links: Arc::new(PgSubjectLinkRepository::new(tx.clone())),
@@ -333,7 +312,11 @@ impl Harness {
             publisher: Arc::new(LogEventPublisher) as Arc<dyn EventPublisher>,
             guests: Arc::new(PgGuestRegistry::new(tx.clone())),
             guest_sessions_enabled: true,
-            federated: std::sync::Arc::new(auth::infrastructure::idp::JwksFederatedTokenVerifier::new()),
+            // Members sign in with Apple (#881); the stub links on first sight.
+            federated: Arc::new(StubFederated {
+                links: Arc::new(PgSubjectLinkRepository::new(tx.clone())),
+                directory: directory.clone(),
+            }),
             codes: std::sync::Arc::new(auth::application::command::VerificationCodes::new(
                 std::sync::Arc::new(auth::infrastructure::cache::RedisVerificationStore::new(redis.clone())),
                 std::sync::Arc::new(auth::infrastructure::notify::LogCodeSender),
@@ -342,7 +325,8 @@ impl Harness {
             attestation: None,
             nonces: std::sync::Arc::new(auth::application::command::FederatedNonces::new(
                 std::sync::Arc::new(auth::infrastructure::cache::RedisNonceStore::new(redis.clone())),
-                true,
+                // Not required: the harness signs in with a fixed nonce.
+                false,
             )),
             mfa,
             mfa_issuer: "Core Platform".into(),
@@ -369,18 +353,20 @@ impl Harness {
             ),
         };
 
-        Self { handler: App::compose(deps), pool, credentials, directory, redis, seed_cipher }
+        Self { handler: App::compose(deps), pool, directory, redis, seed_cipher }
     }
 
     // ── RPC helpers ──────────────────────────────────────────────────────────
 
+    /// Signs in with Apple as `username` (the stub's id_token is the subject).
     pub async fn login(&self, username: &str) -> Result<proto::LoginResponse, Status> {
         let request = Request::new(proto::LoginRequest {
             device: None,
-            grant_type: proto::GrantType::Password as i32,
-            credential: Some(proto::login_request::Credential::Password(proto::PasswordGrant {
-                username: username.to_owned(),
-                password: "pw".to_owned(),
+            grant_type: proto::GrantType::IdToken as i32,
+            credential: Some(proto::login_request::Credential::IdToken(proto::IdTokenGrant {
+                provider: proto::FederatedProvider::Apple as i32,
+                id_token: username.to_owned(),
+                nonce: "it-nonce".to_owned(),
             })),
             guest_refresh_token: String::new(),
         });

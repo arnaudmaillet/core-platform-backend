@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./0005-auth-federated-idp-with-platform-edge-tokens.md
-  source_sha256: 4d67d490cc7bb1286ab101b84a5d34ca691b306d31e7f1646cd82be54038cd42
-  translated_at: 2026-10-04
+  source_sha256: e7179ce0d537d3a6a0b36af39bfa22ee65378a8d8a8fffa0aaf480c48e97e578
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`0005-auth-federated-idp-with-platform-edge-tokens.md`](./0005-auth-federated-idp-with-platform-edge-tokens.md) fait foi.
@@ -10,7 +10,7 @@ i18n:
 
 # ADR-0005 : Auth fédère un IdP et émet des edge tokens ES256 plateforme avec révocation par génération
 
-- **Statut :** Accepted
+- **Statut :** Accepted — remplacé en partie par l'[ADR-0018](./0018-passwordless-identity-passkeys-for-staff.fr.md) (l'IdP fédéré pour les identifiants ; le modèle de jeton d'edge reste)
 - **Date :** 2026-06-26
 - **Contexte(s) affecté(s) :** auth ; account ; auth-context (lib de vérif) ; realtime ; tous les services
 - **Décideurs :** arnaudmaillet (architecture)

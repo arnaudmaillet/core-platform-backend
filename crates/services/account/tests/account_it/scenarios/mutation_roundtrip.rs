@@ -2,7 +2,7 @@
 //! aggregate's PRE-mutation version (`version() - 1` — `touch()` already
 //! bumped it in memory); binding `version()` made every mutation on every
 //! account abort with ConcurrentModification while create+read stayed green —
-//! found live by the prod Keycloak E2E login drill (VerifyEmail could never
+//! found live by the prod E2E login drill (VerifyEmail could never
 //! activate an account, so no login could ever succeed).
 
 use crate::account_it::harness::{self, TestHarness, DEADLINE};

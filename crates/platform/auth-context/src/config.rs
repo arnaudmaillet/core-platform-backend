@@ -12,7 +12,7 @@ pub struct AuthContextConfig {
     /// Full URL of the OIDC JWKS endpoint.
     ///
     /// Examples:
-    /// - Keycloak: `https://keycloak.example.com/realms/platform/protocol/openid-connect/certs`
+    /// - the platform's `auth`: `http://auth-server:8081/.well-known/jwks.json`
     /// - Auth0:    `https://your-tenant.auth0.com/.well-known/jwks.json`
     /// - Okta:     `https://your-org.okta.com/oauth2/default/v1/keys`
     pub jwks_url: String,

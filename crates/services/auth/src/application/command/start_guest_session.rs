@@ -174,7 +174,6 @@ impl StartGuestSessionHandler {
             access_token,
             refresh_token: generated.plaintext,
             access_expires_in: claims.expires_in_secs(now),
-            first_link: false,
             reactivated: false,
         })
     }
