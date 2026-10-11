@@ -73,11 +73,16 @@ impl Adapters {
         let cipher: Arc<dyn SubjectCipher> = match (&kms, &config.kms) {
             (Some(kms), Some(kms_cfg)) => {
                 tracing::info!("audit subject-cipher: KMS KEK custody (issue #482)");
-                Arc::new(KmsSubjectCipher::new(
-                    TransactionManager::new(pool.clone()),
-                    Arc::clone(kms) as Arc<dyn crate::infrastructure::KmsCipher>,
-                    kms_cfg.dek_key_id.clone(),
-                ))
+                // The env KEK stays a reader (#485): DEKs it wrapped before custody
+                // moved to KMS are unwrapped with it and re-wrapped under KMS.
+                Arc::new(
+                    KmsSubjectCipher::new(
+                        TransactionManager::new(pool.clone()),
+                        Arc::clone(kms) as Arc<dyn crate::infrastructure::KmsCipher>,
+                        kms_cfg.dek_key_id.clone(),
+                    )
+                    .reading_local(config.kek),
+                )
             }
             _ => Arc::new(AesGcmSubjectCipher::new(
                 TransactionManager::new(pool.clone()),
@@ -89,32 +94,44 @@ impl Adapters {
         // witness in production; the Postgres-only anchor for local/dev.
         let anchor: Arc<dyn CheckpointAnchor> = match &config.witness {
             Some(witness_cfg) => {
+                config.witness_independence().map_err(|reason| anyhow::anyhow!(reason))?;
                 let witness = ObjectLockWitness::new(witness_cfg.clone())
                     .map_err(|e| anyhow::anyhow!("build checkpoint witness: {e}"))?;
                 witness
                     .ensure_bucket()
                     .await
                     .map_err(|e| anyhow::anyhow!("ensure witness bucket: {e}"))?;
-                let (signer, key_id, algorithm): (Arc<dyn KmsSigner>, String, String) = match (&kms, &config.kms) {
-                    (Some(kms), Some(kms_cfg)) => (
-                        Arc::clone(kms) as Arc<dyn KmsSigner>,
-                        kms_cfg.signing_key_id.clone(),
-                        kms_cfg.signing_algorithm.clone(),
-                    ),
-                    _ => (
-                        Arc::new(LocalCheckpointSigner::new(config.checkpoint_signing_key)),
-                        "local-hmac".to_owned(),
-                        "HMAC_SHA_256".to_owned(),
-                    ),
-                };
+                let (signer, key_id, algorithm, accepted): (Arc<dyn KmsSigner>, String, String, Vec<String>) =
+                    match (&kms, &config.kms) {
+                        (Some(kms), Some(kms_cfg)) => (
+                            Arc::clone(kms) as Arc<dyn KmsSigner>,
+                            kms_cfg.signing_key_id.clone(),
+                            kms_cfg.signing_algorithm.clone(),
+                            kms_cfg.accepted_signing_algorithms.clone(),
+                        ),
+                        _ => {
+                            tracing::warn!(
+                                "audit checkpoint witness WITHOUT KMS: signed with the local HMAC key beside the service — not operator-proof (#483/#485)"
+                            );
+                            (
+                                Arc::new(LocalCheckpointSigner::new(config.checkpoint_signing_key)),
+                                "local-hmac".to_owned(),
+                                "HMAC_SHA_256".to_owned(),
+                                Vec::new(),
+                            )
+                        }
+                    };
                 tracing::info!("audit checkpoint anchor: signed + external WORM witness (issue #483)");
-                Arc::new(WitnessCheckpointAnchor::new(
-                    signer,
-                    key_id,
-                    algorithm,
-                    Arc::new(witness) as Arc<dyn Witness>,
-                    Some(PgCheckpointAnchor::new(TransactionManager::new(pool.clone()))),
-                ))
+                Arc::new(
+                    WitnessCheckpointAnchor::new(
+                        signer,
+                        key_id,
+                        algorithm,
+                        Arc::new(witness) as Arc<dyn Witness>,
+                        Some(PgCheckpointAnchor::new(TransactionManager::new(pool.clone()))),
+                    )
+                    .accepting(accepted),
+                )
             }
             None => Arc::new(PgCheckpointAnchor::new(TransactionManager::new(pool.clone()))),
         };

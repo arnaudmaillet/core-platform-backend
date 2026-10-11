@@ -44,6 +44,11 @@ pub struct AuditConfig {
     /// witness (issue #483); `None` keeps the Postgres-only anchor (local/dev).
     /// Enabled by `AUDIT_WITNESS_ENDPOINT`.
     pub witness: Option<ObjectLockConfig>,
+    /// `AUDIT_WITNESS_ALLOW_SHARED_PRINCIPAL=true` lets the witness share the
+    /// archive's access key or bucket — an acknowledged deferral
+    /// (local/dev, or a single-account deployment until the cross-account witness
+    /// exists, #485); otherwise the process refuses to start that way.
+    pub witness_allow_shared: bool,
     /// The local HMAC checkpoint-signing key, used when [`kms`](Self::kms) is not
     /// set. Keeps the signed-checkpoint path exercised in dev without a real KMS
     /// asymmetric key (not operator-proof — see the README).
@@ -72,10 +77,41 @@ impl AuditConfig {
             kek: kek_from_env(),
             kms: kms_from_env(),
             witness: witness_from_env(),
+            witness_allow_shared: std::env::var("AUDIT_WITNESS_ALLOW_SHARED_PRINCIPAL").is_ok_and(|v| v == "true"),
             checkpoint_signing_key: signing_key_from_env(),
             authz: authz_from_env(),
         }
     }
+}
+
+impl AuditConfig {
+    /// The witness must be a trust domain of its own (#485, the premise of #483):
+    /// see [`witness_independence`].
+    pub fn witness_independence(&self) -> Result<(), String> {
+        witness_independence(self.witness.as_ref(), &self.object_lock, self.witness_allow_shared)
+    }
+}
+
+/// A witness sharing the archive's access key (the same principal) or its bucket
+/// can be rewritten by whoever holds the archive, defeating the anchor (#485).
+/// Endpoints are not compared: on AWS every account shares the S3 endpoint, and
+/// one bucket is reachable under several endpoint spellings.
+/// Refused unless `allow_shared` (an acknowledged deferral).
+pub fn witness_independence(
+    witness: Option<&ObjectLockConfig>,
+    archive: &ObjectLockConfig,
+    allow_shared: bool,
+) -> Result<(), String> {
+    let Some(witness) = witness else { return Ok(()) };
+    let shared = witness.access_key == archive.access_key || witness.bucket == archive.bucket;
+    if shared && !allow_shared {
+        return Err(
+            "the checkpoint witness shares the WORM archive's access key or bucket: give AUDIT_WITNESS_* \
+             a separate account (or acknowledge the deferral with AUDIT_WITNESS_ALLOW_SHARED_PRINCIPAL=true)"
+                .to_owned(),
+        );
+    }
+    Ok(())
 }
 
 /// Resolve caller verification — `Some` only when `AUDIT_JWKS_URL` is set.
@@ -106,6 +142,12 @@ fn kms_from_env() -> Option<KmsConfig> {
         dek_key_id: env_str("AUDIT_KMS_DEK_KEY_ID", "alias/audit-dek"),
         signing_key_id: env_str("AUDIT_KMS_SIGNING_KEY_ID", "alias/audit-checkpoint"),
         signing_algorithm: env_str("AUDIT_KMS_SIGNING_ALGORITHM", DEFAULT_KMS_SIGNING_ALGORITHM),
+        accepted_signing_algorithms: env_str("AUDIT_KMS_ACCEPTED_SIGNING_ALGORITHMS", "")
+            .split(',')
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .map(str::to_owned)
+            .collect(),
         request_timeout: Duration::from_millis(env_u64("AUDIT_KMS_TIMEOUT_MS", DEFAULT_KMS_TIMEOUT_MS)),
     })
 }
@@ -179,4 +221,29 @@ fn env_first(keys: &[&str], default: &str) -> String {
     keys.iter()
         .find_map(|k| std::env::var(k).ok())
         .unwrap_or_else(|| default.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store(endpoint: &str, bucket: &str, access_key: &str) -> ObjectLockConfig {
+        ObjectLockConfig { endpoint: endpoint.to_owned(), bucket: bucket.to_owned(), access_key: access_key.to_owned(), ..object_lock_from_env() }
+    }
+
+    /// #485: a witness with the archive's access key (the old defaults) or its
+    /// bucket is refused, whatever the endpoint; a separate account, or the
+    /// acknowledged deferral, is not.
+    #[test]
+    fn the_witness_must_be_its_own_trust_domain() {
+        let archive = store("https://s3.us-east-1.amazonaws.com", "audit-archive", "minioadmin");
+        let same_key = store("https://witness.example", "audit-witness", "minioadmin");
+        assert!(witness_independence(Some(&same_key), &archive, false).is_err());
+        assert!(witness_independence(Some(&same_key), &archive, true).is_ok());
+        let same_bucket = store("https://s3.amazonaws.com", "audit-archive", "other-key");
+        assert!(witness_independence(Some(&same_bucket), &archive, false).is_err());
+        let separate = store("https://s3.us-east-1.amazonaws.com", "audit-witness", "other-key");
+        assert!(witness_independence(Some(&separate), &archive, false).is_ok());
+        assert!(witness_independence(None, &archive, false).is_ok());
+    }
 }
