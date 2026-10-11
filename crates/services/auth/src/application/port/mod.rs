@@ -1,5 +1,5 @@
 //! Outbound ports — the only contracts the application layer holds against the
-//! outside world. Concrete adapters (Keycloak, Postgres, Redis, the `account`
+//! outside world. Concrete adapters (Postgres, Redis, the `account`
 //! gRPC client, the token minter) live in `infrastructure` (Phase 4) and are
 //! injected at the composition root. Each is an `async_trait` so it can be held
 //! as `Arc<dyn …>`.

@@ -5,12 +5,12 @@ edition.workspace   = true
 license.workspace   = true
 authors.workspace   = true
 repository.workspace = true
-description = "Auth microservice — issuance, session lifecycle, and IdP brokering boundary (identity SoR lives in `account`)."
+description = "Auth microservice — issuance and session lifecycle; checks Apple / Google id_tokens, one-time codes and passkeys (identity SoR lives in `account`)."
 
 # ── Phase 0 scaffold ──────────────────────────────────────────────────────────
 # Only the canonical error namespace (AUT-XXXX) lives here today. Subsequent
 # phases add: domain/ (Phase 2), application/ + ports (Phase 3), infrastructure/
-# adapters incl. Keycloak/Postgres/Redis (Phase 4), and the service composition
+# adapters incl. Postgres/Redis (Phase 4), and the service composition
 # root + tonic wiring (Phase 5). Dependencies grow per phase — kept minimal here
 [dependencies]
 # JWKS well-known endpoint (infrastructure/http) — plain HTTP beside the gRPC server.

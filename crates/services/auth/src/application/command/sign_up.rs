@@ -443,14 +443,14 @@ mod tests {
     async fn a_verified_email_held_by_another_method_points_to_it_relay_addresses_never_match() {
         let fx = Fixture::new();
         let verifier = Arc::new(StubVerifier::default());
-        let keycloak = IdpSubject::new("https://sso.example/realms/core", "kc-1").unwrap();
+        let google = IdpSubject::new("https://accounts.google.com", "g-1").unwrap();
         let existing = AccountId::from_uuid(Uuid::now_v7());
-        fx.directory.with_email("bob@example.com", &keycloak, existing);
-        fx.links.save(&SubjectLink::establish(keycloak, existing, t0(), Uuid::now_v7())).await.unwrap();
+        fx.directory.with_email("bob@example.com", &google, existing);
+        fx.links.save(&SubjectLink::establish(google, existing, t0(), Uuid::now_v7())).await.unwrap();
 
         verifier.knows("t2", FederatedProvider::Apple, "apple-2", Some("Bob@Example.com"), false);
         let outcome = handler(&fx, &verifier).handle(sign_up("t2", adult_dob(), None), t0()).await.unwrap();
-        assert!(matches!(outcome, SignUpOutcome::ExistingAccount { method: None }));
+        assert!(matches!(outcome, SignUpOutcome::ExistingAccount { method: Some(SignInMethod::Google) }));
         assert!(fx.directory.provisioned().is_empty(), "no duplicate");
 
         // The same address through a private relay is someone new to us.

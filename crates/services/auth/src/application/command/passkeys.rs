@@ -687,7 +687,7 @@ mod tests {
     }
 
     /// A passkey signs in without a second step, even with two-step sign-in
-    /// on; it is also the second step after a password, and a step-up.
+    /// on; it is also the second step after a first factor, and a step-up.
     #[tokio::test]
     async fn a_passkey_signs_in_completes_a_second_step_and_steps_up() {
         use crate::application::command::{CompleteLoginCommand, LoginOutcome, StepUpCredential, VerifyCredentialsCommand};
@@ -723,7 +723,7 @@ mod tests {
             Err(AuthError::PasskeyAssertionFailed)
         ));
 
-        // The second step after a password.
+        // The second step after a first factor.
         let password = LoginCommand {
             grant: crate::application::fakes::member_grant(),
             device: device.clone(),
@@ -797,8 +797,8 @@ mod tests {
         let account = session.account_id;
         w.fx.directory.set_permissions(&account, &["user", "admin", "audit:read"]);
 
-        let by_password = w.login().await;
-        assert_eq!(grants_in(&w, &by_password.access_token).await, ["user", "read:public"], "a password session is a member's");
+        let by_id_token = w.login().await;
+        assert_eq!(grants_in(&w, &by_id_token.access_token).await, ["user", "read:public"], "an Apple session is a member's");
 
         // A passkey registered without a grant (e.g. before the role): a member passkey.
         let mut member_key = SoftAuthenticator::new();

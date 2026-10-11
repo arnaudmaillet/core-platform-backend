@@ -145,7 +145,7 @@ impl LoginHandler {
     }
 
     /// The identity a passkey session stands for: the account's first link
-    /// (so a password change or a password step-up works from it), else the
+    /// (what sign-in method it stands for), else the
     /// passkey itself.
     async fn passkey_subject(&self, account_id: &AccountId, assertion: &PasskeyAssertion) -> Result<IdpSubject, AuthError> {
         match self.links.find_by_account(account_id).await?.into_iter().next() {
@@ -713,7 +713,7 @@ mod tests {
         assert_eq!(sender.login_notices(), vec![told(), told()]);
     }
 
-    /// #649: with two-step sign-in on, a proven password issues nothing — no
+    /// #649: with two-step sign-in on, a proven first factor issues nothing — no
     /// session, no resumed account — until the code; the challenge works once.
     #[tokio::test]
     async fn two_step_sign_in_waits_for_the_code_then_issues_once() {
