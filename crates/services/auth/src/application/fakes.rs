@@ -96,6 +96,8 @@ pub struct StubAccountDirectory {
     resumed: Mutex<Vec<AccountId>>,
     /// When set, resuming fails as if the account was suspended meanwhile.
     refuse_resume: std::sync::atomic::AtomicBool,
+    /// When set, `lookup` fails as if `account` were unreachable.
+    lookup_down: std::sync::atomic::AtomicBool,
     /// email → holder (lower-cased).
     emails: Mutex<HashMap<String, super::port::EmailHolder>>,
     /// Every account provisioned, in order.
@@ -124,6 +126,7 @@ impl StubAccountDirectory {
             looked_up: Mutex::new(Vec::new()),
             resumed: Mutex::new(Vec::new()),
             refuse_resume: std::sync::atomic::AtomicBool::new(false),
+            lookup_down: std::sync::atomic::AtomicBool::new(false),
             emails: Mutex::new(HashMap::new()),
             provisioned: Mutex::new(Vec::new()),
             contacts: Mutex::new(HashMap::new()),
@@ -200,6 +203,11 @@ impl StubAccountDirectory {
         }
     }
 
+    /// Makes every later lookup fail as if `account` were unreachable.
+    pub fn lookup_down(&self, down: bool) {
+        self.lookup_down.store(down, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Makes every later resume fail (the account left `Deactivated`).
     pub fn refuse_resume(&self) {
         self.refuse_resume.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -249,6 +257,9 @@ impl AccountDirectory for StubAccountDirectory {
 
     async fn lookup(&self, account_id: &AccountId) -> Result<AccountSnapshot, AuthError> {
         self.looked_up.lock().unwrap().push(*account_id);
+        if self.lookup_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AuthError::AccountDirectoryUnavailable);
+        }
         Ok(self.snapshots.lock().unwrap().get(account_id).cloned().unwrap_or(AccountSnapshot {
             activation: AccountActivation::Active,
             permissions: Vec::new(),

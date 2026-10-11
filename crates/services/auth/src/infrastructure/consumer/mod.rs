@@ -2,4 +2,4 @@
 
 pub mod account_event_consumer;
 
-pub use account_event_consumer::{run_account_event_consumer, ACCOUNT_EVENTS_GROUP, ACCOUNT_EVENTS_TOPIC};
+pub use account_event_consumer::{run_account_event_consumer, AccountEventHandlers, ACCOUNT_EVENTS_GROUP, ACCOUNT_EVENTS_TOPIC};

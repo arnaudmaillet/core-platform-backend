@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: da4a57883ecbe0fe5c11b451369012d9a6aa8c0bd9738622228aa9347af6cb58
-  translated_at: 2026-10-08
+  source_sha256: 32ea774c6e972899401c31975cffafb4d9d5a0545be827451307d3c7bab6f541
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -20,7 +20,7 @@ i18n:
 > | **Tier** | **TIER-0** — chaque requête authentifiée dépend des jetons émis par ce service |
 > | **Déployable** | `crates/apps/auth-server` (crate bibliothèque : `crates/services/auth`) |
 > | **Stockage** | PostgreSQL/CockroachDB (db `auth`) · Redis Cluster (sessions/blacklist) |
-> | **Asynchrone** | publie `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked/AppAuthorized/AppAuthorizationRevoked) · consomme `account.v1.events` (`account_deleted` → effacement RGPD) |
+> | **Asynchrone** | publie `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked/AppAuthorized/AppAuthorizationRevoked) · consomme `account.v1.events` (`account_deleted` → effacement RGPD ; `account_suspended` / `account_deactivated` / `role_revoked` → déconnexion partout) |
 > | **Appelants amont** | gateway / edge, clients utilisateurs (login & refresh) |
 > | **Dépendances aval** | Keycloak (IdP), `account` (gRPC, SoR d'identité), PostgreSQL, Redis Cluster |
 > | **SLO** | `<TODO: 99.95%>` dispo · login p99 `<TODO>` · refresh p99 `<TODO>` |
@@ -46,9 +46,11 @@ base à chaque appel**. Une conception naïve consulte une table de sessions à 
 s'effondre sous la charge. `auth` y répond par un **modèle à jeton scindé** : des **jetons d'edge**
 courts et vérifiables localement (vérifiés en pur CPU par la bibliothèque `auth-context` dans chaque
 service aval) plus des **refresh tokens** longs, côté serveur, à usage unique, avec rotation
-obligatoire et détection de réutilisation. La déconnexion globale instantanée s'appuie sur un
-compteur de **génération** par session dans Redis Cluster ; la révocation se compte donc en
-millisecondes — jamais une écriture amplifiée sur tous les lecteurs.
+obligatoire et détection de réutilisation. La déconnexion globale s'appuie sur un compteur de
+**génération** par session dans Redis Cluster ; la révocation est donc une seule écriture — jamais
+une écriture amplifiée sur tous les lecteurs. Le refresh et `Introspect` la voient aussitôt ; les
+services qui vérifient les jetons d'edge localement acceptent un jeton révoqué jusqu'à son expiration
+(≤ `AUTH_ACCESS_TTL_SECS`) tant que le contrôle de révocation à l'edge n'est pas en place (#884).
 
 **Objectifs fondamentaux :** (1) aucune lecture en base sur le chemin chaud ; (2) réutilisation d'un
 refresh token = compromission ⇒ révocation de toute la génération de session ; (3) **100 %
@@ -198,6 +200,20 @@ code e-mail ou téléphone, le sujet **est** l'adresse), et l'invité qu'il éta
 avec les sessions de cet invité (sur chaque shard ; index `idx_guest_principals_upgraded`).
 Idempotent : un rejeu ne supprime rien de plus. L'identité est ensuite libre : se reconnecter avec elle
 ne trouve aucun compte et peut s'inscrire à nouveau.
+
+### Suspension, désactivation, rôle retiré (#884)
+
+Le même consumer déconnecte le compte partout sur `account_suspended`, `account_deactivated` et
+`role_revoked` (`AccountRevocation`, le travail de `LogoutAllSessions`) : une nouvelle génération,
+puis chaque session active révoquée (raison `account_suspended` / `account_deactivated` /
+`role_revoked`, publiée en `auth.session_revoked`), mise en blacklist pour la durée de vie du jeton
+d'accès, avec ses refresh tokens. Une suspension ou une désactivation n'est appliquée que si
+`account` déclare encore le compte inactif : un compte réactivé par un admin, ou repris par son
+titulaire qui s'est reconnecté, depuis l'événement garde ses nouvelles sessions ; quand `account` ne
+peut être interrogé, le compte est déconnecté quand même (échec fermé). Un rôle retiré est toujours appliqué, pour que les permissions qu'il accordait meurent
+avec les jetons qui les portaient, et non au prochain refresh. Les jetons d'accès déjà émis sont
+refusés aussitôt par `Refresh` et `Introspect`, ailleurs à `exp` tant que le contrôle de révocation à
+l'edge n'est pas en place.
 
 ### Identifiants et step-up
 
@@ -350,8 +366,9 @@ chemin chaud, Kafka pour les événements. L'IdP est masqué derrière un `Ident
 ```
 
 **Chemin chaud à jeton scindé.** 99 % des appels API = vérification de signature seule, aucune E/S.
-La révocation est un incrément de `generation` écrit dans `auth:sess:{account}:gen` sur Redis ; un
-jeton d'edge portant une `gen` périmée est rejeté. Seul `/refresh` (faible QPS) touche PostgreSQL.
+La révocation est un incrément de `generation` écrit dans `auth:sess:{account}:gen` sur Redis ;
+`Refresh` et `Introspect` rejettent un jeton d'edge portant une `gen` périmée (l'edge à vérification
+locale pas encore, #884). Seul `/refresh` (faible QPS) touche PostgreSQL.
 
 > **Invariants** (et où ils sont appliqués) : TTL du jeton d'edge ⊆ TTL de session ⊆ plafond absolu ;
 > la rotation du refresh est obligatoire et à usage unique, et toute réutilisation révoque la

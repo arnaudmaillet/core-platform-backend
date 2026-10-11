@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use cqrs::Envelope;
+use uuid::Uuid;
 use validate_core::{FieldViolation, Validate};
 
 use crate::application::ensure_valid;
@@ -38,12 +39,13 @@ pub struct LogoutAllSessionsOutcome {
     pub sessions_revoked: i32,
 }
 
-/// Bumps the account's generation — the instant, edge-enforced kill switch — then
-/// durably revokes each active session and its refresh tokens.
+/// Bumps the account's generation — the account-wide kill switch — then durably
+/// revokes each active session and its refresh tokens.
 ///
-/// The generation bump is what actually invalidates outstanding edge tokens on
-/// the next request; the per-session revocation keeps the durable record and the
-/// blacklist consistent.
+/// The generation bump is what invalidates outstanding edge tokens for `Refresh`
+/// and `Introspect`; the per-session revocation keeps the durable record and the
+/// blacklist consistent. Services that verify edge tokens locally accept them
+/// until `exp` (the edge revocation check is #884).
 pub struct LogoutAllSessionsHandler {
     sessions: Arc<dyn SessionRepository>,
     refresh_tokens: Arc<dyn RefreshTokenRepository>,
@@ -70,19 +72,32 @@ impl LogoutAllSessionsHandler {
     ) -> Result<LogoutAllSessionsOutcome, AuthError> {
         ensure_valid(&envelope.payload)?;
         let account_id = AccountId::try_from(envelope.payload.account_id.as_str())?;
+        self.sign_out_everywhere(&account_id, RevocationReason::GlobalLogout, envelope.correlation_id, now).await
+    }
 
-        // Instant global kill: every existing edge token now carries a stale gen.
-        let generation = self.cache.bump_generation(&account_id).await?;
+    /// The account-wide sign-out behind `LogoutAllSessions`, also run when
+    /// `account` suspends or deactivates the account or revokes one of its roles
+    /// (#884, see `AccountRevocation`). Idempotent: run again, it bumps the
+    /// generation once more and finds no active session.
+    pub async fn sign_out_everywhere(
+        &self,
+        account_id: &AccountId,
+        reason: RevocationReason,
+        correlation_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<LogoutAllSessionsOutcome, AuthError> {
+        // Every existing edge token now carries a stale gen.
+        let generation = self.cache.bump_generation(account_id).await?;
 
         // Durably revoke each active session for record-keeping + blacklist.
-        let sessions = self.sessions.list_active_by_account(&account_id).await?;
+        let sessions = self.sessions.list_active_by_account(account_id).await?;
         let mut revoked = 0;
         for mut session in sessions {
             if session.status() != SessionStatus::Active {
                 continue;
             }
             let session_id = session.id();
-            session.revoke(now, RevocationReason::GlobalLogout, envelope.correlation_id)?;
+            session.revoke(now, reason, correlation_id)?;
             self.sessions.save(&session).await?;
             self.cache.blacklist_session(&session_id, self.policy.access_ttl).await?;
             self.refresh_tokens.revoke_all_for_session(&session_id).await?;

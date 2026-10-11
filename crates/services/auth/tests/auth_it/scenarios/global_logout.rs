@@ -1,5 +1,5 @@
 //! Global sign-out bumps the account generation and invalidates every session's
-//! edge token at once — the instant, edge-enforced kill switch.
+//! edge token at once for `Introspect` and `Refresh` — the account-wide kill switch.
 
 use crate::auth_it::harness::{random_user, Harness};
 
