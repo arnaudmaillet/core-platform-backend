@@ -293,6 +293,32 @@ updated, and anything off is `AUT-5028` (the reason is logged). A passkey sessio
 account's first identity link (so `ChangePassword` and a password step-up work from it). The usual
 sign-in follow-ups apply (new-device alert, deactivated account resumed, guest retired).
 
+**Staff sign in with passkeys only (#880).** A staff account — any grant from `account` besides the
+member role `user` (a staff role such as `admin` or `support_agent`, a fine-grained permission such as
+`audit:read`, an override; unknown grants count as staff) — gets its staff grants **only in a session
+opened with a staff-enrolled passkey** (`Login { passkey }`, or `CompleteLogin { passkey }` after a
+first factor). Signed in any other way (Apple / Google, an email or SMS code, a password, a member
+passkey) the same account gets a member session: `user`, `read:public` and its profiles. Each session
+records how it was opened (`sessions.sign_in_method` + `passkey_credential_id`, migration 0009); every
+`Refresh` and `VerifyCredentials` re-reads that passkey, so removing it ends the staff grants at the
+next refresh, and `RevokeRole` applies there too. A staff session steps up with its passkey only
+(`AUT-5031`); a passkey step-up never turns a member session into a staff one. The services that check
+staff permissions (audit's gate, the verification queue, private documents, account's admin RPCs) are
+unchanged: they keep reading `perms`, which only staff passkey sessions carry.
+
+A passkey is **staff-enrolled** only when its `FinishPasskeyRegistration` presents a **staff enrollment
+grant** (`staff_enrollment_grant`): single use, 24 hours, bound to one account (only its SHA-256 is
+kept; `AUT-5032` when unknown, another account's, expired or used). Passkeys registered without one —
+before a role was assigned, or by whoever controls a staff member's mailbox — stay member passkeys.
+Grants come from `IssueStaffPasskeyEnrollment(account_id)` (mesh only): the caller presents its own
+token, introspected here, and must be an `admin` / `super_admin` — roles only a staff passkey session
+carries — for another account (`AUT-5033`). The very first grant comes from the one-off bootstrap,
+`auth-server bootstrap-staff <account_id>` run inside an auth pod with `AUTH_STAFF_BOOTSTRAP=true`
+(no network surface; the grant is printed to that terminal), refused for good once any staff passkey
+exists on any shard (`AUT-5034`). Every grant and every staff enrollment is published
+(`auth.staff_enrollment_granted`, `auth.staff_passkey_enrolled`) and recorded by audit as a
+`PrivilegedAction`; grants are erased with the account.
+
 **Step-up.** A token minted right after a credential proof — `Login` / `CompleteLogin`, or
 `VerifyCredentials` (re-prove the password, or give a two-step code: the step-up of an account without
 a password; `AUT-5020` when two-step sign-in is off) — carries
@@ -408,6 +434,7 @@ on TIER-0 (`Service::EDGE_REVOCATION_FAIL_CLOSED`) and for staff calls, fail ope
 | `AUTH_SMS_COUNTRIES` | Comma-separated ISO 3166-1 alpha-2 countries SMS codes may go to; must equal the SNS protect allow-list (infra `global/messaging/sms`). An unknown code fails the boot. | the launch markets (37) |
 | `AUTH_SMS_DAILY_BUDGET` | SMS the whole service may send per UTC day (`0` = none); over it `AUT-5016`. | `50` |
 | `AUTH_SMS_COUNTRY_DAILY_BUDGET` | SMS one destination country may receive per UTC day, checked before the service's; over it `AUT-5016`. | `25` |
+| `AUTH_STAFF_BOOTSTRAP` | `true` opens `auth-server bootstrap-staff <account_id>` (#880): the very first staff enrollment grant, refused once any staff passkey exists. Set it on the command line of that one run, never on the Deployment. | unset |
 | `AUTH_WEBAUTHN_RP_ID` · `AUTH_WEBAUTHN_ORIGINS` | Passkeys (#808): the RP id (the domain the iOS app lists under `webcredentials`, serving its `apple-app-site-association`) and the allowed client origins (comma list; default `https://<rp id>`). Unset → passkeys unavailable (UNAVAILABLE). **Never change the RP id once passkeys exist**: they are bound to it. | — · — |
 | `AUTH_MFA_SEED_KEY` · `AUTH_MFA_SEED_KEY_ID` · `AUTH_MFA_SEED_KEYS_PREVIOUS` | Two-step sign-in (#649): the AES-256 key sealing TOTP seeds (32 bytes, standard base64), its id, and retired keys (`id:base64,…`) still opening older seeds. Unset → two-step sign-in unavailable, fail-closed (`AUT-5019`). **Never remove once used.** Provisioned by core-platform-infra#27. | — · `k1` · — |
 | `AUTH_MFA_ISSUER` | The service's name in the holder's authenticator app (#649). | `Core Platform` |

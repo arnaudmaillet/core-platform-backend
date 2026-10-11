@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: bbb2d6f8694fe8c47908cc92cec11af3c47946fcba6177764f4b6a8af30f016b
-  translated_at: 2026-10-06
+  source_sha256: eaeb5b6b09b1493b3807ca8272921a5f703a78d7958d615d8446158154f08395
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -104,6 +104,9 @@ issued --(refresh: rotate)--> issued' --(revoke / generation-bump / expiry)--> r
 | I2 | Un bump de `Generation` révoque tous les tokens de cette famille de sujet | domaine | (révocation) |
 | I3 | Les access tokens sont courts et signés ES256 | domaine + infrastructure | la vérif échoue en aval |
 | I4 | La révocation est fail-closed et immédiate | application | — |
+| I5 | Une autorisation staff n'est émise que dans une session ouverte avec une passkey enrôlée staff qui appartient toujours au compte (#880) | application (`Permission::for_session`, relue à chaque émission) | autorisations membres seulement |
+| I6 | Une passkey n'est enrôlée staff qu'avec une autorisation à usage unique, non expirée, liée à son compte ; les autorisations viennent d'un admin dans une session par passkey staff (jamais pour lui-même) ou du bootstrap ponctuel tant qu'aucune passkey staff n'existe | application + Postgres (mise à jour conditionnelle) | `AUT-5032` / `AUT-5033` / `AUT-5034` |
+| I7 | Une session staff fait son step-up avec sa passkey uniquement | application | `AUT-5031` |
 
 ---
 
@@ -145,6 +148,8 @@ ensuite.
 | `session_issued` | une session authentifiée a été établie | connexion / émission de token | `audit` (Authentication) |
 | `session_revoked` | une session a été invalidée | déconnexion / révocation / bump de génération | `audit` (Authentication) |
 | `subject_linked` | un sujet IdP a été lié à un compte | flux de liaison de compte | (interne) |
+| `staff_enrollment_granted` | une autorisation d'enrôlement de passkey staff a été émise (par un admin, ou le bootstrap) | `IssueStaffPasskeyEnrollment` / `auth-server bootstrap-staff` | `audit` (PrivilegedAction) |
+| `staff_passkey_enrolled` | une passkey est devenue passkey staff avec une autorisation | `FinishPasskeyRegistration` avec une autorisation | `audit` (PrivilegedAction) |
 
 ---
 

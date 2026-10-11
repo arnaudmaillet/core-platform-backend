@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: e8770cbe35788218fac84934f0d956e55bf6456a48f7a2d87ecf25b646228bdc
-  translated_at: 2026-10-10
+  source_sha256: dcf688e07b715908a0900acd6806e0a5f69994c3fe30a89f72d76a4ef81feb24
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`EVENT_CATALOG.md`](./EVENT_CATALOG.md) fait foi.
@@ -109,6 +109,8 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `session_issued` | une session authentifiée a été établie | connexion / émission de token | `audit` (Authentication) |
 | `session_revoked` | une session a été invalidée | déconnexion / révocation / bump de génération | `audit` (Authentication) |
 | `subject_linked` | un sujet IdP a été lié à un compte | flux de liaison de compte | interne |
+| `staff_enrollment_granted` | une autorisation d'enrôlement de passkey staff a été émise (#880 ; `granted_by` absent pour le bootstrap ponctuel ; l'autorisation elle-même ne quitte jamais auth) | `IssueStaffPasskeyEnrollment` / `auth-server bootstrap-staff` | `audit` (PrivilegedAction) |
+| `staff_passkey_enrolled` | une passkey est devenue passkey staff avec une autorisation (#880) : les sessions ouvertes avec elle portent les permissions staff | `FinishPasskeyRegistration` avec une autorisation | `audit` (PrivilegedAction) |
 
 ## Profil — `profile.v1.events` (producteur : `profile`)
 

@@ -49,6 +49,13 @@ impl AccountEraser for PgAccountEraser {
                         .execute(&mut **tx)
                         .await
                         .map_err(storage)?;
+                    // Staff enrollment grants (#880); the grant records stay on the
+                    // audit plane.
+                    sqlx::query("DELETE FROM staff_enrollment_grants WHERE account_id = $1")
+                        .bind(account)
+                        .execute(&mut **tx)
+                        .await
+                        .map_err(storage)?;
                     // Third-party app authorisations (#667); the consent records stay
                     // on the audit plane, crypto-shredded with the account.
                     sqlx::query("DELETE FROM app_authorizations WHERE account_id = $1")
@@ -90,6 +97,13 @@ impl AccountEraser for PgAccountEraser {
                     .map_err(storage)?
                     .rows_affected();
             }
+            // The staff grants this account issued to others (#880) keep no
+            // trace of it; the issuer stays on the audit plane.
+            sqlx::query("UPDATE staff_enrollment_grants SET issued_by = NULL WHERE issued_by = $1")
+                .bind(account)
+                .execute(&mut *tx)
+                .await
+                .map_err(storage)?;
             tx.commit().await.map_err(storage)?;
             erased.guests += guests.len() as u64;
         }

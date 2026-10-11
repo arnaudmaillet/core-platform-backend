@@ -92,6 +92,7 @@ async fn a_passkey_is_registered_listed_and_removed() {
         client_data_json:   SoftAuthenticator::client_data("webauthn.create", &challenge, &origin),
         attestation_object: auth.attestation(PASSKEY_RP_ID, PASSKEY),
         name:               "iPhone".into(),
+        staff_enrollment_grant: String::new(),
     };
     let made = h
         .handler

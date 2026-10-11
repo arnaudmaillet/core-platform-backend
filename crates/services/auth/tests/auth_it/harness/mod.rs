@@ -146,7 +146,8 @@ impl AccountDirectory for StubDirectory {
         };
         Ok(AccountSnapshot {
             activation,
-            permissions: vec![Permission::new("posts:write")],
+            // What `account` grants a member: its role (#880: anything else is staff).
+            permissions: vec![Permission::new("user")],
             age_bracket: None,
             mfa_enrolled: self.mfa.lock().unwrap().contains_key(account_id),
         })
@@ -357,6 +358,7 @@ impl Harness {
                     redis.clone(),
                     "pkauth",
                 )),
+                staff_grants: Arc::new(auth::infrastructure::persistence::PgStaffGrants::new(tx.clone())),
             }),
             app_authorizations: Arc::new(auth::infrastructure::persistence::PgAppAuthorizationRepository::new(tx.clone())),
             policy: SessionPolicy::new(

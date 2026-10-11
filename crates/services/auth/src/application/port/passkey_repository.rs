@@ -18,6 +18,9 @@ pub struct StoredPasskey {
     pub backed_up:       bool,
     pub created_at:      DateTime<Utc>,
     pub last_used_at:    Option<DateTime<Utc>>,
+    /// Registered with a staff enrollment grant (#880): only a session opened
+    /// with it carries the account's staff permissions.
+    pub staff_enrolled:  bool,
 }
 
 /// An account's passkeys (Postgres, on the account's shard).
@@ -48,4 +51,8 @@ pub trait PasskeyRepository: Send + Sync + 'static {
 
     /// Removes one; `false` when the account has no such passkey.
     async fn remove(&self, account_id: &AccountId, credential_id: &[u8]) -> Result<bool, AuthError>;
+
+    /// Whether any account holds a staff-enrolled passkey (every shard): the
+    /// one-off staff bootstrap is open only while none does (#880).
+    async fn any_staff_enrolled(&self) -> Result<bool, AuthError>;
 }

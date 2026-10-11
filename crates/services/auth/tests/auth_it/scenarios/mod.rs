@@ -20,3 +20,4 @@ mod device_history;
 mod two_step_sign_in;
 mod mfa_enrolment;
 mod passkeys;
+mod staff_passkeys;

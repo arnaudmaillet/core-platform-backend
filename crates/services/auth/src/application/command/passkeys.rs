@@ -29,9 +29,10 @@ use super::credentials::caller_session;
 use super::mfa_settings::{notify_security_change, MfaCaller};
 use super::verification::VerificationCodes;
 use crate::application::port::{
-    AccountDirectory, FederatedNonceStore, MfaChange, PasskeyRepository, SessionCache, SessionRepository,
-    StoredPasskey,
+    AccountDirectory, EventPublisher, FederatedNonceStore, MfaChange, PasskeyRepository, SessionCache, SessionRepository,
+    StaffEnrollmentGrants, StoredPasskey,
 };
+use crate::domain::event::{DomainEvent, StaffPasskeyEnrolled};
 use crate::domain::value_object::webauthn::{verify_assertion, verify_registration, RelyingParty};
 use crate::domain::value_object::{AccountId, SessionId};
 use crate::error::AuthError;
@@ -63,7 +64,7 @@ pub struct PasskeyRegistrationOptions {
 }
 
 /// The authenticator's response to a registration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PasskeyRegistration {
     /// The challenge the options carried.
     pub challenge:          String,
@@ -71,6 +72,18 @@ pub struct PasskeyRegistration {
     pub attestation_object: Vec<u8>,
     /// The holder's name for it; empty ⇒ "Passkey".
     pub name:               String,
+    /// A staff enrollment grant (#880): the passkey becomes a staff passkey.
+    /// A secret: never logged.
+    pub staff_enrollment_grant: Option<String>,
+}
+
+impl std::fmt::Debug for PasskeyRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PasskeyRegistration")
+            .field("name", &self.name)
+            .field("staff", &self.staff_enrollment_grant.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// A passkey as the holder sees it.
@@ -83,6 +96,8 @@ pub struct PasskeyView {
     pub last_used_at:  Option<DateTime<Utc>>,
     /// Synced across the holder's devices (e.g. iCloud Keychain).
     pub synced:        bool,
+    /// A staff passkey (#880).
+    pub staff:         bool,
 }
 
 impl From<&StoredPasskey> for PasskeyView {
@@ -93,6 +108,7 @@ impl From<&StoredPasskey> for PasskeyView {
             created_at:    p.created_at,
             last_used_at:  p.last_used_at,
             synced:        p.backed_up,
+            staff:         p.staff_enrolled,
         }
     }
 }
@@ -147,6 +163,15 @@ fn sign_in_key(challenge: &[u8]) -> String {
     data_encoding::HEXLOWER.encode(&Sha256::digest(challenge))
 }
 
+/// A passkey assertion that checked out: whose account, which passkey, and
+/// whether it is staff-enrolled (#880).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedPasskey {
+    pub account_id:     AccountId,
+    pub credential_id:  Vec<u8>,
+    pub staff_enrolled: bool,
+}
+
 /// Signing in with a passkey: the challenge, then the assertion's check.
 pub struct PasskeySignIn {
     rp:         RelyingParty,
@@ -157,6 +182,11 @@ pub struct PasskeySignIn {
 impl PasskeySignIn {
     pub fn new(rp: RelyingParty, passkeys: Arc<dyn PasskeyRepository>, challenges: Arc<dyn FederatedNonceStore>) -> Self {
         Self { rp, passkeys, challenges }
+    }
+
+    /// Where the passkeys are kept (a staff session's passkey is re-read, #880).
+    pub fn repository(&self) -> &Arc<dyn PasskeyRepository> {
+        &self.passkeys
     }
 
     /// A challenge for an assertion (single use, five minutes).
@@ -172,14 +202,14 @@ impl PasskeySignIn {
     }
 
     /// Checks `assertion` (its challenge used up either way) and returns the
-    /// account it signs in. `expected`: the account a second step or a
-    /// step-up belongs to — the passkey must be that account's.
+    /// account it signs in and the passkey. `expected`: the account a second
+    /// step or a step-up belongs to — the passkey must be that account's.
     pub async fn verify(
         &self,
         assertion: &PasskeyAssertion,
         expected: Option<&AccountId>,
         now: DateTime<Utc>,
-    ) -> Result<AccountId, AuthError> {
+    ) -> Result<VerifiedPasskey, AuthError> {
         let challenge = URL_SAFE_NO_PAD
             .decode(assertion.challenge.trim_end_matches('='))
             .map_err(|_| AuthError::PasskeyChallengeInvalid)?;
@@ -218,7 +248,11 @@ impl PasskeySignIn {
             AuthError::PasskeyAssertionFailed
         })?;
         self.passkeys.record_use(&account_id, &assertion.credential_id, used.sign_count, used.backed_up, now).await?;
-        Ok(account_id)
+        Ok(VerifiedPasskey {
+            account_id,
+            credential_id: assertion.credential_id.clone(),
+            staff_enrolled: passkey.staff_enrolled,
+        })
     }
 }
 
@@ -231,6 +265,9 @@ pub struct PasskeyHandler {
     directory:     Arc<dyn AccountDirectory>,
     /// The email transport for change notices; `None`: none are sent.
     codes:         Option<Arc<VerificationCodes>>,
+    /// Staff enrollment grants and where enrollments are published (#880);
+    /// `None`: a registration with a grant is refused.
+    staff:         Option<(Arc<dyn StaffEnrollmentGrants>, Arc<dyn EventPublisher>)>,
 }
 
 impl PasskeyHandler {
@@ -242,7 +279,13 @@ impl PasskeyHandler {
         cache: Arc<dyn SessionCache>,
         directory: Arc<dyn AccountDirectory>,
     ) -> Self {
-        Self { rp, passkeys, registrations, sessions, cache, directory, codes: None }
+        Self { rp, passkeys, registrations, sessions, cache, directory, codes: None, staff: None }
+    }
+
+    /// Accepts staff enrollment grants at registration (#880).
+    pub fn with_staff_grants(mut self, grants: Arc<dyn StaffEnrollmentGrants>, publisher: Arc<dyn EventPublisher>) -> Self {
+        self.staff = Some((grants, publisher));
+        self
     }
 
     /// Emails every change to the account's address.
@@ -317,6 +360,19 @@ impl PasskeyHandler {
             tracing::info!(%reason, account.id = %account_id.as_str(), "passkey registration refused");
             AuthError::PasskeyRejected
         })?;
+        // A staff passkey (#880): the grant is used up here, once the
+        // authenticator's response checked out.
+        let staff_grant = match &registration.staff_enrollment_grant {
+            None => None,
+            Some(grant) => {
+                let (grants, _) = self.staff.as_ref().ok_or(AuthError::StaffEnrollmentGrantInvalid)?;
+                let grant_id = grants
+                    .redeem(&account_id, &super::staff_enrollment::grant_hash(grant), now)
+                    .await?
+                    .ok_or(AuthError::StaffEnrollmentGrantInvalid)?;
+                Some(grant_id)
+            }
+        };
         let stored = StoredPasskey {
             credential_id:   made.credential_id,
             public_key:      made.public_key,
@@ -328,8 +384,14 @@ impl PasskeyHandler {
             // Postgres keeps microseconds: the response and every later read agree.
             created_at:      now.trunc_subsecs(6),
             last_used_at:    None,
+            staff_enrolled:  staff_grant.is_some(),
         };
         self.passkeys.add(&account_id, &stored, MAX_PASSKEYS).await?;
+        if let (Some(grant_id), Some((_, publisher))) = (staff_grant, &self.staff) {
+            let enrolled = StaffPasskeyEnrolled { account_id, grant_id, occurred_at: now, correlation_id: envelope.correlation_id };
+            publisher.publish(&DomainEvent::StaffPasskeyEnrolled(enrolled)).await?;
+            tracing::info!(account.id = %account_id.as_str(), grant.id = %grant_id, "staff passkey enrolled");
+        }
         notify_security_change(self.codes.clone(), Arc::clone(&self.directory), account_id, MfaChange::PasskeyAdded);
         Ok(PasskeyView::from(&stored))
     }
@@ -372,7 +434,8 @@ mod tests {
     use crate::application::command::verification::VerificationPolicy;
     use crate::application::command::{IssuedSession, LoginCommand};
     use crate::application::fakes::{
-        t0, Fixture, InMemoryNonceStore, InMemoryPasskeyRepository, InMemoryVerificationStore, RecordingCodeSender,
+        t0, Fixture, InMemoryNonceStore, InMemoryPasskeyRepository, InMemoryStaffGrants, InMemoryVerificationStore,
+        RecordingCodeSender,
     };
     use crate::application::port::{AuthnGrant, ContactDetails};
     use crate::domain::value_object::webauthn::testing::{SoftAuthenticator, PASSKEY};
@@ -386,6 +449,7 @@ mod tests {
         passkeys: Arc<InMemoryPasskeyRepository>,
         sender:   Arc<RecordingCodeSender>,
         handler:  PasskeyHandler,
+        grants:   Arc<InMemoryStaffGrants>,
     }
 
     impl World {
@@ -407,7 +471,18 @@ mod tests {
                 Arc::clone(&fx.directory) as _,
             )
             .with_codes(codes);
-            Self { fx, passkeys, sender, handler }
+            let grants = Arc::new(InMemoryStaffGrants::default());
+            let handler = handler.with_staff_grants(Arc::clone(&grants) as _, Arc::clone(&fx.publisher) as _);
+            Self { fx, passkeys, sender, handler, grants }
+        }
+
+        fn staff(&self) -> super::super::staff_enrollment::StaffEnrollment {
+            super::super::staff_enrollment::StaffEnrollment::new(
+                Arc::clone(&self.grants) as _,
+                Arc::clone(&self.passkeys) as _,
+                Arc::clone(&self.fx.directory) as _,
+                Arc::clone(&self.fx.publisher) as _,
+            )
         }
 
         async fn login(&self) -> IssuedSession {
@@ -422,6 +497,17 @@ mod tests {
 
         /// Starts and finishes a registration with `auth` for `session`.
         async fn register(&self, session: &IssuedSession, auth: &SoftAuthenticator) -> Result<PasskeyView, AuthError> {
+            self.register_with(session, auth, None, t0()).await
+        }
+
+        /// The same, presenting a staff enrollment grant (#880), at `now`.
+        async fn register_with(
+            &self,
+            session: &IssuedSession,
+            auth: &SoftAuthenticator,
+            grant: Option<String>,
+            now: DateTime<Utc>,
+        ) -> Result<PasskeyView, AuthError> {
             let options = self.handler.start_registration(on(session), t0()).await?;
             let challenge = URL_SAFE_NO_PAD.decode(&options.challenge).unwrap();
             self.handler
@@ -431,8 +517,9 @@ mod tests {
                         client_data_json:   SoftAuthenticator::client_data("webauthn.create", &challenge, ORIGIN),
                         attestation_object: auth.attestation(RP_ID, PASSKEY),
                         name:               "  My   iPhone ".into(),
+                        staff_enrollment_grant: grant,
                     })),
-                    t0(),
+                    now,
                 )
                 .await
         }
@@ -512,6 +599,7 @@ mod tests {
             client_data_json:   SoftAuthenticator::client_data("webauthn.create", &challenge, ORIGIN),
             attestation_object: auth.attestation(RP_ID, PASSKEY),
             name:               String::new(),
+            staff_enrollment_grant: None,
         };
 
         let stolen = w
@@ -571,14 +659,14 @@ mod tests {
         let handle = session.account_id.as_uuid().as_bytes().to_vec();
 
         let ok = assertion(&sign_in, &mut auth, handle.clone(), PASSKEY).await;
-        assert_eq!(sign_in.verify(&ok, None, t0()).await.unwrap(), session.account_id);
+        assert_eq!(sign_in.verify(&ok, None, t0()).await.unwrap().account_id, session.account_id);
         assert_eq!(w.passkeys.list(&session.account_id).await.unwrap()[0].last_used_at, Some(t0()));
         // Single use.
         assert!(matches!(sign_in.verify(&ok, None, t0()).await, Err(AuthError::PasskeyChallengeInvalid)));
 
         // The second step / step-up of the same account: with or without a handle.
         let step = assertion(&sign_in, &mut auth, Vec::new(), PASSKEY).await;
-        assert_eq!(sign_in.verify(&step, Some(&session.account_id), t0()).await.unwrap(), session.account_id);
+        assert_eq!(sign_in.verify(&step, Some(&session.account_id), t0()).await.unwrap().account_id, session.account_id);
 
         // No handle and no account: refused (an id never names an account).
         let anonymous = assertion(&sign_in, &mut auth, Vec::new(), PASSKEY).await;
@@ -671,4 +759,162 @@ mod tests {
         }
         assert!(matches!(w.handler.start_registration(on(&session), t0()).await, Err(AuthError::PasskeyLimitReached)));
     }
+
+    // ── Staff passkeys (#880) ───────────────────────────────────────────────
+
+    fn admin() -> super::super::staff_enrollment::StaffIssuer {
+        super::super::staff_enrollment::StaffIssuer {
+            account_id:  AccountId::from_uuid(Uuid::now_v7()),
+            permissions: vec!["user".into(), "admin".into()],
+        }
+    }
+
+    async fn passkey_login(w: &World, sign_in: PasskeySignIn, auth: &mut SoftAuthenticator, account: &AccountId) -> IssuedSession {
+        let sign_in = Arc::new(sign_in);
+        let a = assertion(&sign_in, auth, account.as_uuid().as_bytes().to_vec(), PASSKEY).await;
+        let cmd = LoginCommand { grant: AuthnGrant::Passkey(a), device: DeviceFingerprint::default(), guest_refresh_token: None, client_ip: None };
+        let login = w.fx.login_handler().with_passkeys(sign_in);
+        login.handle(Envelope::new(Uuid::now_v7(), cmd), t0()).await.unwrap().issued().unwrap()
+    }
+
+    async fn grants_in(w: &World, access_token: &str) -> Vec<String> {
+        use crate::application::port::TokenMinter;
+        let claims = w.fx.minter.verify_access(access_token).await.unwrap();
+        claims.permissions.iter().map(|p| p.as_str().to_owned()).collect()
+    }
+
+    fn sign_in_over(w: &World) -> PasskeySignIn {
+        PasskeySignIn::new(RelyingParty::new(RP_ID, vec![]), Arc::clone(&w.passkeys) as _, Arc::new(InMemoryNonceStore::default()))
+    }
+
+    /// A staff account's grants ride only in a session opened with a
+    /// staff-enrolled passkey — not with a password, not with a passkey
+    /// registered without a grant — and follow that passkey at each refresh.
+    #[tokio::test]
+    async fn staff_grants_ride_only_in_a_staff_passkey_session_and_follow_it_on_refresh() {
+        let w = World::new();
+        let session = w.login().await;
+        let account = session.account_id;
+        w.fx.directory.set_permissions(&account, &["user", "admin", "audit:read"]);
+
+        let by_password = w.login().await;
+        assert_eq!(grants_in(&w, &by_password.access_token).await, ["user", "read:public"], "a password session is a member's");
+
+        // A passkey registered without a grant (e.g. before the role): a member passkey.
+        let mut member_key = SoftAuthenticator::new();
+        assert!(!w.register(&session, &member_key).await.unwrap().staff);
+        let by_member_key = passkey_login(&w, sign_in_over(&w), &mut member_key, &account).await;
+        assert!(!grants_in(&w, &by_member_key.access_token).await.contains(&"admin".to_owned()));
+
+        // An admin's grant makes the next passkey a staff passkey.
+        let grant = w.staff().issue(&admin(), &account.as_str(), t0(), Uuid::now_v7()).await.unwrap();
+        let mut staff_key = SoftAuthenticator::new();
+        assert!(w.register_with(&session, &staff_key, Some(grant.grant), t0()).await.unwrap().staff);
+        let staff_session = passkey_login(&w, sign_in_over(&w), &mut staff_key, &account).await;
+        let grants = grants_in(&w, &staff_session.access_token).await;
+        assert!(grants.contains(&"admin".to_owned()) && grants.contains(&"audit:read".to_owned()), "{grants:?}");
+        let events = w.fx.publisher.event_types();
+        assert!(events.contains(&"auth.staff_enrollment_granted") && events.contains(&"auth.staff_passkey_enrolled"));
+
+        // Kept across a refresh; gone at the next one once the passkey is removed.
+        let refresh = |token: String| {
+            let handler = w.fx.refresh_handler().with_passkeys(Arc::clone(&w.passkeys) as _);
+            async move {
+                let cmd = crate::application::command::RefreshCommand { refresh_token: token, device: DeviceFingerprint::default() };
+                handler.handle(Envelope::new(Uuid::now_v7(), cmd), t0()).await.unwrap()
+            }
+        };
+        let refreshed = refresh(staff_session.refresh_token.clone()).await;
+        assert!(grants_in(&w, &refreshed.access_token).await.contains(&"admin".to_owned()));
+        w.passkeys.remove(&account, &staff_key.credential_id).await.unwrap();
+        let after_removal = refresh(refreshed.refresh_token).await;
+        assert!(!grants_in(&w, &after_removal.access_token).await.contains(&"admin".to_owned()));
+    }
+
+    /// A grant is for an admin to issue, never for themselves, and is used
+    /// once, before it expires, by its own account.
+    #[tokio::test]
+    async fn a_staff_grant_is_refused_to_non_admins_for_oneself_and_once_used_or_expired() {
+        use super::super::staff_enrollment::{StaffIssuer, STAFF_GRANT_TTL_SECS};
+        let w = World::new();
+        let session = w.login().await;
+        let account = session.account_id.as_str();
+        let staff = w.staff();
+
+        let member = StaffIssuer { account_id: AccountId::from_uuid(Uuid::now_v7()), permissions: vec!["user".into()] };
+        assert!(matches!(staff.issue(&member, &account, t0(), Uuid::now_v7()).await, Err(AuthError::StaffEnrollmentForbidden)));
+        let me = StaffIssuer { account_id: session.account_id, permissions: vec!["admin".into()] };
+        assert!(matches!(staff.issue(&me, &account, t0(), Uuid::now_v7()).await, Err(AuthError::StaffEnrollmentForbidden)));
+
+        // Expired: issued a day and a second ago — refused, and a refused
+        // registration stores nothing.
+        let long_ago = t0() - chrono::Duration::seconds(STAFF_GRANT_TTL_SECS + 1);
+        let late = staff.issue(&admin(), &account, long_ago, Uuid::now_v7()).await.unwrap();
+        let refused = w.register_with(&session, &SoftAuthenticator::new(), Some(late.grant), t0()).await;
+        assert!(matches!(refused, Err(AuthError::StaffEnrollmentGrantInvalid)));
+        assert!(w.passkeys.is_empty());
+
+        // Another account's grant: refused.
+        let other = AccountId::from_uuid(Uuid::now_v7());
+        let theirs = staff.issue(&admin(), &other.as_str(), t0(), Uuid::now_v7()).await.unwrap();
+        let stolen = w.register_with(&session, &SoftAuthenticator::new(), Some(theirs.grant), t0()).await;
+        assert!(matches!(stolen, Err(AuthError::StaffEnrollmentGrantInvalid)));
+
+        // Used once.
+        let grant = staff.issue(&admin(), &account, t0(), Uuid::now_v7()).await.unwrap();
+        assert!(w.register_with(&session, &SoftAuthenticator::new(), Some(grant.grant.clone()), t0()).await.unwrap().staff);
+        let again = w.register_with(&session, &SoftAuthenticator::new(), Some(grant.grant), t0()).await;
+        assert!(matches!(again, Err(AuthError::StaffEnrollmentGrantInvalid)));
+    }
+
+    /// The first grant: only with the bootstrap on, and never once a staff
+    /// passkey exists.
+    #[tokio::test]
+    async fn the_bootstrap_opens_only_while_no_staff_passkey_exists() {
+        let w = World::new();
+        let session = w.login().await;
+        let account = session.account_id.as_str();
+        assert!(matches!(w.staff().bootstrap(&account, t0(), Uuid::now_v7()).await, Err(AuthError::StaffBootstrapClosed)));
+
+        let open = w.staff().with_bootstrap(true);
+        let first = open.bootstrap(&account, t0(), Uuid::now_v7()).await.unwrap();
+        w.register_with(&session, &SoftAuthenticator::new(), Some(first.grant), t0()).await.unwrap();
+        assert!(matches!(open.bootstrap(&account, t0(), Uuid::now_v7()).await, Err(AuthError::StaffBootstrapClosed)));
+    }
+
+    /// A staff session steps up with its passkey only; a passkey step-up never
+    /// makes a member session staff.
+    #[tokio::test]
+    async fn a_staff_session_steps_up_with_its_passkey_only() {
+        use crate::application::command::{StepUpCredential, VerifyCredentialsCommand};
+        let w = World::new();
+        let session = w.login().await;
+        let account = session.account_id;
+        w.fx.directory.set_permissions(&account, &["user", "admin"]);
+        let grant = w.staff().issue(&admin(), &account.as_str(), t0(), Uuid::now_v7()).await.unwrap();
+        let mut staff_key = SoftAuthenticator::new();
+        w.register_with(&session, &staff_key, Some(grant.grant), t0()).await.unwrap();
+        let sign_in = Arc::new(sign_in_over(&w));
+        let staff_session = passkey_login(&w, sign_in_over(&w), &mut staff_key, &account).await;
+        let step_up = w.fx.verify_credentials_handler().with_passkeys(Arc::clone(&sign_in));
+        let verify = |on: &IssuedSession, credential| VerifyCredentialsCommand {
+            account_id: on.account_id.as_str(),
+            session_id: on.session_id.as_str(),
+            credential,
+        };
+
+        let by_code = step_up
+            .handle(Envelope::new(Uuid::now_v7(), verify(&staff_session, StepUpCredential::MfaCode("123456".into()))), t0())
+            .await;
+        assert!(matches!(by_code, Err(AuthError::StaffStepUpNeedsPasskey)));
+        let a = assertion(&sign_in, &mut staff_key, Vec::new(), PASSKEY).await;
+        let stepped = step_up.handle(Envelope::new(Uuid::now_v7(), verify(&staff_session, StepUpCredential::Passkey(a))), t0()).await.unwrap();
+        assert!(grants_in(&w, &stepped.access_token).await.contains(&"admin".to_owned()));
+
+        // The password session stepped up with the staff passkey stays a member's.
+        let a = assertion(&sign_in, &mut staff_key, Vec::new(), PASSKEY).await;
+        let member = step_up.handle(Envelope::new(Uuid::now_v7(), verify(&session, StepUpCredential::Passkey(a))), t0()).await.unwrap();
+        assert!(!grants_in(&w, &member.access_token).await.contains(&"admin".to_owned()));
+    }
+
 }

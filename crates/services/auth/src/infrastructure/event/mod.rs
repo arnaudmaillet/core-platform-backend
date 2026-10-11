@@ -26,5 +26,7 @@ pub(crate) fn event_key(event: &DomainEvent) -> AccountId {
         DomainEvent::SubjectLinked(e) => e.account_id,
         DomainEvent::AppAuthorized(e) => e.account_id,
         DomainEvent::AppAuthorizationRevoked(e) => e.account_id,
+        DomainEvent::StaffEnrollmentGranted(e) => e.account_id,
+        DomainEvent::StaffPasskeyEnrolled(e) => e.account_id,
     }
 }

@@ -44,5 +44,5 @@ async fn a_guest_session_needs_a_device_and_members_now_read_public_too() {
     let member = h.login(&random_user()).await.unwrap().tokens.unwrap();
     let seen = h.introspect(&member.access_token).await.unwrap();
     assert!(seen.permissions.contains(&"read:public".to_owned()), "{:?}", seen.permissions);
-    assert!(seen.permissions.contains(&"posts:write".to_owned()));
+    assert!(seen.permissions.contains(&"user".to_owned()));
 }

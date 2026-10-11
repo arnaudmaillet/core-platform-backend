@@ -226,6 +226,8 @@ mod tests {
         assert!(on_edge("/auth.v1.AuthService/ListAuthorizedApps"));
         assert!(on_edge("/auth.v1.AuthService/RevokeAppAuthorization"));
         assert!(!on_edge("/auth.v1.AuthService/RecordAppAuthorization"));
+        // Staff enrollment grants (#880): mesh only, the caller's own token checked.
+        assert!(!on_edge("/auth.v1.AuthService/IssueStaffPasskeyEnrollment"));
         assert!(!on_edge("/auth.v1.AuthService/NoteAppUse"));
     }
 }

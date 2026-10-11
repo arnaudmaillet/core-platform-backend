@@ -206,4 +206,11 @@ impl AuthService for AuthServiceHandler {
     ) -> Result<Response<proto::StartGuestSessionResponse>, Status> {
         self.start_guest_session(request).await
     }
+
+    async fn issue_staff_passkey_enrollment(
+        &self,
+        request: Request<proto::IssueStaffPasskeyEnrollmentRequest>,
+    ) -> Result<Response<proto::IssueStaffPasskeyEnrollmentResponse>, Status> {
+        self.issue_staff_passkey_enrollment(request).await
+    }
 }

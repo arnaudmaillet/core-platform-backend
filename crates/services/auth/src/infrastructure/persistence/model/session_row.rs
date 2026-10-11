@@ -3,7 +3,8 @@ use uuid::Uuid;
 
 use crate::domain::aggregate::Session;
 use crate::domain::value_object::{
-    AccountId, DeviceFingerprint, Generation, IdpSubject, SessionId, SessionKind, SessionStatus,
+    AccountId, DeviceFingerprint, Generation, IdpSubject, SessionId, SessionKind, SessionMethod, SessionSignIn,
+    SessionStatus,
 };
 use crate::error::AuthError;
 
@@ -28,6 +29,9 @@ pub struct SessionRow {
     pub absolute_expiry: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub version: i64,
+    /// How it was opened (migration 0009, #880); null on older rows.
+    pub sign_in_method: Option<String>,
+    pub passkey_credential_id: Option<Vec<u8>>,
 }
 
 impl TryFrom<SessionRow> for Session {
@@ -47,6 +51,7 @@ impl TryFrom<SessionRow> for Session {
             Generation::from_i64(row.generation),
             status,
             device,
+            SessionSignIn::from_parts(row.sign_in_method.as_deref().and_then(SessionMethod::parse), row.passkey_credential_id),
             row.issued_at,
             row.expires_at,
             row.absolute_expiry,

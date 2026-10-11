@@ -5,8 +5,10 @@
 //!
 //! Scope: `session_issued` and `session_revoked` — the authentication lifecycle —
 //! and `app_authorized` / `app_authorization_revoked` — consent given to a
-//! third-party app and its withdrawal (#667, GDPR Art. 7). Every other auth event
-//! (e.g. `subject_linked`) is a benign skip.
+//! third-party app and its withdrawal (#667, GDPR Art. 7) — and
+//! `staff_enrollment_granted` / `staff_passkey_enrolled`, who may become staff
+//! (#880, privileged actions). Every other auth event (e.g. `subject_linked`) is
+//! a benign skip.
 //!
 //! Unlike moderation, auth events carry **no free-text PII** — only structured
 //! metadata over pseudonymous ids (the account id is the subject pseudonym; audit
@@ -42,8 +44,34 @@ pub enum AuthEventWire {
     SessionRevoked(SessionRevokedWire),
     AppAuthorized(AppAuthorizedWire),
     AppAuthorizationRevoked(AppAuthorizationRevokedWire),
+    StaffEnrollmentGranted(StaffEnrollmentGrantedWire),
+    StaffPasskeyEnrolled(StaffPasskeyEnrolledWire),
     #[serde(other)]
     Other,
+}
+
+/// A staff passkey enrollment grant issued (#880); `granted_by` absent for the
+/// one-off bootstrap.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StaffEnrollmentGrantedWire {
+    pub account_id: String,
+    pub grant_id: String,
+    #[serde(default)]
+    pub granted_by: Option<String>,
+    pub expires_at: DateTime<Utc>,
+    pub occurred_at: DateTime<Utc>,
+    #[serde(default)]
+    pub correlation_id: String,
+}
+
+/// A passkey registered as a staff passkey with a grant (#880).
+#[derive(Debug, Clone, Deserialize)]
+pub struct StaffPasskeyEnrolledWire {
+    pub account_id: String,
+    pub grant_id: String,
+    pub occurred_at: DateTime<Utc>,
+    #[serde(default)]
+    pub correlation_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -208,6 +236,64 @@ fn app_consent(
         resource: ResourceRef::new("third_party_app", app_id.to_owned()),
         outcome: Outcome::Executed,
         lawful_basis: LawfulBasis::Consent,
+        source_service: SOURCE.to_owned(),
+        correlation_id: correlation_id.to_owned(),
+        occurred_at,
+        pii: None,
+        attributes,
+    })
+}
+
+/// A staff enrollment grant (#880) → a `PrivilegedAction` record: the admin
+/// who issued it is the actor (the system for the bootstrap), the account the
+/// subject, the grant the resource.
+pub fn map_staff_enrollment_granted(wire: &StaffEnrollmentGrantedWire) -> Result<AuditEvent, AuditError> {
+    let (actor_type, actor) = match &wire.granted_by {
+        Some(admin) => (ActorType::Admin, admin.as_str()),
+        None => (ActorType::System, "auth-bootstrap"),
+    };
+    let mut attributes = BTreeMap::new();
+    attributes.insert("expires_at".to_owned(), wire.expires_at.to_rfc3339());
+    attributes.insert("bootstrap".to_owned(), wire.granted_by.is_none().to_string());
+    staff_record("auth.staff_enrollment_granted", &wire.account_id, &wire.grant_id, actor_type, actor, wire.occurred_at, &wire.correlation_id, attributes)
+}
+
+/// A staff passkey enrolled (#880) → a `PrivilegedAction` record, the
+/// holder's own act with the grant.
+pub fn map_staff_passkey_enrolled(wire: &StaffPasskeyEnrolledWire) -> Result<AuditEvent, AuditError> {
+    staff_record(
+        "auth.staff_passkey_enrolled",
+        &wire.account_id,
+        &wire.grant_id,
+        ActorType::User,
+        &wire.account_id,
+        wire.occurred_at,
+        &wire.correlation_id,
+        BTreeMap::new(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn staff_record(
+    action: &str,
+    account_id: &str,
+    grant_id: &str,
+    actor_type: ActorType,
+    actor: &str,
+    occurred_at: DateTime<Utc>,
+    correlation_id: &str,
+    attributes: BTreeMap<String, String>,
+) -> Result<AuditEvent, AuditError> {
+    AuditEvent::try_new(NewAuditEvent {
+        event_id: EventId::new(derive_id(&[action, grant_id]))?,
+        category: EventCategory::PrivilegedAction,
+        subject: Some(SubjectPseudonym::new(account_id.to_owned())?),
+        tenant: None,
+        actor: Actor::new(actor_type, ActorPseudonym::new(actor.to_owned())?, String::new()),
+        action: action.to_owned(),
+        resource: ResourceRef::new("staff_enrollment_grant", grant_id.to_owned()),
+        outcome: Outcome::Executed,
+        lawful_basis: LawfulBasis::Unspecified,
         source_service: SOURCE.to_owned(),
         correlation_id: correlation_id.to_owned(),
         occurred_at,

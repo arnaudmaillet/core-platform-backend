@@ -156,7 +156,9 @@ service AuthService {
     // The authenticator's response: verified (challenge, origin, RP id, user
     // verification, ES256 key) and stored. The account's email is told.
     // AUT-5023 bad / used / expired challenge; AUT-5024 not accepted;
-    // AUT-5026 this authenticator's passkey is already registered.
+    // AUT-5026 this authenticator's passkey is already registered. With a
+    // staff enrollment grant the passkey is a staff passkey (#880); AUT-5032
+    // when the grant is unknown, another account's, expired or used.
     rpc FinishPasskeyRegistration(FinishPasskeyRegistrationRequest) returns (Passkey);
 
     // A challenge to sign in with a passkey (single use, 5 minutes), then
@@ -172,6 +174,20 @@ service AuthService {
     // those left. Needs a recent credential proof; the account's email is
     // told. AUT-5027 when the account has no such passkey.
     rpc RemovePasskey(RemovePasskeyRequest) returns (ListPasskeysResponse);
+
+    // ── Staff passkeys (#880) ─────────────────────────────────────────────────
+    // A staff account's staff permissions are minted only in a session opened
+    // with a staff passkey (Login { passkey } or CompleteLogin { passkey });
+    // signed in any other way it gets a member session. A staff session steps
+    // up with its passkey only (AUT-5031).
+
+    // INTERNAL (mesh only, staff tooling): a staff enrollment grant for
+    // another account — single use, 24 hours — that FinishPasskeyRegistration
+    // turns into a staff passkey. The caller presents its own token
+    // (`authorization: Bearer`): an `admin` / `super_admin` in a staff passkey
+    // session, never for itself (AUT-5033). Recorded on the audit plane. The
+    // first grant comes from `auth-server bootstrap-staff`.
+    rpc IssueStaffPasskeyEnrollment(IssueStaffPasskeyEnrollmentRequest) returns (IssueStaffPasskeyEnrollmentResponse);
 
     // ── Third-party app authorisations (#667) ─────────────────────────────────
 
