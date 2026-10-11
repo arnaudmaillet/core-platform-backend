@@ -27,7 +27,7 @@ pub mod subscription;
 pub mod value_object;
 
 pub use connection::{Connection, ConnectionState, CloseReason};
-pub use session::Session;
+pub use session::{Session, TokenIds};
 pub use subscription::SubscriptionSet;
 pub use value_object::{
     ChannelClass, ChannelKey, ChannelRef, ConnectionId, DeliveryGuarantee, DeviceId, NodeId,

@@ -96,7 +96,13 @@ impl Revocations {
         let (Some(session), Some(generation)) = (edge::session_id(claims), edge::generation(claims)) else {
             return Err(RevocationRefusal::Revoked);
         };
-        match self.check.is_revoked(edge::generation_owner(claims), session, generation).await {
+        self.admit_ids(edge::generation_owner(claims), session, generation).await
+    }
+
+    /// [`Self::admit`] for a token already verified and kept by its ids (a live
+    /// socket re-checked after its handshake).
+    pub async fn admit_ids(&self, owner: &str, session: &str, generation: i64) -> Result<(), RevocationRefusal> {
+        match self.check.is_revoked(owner, session, generation).await {
             Ok(false) => Ok(()),
             Ok(true) => Err(RevocationRefusal::Revoked),
             Err(RevocationUnavailable) => match self.on_failure {

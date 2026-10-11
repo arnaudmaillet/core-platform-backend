@@ -9,12 +9,19 @@
 //! refresh and re-handshake); anything else — bad signature, malformed, missing
 //! claim — is `RTM-1001 HandshakeRejected`. The plane never reveals *why* beyond
 //! these two, and logs nothing token-bearing.
+//!
+//! With [`Revocations`] attached (#903), a token `auth` revoked since it was
+//! minted is `RTM-1001` too, and the session keeps the token's `sid` / `gen` so
+//! the gateway re-checks it while the socket lives. Realtime is TIER-1: an
+//! unreadable revocation state admits the token (until `exp`).
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use auth_context::{AuthError, JwtDecoder, OidcClaims, OidcClaimsExtractor};
 use chrono::{DateTime, Utc};
+
+use transport::grpc::revocation::Revocations;
 
 use crate::application::port::TokenVerifier;
 use crate::domain::{DeviceId, Session, UserId};
@@ -27,6 +34,7 @@ pub struct AuthContextTokenVerifier {
     decoder: Arc<EdgeDecoder>,
     /// The custom JWT claim carrying the device/session id (default: `did`).
     device_claim: String,
+    revocations: Option<Revocations>,
 }
 
 impl AuthContextTokenVerifier {
@@ -34,7 +42,14 @@ impl AuthContextTokenVerifier {
         Self {
             decoder,
             device_claim: device_claim.into(),
+            revocations: None,
         }
+    }
+
+    /// Also refuses a token revoked in `auth` (#903).
+    pub fn with_revocations(mut self, revocations: Revocations) -> Self {
+        self.revocations = Some(revocations);
+        self
     }
 }
 
@@ -56,6 +71,7 @@ impl TokenVerifier for AuthContextTokenVerifier {
     ) -> Result<Session, RealtimeError> {
         let principal = self.decoder.decode(edge_token).await.map_err(map_auth_err)?;
         reject_guest(&principal.raw_claims)?;
+        admit(self.revocations.as_ref(), &principal.raw_claims).await?;
 
         let user_id = UserId::new(principal.user_id.as_str().to_owned())?;
 
@@ -80,7 +96,26 @@ impl TokenVerifier for AuthContextTokenVerifier {
             })?;
         let device_id = DeviceId::new(device.to_owned())?;
 
-        Ok(Session::new(user_id, device_id, expires_at))
+        Ok(with_token_ids(Session::new(user_id, device_id, expires_at), &principal.raw_claims))
+    }
+}
+
+/// A token `auth` revoked since it was minted is `RTM-1001` (#903).
+async fn admit(revocations: Option<&Revocations>, claims: &auth_context::OidcClaims) -> Result<(), RealtimeError> {
+    let Some(revocations) = revocations else {
+        return Ok(());
+    };
+    revocations
+        .admit(claims)
+        .await
+        .map_err(|refusal| RealtimeError::HandshakeRejected { reason: refusal.reason().to_owned() })
+}
+
+/// Keeps the token's `sid` / `gen` on the session, for the heartbeat re-check.
+fn with_token_ids(session: Session, claims: &auth_context::OidcClaims) -> Session {
+    match (auth_context::edge::session_id(claims), auth_context::edge::generation(claims)) {
+        (Some(sid), Some(generation)) => session.with_token(sid, generation),
+        _ => session,
     }
 }
 
@@ -109,5 +144,44 @@ mod guest_tests {
         assert!(matches!(reject_guest(&guest), Err(RealtimeError::HandshakeRejected { .. })));
         let member = claims(serde_json::json!({ "sub": "acct-1", "exp": 4_102_444_800_i64, "did": "d" }));
         assert!(reject_guest(&member).is_ok());
+    }
+
+    /// Revoked when `gen` is below 2; `None` = unreadable.
+    struct State(Option<()>);
+
+    impl transport::grpc::revocation::RevocationCheck for State {
+        fn is_revoked<'a>(&'a self, _: &'a str, _: &'a str, generation: i64) -> transport::grpc::revocation::RevocationLookup<'a> {
+            Box::pin(async move { self.0.ok_or(transport::grpc::revocation::RevocationUnavailable).map(|_| generation < 2) })
+        }
+    }
+
+    /// #903: a revoked token is refused at the handshake (`RTM-1001`); an
+    /// unreadable state admits it (fail open); unconfigured, nothing is checked.
+    #[tokio::test]
+    async fn the_handshake_refuses_a_revoked_token_and_fails_open() {
+        use transport::grpc::revocation::{RevocationFailure, Revocations};
+        let live = claims(serde_json::json!({ "sub": "acct-1", "exp": 4_102_444_800_i64, "sid": "s-1", "gen": 2 }));
+        let revoked = claims(serde_json::json!({ "sub": "acct-1", "exp": 4_102_444_800_i64, "sid": "s-1", "gen": 1 }));
+        let up = Revocations::new(std::sync::Arc::new(State(Some(()))), RevocationFailure::Open);
+        assert!(admit(Some(&up), &live).await.is_ok());
+        assert!(matches!(admit(Some(&up), &revoked).await, Err(RealtimeError::HandshakeRejected { .. })));
+        let down = Revocations::new(std::sync::Arc::new(State(None)), RevocationFailure::Open);
+        assert!(admit(Some(&down), &live).await.is_ok());
+        assert!(admit(None, &revoked).await.is_ok());
+    }
+
+    #[test]
+    fn the_session_keeps_the_token_ids() {
+        let session = || {
+            Session::new(
+                UserId::new("acct-1".to_owned()).unwrap(),
+                DeviceId::new("d".to_owned()).unwrap(),
+                DateTime::from_timestamp(4_102_444_800, 0).unwrap(),
+            )
+        };
+        let with = with_token_ids(session(), &claims(serde_json::json!({ "sub": "acct-1", "exp": 1, "sid": "s-1", "gen": 3 })));
+        let token = with.token.unwrap();
+        assert_eq!((token.session_id.as_str(), token.generation), ("s-1", 3));
+        assert!(with_token_ids(session(), &claims(serde_json::json!({ "sub": "acct-1", "exp": 1 }))).token.is_none());
     }
 }

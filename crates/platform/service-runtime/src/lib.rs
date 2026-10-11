@@ -123,6 +123,13 @@ pub use edge_revocation::{EDGE_REVOCATION_CACHE_MS_ENV, EDGE_REVOCATION_HOSTS_EN
 /// service is built so [`staff_gate_from_env`] sees it too.
 static EDGE_REVOCATION: OnceLock<Arc<dyn RevocationCheck>> = OnceLock::new();
 
+/// The process's edge-token revocation check, for a verifier the runtime does
+/// not build itself (the realtime handshake, audit's caller gate): set by
+/// [`serve`] before `Service::build` when `EDGE_REVOCATION_REDIS_HOSTS` is.
+pub fn edge_revocation() -> Option<Arc<dyn RevocationCheck>> {
+    EDGE_REVOCATION.get().cloned()
+}
+
 /// Backend health probes now live in the `health` foundation crate, so storage
 /// crates can expose ready-made probes (`<storage>::health::probe(...)`) without
 /// depending on this platform crate. Re-exported here for ergonomic use from

@@ -89,6 +89,7 @@ impl Service for RealtimeGatewayService {
             send_queue_cap: config.send_queue_cap,
             heartbeat_interval: config.heartbeat_interval,
             heartbeat_timeout: config.heartbeat_timeout,
+            revocations: adapters.revocations.clone(),
         };
 
         let ws_addr = config.ws_addr.clone();

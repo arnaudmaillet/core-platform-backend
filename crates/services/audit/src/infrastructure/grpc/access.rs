@@ -17,6 +17,7 @@
 //! the RPC name are traced (the interim access trail until each read is
 //! recorded as its own `DATA_ACCESS` event — see the README deferral).
 
+use transport::grpc::revocation::{RevocationFailure, RevocationRefusal, Revocations};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -104,11 +105,22 @@ pub async fn authorize(
 /// gateway's handshake verification).
 pub struct AuthContextCallerGate {
     decoder: Arc<JwtDecoder<OidcClaims, OidcClaimsExtractor>>,
+    /// `auth`'s revocation state (#903): a token revoked since it was minted
+    /// (a staff member whose role was revoked, a signed-out session) is
+    /// refused. Always fail closed (TIER-0).
+    revocations: Option<Revocations>,
 }
 
 impl AuthContextCallerGate {
     pub fn new(decoder: Arc<JwtDecoder<OidcClaims, OidcClaimsExtractor>>) -> Self {
-        Self { decoder }
+        Self { decoder, revocations: None }
+    }
+
+    /// Also refuses a revoked token (`AUD-3004`); an unreadable revocation
+    /// state is `AUD-3006`, whatever posture `revocations` carries.
+    pub fn with_revocations(mut self, revocations: Revocations) -> Self {
+        self.revocations = Some(revocations.with_failure(RevocationFailure::Closed));
+        self
     }
 }
 
@@ -123,6 +135,12 @@ impl CallerGate for AuthContextCallerGate {
             .decode(token)
             .await
             .map_err(|_| AuditError::CallerUnauthenticated)?;
+        if let Some(revocations) = &self.revocations {
+            revocations.admit(&principal.raw_claims).await.map_err(|refusal| match refusal {
+                RevocationRefusal::Revoked => AuditError::CallerUnauthenticated,
+                RevocationRefusal::Unavailable => AuditError::CallerCheckUnavailable,
+            })?;
+        }
         Ok(Caller::new(
             principal.user_id.as_str().to_owned(),
             principal.permissions.into_iter().map(|p| p.0),
@@ -155,7 +173,14 @@ pub fn build_gate(authz: &Option<AuthContextConfig>) -> Arc<dyn CallerGate> {
             // so every real token used to be PERMISSION_DENIED) and ES256 only
             // (listing RS256 next to it made `jsonwebtoken` reject every valid
             // token as InvalidAlgorithm — see `auth_context::EDGE_ALGORITHMS`).
-            Arc::new(AuthContextCallerGate::new(spawn_edge_decoder(auth)))
+            let gate = AuthContextCallerGate::new(spawn_edge_decoder(auth));
+            Arc::new(match service_runtime::edge_revocation() {
+                Some(check) => gate.with_revocations(Revocations::new(check, RevocationFailure::Closed)),
+                None => {
+                    tracing::warn!("EDGE_REVOCATION_REDIS_HOSTS unset: a revoked token keeps reading audit until exp (#903)");
+                    gate
+                }
+            })
         }
         None => {
             tracing::warn!(
@@ -213,9 +238,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_authorization_header_is_unauthenticated() {
-        let gate = AuthContextCallerGate {
-            decoder: unreachable_decoder(),
-        };
+        let gate = AuthContextCallerGate::new(unreachable_decoder());
         let err = authorize(&gate, &MetadataMap::new(), perm::READ, AuditError::QueryForbidden)
             .await
             .unwrap_err();
@@ -224,9 +247,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_non_bearer_scheme_is_unauthenticated() {
-        let gate = AuthContextCallerGate {
-            decoder: unreachable_decoder(),
-        };
+        let gate = AuthContextCallerGate::new(unreachable_decoder());
         let meta = metadata_with_auth("Basic dXNlcjpwYXNz");
         let err = authorize(&gate, &meta, perm::READ, AuditError::QueryForbidden)
             .await
@@ -263,6 +284,55 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AuditError::CallerUnauthenticated));
+    }
+
+    /// Revoked when `gen` is below 2; `None` = unreadable.
+    struct State(Option<()>);
+
+    impl transport::grpc::revocation::RevocationCheck for State {
+        fn is_revoked<'a>(&'a self, _: &'a str, _: &'a str, generation: i64) -> transport::grpc::revocation::RevocationLookup<'a> {
+            Box::pin(async move { self.0.ok_or(transport::grpc::revocation::RevocationUnavailable).map(|_| generation < 2) })
+        }
+    }
+
+    /// #903: a token verified by the gate but revoked in `auth` since it was
+    /// minted is `AUD-3004`; an unreadable revocation state is `AUD-3006` —
+    /// fail closed even when the check was handed an open posture.
+    #[tokio::test]
+    async fn a_revoked_token_is_unauthenticated_and_an_unreadable_state_fails_closed() {
+        use jsonwebtoken::{encode, DecodingKey, EncodingKey, Header};
+        let secret = b"audit-gate-test-secret";
+        let cache = JwksCache::new();
+        cache.replace([("k1".to_owned(), DecodingKey::from_secret(secret))].into_iter().collect()).await;
+        let decoder = Arc::new(JwtDecoder::with_algorithms(
+            &AuthContextConfig::default(),
+            cache,
+            OidcClaimsExtractor::platform_edge(),
+            vec![Algorithm::HS256],
+        ));
+        let token = |generation: i64| {
+            let mut header = Header::new(Algorithm::HS256);
+            header.kid = Some("k1".to_owned());
+            let claims = serde_json::json!({
+                "sub": "staff-1", "sid": "s-1", "gen": generation,
+                "exp": 4_102_444_800_i64, "perms": [perm::READ],
+            });
+            encode(&header, &claims, &EncodingKey::from_secret(secret)).unwrap()
+        };
+        let gate = |state| {
+            AuthContextCallerGate::new(Arc::clone(&decoder)).with_revocations(Revocations::new(
+                Arc::new(State(state)),
+                RevocationFailure::Open,
+            ))
+        };
+        let meta = |generation| metadata_with_auth(&format!("Bearer {}", token(generation)));
+
+        let caller = authorize(&gate(Some(())), &meta(2), perm::READ, AuditError::QueryForbidden).await;
+        assert!(caller.is_ok(), "a live token reads: {caller:?}");
+        let revoked = authorize(&gate(Some(())), &meta(1), perm::READ, AuditError::QueryForbidden).await;
+        assert!(matches!(revoked, Err(AuditError::CallerUnauthenticated)));
+        let unreadable = authorize(&gate(None), &meta(2), perm::READ, AuditError::QueryForbidden).await;
+        assert!(matches!(unreadable, Err(AuditError::CallerCheckUnavailable)));
     }
 
     /// A decoder whose JWKS cache is empty — any decode attempt fails, which is

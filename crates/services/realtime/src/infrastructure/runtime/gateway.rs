@@ -24,11 +24,12 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
+use transport::grpc::revocation::Revocations;
 use uuid::Uuid;
 
 use crate::application::handshake::HandshakeHandler;
 use crate::application::lifecycle::ReapHandler;
-use crate::domain::{Connection, ConnectionId};
+use crate::domain::{Connection, ConnectionId, Session};
 use crate::error::RealtimeError;
 use crate::infrastructure::codec::{self, ClientIntent};
 use crate::infrastructure::redis_node_channel::BROADCAST_CHANNEL;
@@ -43,6 +44,9 @@ pub struct GatewayState {
     pub send_queue_cap: usize,
     pub heartbeat_interval: Duration,
     pub heartbeat_timeout: Duration,
+    /// Re-checks each live socket's token against `auth`'s revocation state on
+    /// the heartbeat (#903); `None` when not configured.
+    pub revocations: Option<Revocations>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,6 +148,16 @@ async fn handle_socket(socket: WebSocket, state: GatewayState, token: String) {
                 if reap {
                     break;
                 }
+                let session = connection.lock().await.session().clone();
+                if is_revoked(state.revocations.as_ref(), &session).await {
+                    let frame = codec::control_frame(
+                        pb::ServerControl::ReauthRequired, None, "RTM-1001",
+                        "edge token revoked; sign in again", 0,
+                    ).encode_to_vec();
+                    let _ = tx.try_send(frame);
+                    tracing::debug!("ws closed: token revoked");
+                    break;
+                }
                 if expired {
                     let frame = codec::control_frame(
                         pb::ServerControl::ReauthRequired, None, "RTM-1002",
@@ -169,6 +183,19 @@ async fn handle_socket(socket: WebSocket, state: GatewayState, token: String) {
         tracing::warn!(%error, "registry evict failed on teardown");
     }
     writer.abort();
+}
+
+/// `true` when the socket's token was revoked in `auth` since its handshake
+/// (#903). Unconfigured, a token without ids, or an unreadable state (realtime
+/// fails open) keep the socket.
+async fn is_revoked(revocations: Option<&Revocations>, session: &Session) -> bool {
+    let (Some(revocations), Some(token)) = (revocations, &session.token) else {
+        return false;
+    };
+    revocations
+        .admit_ids(session.user_id.as_str(), &token.session_id, token.generation)
+        .await
+        .is_err()
 }
 
 /// Decode one client frame and apply its intent to the connection, keeping the
@@ -298,4 +325,51 @@ pub fn spawn_node_subscriber(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use chrono::DateTime;
+    use transport::grpc::revocation::{
+        RevocationCheck, RevocationFailure, RevocationLookup, RevocationUnavailable, Revocations,
+    };
+
+    use super::*;
+    use crate::domain::DeviceId;
+
+    /// Revoked when `gen` is below the current one; `None` = unreadable.
+    struct Current(Option<i64>);
+
+    impl RevocationCheck for Current {
+        fn is_revoked<'a>(&'a self, _: &'a str, _: &'a str, generation: i64) -> RevocationLookup<'a> {
+            Box::pin(async move { self.0.map(|current| generation < current).ok_or(RevocationUnavailable) })
+        }
+    }
+
+    fn session(token: Option<i64>) -> Session {
+        let session = Session::new(
+            crate::domain::UserId::new("acct-1".to_owned()).unwrap(),
+            DeviceId::new("d".to_owned()).unwrap(),
+            DateTime::from_timestamp(4_102_444_800, 0).unwrap(),
+        );
+        match token {
+            Some(generation) => session.with_token("s-1", generation),
+            None => session,
+        }
+    }
+
+    /// #903: a live socket whose token was revoked since its handshake is
+    /// closed at the next heartbeat; an unreadable state (fail open), a token
+    /// without ids, or no check configured keep it.
+    #[tokio::test]
+    async fn a_socket_is_closed_once_its_token_is_revoked() {
+        let revocations = |current| Revocations::new(Arc::new(Current(current)), RevocationFailure::Open);
+        assert!(!is_revoked(Some(&revocations(Some(1))), &session(Some(1))).await);
+        assert!(is_revoked(Some(&revocations(Some(2))), &session(Some(1))).await, "signed out since");
+        assert!(!is_revoked(Some(&revocations(None)), &session(Some(1))).await, "fail open");
+        assert!(!is_revoked(Some(&revocations(Some(2))), &session(None)).await, "no ids to check");
+        assert!(!is_revoked(None, &session(Some(1))).await, "not configured");
+    }
 }

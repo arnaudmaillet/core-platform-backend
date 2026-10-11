@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: e0839b81e1ebf56422362a0c1c7ad638c773c5030d3e6cd4b46e8cd4328fdf14
-  translated_at: 2026-06-26
+  source_sha256: 94a7d1b7553e37d1e539b0519be3dc39c0252c946cd29ce32e584fd993f77d6d
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -78,7 +78,7 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), Kafka pour l'
 
 > **Invariants** (et où ils sont appliqués) :
 > - **Le plan ne stocke rien.** Il détient la connexion et le registre de routage éphémère, jamais le contenu. Un raté de registre (destinataire hors ligne) est un no-op — la durabilité et le chemin de push vers téléphone verrouillé appartiennent à `chat` / `notification` — domain + application.
-> - **Authentifier une fois, au handshake.** Le jeton de bord est vérifié à l'upgrade WS via `auth-context` ; jamais re-vérifié par trame (cela réintroduirait le coût maillage par-message que le plan existe pour éliminer) — frontière infrastructure.
+> - **Authentifier une fois, au handshake.** Le jeton de bord est vérifié à l'upgrade WS via `auth-context` ; jamais re-vérifié par trame (cela réintroduirait le coût maillage par-message que le plan existe pour éliminer) — frontière infrastructure. Sa **révocation** est re-vérifiée au heartbeat (#903) : une lecture en cache par socket et par tick, pas par trame.
 > - **La seule autorisation est la propriété de portée de canal.** Une connexion ne peut s'abonner qu'aux canaux liés à son identité épinglée (Alice → `dm:alice`, jamais `dm:bob`). La visibilité fine du contenu a été autorisée en amont à l'émission de l'événement — domain.
 > - **Un consommateur lent est délesté, pas tamponné.** Chaque connexion a une file d'envoi bornée ; en débordement, le plan jette/déconnecte plutôt que de laisser un mauvais réseau gonfler la mémoire du nœud — infrastructure.
 > - **Fail-open, toujours.** Un événement live perdu n'est jamais un message perdu ; le client resynchronise depuis le SoR via son jeton de séquence à la reconnexion — application.
@@ -229,6 +229,7 @@ Bibliothèque uniquement. Implémentera [`service_runtime::Service`](../../platf
 | `REDIS_URL` | **Oui** | — | registre de connexion/présence + saut inter-nœud Pub/Sub |
 | `KAFKA_BROKERS` | **Oui** (dispatcher) | — | ingestion des événements amont |
 | `<auth-context verification config>` | **Oui** | — | vérification du jeton de bord (ES256) au handshake |
+| `EDGE_REVOCATION_REDIS_HOSTS` | Non (recommandé) | — | le Redis d'`auth` (voir `service-runtime`, #903) : un jeton qu'`auth` a révoqué est refusé au handshake (`RTM-1001`), et un socket vivant est re-vérifié à chaque heartbeat puis fermé (`ReauthRequired`, `RTM-1001`) dès que son jeton est révoqué — déconnexion, suspension, rôle retiré. Échec ouvert (TIER-1) : un état illisible garde le socket. Non défini ⇒ un jeton révoqué garde son socket |
 
 ### Fonctionnalités à la compilation
 - `integration-realtime` *(Phase 6)* — active la suite d'intégration live adossée à des conteneurs (Redis + Kafka réels).

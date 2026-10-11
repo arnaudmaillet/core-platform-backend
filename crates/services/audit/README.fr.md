@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 22610f6d6634c62414f6e5a0eae0c3abaa62dc842856f18782c928bf9b912395
-  translated_at: 2026-10-08
+  source_sha256: 53967a5158b6f8e36071f4e494be42786aa15a8c0be3badc62f01ebf8717b151
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -197,6 +197,7 @@ Bibliothèque uniquement. Implémente [`service_runtime::Service`](../../platfor
 | `AUDIT_WITNESS_ENDPOINT` | **Oui (prod)** | — | endpoint du bucket WORM compte-séparé (S3 Object Lock). **Sa présence active** l'ancrage au témoin externe (#483) ; absent ⇒ `PgCheckpointAnchor` Postgres-seul (dev). `AUDIT_WITNESS_{REGION,BUCKET,ACCESS_KEY,SECRET_KEY}` le configurent |
 | `AUDIT_CHECKPOINT_SIGNING_KEY_BASE64` | Non (dev) | clé dev | base64 de la clé HMAC de signature des checkpoints utilisée **uniquement** quand KMS est absent (voie checkpoint-signé dev/CI) |
 | `AUDIT_JWKS_URL` | **Oui (prod)** | — | endpoint JWKS vérifiant les tokens edge ES256 sur la surface privilégiée. **Sa présence active** le caller gate `auth-context` ; absent ⇒ **deny-all** (`AUD-3004`) — la surface ne s'ouvre jamais par omission. Chaque RPC exige sa permission `audit:*` : `audit:record` / `audit:read` / `audit:export` / `audit:verify` |
+| `EDGE_REVOCATION_REDIS_HOSTS` | Non (recommandé) | — | le Redis d'`auth` (voir `service-runtime`) : le caller gate refuse aussi un token qu'`auth` a révoqué depuis son émission — un membre du staff dont le rôle a été retiré, une session déconnectée (`AUD-3004`), et échoue fermé quand cet état est illisible (`AUD-3006`, rejouable). Non défini ⇒ un token révoqué lit jusqu'à `exp` (#903) |
 | `AUDIT_TOKEN_ISSUER` / `AUDIT_TOKEN_AUDIENCE` | Non (recommandé) | — | claims `iss` / `aud` attendus du token edge (les valeurs que `auth` frappe) |
 | `AUDIT_JWKS_TIMEOUT_MS` | Non | `10000` | timeout par requête du fetch JWKS |
 | `<config registre / archive>` | **Oui** | — | registre Postgres append-only + archive WORM Object-Lock |
