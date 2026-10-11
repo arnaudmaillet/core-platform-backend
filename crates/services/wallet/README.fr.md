@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 892513a5e7627c285ca44928246244720fed6e5767c5ac64dbc7b8a4e0ca400f
-  translated_at: 2026-10-10
+  source_sha256: 41bac7722b3b6588b90c1a98f7754b6e92e1326a866697b4c0114ca500677f53
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -233,8 +233,15 @@ l'infra ne fournit pas les jetons (core-platform-infra#62).
 - `BuyStakePack` répond `BOUGHT`, `PACK_STILL_ACTIVE` ou `INSUFFICIENT_GEMS` dans la réponse ;
   `SpendGems` répond `SPENT` ou `INSUFFICIENT_GEMS`.
 
-- `ClaimReward` répond `CLAIMED`, `TOO_EARLY` ou `DAILY_CAP_REACHED` **dans la réponse** (pas
-  d'erreur), avec le portefeuille après l'appel ; `next_claim_at` dit quand la prochaine ouvre.
+- `ClaimReward` répond `CLAIMED`, `TOO_EARLY`, `DAILY_CAP_REACHED` ou `BALANCE_FULL` **dans la
+  réponse** (pas d'erreur), avec le portefeuille après l'appel ; `next_claim_at` dit quand la
+  prochaine ouvre. Le solde de points est plafonné (#887, charte §4.1 `A_max`) : un claim est rogné à
+  la place restante sous `points_cap` (renvoyé dans `Wallet`), et un portefeuille au plafond répond
+  `BALANCE_FULL`, avec `claim_available` à faux et sans `next_claim_at` : dépenser des points le
+  rouvre, aucune attente ne le fait. Les gems ne sont pas plafonnées. La cadence d'appel (environ 30
+  `ClaimReward` par heure et par compte, `RESOURCE_EXHAUSTED`) relève du profil de trafic
+  `per_caller` de l'edge client, réglé dans l'`infrastructure.toml` du dépôt infra, pas dans ce
+  service.
 - `ListWalletTransactions` : du plus récent au plus ancien, les deux monnaies ou une seule ; 50 par
   page par défaut, 100 au plus. Un `TransactionKind` inconnu (d'un serveur plus récent) se lit
   `UNSPECIFIED`.
@@ -297,6 +304,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_CLAIM_INTERVAL_SECS` | `3600` | une réclamation par intervalle |
 | `WALLET_CLAIM_BASE_POINTS` | `25` | une réclamation sans série |
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points réclamables par jour UTC |
+| `WALLET_POINTS_CAP` | `2000` | le solde de points qu'un claim ne dépasse jamais (`BALANCE_FULL` à ce niveau) ; 0 garde la valeur par défaut |
 | `WALLET_STARTER_GEMS` | `100` | gems à l'ouverture d'un portefeuille |
 | `WALLET_STAKE_PACK_SHOTS` | `3` | tirs dans un pack ×100 |
 | `WALLET_STAKE_PACK_PRICE` | `50` | prix d'un pack en gems |

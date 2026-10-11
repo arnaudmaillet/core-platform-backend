@@ -41,11 +41,14 @@ pub struct ClaimPolicy {
     pub base_points: i32,
     /// Points claimable per UTC day.
     pub daily_cap:   i32,
+    /// The points balance a claim never takes past (#887, charter §4.1 `A_max`):
+    /// a claim is clamped to what fits, and a full wallet claims nothing.
+    pub points_cap:  i64,
 }
 
 impl Default for ClaimPolicy {
     fn default() -> Self {
-        Self { interval: TimeDelta::hours(1), base_points: 25, daily_cap: 200 }
+        Self { interval: TimeDelta::hours(1), base_points: 25, daily_cap: 200, points_cap: 2_000 }
     }
 }
 
@@ -55,11 +58,13 @@ impl ClaimPolicy {
         (1.0 + 0.1 * f64::from((streak - 1).max(0))).min(2.0)
     }
 
-    /// What a claim with `streak` pays after `claimed_today`, within the cap.
-    fn amount(&self, streak: i32, claimed_today: i32) -> i32 {
+    /// What a claim with `streak` pays after `claimed_today`, within the daily
+    /// cap and the room left under the balance cap.
+    fn amount(&self, streak: i32, claimed_today: i32, points: i64) -> i32 {
         // Rounded half away from zero, like the app.
         let full = (f64::from(self.base_points) * Self::multiplier(streak)).round() as i32;
-        full.min(self.daily_cap - claimed_today).max(0)
+        let room = i32::try_from((self.points_cap - points).max(0)).unwrap_or(i32::MAX);
+        full.min(self.daily_cap - claimed_today).min(room).max(0)
     }
 }
 
@@ -96,6 +101,8 @@ pub enum ClaimDecision {
     TooEarly { next_claim_at: DateTime<Utc> },
     /// Today's cap is reached: the next claim opens at 00:00 UTC.
     DailyCapReached { next_claim_at: DateTime<Utc> },
+    /// The balance is at the cap (#887): spending points opens the claim again.
+    BalanceFull,
 }
 
 /// The claim surface as the app renders it.
@@ -108,6 +115,8 @@ pub struct ClaimState {
     pub daily_cap:     i32,
     /// The live chain; 0 once lapsed.
     pub streak_days:   i32,
+    /// The balance cap (#887), echoed so the app never hardcodes it.
+    pub points_cap:    i64,
 }
 
 /// An account's wallet: both balances, the claim's state and the stake pack.
@@ -178,6 +187,10 @@ impl Wallet {
     pub fn decide_claim(&self, policy: &ClaimPolicy, now: DateTime<Utc>) -> ClaimDecision {
         let today = now.date_naive();
         let claimed = self.claimed_on(today);
+        // First: no wait opens a full wallet, only spending does.
+        if self.points >= policy.points_cap {
+            return ClaimDecision::BalanceFull;
+        }
         if claimed >= policy.daily_cap {
             return ClaimDecision::DailyCapReached { next_claim_at: next_midnight(now) };
         }
@@ -187,7 +200,7 @@ impl Wallet {
             return ClaimDecision::TooEarly { next_claim_at: opens };
         }
         let streak = self.prospective_streak(today);
-        ClaimDecision::Claim { awarded: policy.amount(streak, claimed), streak }
+        ClaimDecision::Claim { awarded: policy.amount(streak, claimed, self.points), streak }
     }
 
     /// Records a claim [`Self::decide_claim`] allowed.
@@ -238,14 +251,16 @@ impl Wallet {
             ClaimDecision::TooEarly { next_claim_at } | ClaimDecision::DailyCapReached { next_claim_at } => {
                 (false, Some(next_claim_at))
             }
+            ClaimDecision::BalanceFull => (false, None),
         };
         ClaimState {
             available,
             next_claim_at,
-            claim_amount: policy.amount(self.prospective_streak(today), claimed),
+            claim_amount: policy.amount(self.prospective_streak(today), claimed, self.points),
             claimed_today: claimed,
             daily_cap: policy.daily_cap,
             streak_days: self.display_streak(today),
+            points_cap: policy.points_cap,
         }
     }
 }
@@ -330,6 +345,25 @@ mod tests {
         claim(&mut w, at(8, 10, 0));
         let waiting = w.claim_state(&ClaimPolicy::default(), at(8, 10, 5));
         assert_eq!((waiting.available, waiting.next_claim_at, waiting.streak_days), (false, Some(at(8, 11, 0)), 1));
+    }
+
+    /// #887: a claim is clamped to the room under the balance cap; a full
+    /// wallet claims nothing, whatever the hour, until points are spent.
+    #[test]
+    fn the_balance_cap_clamps_a_claim_and_a_full_wallet_claims_nothing() {
+        let policy = ClaimPolicy::default();
+        let mut w = wallet();
+        w.points = policy.points_cap - 10;
+        assert_eq!(claim(&mut w, at(5, 9, 0)), ClaimDecision::Claim { awarded: 10, streak: 1 });
+        assert_eq!(w.points, policy.points_cap);
+
+        assert_eq!(claim(&mut w, at(5, 11, 0)), ClaimDecision::BalanceFull, "the hour has passed, the wallet is full");
+        let state = w.claim_state(&policy, at(5, 11, 0));
+        assert_eq!((state.available, state.next_claim_at, state.claim_amount), (false, None, 0));
+        assert_eq!(state.points_cap, policy.points_cap);
+
+        w.points -= 100; // a stake spent them
+        assert_eq!(claim(&mut w, at(5, 11, 0)), ClaimDecision::Claim { awarded: 25, streak: 1 });
     }
 
     #[test]

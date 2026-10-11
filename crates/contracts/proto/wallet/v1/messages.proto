@@ -26,7 +26,8 @@ message Wallet {
     bool                      claim_available = 8;
     // When the next claim opens; unset while `claim_available`.
     google.protobuf.Timestamp next_claim_at   = 9;
-    // What the next claim pays (streak multiplier and daily cap applied).
+    // What the next claim pays (streak multiplier, daily cap and the room
+    // under `points_cap` applied).
     int32                     claim_amount    = 10;
     // Points claimed in the current UTC day.
     int32                     claimed_today   = 11;
@@ -45,6 +46,11 @@ message Wallet {
     int64                     stake_pack_price        = 17;
     int32                     stake_pack_shots        = 18;
     int32                     points_per_shot         = 19;
+
+    // The points balance a claim never takes past (server policy): a claim is
+    // clamped to what fits, and at the cap `claim_available` is false with no
+    // `next_claim_at` (ClaimReward answers CLAIM_OUTCOME_BALANCE_FULL).
+    int64                     points_cap              = 20;
 }
 
 message GetWalletRequest {

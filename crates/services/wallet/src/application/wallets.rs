@@ -569,6 +569,7 @@ pub(crate) mod fakes {
                 }
                 ClaimDecision::TooEarly { .. } => (ClaimOutcome::TooEarly, 0),
                 ClaimDecision::DailyCapReached { .. } => (ClaimOutcome::DailyCapReached, 0),
+                ClaimDecision::BalanceFull => (ClaimOutcome::BalanceFull, 0),
             };
             Ok(ClaimResult { outcome, awarded, wallet })
         }

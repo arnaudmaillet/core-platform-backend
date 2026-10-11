@@ -101,6 +101,31 @@ async fn concurrent_claims_credit_once_per_hour_and_replays_answer_the_same() {
     assert_reconciles(&pool, &account).await;
 }
 
+/// #887 over Postgres: the claim that reaches the balance cap is clamped to
+/// what fits (and recorded as such in the ledger), then a full wallet answers
+/// BALANCE_FULL, crediting nothing.
+#[tokio::test]
+async fn a_claim_stops_at_the_points_cap() {
+    let pool = pool().await;
+    let store = store(&pool);
+    let account = AccountId::from_uuid(Uuid::now_v7());
+    let policy = ClaimPolicy { points_cap: 40, ..ClaimPolicy::default() };
+    let start = Utc.with_ymd_and_hms(2026, 10, 8, 12, 0, 0).unwrap();
+    let claim = |hours: i64, key: &str| {
+        let store = Arc::clone(&store);
+        let key = IdempotencyKey::for_operation(Operation::Claim, key).unwrap();
+        async move { store.claim(&account, &key, &policy, 100, start + chrono::TimeDelta::hours(hours)).await.unwrap() }
+    };
+
+    let first = claim(0, "cap-claim-0001").await;
+    assert_eq!((first.outcome, first.awarded), (ClaimOutcome::Claimed, 25));
+    let clamped = claim(1, "cap-claim-0002").await;
+    assert_eq!((clamped.outcome, clamped.awarded, clamped.wallet.points), (ClaimOutcome::Claimed, 15, 40));
+    let full = claim(2, "cap-claim-0003").await;
+    assert_eq!((full.outcome, full.awarded, full.wallet.points), (ClaimOutcome::BalanceFull, 0, 40));
+    assert_reconciles(&pool, &account).await;
+}
+
 #[tokio::test]
 async fn the_history_pages_over_postgres_and_erasure_clears_it() {
     let pool = pool().await;

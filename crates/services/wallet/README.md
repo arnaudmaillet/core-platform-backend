@@ -212,8 +212,14 @@ ServiceAccount token, `x-mesh-token`. `off` until the infra provides the tokens 
 - `BuyStakePack` answers `BOUGHT`, `PACK_STILL_ACTIVE` or `INSUFFICIENT_GEMS` in-band;
   `SpendGems` answers `SPENT` or `INSUFFICIENT_GEMS`.
 
-- `ClaimReward` answers `CLAIMED`, `TOO_EARLY` or `DAILY_CAP_REACHED` **in-band** (not errors),
-  with the wallet after the call; `next_claim_at` says when the next claim opens.
+- `ClaimReward` answers `CLAIMED`, `TOO_EARLY`, `DAILY_CAP_REACHED` or `BALANCE_FULL` **in-band**
+  (not errors), with the wallet after the call; `next_claim_at` says when the next claim opens.
+  The points balance is capped (#887, charter §4.1 `A_max`): a claim is clamped to the room under
+  `points_cap` (echoed in `Wallet`), and a wallet at the cap answers `BALANCE_FULL`, with
+  `claim_available` false and no `next_claim_at`: spending points opens it again, no wait does.
+  Gems are not capped. Call velocity (about 30 `ClaimReward` an hour per account,
+  `RESOURCE_EXHAUSTED`) is the client edge's `per_caller` traffic profile, set in the infra
+  repo's `infrastructure.toml`, not in this service.
 - `ListWalletTransactions`: newest first, both currencies or one; 50 per page by default, 100 at
   most. An unknown `TransactionKind` (from a newer server) reads as `UNSPECIFIED`.
 
@@ -275,6 +281,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_CLAIM_INTERVAL_SECS` | `3600` | one claim per interval |
 | `WALLET_CLAIM_BASE_POINTS` | `25` | an un-streaked claim |
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points claimable per UTC day |
+| `WALLET_POINTS_CAP` | `2000` | the points balance a claim never takes past (`BALANCE_FULL` at it); 0 keeps the default |
 | `WALLET_STARTER_GEMS` | `100` | gems a wallet opens with |
 | `WALLET_STAKE_PACK_SHOTS` | `3` | shots in a ×100 pack |
 | `WALLET_STAKE_PACK_PRICE` | `50` | a pack's price in gems |
