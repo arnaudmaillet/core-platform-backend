@@ -24,7 +24,7 @@ through the whole async call-stack **without** threading it through every functi
 policy and not transport. Public keys are fetched **once** from the OIDC JWKS endpoint by a background
 task and cached; every token verification is then a pure CPU operation on the hot path.
 
-**Core objectives:** provider agnosticism (Keycloak `realm_access.roles`, Auth0 `permissions`, Okta
+**Core objectives:** provider agnosticism (`realm_access.roles`, Auth0 `permissions`, Okta
 `groups`, any OIDC issuer via the `ClaimsExtractor<C>` strategy); type-safe identity (raw claims travel
 as the generic `C`); transparent propagation via `tokio::task_local!`.
 

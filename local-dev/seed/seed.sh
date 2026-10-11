@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
-# Dev-data seed for the local fleet. Runs INSIDE the compose network so the
-# Keycloak issuer (iss) it sees matches exactly what auth-server sees — the
-# account's identity_id is `${iss}#${sub}`, so this must line up or login fails.
+# Dev-data seed for the local fleet. Runs INSIDE the compose network.
 #
-# Creates 3 users (Keycloak → Active account → profile), mutual follows, and
-# ~5 published posts each. Idempotent: safe to re-run.
+# Creates 3 users (Active account → email-code identity linked in auth →
+# profile), mutual follows, and ~5 published posts each. Nothing signs in with
+# a password (#881): each user signs in with a code sent to their email, which
+# the local auth-server prints to its log (AUTH_VERIFICATION_SENDER=log).
+# Idempotent: safe to re-run.
 set -uo pipefail
 
-KC="http://keycloak:8080"
-REALM="core-platform"
-CLIENT_ID="core-platform-auth"   # public client — no secret
+# The email-code identity issuer auth links accounts under; the account's
+# identity_id is `${issuer}#${email}`.
+EMAIL_ISSUER="urn:core-platform:email"
+AUTH_DB="postgres://core:core@postgres:5432/auth"
 
 ACCOUNT="account-server:50059"
 PROFILE="profile-server:50052"
 SGRAPH="social-graph-server:50053"
 POST="post-server:50056"
 
-# username -> handle:display metadata (password is "password" for all)
+# username -> handle:display metadata
 USERS=("alice" "bob" "carol")
 declare -A HANDLE=( [alice]="alice" [bob]="bob" [carol]="carol" )
 declare -A DISPLAY=( [alice]="Alice Anderson" [bob]="Bob Brown" [carol]="Carol Clark" )
@@ -26,21 +28,12 @@ declare -A PROFILE_ID   # username -> profile_id (filled below)
 log() { printf '\033[36m[seed]\033[0m %s\n' "$*"; }
 err() { printf '\033[31m[seed:ERR]\033[0m %s\n' "$*" >&2; }
 
-b64url_decode() {
-  local d="${1//-/+}"; d="${d//_//}"
-  local pad=$(( ${#d} % 4 )); [ "$pad" -ne 0 ] && d="$d$(printf '=%.0s' $(seq $((4-pad))))"
-  printf '%s' "$d" | base64 -d 2>/dev/null
-}
-jwt_claim() { # <token> <claim>
-  b64url_decode "$(printf '%s' "$1" | cut -d. -f2)" | jq -r ".$2"
-}
-
-kc_token() { # <username> -> prints access_token
-  curl -s --max-time 10 \
-    -d "client_id=${CLIENT_ID}" \
-    -d "grant_type=password" -d "scope=openid" \
-    -d "username=$1" -d "password=password" \
-    "${KC}/realms/${REALM}/protocol/openid-connect/token" | jq -r '.access_token // empty'
+# Links an email-code identity to an account in auth's database (what a code
+# sign-up does), so `Login { verification_code }` finds the account.
+link_email() { # <email> <account_id>
+  psql "$AUTH_DB" -v ON_ERROR_STOP=1 -qtc \
+    "INSERT INTO subject_links (issuer, subject, account_id, linked_at) \
+     VALUES ('${EMAIL_ISSUER}', '$1', '$2', now()) ON CONFLICT (issuer, subject) DO NOTHING" >/dev/null
 }
 
 # grpcurl wrapper: <host:port> <method> <json> -> prints response (empty on error)
@@ -54,9 +47,9 @@ wait_for() { # <host:port> <label>
   err "$2 ($1) never became reachable"; return 1
 }
 
-log "waiting for Keycloak + services…"
+log "waiting for services…"
 for _ in $(seq 1 60); do
-  curl -sf --max-time 5 "${KC}/realms/${REALM}/.well-known/openid-configuration" >/dev/null 2>&1 && break
+  psql "$AUTH_DB" -qtc "SELECT 1 FROM subject_links LIMIT 1" >/dev/null 2>&1 && break
   sleep 2
 done
 wait_for "$ACCOUNT" account || exit 1
@@ -66,10 +59,7 @@ wait_for "$POST"    post || exit 1
 
 # ── 1. Accounts + profiles ────────────────────────────────────────────────────
 for u in "${USERS[@]}"; do
-  tok="$(kc_token "$u")"
-  [ -z "$tok" ] && { err "no Keycloak token for $u — is the realm imported?"; exit 1; }
-  iss="$(jwt_claim "$tok" iss)"; sub="$(jwt_claim "$tok" sub)"
-  identity="${iss}#${sub}"
+  identity="${EMAIL_ISSUER}#${EMAIL[$u]}"
   log "$u: identity_id=${identity}"
 
   aid="$(call "$ACCOUNT" account.v1.AccountService/GetAccountByIdentityId \
@@ -79,7 +69,7 @@ for u in "${USERS[@]}"; do
     # re-fetch by identity to get the server-generated UUID.
     call "$ACCOUNT" account.v1.AccountService/CreateAccount \
       "$(jq -nc --arg i "$identity" --arg e "${EMAIL[$u]}" \
-         '{identity_id:$i, email:$e, password_hash:"x", country_of_residence:"US"}')" >/dev/null
+         '{identity_id:$i, email:$e, country_of_residence:"US", date_of_birth:"1990-01-01"}')" >/dev/null
     aid="$(call "$ACCOUNT" account.v1.AccountService/GetAccountByIdentityId \
           "$(jq -nc --arg i "$identity" '{identity_id:$i}')" | jq -r '.id // empty')"
     log "$u: created account ${aid}"
@@ -87,6 +77,7 @@ for u in "${USERS[@]}"; do
     log "$u: account exists ${aid}"
   fi
   [ -z "$aid" ] && { err "$u: could not create/resolve account"; exit 1; }
+  link_email "${EMAIL[$u]}" "$aid" || { err "$u: could not link ${EMAIL[$u]} in auth"; exit 1; }
 
   # PendingVerification -> Active (ignore if already active)
   call "$ACCOUNT" account.v1.AccountService/VerifyEmail \
@@ -139,4 +130,4 @@ for u in "${USERS[@]}"; do
   log "$u: posts ensured (>=5)"
 done
 
-log "✅ seed complete — 3 users (alice/bob/carol, password: password), mutual follows, 5 posts each"
+log "✅ seed complete — 3 users (alice/bob/carol @dev.local: sign in with an email code, see auth-server's log), mutual follows, 5 posts each"

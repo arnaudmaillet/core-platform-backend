@@ -1,14 +1,14 @@
 # Local backend fleet (for frontend/client testing)
 
 Run the backend on your laptop so a native/mobile gRPC client can hit it directly
-on `localhost` — with **real-mode login** through Keycloak. No Kubernetes, no cloud.
+on `localhost` — with **real login** by email code (there are no passwords, #881). No
+Kubernetes, no cloud.
 
 ## What comes up
 
 | Layer | Containers |
 |---|---|
 | Datastores | ScyllaDB, Redis (shared), Redpanda (Kafka API), PostgreSQL, MinIO (S3), OpenSearch, OTLP sink |
-| Identity | Keycloak (realm `core-platform`, imported from `keycloak/`) |
 | Bootstrap (one-shot) | `db-init` (Postgres DBs) → `migrator` (schema) → `scylla-rf1` (RF=1 downshift) → `topic-provisioner` (Kafka topics) → `minio-init` (bucket) |
 | Services | account, auth, profile, social-graph, post, comment, engagement, timeline, notification, chat, geo-discovery, counter (server+worker), moderation, media, search, realtime (gateway+dispatcher) |
 | Seed | `seed` one-shot — 3 users, mutual follows, ~5 posts each |
@@ -27,7 +27,7 @@ on `localhost` — with **real-mode login** through Keycloak. No Kubernetes, no 
 | post | 50056 | timeline | 50070 |
 | comment | 50057 | auth JWKS (HTTP) | 8081 |
 | engagement | 50058 | realtime WS | 8443 |
-| account | 50059 | Keycloak (host) | 8085 |
+| account | 50059 | | |
 | auth (gRPC) | 50060 | MinIO API / console | 9000 / 9001 |
 | moderation | 50061 | OpenSearch | 9200 |
 | search | 50062 | Kafka (host) | 19092 |
@@ -45,7 +45,7 @@ bash local-dev/generate-secrets.sh
 # SERIALLY (see below); the cargo-chef dep layer is cooked once and reused.
 docker compose -f local-dev/docker-compose.fleet.yml up -d
 
-# Seed dev data (idempotent; runs in-network so the Keycloak issuer matches auth)
+# Seed dev data (idempotent; links each user's email-code identity in auth)
 docker compose -f local-dev/docker-compose.fleet.yml run --rm --no-deps seed
 
 # Tear down (keep data) / wipe volumes
@@ -66,8 +66,8 @@ done
 
 ## Seeded dev users
 
-Three Keycloak users (password **`password`** for all), each with an Active account,
-a profile, mutual follows, and 5 published posts:
+Three users, each with an Active account, an email-code sign-in, a profile, mutual
+follows, and 5 published posts:
 
 | username | handle | email |
 |---|---|---|
@@ -75,13 +75,18 @@ a profile, mutual follows, and 5 published posts:
 | bob | @bob | bob@dev.local |
 | carol | @carol | carol@dev.local |
 
-**Real login** (what iOS does): `auth.v1.AuthService/Login` with `grant_type: PASSWORD`
-and `{username, password}`. auth brokers the password grant to Keycloak, resolves the
-account by `identity_id` (= `iss#sub`), and mints an ES256 edge token + refresh.
+**Real login** (what iOS does with an email): ask for a code, read it in auth's log
+(`AUTH_VERIFICATION_SENDER=log`), then `Login` with `grant_type: VERIFICATION_CODE`. auth
+finds the account by the address's identity link and mints an ES256 edge token +
+refresh. (Sign in with Apple / Google needs the app's client ids, `AUTH_APPLE_AUDIENCES` /
+`AUTH_GOOGLE_AUDIENCES`; passkeys need `AUTH_WEBAUTHN_RP_ID`.)
 
 ```bash
+grpcurl -plaintext -d '{"channel":"VERIFICATION_CHANNEL_EMAIL","destination":"alice@dev.local"}' \
+  localhost:50060 auth.v1.AuthService/StartVerification          # → challenge_id
+docker compose -f local-dev/docker-compose.fleet.yml logs auth-server | grep -i code   # the code
 grpcurl -plaintext -d '{"device":{"user_agent":"cli","ip_address":"127.0.0.1","device_id":"d1"},
-  "grant_type":"PASSWORD","password":{"username":"alice","password":"password"}}' \
+  "grant_type":"VERIFICATION_CODE","verification_code":{"challenge_id":"<id>","code":"<code>"}}' \
   localhost:50060 auth.v1.AuthService/Login
 ```
 
@@ -121,8 +126,11 @@ grpcurl at the protos:
 
 ```bash
 G="grpcurl -plaintext -import-path crates/contracts/proto -proto auth/v1/service.proto -proto profile/v1/service.proto"
-TOKEN=$($G -d '{"device":{"device_id":"d1"},"grant_type":"PASSWORD",
-  "password":{"username":"alice","password":"password"}}' \
+CHALLENGE=$($G -d '{"channel":"VERIFICATION_CHANNEL_EMAIL","destination":"alice@dev.local"}' \
+  localhost:60060 auth.v1.AuthService/StartVerification | jq -r .challengeId)
+CODE=...   # from: docker compose -f local-dev/docker-compose.fleet.yml logs auth-server
+TOKEN=$($G -d "{\"device\":{\"device_id\":\"d1\"},\"grant_type\":\"VERIFICATION_CODE\",
+  \"verification_code\":{\"challenge_id\":\"$CHALLENGE\",\"code\":\"$CODE\"}}" \
   localhost:60060 auth.v1.AuthService/Login | jq -r .tokens.accessToken)
 $G -H "authorization: Bearer $TOKEN" -d '{"handle":"bob"}' \
   localhost:60052 profile.v1.ProfileService/GetProfileByHandle      # OK
@@ -140,7 +148,8 @@ overlay; its WSS gateway (`:8443`) always verifies the token.
 
 ## Verified working end-to-end
 
-- ✅ Real login (auth → Keycloak password grant → ES256 token); wrong password rejected.
+- ✅ Real login (until #881: auth → Keycloak password grant → ES256 token). Since #881
+  the seeded users sign in with an email code; not yet re-run end to end locally.
 - ✅ Timeline fan-out — alice's following-feed returns bob's + carol's 10 posts.
 - ✅ Search — OpenSearch indexed 3 profiles + 15 posts; queries return hits.
 - ✅ Accounts (Active), profiles, follows, published posts.

@@ -132,11 +132,11 @@ services:
       - -c
       - |
         set -e
-        for db in account auth counter moderation media keycloak; do
+        for db in account auth counter moderation media; do
           psql -h postgres -U core -d core_platform -tc "SELECT 1 FROM pg_database WHERE datname='$$db'" | grep -q 1 \
             || psql -h postgres -U core -d core_platform -c "CREATE DATABASE $$db"
         done
-        echo "postgres databases ready: account, auth, counter, moderation, media, keycloak"
+        echo "postgres databases ready: account, auth, counter, moderation, media"
     restart: "no"
 
   # ── One-shot bootstrap: schema migrations ───────────────────────────────────
@@ -433,12 +433,11 @@ services:
       redis:
         condition: service_healthy
 
-  # auth is TIER-0 fail-closed. It serves its JWKS on :8081 and brokers the password
-  # grant to the local Keycloak realm (core-platform) — auth calls keycloak:8080, so
-  # the token issuer it sees matches what the seed sees (identity_id = iss#sub).
-  # The ES256 signing key is generated locally into ./secrets (gitignored) by
-  # ./generate-secrets.sh and injected from those files by the entrypoint below —
-  # nothing sensitive is committed. The Keycloak client is public (no secret).
+  # auth is TIER-0 fail-closed. It serves its JWKS on :8081. Nothing signs in with a
+  # password (#881): locally, members sign in with an email code, printed to auth's
+  # log (AUTH_VERIFICATION_SENDER=log). The ES256 signing key is generated locally
+  # into ./secrets (gitignored) by ./generate-secrets.sh and injected from those
+  # files by the entrypoint below — nothing sensitive is committed.
   auth-server:
     <<: *svc
     build:
@@ -474,21 +473,12 @@ services:
       # ids. Unset = that provider is off locally.
       # AUTH_APPLE_AUDIENCES: <bundle id>
       # AUTH_GOOGLE_AUDIENCES: <iOS OAuth client id>
-      # Passwordless email codes: logged instead of sent (docker logs auth-server).
+      # Email codes: logged instead of sent (docker logs auth-server).
       AUTH_VERIFICATION_SENDER: log
       AUTH_SIGNING_KID: local-es256-1
       AUTH_JWKS_HTTP_ADDR: 0.0.0.0:8081
       AUTH_ACCOUNT_GRPC_ENDPOINT: http://account-server:50059
       AUTH_PROFILE_GRPC_ENDPOINT: http://profile-server:50052
-      # Keycloak login broker (password grant) — public client, no secret needed.
-      AUTH_KEYCLOAK_TOKEN_ENDPOINT: http://keycloak:8080/realms/core-platform/protocol/openid-connect/token
-      AUTH_KEYCLOAK_CLIENT_ID: core-platform-auth
-      AUTH_KEYCLOAK_SCOPE: openid
-      # Credential management (ChangePassword / VerifyCredentials): the realm's
-      # confidential `core-platform-auth-admin` service account (view/manage-users).
-      AUTH_KEYCLOAK_ADMIN_URL: http://keycloak:8080/admin/realms/core-platform
-      AUTH_KEYCLOAK_ADMIN_CLIENT_ID: core-platform-auth-admin
-      AUTH_KEYCLOAK_ADMIN_CLIENT_SECRET: local-dev-auth-admin-secret
     ports:
       - "50060:50060"
       - "8081:8081"
@@ -498,38 +488,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      keycloak:
-        condition: service_started
 
-  # ── Additional infra: Keycloak (IdP), MinIO (S3), OpenSearch ────────────────
-  # Keycloak stores its own schema in the `keycloak` Postgres DB (created by
-  # db-init). start-dev + --import-realm loads local-dev/keycloak/*.json on boot.
-  # No healthcheck: auth only calls it at login time, and the seed polls its
-  # well-known endpoint before running.
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.0
-    command: ["start-dev", "--import-realm"]
-    environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
-      KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
-      KC_DB_USERNAME: core
-      KC_DB_PASSWORD: core
-      KC_HTTP_ENABLED: "true"
-      KC_HOSTNAME_STRICT: "false"
-    volumes:
-      - ./keycloak/realm-core-platform.json:/opt/keycloak/data/import/realm-core-platform.json:ro
-    # Host port 8085 (8080 is taken by another container here); in-network callers
-    # (auth, seed) use keycloak:8080 regardless, so this only affects host/admin access.
-    ports:
-      - "8085:8080"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      db-init:
-        condition: service_completed_successfully
-
+  # ── Additional infra: MinIO (S3), OpenSearch ────────────────────────────────
   minio:
     # Upstream MinIO images are no longer anonymously pullable (Docker Hub
     # minio/* removed 2026-09-16, quay.io/minio/* 401 since 2026-10-04); use the
@@ -863,14 +823,15 @@ services:
         condition: service_healthy
 
   # ── One-shot: seed dev data (3 users, mutual follows, ~5 posts each) ─────────
-  # Runs in-network so the Keycloak issuer matches auth's view. Self-waits for the
-  # services it needs; safe to re-run (idempotent).
+  # Each user signs in with an email code (#881): the seed creates the account and
+  # links its email-code identity in auth's database. Self-waits for the services
+  # it needs; safe to re-run (idempotent).
   seed:
     build:
       context: ./seed
       dockerfile: Dockerfile
     depends_on:
-      keycloak:
+      auth-server:
         condition: service_started
       account-server:
         condition: service_started

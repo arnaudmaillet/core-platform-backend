@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 9475b6513a43ec627faf1baab35752f013b15a8ad21d9b15af2d4fda301f98ae
-  translated_at: 2026-06-25
+  source_sha256: 8d8bad9b253bef2c59dbd55ead7ea2deef2f72220993d65dff16c30b39efaf88
+  translated_at: 2026-10-11
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -37,7 +37,7 @@ politique d'autorisation et pas le transport. Les clés publiques sont récupér
 endpoint JWKS OIDC par une tâche d'arrière-plan et mises en cache ; chaque vérification de token est
 ensuite une opération CPU pure sur le chemin chaud.
 
-**Objectifs fondamentaux :** agnosticisme du fournisseur (Keycloak `realm_access.roles`, Auth0
+**Objectifs fondamentaux :** agnosticisme du fournisseur (`realm_access.roles`, Auth0
 `permissions`, Okta `groups`, tout émetteur OIDC via la stratégie `ClaimsExtractor<C>`) ; identité
 type-safe (les claims bruts voyagent comme le générique `C`) ; propagation transparente via
 `tokio::task_local!`.
