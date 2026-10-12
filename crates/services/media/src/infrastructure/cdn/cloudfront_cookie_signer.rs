@@ -28,6 +28,9 @@ pub struct CloudFrontCookieSigner {
     /// The CDN base URL, e.g. `https://cdn.example.com` (no trailing `/`).
     base_url:    String,
     domain:      String,
+    /// The base URL's own path (`/media`, or empty), under which every tree
+    /// sits on the CDN host.
+    base_path:   String,
     ttl:         Duration,
 }
 
@@ -39,15 +42,20 @@ impl CloudFrontCookieSigner {
             .or_else(|_| RsaPrivateKey::from_pkcs8_pem(private_key_pem))
             .map_err(|e| MediaError::DeliverySigningFailed { reason: format!("CloudFront cookie key: {e}") })?;
         let base_url = base_url.trim_end_matches('/').to_owned();
-        let domain = url::Url::parse(&base_url)
+        let parsed = url::Url::parse(&base_url)
             .ok()
-            .and_then(|u| u.host_str().map(str::to_owned))
+            .filter(|u| u.host_str().is_some())
             .ok_or_else(|| MediaError::DeliverySigningFailed { reason: format!("CDN base URL {base_url:?} has no host") })?;
-        Ok(Self { key_pair_id, key: SigningKey::<Sha1>::new(key), base_url, domain, ttl })
+        let domain = parsed.host_str().unwrap_or_default().to_owned();
+        let base_path = parsed.path().trim_end_matches('/').to_owned();
+        Ok(Self { key_pair_id, key: SigningKey::<Sha1>::new(key), base_url, domain, base_path, ttl })
     }
 
     /// Cookies granting every CDN object under `prefix` (an asset's tree,
-    /// trailing `/`) for the signer's TTL from `now`.
+    /// trailing `/`) for the signer's TTL from `now`. Their path is the tree's
+    /// own, so one video's cookies never overwrite another's in a shared
+    /// cookie jar (all are named `CloudFront-*`), and each is only sent for
+    /// its own tree.
     pub fn sign(&self, prefix: &str, now: DateTime<Utc>) -> SignedCookies {
         let expires_at = now + self.ttl;
         let resource = format!("{}/{}*", self.base_url, prefix.trim_start_matches('/'));
@@ -60,7 +68,7 @@ impl CloudFrontCookieSigner {
                 ("CloudFront-Key-Pair-Id".to_owned(), self.key_pair_id.clone()),
             ],
             domain: self.domain.clone(),
-            path: "/".to_owned(),
+            path: format!("{}/{}", self.base_path, prefix.trim_start_matches('/')),
             expires_at,
         }
     }
@@ -115,7 +123,11 @@ mod tests {
 
         let signed = signer.sign("restricted/post-videos/0199/", now);
 
-        assert_eq!((signed.domain.as_str(), signed.path.as_str()), ("cdn.example.com", "/"));
+        assert_eq!(
+            (signed.domain.as_str(), signed.path.as_str()),
+            ("cdn.example.com", "/restricted/post-videos/0199/"),
+            "scoped to its own tree"
+        );
         assert_eq!(signed.expires_at, now + Duration::hours(1));
         let value = |name: &str| signed.cookies.iter().find(|(n, _)| n == name).unwrap().1.clone();
         assert_eq!(value("CloudFront-Key-Pair-Id"), "K2JCJMDEHXQW5F");
@@ -129,6 +141,17 @@ mod tests {
         }
         let signature = Signature::try_from(decode(&value("CloudFront-Signature")).as_slice()).unwrap();
         VerifyingKey::<Sha1>::new(key.to_public_key()).verify(policy.as_bytes(), &signature).expect("RSA-SHA1 over the policy");
+    }
+
+    /// A base URL with a path (a local MinIO bucket) keeps it in the cookie
+    /// path.
+    #[test]
+    fn the_cookie_path_includes_the_base_urls_path() {
+        let key = RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 1024).unwrap();
+        let pem = key.to_pkcs1_pem(rsa::pkcs8::LineEnding::LF).unwrap();
+        let signer = CloudFrontCookieSigner::new("K".into(), &pem, "http://localhost:9000/media/", Duration::hours(1)).unwrap();
+        let signed = signer.sign("post-videos/abc/", DateTime::from_timestamp(0, 0).unwrap());
+        assert_eq!((signed.domain.as_str(), signed.path.as_str()), ("localhost", "/media/post-videos/abc/"));
     }
 
     #[test]
