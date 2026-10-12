@@ -85,7 +85,7 @@ allow-listed listener (see the edge rule below). Each service owns an error-code
   PreSync Job creates every stream topic + `.dlq` (MSK runs with topic
   auto-creation off) — a registry edit is the whole workflow.
 - **Service tiers** are an explicit runtime contract (pod label `tier:`): TIER-0 =
-  fail-closed (`auth`, `moderation`, `audit`, `wallet`); TIER-1 = fail-open
+  fail-closed (`auth`, `account`, `moderation`, `audit`, `wallet`); TIER-1 = fail-open
   (`counter`, `media`, `search`, `realtime`). Respect the posture when adding code.
 - **Client edge (public gRPC):** the mesh port trusts the network; the **edge
   listener** (`:9443`, behind the ALB) trusts only the `auth` edge token. A
