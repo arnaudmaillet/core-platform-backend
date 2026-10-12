@@ -221,6 +221,7 @@ mod tests {
             content_type: ContentType::Text,
             body: body.into(),
             media_ref: None,
+            media_asset_id: None,
             reply_to: None,
             created_at: at(ms),
             withheld,

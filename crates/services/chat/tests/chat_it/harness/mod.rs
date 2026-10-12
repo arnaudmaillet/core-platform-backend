@@ -177,6 +177,8 @@ impl TestHarness {
             redis: RedisConfig { hosts: vec![redis_endpoint], ..RedisConfig::default() },
             kafka,
             interaction_gate: Some(Arc::clone(&gate) as Arc<dyn InteractionGate>),
+            media:            None,
+            media_delivery:   None,
         };
 
         let config = AppConfig {
@@ -313,6 +315,7 @@ impl TestHarness {
                 content_type:    0, // Text
                 body:            body.to_owned(),
                 media_ref:       String::new(),
+                media_asset_id:  String::new(),
                 reply_to:        String::new(),
                 idempotency_key: String::new(),
             }),
@@ -358,6 +361,7 @@ impl TestHarness {
                 content_type:    0,
                 body:            body.to_owned(),
                 media_ref:       String::new(),
+                media_asset_id:  String::new(),
                 reply_to:        String::new(),
                 idempotency_key: String::new(),
             }),

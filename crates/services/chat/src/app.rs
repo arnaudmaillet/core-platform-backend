@@ -68,6 +68,10 @@ pub struct Backends {
     pub redis:            RedisConfig,
     pub kafka:            Option<KafkaClientConfig>,
     pub interaction_gate: Option<Arc<dyn InteractionGate>>,
+    /// media (#919 step 3): a message's asset is checked and made SIGNED on
+    /// send, and history delivers it. `None`: assets are dropped.
+    pub media:            Option<Arc<dyn crate::application::port::MessageMedia>>,
+    pub media_delivery:   Option<Arc<dyn crate::infrastructure::client::MediaDelivery>>,
 }
 
 /// The tuning surface threaded through the graph. Production fills this from
@@ -129,7 +133,7 @@ impl App {
         config:   &AppConfig,
         backends: Backends,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let Backends { scylla, redis, kafka, interaction_gate } = backends;
+        let Backends { scylla, redis, kafka, interaction_gate, media, media_delivery } = backends;
 
         // ── Storage clients ──────────────────────────────────────────────────
         let scylla_client = Arc::new(ScyllaSessionBuilder::new(scylla).build().await?);
@@ -213,12 +217,13 @@ impl App {
             send_keys:         &send_keys,
         };
         let commands = match &kafka_publisher {
-            Some(publisher) => build_commands(Arc::clone(publisher), &repos, interaction_gate.clone())?,
+            Some(publisher) => build_commands(Arc::clone(publisher), &repos, interaction_gate.clone(), media.clone())?,
             // No broker: the inbox follows inline.
             None => build_commands(
                 Arc::new(ProjectingPublisher::new(LogEventPublisher, Arc::clone(&inbox_projector))),
                 &repos,
                 interaction_gate.clone(),
+                media.clone(),
             )?,
         };
 
@@ -310,6 +315,10 @@ impl App {
             commands.direct,
             params,
         );
+        let handler = match media_delivery {
+            Some(media) => handler.with_media(media),
+            None => handler,
+        };
 
         Ok(Self {
             handler,
@@ -353,6 +362,7 @@ fn build_commands<EP: EventPublisher>(
     publisher: Arc<EP>,
     repos:     &Repos<'_>,
     gate:      Option<Arc<dyn InteractionGate>>,
+    media:     Option<Arc<dyn crate::application::port::MessageMedia>>,
 ) -> Result<Commands, Box<dyn std::error::Error>> {
     let Repos { conversation_repo, message_repo, member_repo, subscription_repo, invitation_repo, inbox, send_keys } = *repos;
     let sender: Arc<dyn SendMessages> = Arc::new(SendMessageHandler {
@@ -362,6 +372,7 @@ fn build_commands<EP: EventPublisher>(
         publisher:         Arc::clone(&publisher),
         gate:              gate.clone(),
         send_keys:         Some(Arc::clone(send_keys)),
+        media,
     });
     let direct: Arc<dyn DirectMessaging> = Arc::new(DirectConversations {
         conversation_repo: Arc::clone(conversation_repo),

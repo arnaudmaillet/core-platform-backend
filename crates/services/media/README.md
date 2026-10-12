@@ -201,7 +201,7 @@ so never shared across owners nor guessable from the bytes, and under a prefix t
 (core-platform-infra#87), so only a signed URL reaches them. `ChangeDeliveryVisibility` (mesh only; the
 services that know why, e.g. a private account, call it — it can make private media public, so it takes
 its intended mesh callers only (#852 `MeshCallerGate`): `post-server`, which keeps a private profile's
-post media SIGNED, #919 step 3) changes a READY asset's visibility and moves its
+post media SIGNED, and `chat-server`, whose messages' media is SIGNED, #919 step 3) changes a READY asset's visibility and moves its
 objects: to SIGNED, into its restricted tree (bytes another asset shares are copied and stay public for
 it; bytes it alone holds are moved and the CDN is purged of their public paths); to PUBLIC, back to the
 content-addressed tree. Objects move before the row is saved, driven by listing, so a retry completes a

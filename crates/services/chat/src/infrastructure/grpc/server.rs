@@ -41,11 +41,14 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         offensive_terms:             crate::app::offensive_terms_from_env(),
     };
 
+    let media = crate::service::media_from_env().map_err(|e| e.to_string())?;
     let backends = Backends {
         scylla:           ScyllaConfig::from_env(),
         redis:            RedisConfig::from_env(),
         kafka:            Some(KafkaClientConfig::from_env()),
         interaction_gate: crate::service::interaction_gate_from_env().map_err(|e| e.to_string())?,
+        media:            media.clone().map(|m| m as _),
+        media_delivery:   media.map(|m| m as _),
     };
 
     let app = App::build(&app_config, backends).await?;

@@ -15,6 +15,8 @@ pub struct MessageSummary {
     pub content_type: ContentType,
     pub body:         String,
     pub media_ref:    Option<String>,
+    /// The media asset it shows (#919 step 3).
+    pub media_asset_id: Option<Uuid>,
     pub reply_to:     Option<Uuid>,
     pub created_at:   DateTime<Utc>,
     /// Shown to its sender only (#656).

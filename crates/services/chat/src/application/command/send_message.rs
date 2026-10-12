@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cqrs::{Command, CommandHandler, Envelope};
+use uuid::Uuid;
 use validate_core::{FieldViolation, Validate};
 
 use crate::application::command::direct::{admit, Admission};
 use crate::application::port::{
-    ConversationRepository, EventPublisher, InteractionGate, MemberRepository, MessageRepository,
-    SendClaim, SendKeys,
+    checked_media, ConversationRepository, EventPublisher, InteractionGate, MemberRepository, MessageMedia,
+    MessageRepository, SendClaim, SendKeys,
 };
 use crate::domain::aggregate::{Conversation, Message};
 use crate::domain::event::{MessageEvent, MessageSentEvent};
@@ -45,6 +46,11 @@ pub struct SendMessageCommand {
     pub reply_to:        Option<String>,
     /// The client's key for this message, reused on its retries (#875).
     pub idempotency_key: Option<String>,
+    /// The media asset a `Media` message shows (#919 step 3).
+    pub media_asset_id:  Option<String>,
+    /// The edge caller's account (#919): the asset must be its own. `None`
+    /// on the mesh.
+    pub account_id:      Option<String>,
 }
 
 impl Command for SendMessageCommand {}
@@ -81,6 +87,8 @@ pub struct SentMessage {
     /// The idempotency key was already sent (#875): nothing was written or
     /// published, so nothing goes out live either.
     pub replayed:   bool,
+    /// The media asset it kept, once checked (#919 step 3).
+    pub media_asset_id: Option<Uuid>,
 }
 
 /// Sends a message and says how it goes out (the gRPC layer's live fan-out
@@ -99,6 +107,9 @@ pub struct SendMessageHandler<CR, MR, MSG, EP> {
     pub gate:              Option<Arc<dyn InteractionGate>>,
     /// Idempotency keys (#875); `None` sends every message, key or not.
     pub send_keys:         Option<Arc<dyn SendKeys>>,
+    /// media (#919 step 3): a message's asset is checked and made SIGNED;
+    /// `None` when not configured (the asset is dropped).
+    pub media:             Option<Arc<dyn MessageMedia>>,
 }
 
 impl<CR, MR, MSG, EP> CommandHandler<SendMessageCommand> for SendMessageHandler<CR, MR, MSG, EP>
@@ -146,7 +157,13 @@ where
         );
         let claimed = match claim {
             Some(SendClaim::Sent(first)) => {
-                return Ok(SentMessage { message_id: first, withheld: false, request: false, replayed: true });
+                return Ok(SentMessage {
+                    message_id: first,
+                    withheld: false,
+                    request: false,
+                    replayed: true,
+                    media_asset_id: None,
+                });
             }
             Some(SendClaim::InFlight) => {
                 return Err(ChatError::SendInFlight { conversation_id: conversation_id.as_str() });
@@ -233,15 +250,29 @@ where
             _ => Admission::default(),
         };
 
+        let asset = cmd
+            .media_asset_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| Uuid::parse_str(s).map_err(|_| ChatError::MediaAssetNotUsable { asset_id: s.to_owned() }))
+            .transpose()?;
+        let asset = checked_media(self.media.as_deref(), cmd.account_id.as_deref(), asset).await?;
+        // A message naming its asset needs no other reference (kept even when
+        // media is not configured and the asset is dropped).
+        let media_ref = cmd.media_ref.clone().filter(|s| !s.is_empty()).or_else(|| {
+            cmd.media_asset_id.clone().filter(|s| !s.is_empty())
+        });
+
         let mut message = Message::create(
             message_id,
             conversation_id,
             sender_id,
             content_type,
             MessageContent::new(cmd.body.clone())?,
-            cmd.media_ref.clone().filter(|s| !s.is_empty()),
+            media_ref,
             reply_to,
-        )?;
+        )?
+        .with_media_asset(asset);
         if admission.withheld {
             message.withhold();
         }
@@ -277,6 +308,7 @@ where
             withheld: admission.withheld,
             request:  admission.request,
             replayed: false,
+            media_asset_id: asset,
         })
     }
 }
@@ -305,6 +337,7 @@ mod tests {
                 publisher:         Arc::clone(&f.publisher),
                 gate:              None,
                 send_keys:         None,
+                media:             None,
             };
         handler
             .handle(Envelope::new(uuid::Uuid::now_v7(), SendMessageCommand {
@@ -316,6 +349,8 @@ mod tests {
                 media_ref:       None,
                 reply_to:        None,
                 idempotency_key: None,
+                media_asset_id:  None,
+                account_id:      None,
             }))
             .await
     }
@@ -369,6 +404,7 @@ mod tests {
             publisher:         Arc::clone(&f.publisher),
             gate:              Some(gate_dyn),
             send_keys:         None,
+            media:             None,
         };
         let cmd = |conversation_id: ConversationId, sender: ProfileId| SendMessageCommand {
             message_id:      MessageId::new().as_str(),
@@ -379,6 +415,8 @@ mod tests {
             media_ref:       None,
             reply_to:        None,
             idempotency_key: None,
+            media_asset_id:  None,
+            account_id:      None,
         };
 
         let (stranger, recipient, blocked) = (Fixture::profile(), Fixture::profile(), Fixture::profile());
@@ -422,6 +460,7 @@ mod tests {
             publisher:         Arc::clone(&f.publisher),
             gate:              None,
             send_keys:         Some(Arc::clone(keys) as Arc<dyn SendKeys>),
+            media:             None,
         }
     }
 
@@ -436,6 +475,8 @@ mod tests {
             media_ref:       None,
             reply_to:        None,
             idempotency_key: key.map(str::to_owned),
+            media_asset_id:  None,
+            account_id:      None,
         }
     }
 
@@ -589,6 +630,7 @@ mod tests {
             publisher:         Arc::new(DownPublisher),
             gate:              None,
             send_keys:         Some(Arc::clone(&keys) as Arc<dyn SendKeys>),
+            media:             None,
         };
         let first = keyed(f.conversation_id, f.owner, Some("bubble-0001"));
 
@@ -615,4 +657,62 @@ mod tests {
         assert!(handler.send(&keyed(f.conversation_id, member, Some("bubble-0002"))).await.is_err());
         assert_eq!(keys.held(), 1);
     }
+
+    /// #919 step 3: a MEDIA message naming its asset stores it (and needs no
+    /// other reference); another account's asset is refused, nothing stored.
+    #[tokio::test]
+    async fn a_media_message_keeps_its_checked_asset() {
+        use crate::application::port::{MediaAssetFacts, MessageMedia};
+
+        struct Media;
+        #[async_trait]
+        impl MessageMedia for Media {
+            async fn asset(&self, _: Uuid) -> Result<Option<MediaAssetFacts>, ChatError> {
+                Ok(Some(MediaAssetFacts {
+                    owner_account_id: "acct".into(),
+                    attachable:       true,
+                    usable:           true,
+                    signed:           true,
+                    ready:            true,
+                    video:            false,
+                }))
+            }
+            async fn make_signed(&self, _: Uuid, _: &str) -> Result<bool, ChatError> {
+                unreachable!("already SIGNED")
+            }
+        }
+
+        let f = Fixture::private_group();
+        let messages = Arc::<FakeMessages>::default();
+        let handler = SendMessageHandler {
+            conversation_repo: Arc::clone(&f.conversations),
+            member_repo:       Arc::clone(&f.members),
+            message_repo:      Arc::clone(&messages),
+            publisher:         Arc::clone(&f.publisher),
+            gate:              None,
+            send_keys:         None,
+            media:             Some(Arc::new(Media) as Arc<dyn MessageMedia>),
+        };
+        let asset = Uuid::now_v7();
+        let cmd = |account: &str| SendMessageCommand {
+            message_id:      MessageId::new().as_str(),
+            conversation_id: f.conversation_id.as_str(),
+            sender_id:       f.owner.as_str(),
+            content_type:    ContentType::Media.as_tinyint() as i32,
+            body:            String::new(),
+            media_ref:       None,
+            reply_to:        None,
+            idempotency_key: None,
+            media_asset_id:  Some(asset.to_string()),
+            account_id:      Some(account.to_owned()),
+        };
+
+        handler.send(&cmd("acct")).await.unwrap();
+        assert_eq!(messages.media(), vec![(Some(asset.to_string()), Some(asset))]);
+
+        let err = handler.send(&cmd("someone-else")).await.unwrap_err();
+        assert!(matches!(err, ChatError::MediaAssetNotUsable { .. }), "{err:?}");
+        assert_eq!(messages.inserts(), 1, "nothing stored for the refused one");
+    }
+
 }

@@ -60,6 +60,7 @@ async fn probe(h: &TestHarness, rpc: &str, conv: &ConversationId, caller: &Profi
                 content_type:    0, // Text
                 body:            "probe".to_owned(),
                 media_ref:       String::new(),
+                media_asset_id:  String::new(),
                 reply_to:        String::new(),
                 idempotency_key: String::new(),
             }),

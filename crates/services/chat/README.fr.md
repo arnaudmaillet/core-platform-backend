@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a2f8e3c052ea4806fcc5f6cc01b53df82807cdc0fadf811c5584835f07c1d070
-  translated_at: 2026-10-10
+  source_sha256: b3ef9ba9c1018cee505c90b73c086c99b10f05d801d96ba52ed12b3798e0b87e
+  translated_at: 2026-10-12
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -338,6 +338,26 @@ pas le topic.
   départ concurrent ne laisse jamais de ligne sans rôle), donc quitter la conversation l'efface. Un
   non-membre reçoit la même réponse que pour `MarkRead` (`NOT_FOUND` sur une conversation privée) ;
   une fin passée ou au-delà d'un an donne `CHT-9004`.
+- **Les médias des messages sont SIGNED (#919 étape 3).** `SendMessageRequest.media_asset_id` nomme
+  l'asset média d'un message MEDIA (l'id renvoyé par `media.IssueUploadTicket`) ; `media_ref` peut
+  alors rester vide.
+  - **Vérification :** chat interroge media (`GetAsset`). L'asset doit être une image ou une vidéo du
+    compte de l'expéditeur (le `sub` du jeton ; non vérifié sur le mesh), ni en échec, ni en quarantaine,
+    ni supprimée. Sinon `CHT-2011`, réponse identique dans tous les cas.
+  - **SIGNED :** une image publique READY est passée en SIGNED (media `ChangeDeliveryVisibility`, qui
+    n'accepte que post et chat ; les appels portent le jeton mesh de chat). Une image encore en
+    traitement doit avoir été uploadée SIGNED : sinon `CHT-2012`. Les vidéos restent telles quelles
+    jusqu'au HLS signé (media #921).
+  - **Erreurs :** media injoignable → `CHT-5002`, rejouable.
+  - **Stockage :** l'asset est gardé sur le message (`messages_by_conversation.media_asset_id`,
+    migration 0015), dans le hot tail et dans la frame du plan.
+  - **Lectures :** `MessageView.media_asset_id` est présent sur chaque lecture. `GetHistory` porte aussi
+    `media` (`DeliveredMedia` : blurhash et renditions signées), résolu en un seul
+    `BatchResolveDelivery` par page, en **fail-open**. Les streams en direct ne portent que l'id
+    d'asset : un lecteur le résout via `GetHistory` ou le `ResolveDelivery` de media, car les URLs
+    signées expirent.
+  - **Non configuré :** sans `CHAT_MEDIA_GRPC_ENDPOINT`, les ids d'assets sont ignorés et les messages
+    gardent leur `media_ref`.
 - **Demandes masquées (#810).** Une demande dont le message de l'expéditeur contient un des mots masqués
   de l'appelant, ou un terme injurieux quand son filtre injurieux est actif, apparaît dans
   **HIDDEN_REQUESTS** au lieu de REQUESTS (le destinataire peut toujours l'ouvrir ; les demandes ne sont
@@ -376,10 +396,10 @@ le crate partagé `error` :
 | Range | Class |
 |---|---|
 | `CHT-1xxx` | lifecycle |
-| `CHT-2xxx` | validation |
+| `CHT-2xxx` | validation (`CHT-2011` l'asset média d'un message n'est pas une image / vidéo utilisable de l'expéditeur ; `CHT-2012` son image a été uploadée publique et est encore en traitement — #919) |
 | `CHT-3xxx` | events |
 | `CHT-4xxx` | streaming |
-| `CHT-5xxx` | peer services (`CHT-5001`: social-graph's interaction check unavailable — retryable) |
+| `CHT-5xxx` | services pairs (`CHT-5001` : le contrôle d'interaction de social-graph est indisponible ; `CHT-5002` : media n'a pas répondu à un envoi qui nomme un asset, #919 — tous deux rejouables) |
 | `CHT-9xxx` | identifiers |
 
 `CHT-1009` (conversation privée que l'appelant ne peut pas voir) est volontairement rendu exactement
@@ -517,6 +537,8 @@ async fn main() -> anyhow::Result<()> {
 | `CHAT_TYPING_TTL_SECS` | No | `6` | Typing-indicator expiry (short by design). |
 | `CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT` | No | unset | gRPC mesh de social-graph (`CheckInteraction`, #656). Non défini : messages directs coupés (`CHT-5001`), invitations non vérifiées. |
 | `CHAT_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `CHAT_SOCIAL_GRAPH_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Ses délais de requête et de connexion. |
+| `CHAT_MEDIA_GRPC_ENDPOINT` | No | non défini | gRPC mesh de media (#919) : vérifie l'asset d'un message et le passe en SIGNED à l'envoi, le livre dans l'historique (fail-open). Non défini : les ids d'assets sont ignorés. |
+| `CHAT_MEDIA_RPC_TIMEOUT_MS` / `CHAT_MEDIA_CONNECT_TIMEOUT_MS` | No | `300` / `1000` | Ses délais de requête et de connexion (courts : l'historique est fail-open). |
 
 ### Variables d'infrastructure héritées
 

@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
 use crate::domain::value_object::{
     ContentType, ConversationId, MessageContent, MessageId, ProfileId,
@@ -21,6 +22,9 @@ pub struct Message {
     content:         MessageContent,
     /// Out-of-band pointer for `Media` messages; large media is never inlined.
     media_ref:       Option<String>,
+    /// The media asset a `Media` message shows (#919 step 3), checked
+    /// against media when sent; delivered SIGNED to its readers.
+    media_asset_id:  Option<Uuid>,
     /// The message this one replies to, if any (threaded replies).
     reply_to:        Option<MessageId>,
     /// Shown to its sender only (#656): its recipient blocks them, or they
@@ -64,6 +68,7 @@ impl Message {
             content_type,
             content,
             media_ref,
+            media_asset_id: None,
             reply_to,
             withheld: false,
             created_at: Utc::now(),
@@ -94,10 +99,17 @@ impl Message {
             content_type,
             content,
             media_ref,
+            media_asset_id: None,
             reply_to,
             withheld: false,
             created_at,
         }
+    }
+
+    /// The media asset it shows (#919 step 3).
+    pub fn with_media_asset(mut self, asset: Option<Uuid>) -> Self {
+        self.media_asset_id = asset;
+        self
     }
 
     pub fn id(&self)              -> MessageId        { self.id }
@@ -106,6 +118,7 @@ impl Message {
     pub fn content_type(&self)    -> ContentType      { self.content_type }
     pub fn content(&self)         -> &MessageContent  { &self.content }
     pub fn media_ref(&self)       -> Option<&str>     { self.media_ref.as_deref() }
+    pub fn media_asset_id(&self)  -> Option<Uuid>     { self.media_asset_id }
     pub fn reply_to(&self)        -> Option<MessageId> { self.reply_to }
     pub fn withheld(&self)        -> bool             { self.withheld }
     pub fn created_at(&self)      -> DateTime<Utc>    { self.created_at }

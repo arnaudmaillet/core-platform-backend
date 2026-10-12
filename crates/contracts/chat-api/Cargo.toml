@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Generated gRPC contract for chat.v1 — server + client stubs and reflection descriptor."
 
 [dependencies]
+media-api   = { workspace = true }   # media.v1.DeliveredMedia on messages (#919)
 tonic       = { workspace = true }
 tonic-prost = { workspace = true }
 prost       = { workspace = true }

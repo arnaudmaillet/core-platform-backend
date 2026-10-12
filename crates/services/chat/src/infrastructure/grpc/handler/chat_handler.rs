@@ -32,6 +32,7 @@ use crate::domain::aggregate::participant::muted_forever;
 use crate::domain::value_object::{ContentType, ConversationId, MessageId, ProfileId};
 use crate::error::ChatError;
 use crate::infrastructure::cache::keys::audience_shard_for;
+use crate::infrastructure::client::MediaDelivery;
 use crate::infrastructure::routing::{Fanout, PlaneAttach, PlaneEvent};
 use crate::infrastructure::streaming::ConversationBroadcastRegistry;
 
@@ -71,6 +72,9 @@ pub struct ChatServiceHandler<CB, QB> {
     /// Direct conversations and message requests (#656).
     direct:            Arc<dyn DirectMessaging>,
     params:            StreamingParams,
+    /// Delivers messages' media in history (#919 step 3); `None` when media
+    /// is not configured.
+    media:             Option<Arc<dyn MediaDelivery>>,
 }
 
 impl<CB, QB> ChatServiceHandler<CB, QB>
@@ -112,7 +116,14 @@ where
             sender,
             direct,
             params,
+            media: None,
         }
+    }
+
+    /// History carries its messages' media delivery (#919 step 3).
+    pub fn with_media(mut self, media: Arc<dyn MediaDelivery>) -> Self {
+        self.media = Some(media);
+        self
     }
 
     /// Member-Plane access (stream, presence, typing, receipts) is for roster
@@ -304,10 +315,14 @@ where
         request: Request<proto::SendMessageRequest>,
     ) -> Result<Response<proto::SendMessageResponse>, Status> {
         edge::require_profile(&request, &request.get_ref().sender_id)?;
+        let account_id = edge::principal(&request).map(|p| p.account_id().to_owned());
         let req = request.into_inner();
         let content_type = ContentType::try_from(req.content_type as i8)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let media_ref = non_empty(req.media_ref);
+        let media_asset = non_empty(req.media_asset_id);
+        // A message naming its asset needs no other reference (as the
+        // command stores it).
+        let media_ref = non_empty(req.media_ref).or_else(|| media_asset.clone());
         let reply_to  = non_empty(req.reply_to);
 
         let cmd = SendMessageCommand {
@@ -319,6 +334,8 @@ where
             media_ref:       media_ref.clone(),
             reply_to:        reply_to.clone(),
             idempotency_key: non_empty(req.idempotency_key),
+            media_asset_id:  media_asset.clone(),
+            account_id,
         };
 
         // Durable write (and Kafka seam) first.
@@ -343,6 +360,8 @@ where
                 content_type,
                 body:         req.body,
                 media_ref,
+                // As the send kept it (checked; dropped without media).
+                media_asset_id: sent.media_asset_id,
                 reply_to:     reply_to.and_then(|s| Uuid::parse_str(&s).ok()),
                 created_at:   now,
                 withheld:     sent.withheld,
@@ -492,8 +511,10 @@ where
             .await
             .map_err(cqrs_to_status)?;
 
+        let mut messages: Vec<proto::MessageView> = page.messages.into_iter().map(summary_to_view).collect();
+        deliver_media(self.media.as_deref(), &mut messages).await;
         Ok(Response::new(proto::GetHistoryResponse {
-            messages:        page.messages.into_iter().map(summary_to_view).collect(),
+            messages,
             next_page_token: page.next_page_token.unwrap_or_default(),
         }))
     }
@@ -1126,6 +1147,33 @@ fn summary_to_view(s: MessageSummary) -> proto::MessageView {
         media_ref:     s.media_ref.unwrap_or_default(),
         reply_to:      s.reply_to.map(|u| u.to_string()).unwrap_or_default(),
         created_at_ms: s.created_at.timestamp_millis(),
+        media_asset_id: s.media_asset_id.map(|u| u.to_string()).unwrap_or_default(),
+        media:         None,
+    }
+}
+
+/// Adds each message's media delivery (#919 step 3): one media call per page.
+/// Fail-open — media unreachable or slow, the page goes out without it.
+async fn deliver_media(media: Option<&dyn MediaDelivery>, messages: &mut [proto::MessageView]) {
+    let Some(media) = media else { return };
+    let mut ids: Vec<String> =
+        messages.iter().map(|m| m.media_asset_id.clone()).filter(|id| !id.is_empty()).collect();
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        return;
+    }
+    let delivered = match media.deliver(&ids).await {
+        Ok(delivered) => delivered,
+        Err(status) => {
+            tracing::warn!(%status, assets = ids.len(), "media delivery unavailable; history served without it");
+            return;
+        }
+    };
+    let by_id: std::collections::HashMap<&str, &media_api::DeliveredMedia> =
+        delivered.iter().map(|m| (m.asset_id.as_str(), m)).collect();
+    for message in messages.iter_mut() {
+        message.media = by_id.get(message.media_asset_id.as_str()).map(|m| (*m).clone());
     }
 }
 
@@ -1147,6 +1195,8 @@ fn frame_to_view(f: &crate::infrastructure::routing::MessageFrame) -> proto::Mes
         media_ref:     f.media_ref.clone().unwrap_or_default(),
         reply_to:      f.reply_to.clone().unwrap_or_default(),
         created_at_ms: f.created_at_ms,
+        media_asset_id: f.media_asset_id.clone().unwrap_or_default(),
+        media:         None,
     }
 }
 
@@ -1207,6 +1257,31 @@ pub fn cqrs_to_status(err: cqrs::error::CqrsError) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #919 step 3: history messages carry their asset's delivery; media
+    /// down, they go out without it.
+    #[tokio::test]
+    async fn history_delivers_message_media_fail_open() {
+        use async_trait::async_trait;
+        struct Fake(Result<Vec<media_api::DeliveredMedia>, Status>);
+        #[async_trait]
+        impl MediaDelivery for Fake {
+            async fn deliver(&self, _: &[String]) -> Result<Vec<media_api::DeliveredMedia>, Status> {
+                self.0.clone()
+            }
+        }
+        let view = |asset: &str| proto::MessageView { media_asset_id: asset.into(), ..Default::default() };
+        let delivered = media_api::DeliveredMedia { asset_id: "a".into(), blurhash: "bh".into(), ..Default::default() };
+
+        let mut page = [view("a"), view("")];
+        deliver_media(Some(&Fake(Ok(vec![delivered]))), &mut page).await;
+        assert_eq!(page[0].media.as_ref().map(|m| m.blurhash.as_str()), Some("bh"));
+        assert!(page[1].media.is_none());
+
+        let mut page = [view("a")];
+        deliver_media(Some(&Fake(Err(Status::unavailable("down")))), &mut page).await;
+        assert!(page[0].media.is_none());
+    }
 
     /// A refused private join must be byte-identical on the wire to a missing
     /// conversation: same gRPC code, same message.

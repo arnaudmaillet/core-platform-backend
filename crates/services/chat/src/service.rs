@@ -102,11 +102,14 @@ impl Service for ChatService {
             offensive_terms:             crate::app::offensive_terms_from_env(),
         };
 
+        let media = media_from_env()?;
         let backends = Backends {
             scylla:           ScyllaConfig::from_env(),
             redis:            RedisConfig::from_env(),
             kafka:            Some(KafkaClientConfig::from_env()),
             interaction_gate: interaction_gate_from_env()?,
+            media:            media.clone().map(|m| m as _),
+            media_delivery:   media.map(|m| m as _),
         };
 
         // `App::build` errors are `Box<dyn Error>` (not `Send + Sync`), so flatten
@@ -147,6 +150,26 @@ impl Service for ChatService {
         routes.add_service(ChatServiceServer::new(self.app.handler));
         Ok(())
     }
+}
+
+/// media, from `CHAT_MEDIA_GRPC_ENDPOINT` (#919 step 3): a message's asset is
+/// checked and made SIGNED on send (fail closed), and history delivers it
+/// (fail-open, so the deadline is short). Unset: assets are dropped and
+/// messages keep their `media_ref`.
+pub(crate) fn media_from_env() -> anyhow::Result<Option<Arc<crate::infrastructure::client::GrpcMedia>>> {
+    let Some(endpoint) = std::env::var("CHAT_MEDIA_GRPC_ENDPOINT").ok().filter(|e| !e.trim().is_empty()) else {
+        tracing::warn!("CHAT_MEDIA_GRPC_ENDPOINT unset: message media assets are dropped");
+        return Ok(None);
+    };
+    let ms = |var: &str, default: u64| {
+        std::time::Duration::from_millis(std::env::var(var).ok().and_then(|v| v.parse().ok()).unwrap_or(default))
+    };
+    let channel = tonic::transport::Channel::from_shared(endpoint)
+        .map_err(|e| anyhow::anyhow!("invalid CHAT_MEDIA_GRPC_ENDPOINT: {e}"))?
+        .timeout(ms("CHAT_MEDIA_RPC_TIMEOUT_MS", 300))
+        .connect_timeout(ms("CHAT_MEDIA_CONNECT_TIMEOUT_MS", 1_000))
+        .connect_lazy();
+    Ok(Some(Arc::new(crate::infrastructure::client::GrpcMedia::new(channel))))
 }
 
 /// social-graph's `CheckInteraction`, from `CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT`
