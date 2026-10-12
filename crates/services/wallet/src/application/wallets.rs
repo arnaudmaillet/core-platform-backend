@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::application::port::{
     AudienceCheck, ClaimOutcome, EnvelopeSummary, EventPublisher, GemSpend, LikePositions, MyStakeRecord, OutboxEvent, PackOutcome,
     SpendOutcome, StakeAnnouncement, StakeCursor, StakeOutcome, StakePositionRecord, StakeResult, StakeStatus, TargetDirectory,
-    TransactionCursor, WalletStore,
+    TransactionCursor, WalletStore, WelcomeGiftOutcome,
 };
 use crate::config::WalletConfig;
 use crate::domain::{
@@ -552,6 +552,25 @@ impl Wallets {
         self.store.erase(account).await
     }
 
+    /// A guest's device became `account` (#827): credits the likes the guest
+    /// collected (the pile at `upgraded_at` of a guest first seen at
+    /// `guest_since`), once per device.
+    pub async fn welcome_gift(
+        &self,
+        account: &AccountId,
+        device_key_hash: &str,
+        guest_since: DateTime<Utc>,
+        upgraded_at: DateTime<Utc>,
+    ) -> Result<WelcomeGiftOutcome, WalletError> {
+        let amount = self.config.welcome.amount(guest_since, upgraded_at);
+        let outcome = self
+            .store
+            .welcome_gift(account, device_key_hash, amount, self.config.claim.points_cap, self.config.starter_gems, ledger_time(upgraded_at))
+            .await?;
+        tracing::info!(account = %account, ?outcome, "welcome gift");
+        Ok(outcome)
+    }
+
     fn view(&self, wallet: Wallet, now: DateTime<Utc>) -> WalletView {
         let claim = wallet.claim_state(&self.config.claim, now);
         WalletView { wallet, claim }
@@ -615,6 +634,8 @@ pub(crate) mod fakes {
         pub allocations: Mutex<HashMap<(AccountId, String), (chrono::NaiveDate, crate::domain::Allocation)>>,
         /// day → (leased until, summary once computed)
         pub envelope_days: Mutex<HashMap<chrono::NaiveDate, MemEnvelopeDay>>,
+        /// device key hash → the account its welcome gift went to (#827)
+        pub welcome: Mutex<HashMap<String, Option<AccountId>>>,
     }
 
     impl MemoryStore {
@@ -848,7 +869,41 @@ pub(crate) mod fakes {
             Ok(rows)
         }
 
+        async fn welcome_gift(
+            &self,
+            account: &AccountId,
+            device_key_hash: &str,
+            amount: i64,
+            points_cap: i64,
+            starter_gems: i64,
+            now: DateTime<Utc>,
+        ) -> Result<crate::application::port::WelcomeGiftOutcome, WalletError> {
+            use crate::application::port::WelcomeGiftOutcome;
+            let holder = *self.welcome.lock().unwrap().entry(device_key_hash.to_owned()).or_insert(Some(*account));
+            if holder != Some(*account) {
+                return Ok(WelcomeGiftOutcome::AlreadyGiven);
+            }
+            let key = IdempotencyKey::system("welcome-gift");
+            if let Some(delta) = self.replayed(account, &key) {
+                return Ok(WelcomeGiftOutcome::Credited(delta));
+            }
+            let mut wallet = self.open_locked(account, starter_gems, now);
+            let credit = amount.min(points_cap - wallet.points).max(0);
+            if credit > 0 {
+                wallet.points += credit;
+                wallet.points_earned += credit;
+                self.wallets.lock().unwrap().insert(*account, wallet.clone());
+                self.record(account, (Currency::Points, credit, wallet.points, TransactionKind::WelcomeGift, None), key.as_str(), now);
+            }
+            Ok(WelcomeGiftOutcome::Credited(credit))
+        }
+
         async fn erase(&self, account: &AccountId) -> Result<bool, WalletError> {
+            for holder in self.welcome.lock().unwrap().values_mut() {
+                if *holder == Some(*account) {
+                    *holder = None;
+                }
+            }
             self.stakes.lock().unwrap().retain(|(a, _), _| a != account);
             self.positions.lock().unwrap().retain(|(a, _), _| a != account);
             self.settlements.lock().unwrap().retain(|(a, _), _| a != account);
@@ -1382,6 +1437,31 @@ mod tests {
         // Erasure takes the settlements with the wallet.
         w.erase(&me_id).await.unwrap();
         assert!(!store.settlements.lock().unwrap().contains_key(&(me_id, "post:post-1".to_owned())));
+    }
+
+    /// #827: a guest's device that becomes a member gets the pile it
+    /// collected, once per device: a redelivery answers the same credit,
+    /// another account signing in on that device gets nothing, and erasing
+    /// the account leaves the device welcomed.
+    #[tokio::test]
+    async fn the_welcome_gift_is_credited_once_per_device() {
+        use crate::application::port::WelcomeGiftOutcome;
+        let store = Arc::new(MemoryStore::default());
+        let w = Wallets::new(Arc::clone(&store) as _, WalletConfig::default());
+        let (me, you) = (AccountId::from_uuid(Uuid::now_v7()), AccountId::from_uuid(Uuid::now_v7()));
+        let device = "d".repeat(64);
+        let since = Utc::now() - TimeDelta::hours(50);
+        let at = Utc::now();
+
+        assert_eq!(w.welcome_gift(&me, &device, since, at).await.unwrap(), WelcomeGiftOutcome::Credited(100), "50 + 2 days");
+        assert_eq!(w.welcome_gift(&me, &device, since, at).await.unwrap(), WelcomeGiftOutcome::Credited(100), "a redelivery");
+        let wallet = w.get(&me.to_string(), at).await.unwrap().wallet;
+        assert_eq!((wallet.points, wallet.points_earned), (100, 100), "credited once");
+        assert_eq!(w.welcome_gift(&you, &device, since, at).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven);
+
+        w.erase(&me).await.unwrap();
+        assert_eq!(w.welcome_gift(&you, &device, since, at).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven, "still welcomed");
+        assert_eq!(w.welcome_gift(&you, &"e".repeat(64), since, at).await.unwrap(), WelcomeGiftOutcome::Credited(100));
     }
 
     /// #886: the caller's own stakes, newest first, filtered and paged; each

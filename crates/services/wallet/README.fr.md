@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: d910095ad0b9e1247740f95c71dd218e2fd748edad96a0741a5ec1f6894dd6f2
+  source_sha256: 4b683af8b3c79a75fbddc44e869656373c6683b5931ea4d66fc2e84ccfcd7e86
   translated_at: 2026-10-12
   status: complete
 ---
@@ -19,7 +19,7 @@ i18n:
 > | **Tier** | TIER-0 (fail-closed) |
 > | **Déployable** | `crates/apps/wallet-server` (crate bibliothèque : `crates/services/wallet`) |
 > | **Stockage** | Postgres (cluster CNPG dédié, tables `wallets`, `wallet_transactions`) |
-> | **Asynchrone** | consomme `account.v1.events` (groupe `wallet-account-events`) · publie `wallet.v1.events` (likes misés) |
+> | **Asynchrone** | consomme `account.v1.events` (groupe `wallet-account-events`) et `auth.v1.events` (groupe `wallet-auth-events` : le cadeau de bienvenue) · publie `wallet.v1.events` (likes misés) |
 > | **Appelants** | l'app (edge client `:9443`) · geo-discovery (mesh `SpendGems`, déblocage de pays) · account (mesh `ExportWallet` / `ListStakePositions` / `ListWalletTransactions`, l'export RGPD) |
 > | **Dépendances** | Postgres, Kafka, post et comment (mesh : là où tombent les likes), social-graph (mesh : le lecteur peut-il le voir), engagement (mesh : `GetLikePositions`, le règlement des mises) |
 > | **SLO** | 99,9 % de dispo · p99 lecture < 50 ms · p99 réclamation < 100 ms |
@@ -248,6 +248,21 @@ l'appelant : la première mise la plus récente d'abord, filtrées `ACTIVE` / `S
 `NOT_REWARDED`. **Aucune gem tant que le règlement est en mode shadow** (décision produit du
 2026-10-11) : l'app n'affiche jamais de gems absentes du solde.
 
+**Cadeau de bienvenue (#827).** Un invité accumule des likes avant d'avoir un compte : 50 à son premier
+lancement, puis 25 par journée pleine écoulée, 3 jours au plus (125 au maximum). L'app affiche ce tas
+pendant que l'invité attend. Quand l'appareil de l'invité devient membre (inscription ou connexion
+portant le refresh token de l'invité), auth publie `guest_upgraded`. Cet événement porte le compte, un
+SHA-256 de l'appareil (sa clé App Attest, sinon son id d'appareil — jamais l'id brut) et la date du
+premier lancement de l'invité. Le wallet crédite alors le tas à cet instant en points (`WELCOME_GIFT`),
+**une fois par appareil, quel que soit le compte qui se connecte** :
+- **Une fois par appareil :** l'appareil est d'abord réservé sur le shard de l'UUID nul
+  (`welcome_gifts`, migration 0009), si bien qu'un autre compte sur cet appareil ne reçoit rien.
+- **Idempotent :** le crédit utilise la clé du service `sys:welcome-gift`, donc une redélivrance renvoie
+  le même crédit.
+- **Plafond :** le crédit est borné sous `points_cap`.
+- **Effacement :** effacer le compte détache l'appareil mais le garde comme déjà accueilli.
+- **Réglages :** `WALLET_WELCOME_GIFT_FIRST` / `_DAILY` / `_DAYS`.
+
 **Conviction (#888, charte §6–§9).** `StakeRequest.conviction` (C1–C4 ; `UNSPECIFIED` = un stake rapide)
 dit à quel point le curateur est sûr que la cible finira la journée dans le top : une prédiction
 enregistrée et **figée**, notée plus tard (#889), **sans effet** sur le stake.
@@ -302,6 +317,7 @@ l'infra ne fournit pas les jetons (core-platform-infra#62).
 
 | Topic | Sens | Événement | Effet |
 |---|---|---|---|
+| `auth.v1.events` | consommé (`wallet-auth-events`, `run_consumer`) | `guest_upgraded` | le cadeau de bienvenue, une fois par appareil (#827) ; les autres événements sont ignorés ; un événement mal formé part en DLQ |
 | `account.v1.events` | consommé (`wallet-account-events`, `run_consumer`) | `account_deleted` | le portefeuille, son historique et ses mises sont effacés (RGPD art. 17) ; les autres événements sont ignorés ; un identifiant invalide part en DLQ |
 | `wallet.v1.events` | publié (clé : `<target_kind>:<target_id>`) | `stake_committed` | `{account_id, profile_id, target_kind, target_id, author_profile_id, points, total, first, stake_key, staked_at}` — des likes posés ; via l'outbox, au moins une fois (dédoublonnage sur `stake_key`). Pas encore de consommateur : les compteurs de likes y passent dans les parties suivantes |
 
@@ -358,6 +374,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_CURATOR_DAILY_CAP` | `40` | le maximum qu'un compte reçoit de l'enveloppe d'un jour |
 | `WALLET_ENVELOPE_TARGET_CAP_BPS` | `200` | le maximum que les positions d'une cible reçoivent ensemble, en points de base du pool (≤ 10000) |
 | `WALLET_OUTCOME_TOP_PERCENT` | `15` | une cible marque quand elle finit la journée dans cette part du top des cibles du jour (1–100) |
+| `WALLET_WELCOME_GIFT_FIRST` / `_DAILY` / `_DAYS` | `50` / `25` / `3` | le cadeau de bienvenue (#827) : likes au premier lancement de l'invité, par journée pleine ensuite, et combien de ces journées |
 | `WALLET_CONVICTION_PROBABILITIES` | `0.25,0.40,0.60,0.80` | la probabilité que représente chaque niveau de conviction C1–C4 (#888) : quatre valeurs croissantes dans ]0, 1[ ; toute autre valeur garde le défaut |
 | `WALLET_ENVELOPE_SECS` | `600` | fréquence à laquelle l'enveloppe cherche une journée terminée |
 | `WALLET_ALLOW_LOG_PUBLISHER` | non défini | `true` : démarrer sans `KAFKA_BROKERS`, en journalisant les événements (local seulement) |
@@ -382,6 +399,7 @@ Migrations : `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.s
 `0005_create_settlements.sql` (`settlements` ; `stakes.settled_at` / `settle_claimed_until`),
 `0006_create_envelope_days.sql` (`envelope_days` ; les parts des règlements), `0007_stakes_by_account_recent.sql`
 (`ListMyStakes`), `0008_stake_conviction.sql` (`wallet_transactions.conviction`, `stakes.first_conviction`, #888),
+`0009_welcome_gifts.sql` (`welcome_gifts`, les appareils accueillis, #827),
 appliquées par `migrator wallet` (init
 container) avant le binaire. Infra (dépôt ECR, manifests, `wallet-postgres`, route d'ingress,
 NetworkPolicy) : core-platform-infra#41 — le binaire rejoint `FLEET_BINS` dès que son dépôt ECR

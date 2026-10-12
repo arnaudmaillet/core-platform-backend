@@ -337,6 +337,7 @@ fn transaction_to_proto(t: &Transaction) -> proto::WalletTransaction {
             TransactionKind::StakePack => proto::TransactionKind::StakePack,
             TransactionKind::CountryUnlock => proto::TransactionKind::CountryUnlock,
             TransactionKind::Stake => proto::TransactionKind::Stake,
+            TransactionKind::WelcomeGift => proto::TransactionKind::WelcomeGift,
             TransactionKind::Unknown => proto::TransactionKind::Unspecified,
         } as i32,
         created_at:     Some(timestamp(t.created_at)),

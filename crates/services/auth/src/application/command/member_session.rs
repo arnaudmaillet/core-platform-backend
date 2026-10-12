@@ -16,6 +16,7 @@ use crate::domain::value_object::{
     AccountId, AgeBracket, DeviceFingerprint, IdpSubject, Permission, RevocationReason, SessionId,
     SessionKind, SessionMethod, SessionSignIn, SessionStatus,
 };
+use crate::domain::event::{DomainEvent, GuestUpgraded};
 use crate::error::AuthError;
 
 /// A freshly issued member session (the plaintext refresh token appears once).
@@ -179,6 +180,18 @@ impl MemberSessions {
             // records accounts; a guest is none).
             let _ = session.drain_events();
         }
-        guests.mark_upgraded(&guest_id, &account_id, now).await
+        // The first upgrade only: the wallet credits the guest's welcome
+        // gift once per device from it (#827).
+        if let Some(guest) = guests.mark_upgraded(&guest_id, &account_id, now).await? {
+            let event = DomainEvent::GuestUpgraded(GuestUpgraded {
+                account_id,
+                device_key_hash: guest.device_key_hash(),
+                guest_since: guest.first_seen_at,
+                occurred_at: now,
+                correlation_id,
+            });
+            self.publisher.publish(&event).await?;
+        }
+        Ok(())
     }
 }

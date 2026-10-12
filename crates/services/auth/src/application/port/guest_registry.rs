@@ -22,6 +22,27 @@ pub struct GuestRecord {
     pub first_seen_at:    DateTime<Utc>,
 }
 
+/// A guest that just became an account (#827): what the welcome gift needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpgradedGuest {
+    pub device_id:     String,
+    pub attest_key_id: Option<String>,
+    pub first_seen_at: DateTime<Utc>,
+}
+
+impl UpgradedGuest {
+    /// SHA-256 (lowercase hex) of its device: the App Attest key that
+    /// vouched for the install when there is one, else the device id.
+    pub fn device_key_hash(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let key = match &self.attest_key_id {
+            Some(attest) => format!("attest:{attest}"),
+            None => format!("device:{}", self.device_id),
+        };
+        data_encoding::HEXLOWER.encode(&Sha256::digest(key.as_bytes()))
+    }
+}
+
 /// Durable record of guests (Postgres `guest_principals`).
 #[async_trait]
 pub trait GuestRegistry: Send + Sync + 'static {
@@ -39,11 +60,33 @@ pub trait GuestRegistry: Send + Sync + 'static {
         limit: i64,
     ) -> Result<u64, AuthError>;
 
-    /// The guest became `account_id` (it signed up or signed in on its device).
+    /// The guest became `account_id` (it signed up or signed in on its
+    /// device). The guest, the first time only (`None` when already
+    /// upgraded, or unknown).
     async fn mark_upgraded(
         &self,
         guest_id: &AccountId,
         account_id: &AccountId,
         at: DateTime<Utc>,
-    ) -> Result<(), AuthError>;
+    ) -> Result<Option<UpgradedGuest>, AuthError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #827: the App Attest key stands for the device when one vouched for
+    /// it, else the device id; either way hashed, and the two never collide.
+    #[test]
+    fn the_device_key_prefers_the_attest_key_and_is_hashed() {
+        let guest = |attest: Option<&str>| UpgradedGuest {
+            device_id:     "device-1".into(),
+            attest_key_id: attest.map(str::to_owned),
+            first_seen_at: Utc::now(),
+        };
+        let (by_device, by_key) = (guest(None).device_key_hash(), guest(Some("key-1")).device_key_hash());
+        assert_ne!(by_device, by_key);
+        assert_eq!(by_key, guest(Some("key-1")).device_key_hash(), "stable");
+        assert_eq!(by_device.len(), 64);
+    }
 }

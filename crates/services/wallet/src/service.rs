@@ -24,11 +24,14 @@ use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 use crate::app::{App, StakeDeps};
 use crate::application::Wallets;
 use crate::config::WalletConfig;
-use crate::infrastructure::consumer::run_account_consumer;
+use crate::infrastructure::consumer::{run_account_consumer, run_auth_consumer};
 use crate::infrastructure::grpc::{WalletServiceHandler, WalletServiceServer, FILE_DESCRIPTOR_SET};
 
 const ACCOUNT_TOPIC: &str = "account.v1.events";
 const ACCOUNT_GROUP: &str = "wallet-account-events";
+/// Guests becoming members (#827): the welcome gift.
+const AUTH_TOPIC: &str = "auth.v1.events";
+const AUTH_GROUP: &str = "wallet-auth-events";
 /// Backoff before respawning a consumer after the runner returns.
 const CONSUMER_RESPAWN_BACKOFF: Duration = Duration::from_secs(5);
 
@@ -90,6 +93,8 @@ impl Service for WalletService {
         }
         // A deleted account's wallet goes with it.
         spawn_account_consumer(Arc::clone(&app.wallets));
+        // A guest's device that becomes a member gets its welcome gift (#827).
+        spawn_auth_consumer(Arc::clone(&app.wallets));
         Ok(Self { app, pool })
     }
 
@@ -195,6 +200,21 @@ fn mesh_channel(env_key: &str, default: &str) -> anyhow::Result<tonic::transport
 }
 
 /// Spawns the supervised account consumer.
+fn spawn_auth_consumer(wallets: Arc<Wallets>) {
+    tokio::spawn(async move {
+        loop {
+            match build_consumer(AUTH_TOPIC, AUTH_GROUP) {
+                Ok((consumer, producer)) => {
+                    run_auth_consumer(consumer, Arc::clone(&wallets), producer).await;
+                    tracing::warn!("wallet auth consumer exited; respawning after backoff");
+                }
+                Err(error) => tracing::error!(%error, "failed to build the auth consumer; retrying"),
+            }
+            tokio::time::sleep(CONSUMER_RESPAWN_BACKOFF).await;
+        }
+    });
+}
+
 fn spawn_account_consumer(wallets: Arc<Wallets>) {
     tokio::spawn(async move {
         loop {

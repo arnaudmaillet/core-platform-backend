@@ -9,7 +9,7 @@
 > | **Tier** | **TIER-0** — every authenticated request depends on tokens this service issues |
 > | **Deployable** | `crates/apps/auth-server` (library crate: `crates/services/auth`) |
 > | **Datastores** | PostgreSQL/CockroachDB (db `auth`) · Redis Cluster (sessions/blacklist) |
-> | **Async** | publishes `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked/AppAuthorized/AppAuthorizationRevoked) · consumes `account.v1.events` (`account_deleted` → GDPR erasure; `account_suspended` / `account_deactivated` / `role_revoked` → sign-out everywhere) |
+> | **Async** | publishes `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked/AppAuthorized/AppAuthorizationRevoked/GuestUpgraded — a guest's device became a member, for the wallet's welcome gift, #827) · consumes `account.v1.events` (`account_deleted` → GDPR erasure; `account_suspended` / `account_deactivated` / `role_revoked` → sign-out everywhere) |
 > | **Upstream callers** | gateway / edge, end-user clients (login & refresh) |
 > | **Downstream deps** | `account` (gRPC, identity SoR), PostgreSQL, Redis Cluster, Apple / Google JWKS (id_token keys), Amazon SES / SNS (codes) |
 > | **SLO** | `<TODO: 99.95%>` avail · login p99 `<TODO>` · refresh p99 `<TODO>` |

@@ -1,10 +1,12 @@
 pub mod app_authorization;
+pub mod guest_upgraded;
 pub mod session_issued;
 pub mod session_revoked;
 pub mod staff_enrollment;
 pub mod subject_linked;
 
 pub use app_authorization::{AppAuthorizationRevoked, AppAuthorized};
+pub use guest_upgraded::GuestUpgraded;
 pub use session_issued::SessionIssued;
 pub use session_revoked::SessionRevoked;
 pub use staff_enrollment::{StaffEnrollmentGranted, StaffPasskeyEnrolled};
@@ -30,6 +32,7 @@ pub enum DomainEvent {
     AppAuthorizationRevoked(AppAuthorizationRevoked),
     StaffEnrollmentGranted(StaffEnrollmentGranted),
     StaffPasskeyEnrolled(StaffPasskeyEnrolled),
+    GuestUpgraded(GuestUpgraded),
 }
 
 impl DomainEvent {
@@ -43,6 +46,7 @@ impl DomainEvent {
             Self::AppAuthorizationRevoked(_) => "auth.app_authorization_revoked",
             Self::StaffEnrollmentGranted(_) => "auth.staff_enrollment_granted",
             Self::StaffPasskeyEnrolled(_) => "auth.staff_passkey_enrolled",
+            Self::GuestUpgraded(_) => "auth.guest_upgraded",
         }
     }
 }

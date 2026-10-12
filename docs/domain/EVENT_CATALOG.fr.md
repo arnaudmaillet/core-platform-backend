@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./EVENT_CATALOG.md
-  source_sha256: 4d2232838558ab335517f7596213f1922e9854da13e9777bcca1bd4662f3b756
-  translated_at: 2026-10-11
+  source_sha256: fa104d8f8ee040bd6a03e537e5229c3fd076021a4608b0ff388b33b75830b84a
+  translated_at: 2026-10-12
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`EVENT_CATALOG.md`](./EVENT_CATALOG.md) fait foi.
@@ -62,7 +62,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `chat.message.push` | `chat` | `notification` |
 | `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery`, `timeline` |
 | `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline`, `notification` |
-| `auth.v1.events` | `auth` | `audit` |
+| `auth.v1.events` | `auth` | `audit`, `wallet` |
 | `media.v1.events` | `media` | `media` |
 | `audit.v1.events` | `media` | `audit` |
 
@@ -111,6 +111,7 @@ Croiser chaque arête dans [`CONTEXT_MAP.md`](./CONTEXT_MAP.md), et le détail p
 | `subject_linked` | une identité de connexion (un sujet Apple / Google, une adresse e-mail ou un numéro de téléphone) a été liée à un compte | `SignUp` ; `ChangeContact` qui re-clé une identité par code | interne |
 | `staff_enrollment_granted` | une autorisation d'enrôlement de passkey staff a été émise (#880 ; `granted_by` absent pour le bootstrap ponctuel ; l'autorisation elle-même ne quitte jamais auth) | `IssueStaffPasskeyEnrollment` / `auth-server bootstrap-staff` | `audit` (PrivilegedAction) |
 | `staff_passkey_enrolled` | une passkey est devenue passkey staff avec une autorisation (#880) : les sessions ouvertes avec elle portent les permissions staff | `FinishPasskeyRegistration` avec une autorisation | `audit` (PrivilegedAction) |
+| `guest_upgraded` | l'appareil d'un invité est devenu membre (#827) : le compte, un SHA-256 de la clé de l'appareil (sa clé App Attest, sinon son id d'appareil — jamais l'id brut), le premier lancement de l'invité | le premier `SignUp` / la première connexion portant le refresh token de l'invité | `wallet` (crédite le cadeau de bienvenue de l'invité, une fois par appareil) |
 
 ## Profil — `profile.v1.events` (producteur : `profile`)
 

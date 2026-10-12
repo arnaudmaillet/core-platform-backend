@@ -30,6 +30,9 @@ enum TransactionKind {
     // Likes staked on a post or a comment (points); `ref_id` is
     // `post:<id>` or `comment:<id>`.
     TRANSACTION_KIND_STAKE          = 5;
+    // The likes a guest collected (50, then 25 a day for 3 days), credited
+    // once when its device became a member (points; #827).
+    TRANSACTION_KIND_WELCOME_GIFT   = 6;
 }
 
 // The outcome of a claim: ordinary states the app renders, not errors.

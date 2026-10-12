@@ -31,7 +31,7 @@ pub use account_eraser::{AccountEraser, ErasedAccount};
 pub use event_publisher::EventPublisher;
 pub use federated_nonce_store::FederatedNonceStore;
 pub use federated_token_verifier::{FederatedIdentity, FederatedTokenVerifier};
-pub use guest_registry::{GuestRecord, GuestRegistry};
+pub use guest_registry::{GuestRecord, GuestRegistry, UpgradedGuest};
 pub use identity_provider::AuthnGrant;
 pub use mfa::{MfaChange, MfaSecret, MfaSeedCipher, MfaStore, PendingLogin};
 pub use passkey_repository::{PasskeyRepository, StoredPasskey};

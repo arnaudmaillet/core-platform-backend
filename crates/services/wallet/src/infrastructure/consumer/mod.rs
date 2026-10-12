@@ -1,8 +1,10 @@
 //! Inbound Kafka consumers.
 
 pub mod account_consumer;
+pub mod auth_consumer;
 
 pub use account_consumer::run_account_consumer;
+pub use auth_consumer::run_auth_consumer;
 
 /// A consumer retries what the error says is transient; the rest is
 /// dead-lettered.

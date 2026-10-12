@@ -4,7 +4,7 @@ use tracing::instrument;
 
 use chrono::{DateTime, Utc};
 
-use crate::application::port::{GuestRecord, GuestRegistry};
+use crate::application::port::{GuestRecord, GuestRegistry, UpgradedGuest};
 use crate::domain::value_object::AccountId;
 use crate::error::AuthError;
 
@@ -64,26 +64,31 @@ impl GuestRegistry for PgGuestRegistry {
         guest_id: &AccountId,
         account_id: &AccountId,
         at: DateTime<Utc>,
-    ) -> Result<(), AuthError> {
+    ) -> Result<Option<UpgradedGuest>, AuthError> {
         let guest = guest_id.as_uuid();
         let account = account_id.as_uuid();
         self.tx
             .run_on_shard(guest_id, move |tx| {
                 Box::pin(async move {
-                    sqlx::query(
+                    let row: Option<(String, Option<String>, DateTime<Utc>)> = sqlx::query_as(
                         r#"
                         UPDATE guest_principals
                            SET upgraded_to_account_id = $2, upgraded_at = $3
                          WHERE guest_id = $1 AND upgraded_to_account_id IS NULL
+                     RETURNING device_id, attest_key_id, first_seen_at
                         "#,
                     )
                     .bind(guest)
                     .bind(account)
                     .bind(at)
-                    .execute(&mut **tx)
+                    .fetch_optional(&mut **tx)
                     .await
-                    .map(|_| ())
-                    .map_err(storage)
+                    .map_err(storage)?;
+                    Ok(row.map(|(device_id, attest_key_id, first_seen_at)| UpgradedGuest {
+                        device_id,
+                        attest_key_id,
+                        first_seen_at,
+                    }))
                 })
             })
             .await

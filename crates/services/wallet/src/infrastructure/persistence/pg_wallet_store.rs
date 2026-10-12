@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::application::port::{
     ClaimOutcome, ClaimResult, EnvelopeSummary, GemSpend, MyStakeRecord, SettlementRecord, StakePositionRecord, OutboxEvent, PackOutcome,
     SpendOutcome, StakeAnnouncement, StakeCursor, StakeOutcome, StakeResult, StakeStatus, TransactionCursor, WalletStore,
+    WelcomeGiftOutcome,
 };
 use crate::domain::event::{StakeCommitted, WalletEvent};
 use crate::domain::{
@@ -615,6 +616,13 @@ impl WalletStore for PgWalletStore {
             .rows_affected()
             > 0;
         tx.commit().await.map_err(storage)?;
+        // The device stays claimed (not welcomed twice), unlinked from the
+        // account (#827).
+        sqlx::query("UPDATE welcome_gifts SET account_id = NULL WHERE account_id = $1")
+            .bind(account.as_uuid())
+            .execute(self.envelope_pool()?)
+            .await
+            .map_err(storage)?;
         Ok(erased)
     }
 
@@ -885,6 +893,74 @@ impl WalletStore for PgWalletStore {
         .await
         .map_err(storage)?;
         Ok(())
+    }
+
+    #[instrument(name = "wallet.welcome_gift", skip(self, device_key_hash))]
+    async fn welcome_gift(
+        &self,
+        account: &AccountId,
+        device_key_hash: &str,
+        amount: i64,
+        points_cap: i64,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<WelcomeGiftOutcome, WalletError> {
+        // The device first, on the nil UUID's shard: once per device, whoever
+        // signs in. A redelivery to the same account goes on to its credit.
+        let claimed = sqlx::query(
+            "INSERT INTO welcome_gifts (device_key_hash, account_id, claimed_at) VALUES ($1, $2, $3) \
+             ON CONFLICT (device_key_hash) DO NOTHING",
+        )
+        .bind(device_key_hash)
+        .bind(account.as_uuid())
+        .bind(now)
+        .execute(self.envelope_pool()?)
+        .await
+        .map_err(storage)?
+        .rows_affected()
+            == 1;
+        if !claimed {
+            let (holder,): (Option<Uuid>,) = sqlx::query_as("SELECT account_id FROM welcome_gifts WHERE device_key_hash = $1")
+                .bind(device_key_hash)
+                .fetch_one(self.envelope_pool()?)
+                .await
+                .map_err(storage)?;
+            if holder != Some(account.as_uuid()) {
+                return Ok(WelcomeGiftOutcome::AlreadyGiven);
+            }
+        }
+
+        // Then the credit, once per account (the service's own key).
+        let key = IdempotencyKey::system("welcome-gift");
+        let (mut tx, mut wallet) = self.locked(account, starter_gems, now).await?;
+        if let Some(delta) = replayed(&mut tx, account, &key).await? {
+            tx.commit().await.map_err(storage)?;
+            return Ok(WelcomeGiftOutcome::Credited(delta));
+        }
+        let credit = amount.min(points_cap - wallet.points).max(0);
+        if credit > 0 {
+            wallet.points += credit;
+            wallet.points_earned += credit;
+            sqlx::query("UPDATE wallets SET points = $2, points_earned = $3, updated_at = $4 WHERE account_id = $1")
+                .bind(account.as_uuid())
+                .bind(wallet.points)
+                .bind(wallet.points_earned)
+                .bind(now)
+                .execute(&mut *tx)
+                .await
+                .map_err(storage)?;
+            let movement = Movement {
+                currency:      Currency::Points,
+                delta:         credit,
+                balance_after: wallet.points,
+                kind:          TransactionKind::WelcomeGift,
+                ref_id:        None,
+                conviction:    None,
+            };
+            record(&mut tx, account, movement, &key, now).await?;
+        }
+        tx.commit().await.map_err(storage)?;
+        Ok(WelcomeGiftOutcome::Credited(credit))
     }
 
     async fn calibration_rows(&self, day: NaiveDate) -> Result<Vec<CalibrationRow>, WalletError> {

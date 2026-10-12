@@ -755,9 +755,18 @@ impl super::port::GuestRegistry for InMemoryGuestRegistry {
         guest_id: &AccountId,
         account_id: &AccountId,
         _at: DateTime<Utc>,
-    ) -> Result<(), AuthError> {
+    ) -> Result<Option<crate::application::port::UpgradedGuest>, AuthError> {
+        if self.upgrades.lock().unwrap().iter().any(|(g, _)| g == guest_id) {
+            return Ok(None);
+        }
         self.upgrades.lock().unwrap().push((*guest_id, *account_id));
-        Ok(())
+        Ok(self.records.lock().unwrap().iter().find(|r| r.guest_id == *guest_id).map(|r| {
+            crate::application::port::UpgradedGuest {
+                device_id:     r.device_id.clone(),
+                attest_key_id: r.attest_key_id.clone(),
+                first_seen_at: r.first_seen_at,
+            }
+        }))
     }
 
     async fn purge_stale(
@@ -804,6 +813,11 @@ impl RecordingEventPublisher {
 
     pub fn count(&self) -> usize {
         self.events.lock().unwrap().len()
+    }
+
+    /// Every event published so far.
+    pub fn events(&self) -> Vec<DomainEvent> {
+        self.events.lock().unwrap().clone()
     }
 }
 

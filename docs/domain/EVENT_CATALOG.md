@@ -49,7 +49,7 @@ producer's `DOMAIN.md §8`.
 | `chat.message.push` | `chat` | `notification` |
 | `counter.v1.popularity` | `counter` | `realtime`, `geo-discovery`, `timeline` |
 | `moderation.v1.events` | `moderation` | `audit`, `search`, `media`, `post`, `geo-discovery`, `timeline`, `notification` |
-| `auth.v1.events` | `auth` | `audit` |
+| `auth.v1.events` | `auth` | `audit`, `wallet` |
 | `media.v1.events` | `media` | `media` |
 | `audit.v1.events` | `media` | `audit` |
 
@@ -98,6 +98,7 @@ producer's `DOMAIN.md §8`.
 | `subject_linked` | a sign-in identity (an Apple / Google subject, an email address or a phone number) was bound to an account | `SignUp`; `ChangeContact` re-keying a code identity | internal |
 | `staff_enrollment_granted` | a staff passkey enrollment grant was issued (#880; `granted_by` absent for the one-off bootstrap; the grant itself never leaves auth) | `IssueStaffPasskeyEnrollment` / `auth-server bootstrap-staff` | `audit` (PrivilegedAction) |
 | `staff_passkey_enrolled` | a passkey became a staff passkey with a grant (#880): sessions opened with it carry staff permissions | `FinishPasskeyRegistration` with a grant | `audit` (PrivilegedAction) |
+| `guest_upgraded` | a guest's device became a member (#827): the account, a SHA-256 of the device key (its App Attest key, else its device id — never the raw id), when the guest first launched | the first `SignUp` / sign-in carrying the guest's refresh token | `wallet` (credits the guest's welcome gift, once per device) |
 
 ## Profile — `profile.v1.events` (producer: `profile`)
 
