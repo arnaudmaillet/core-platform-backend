@@ -7,7 +7,11 @@ use error::AppError;
 use transport::kafka::consumer::{run_consumer, KafkaConsumerHandle, ProcessOutcome, RetryPolicy};
 use transport::kafka::producer::KafkaProducerHandle;
 
-use crate::application::port::{AuthorLocationStore, AuthorTabs, AuthorWindowStore, ReuseDefaults, ReuseRegistry};
+use crate::application::command::sync_author_media::sync_author_media;
+use crate::application::port::{
+    AuthorLocationStore, AuthorPrivacy, AuthorTabs, AuthorWindowStore, MediaCatalog, PostRepository, ReuseDefaults,
+    ReuseRegistry,
+};
 use crate::domain::value_object::{LocationAudience, LocationSharing, ProfileId};
 
 /// Lenient read DTO for `profile.v1.events` (the internally-tagged
@@ -46,6 +50,21 @@ struct ProfileV1Event {
     allow_downloads: Option<bool>,
     #[serde(default)]
     show_like_counts: Option<bool>,
+    /// `public` | `private` (#919 step 3).
+    #[serde(default)]
+    visibility: Option<String>,
+}
+
+/// Where the authors' settings go.
+pub struct AuthorSettings {
+    pub locations: Arc<dyn AuthorLocationStore>,
+    pub windows:   Arc<dyn AuthorWindowStore>,
+    pub reuse:     Arc<dyn ReuseRegistry>,
+    /// Which authors are private (#919 step 3) …
+    pub privacy:   Arc<dyn AuthorPrivacy>,
+    /// … and, when media is configured, their posts' media follows.
+    pub posts:     Arc<dyn PostRepository>,
+    pub media:     Option<Arc<dyn MediaCatalog>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -57,6 +76,8 @@ enum Outcome {
     Window(ProfileId, Option<u32>, AuthorTabs),
     /// The author's remix / sound reuse defaults.
     Reuse(ProfileId, ReuseDefaults),
+    /// The author went private (`true`) or public (#919 step 3).
+    Privacy(ProfileId, bool),
     Poison(String),
 }
 
@@ -64,13 +85,20 @@ fn outcome(event: &ProfileV1Event) -> Outcome {
     let tab = match event.event_type.as_str() {
         "ProfileLocationSettingsChanged" => false,
         "ProfileTabSettingsChanged" => true,
-        "ProfileInteractionSettingsChanged" => false,
+        "ProfileInteractionSettingsChanged" | "ProfileVisibilityChanged" => false,
         _ => return Outcome::Skip,
     };
     let profile_id = match ProfileId::try_from(event.profile_id.as_str()) {
         Ok(id) => id,
         Err(e) => return Outcome::Poison(e.to_string()),
     };
+    if event.event_type == "ProfileVisibilityChanged" {
+        return match event.visibility.as_deref() {
+            Some("private") => Outcome::Privacy(profile_id, true),
+            Some("public") => Outcome::Privacy(profile_id, false),
+            other => Outcome::Poison(format!("visibility {other:?}")),
+        };
+    }
     if event.event_type == "ProfileInteractionSettingsChanged" {
         return Outcome::Reuse(profile_id, ReuseDefaults {
             allow_remix:       event.allow_remix.unwrap_or(true),
@@ -119,17 +147,15 @@ fn outcome(event: &ProfileV1Event) -> Outcome {
 /// redelivery is harmless. The reads apply them for anyone but the author.
 pub async fn run_author_location_consumer(
     consumer: KafkaConsumerHandle,
-    store: Arc<dyn AuthorLocationStore>,
-    windows: Arc<dyn AuthorWindowStore>,
-    reuse: Arc<dyn ReuseRegistry>,
+    settings: Arc<AuthorSettings>,
     producer: KafkaProducerHandle,
 ) {
     info!("post author-location consumer started");
 
     let policy = RetryPolicy::default();
     let result = run_consumer::<ProfileV1Event, _>(&consumer, &producer, &policy, move |event| {
-        let (store, windows, reuse) = (Arc::clone(&store), Arc::clone(&windows), Arc::clone(&reuse));
-        Box::pin(async move { process_event(store.as_ref(), windows.as_ref(), reuse.as_ref(), event).await })
+        let settings = Arc::clone(&settings);
+        Box::pin(async move { process_event(&settings, event).await })
     })
     .await;
 
@@ -138,24 +164,31 @@ pub async fn run_author_location_consumer(
     }
 }
 
-async fn process_event(
-    store: &dyn AuthorLocationStore,
-    windows: &dyn AuthorWindowStore,
-    reuse: &dyn ReuseRegistry,
-    event: &ProfileV1Event,
-) -> ProcessOutcome {
+async fn process_event(settings: &AuthorSettings, event: &ProfileV1Event) -> ProcessOutcome {
     let written = match outcome(event) {
         Outcome::Skip => return ProcessOutcome::Done,
         Outcome::Poison(reason) => return ProcessOutcome::Reject(reason),
-        Outcome::Record(profile_id, sharing) => store.set(&profile_id, sharing).await,
-        Outcome::Window(profile_id, days, tabs) => windows.set_tab_settings(&profile_id, days, tabs).await,
-        Outcome::Reuse(profile_id, defaults) => reuse.set_defaults(&profile_id, defaults).await,
+        Outcome::Record(profile_id, sharing) => settings.locations.set(&profile_id, sharing).await,
+        Outcome::Window(profile_id, days, tabs) => settings.windows.set_tab_settings(&profile_id, days, tabs).await,
+        Outcome::Reuse(profile_id, defaults) => settings.reuse.set_defaults(&profile_id, defaults).await,
+        Outcome::Privacy(profile_id, private) => privacy_changed(settings, &profile_id, private).await,
     };
     match written {
         Ok(())                     => ProcessOutcome::Done,
         Err(e) if e.is_retryable() => ProcessOutcome::Retry(e.to_string()),
         Err(e)                     => ProcessOutcome::Reject(e.to_string()),
     }
+}
+
+/// Records the author's privacy first (new posts read it), then walks its
+/// posts so their media follows; a redelivery walks again harmlessly.
+async fn privacy_changed(settings: &AuthorSettings, author: &ProfileId, private: bool) -> Result<(), crate::error::PostError> {
+    settings.privacy.set_private(author, private).await?;
+    if let Some(media) = &settings.media {
+        let sync = sync_author_media(settings.posts.as_ref(), media.as_ref(), author, private).await?;
+        info!(author = %author.as_str(), private, changed = sync.changed, "author's post media follows its privacy");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -220,6 +253,23 @@ mod tests {
             outcome(&hidden),
             Outcome::Window(ProfileId::try_from(id.as_str()).unwrap(), None, AuthorTabs { show_reposts: false, show_places: true })
         );
+    }
+
+    #[test]
+    fn visibility_is_read_from_profiles_own_wire() {
+        let id = Uuid::now_v7().to_string();
+        let private = wire(ProfileEventWire::ProfileVisibilityChanged {
+            profile_id: id.clone(),
+            visibility: "private".into(),
+            occurred_at_ms: 1,
+        });
+        assert_eq!(outcome(&private), Outcome::Privacy(ProfileId::try_from(id.as_str()).unwrap(), true));
+        let public = wire(ProfileEventWire::ProfileVisibilityChanged {
+            profile_id: id.clone(),
+            visibility: "public".into(),
+            occurred_at_ms: 2,
+        });
+        assert_eq!(outcome(&public), Outcome::Privacy(ProfileId::try_from(id.as_str()).unwrap(), false));
     }
 
     #[test]

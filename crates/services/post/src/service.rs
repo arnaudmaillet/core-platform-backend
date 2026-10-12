@@ -20,11 +20,11 @@ use transport::kafka::consumer::{KafkaConsumerBuilder, KafkaConsumerHandle};
 use transport::kafka::producer::{KafkaProducerBuilder, KafkaProducerHandle};
 
 use crate::app::{App, Backends};
-use crate::application::port::{AudienceGate, AuthorLocationStore, AuthorTierStore, AuthorWindowStore, ReuseRegistry};
+use crate::application::port::{AudienceGate, AuthorTierStore};
 use crate::infrastructure::client::{GrpcAudienceGate, GrpcMedia};
 use tonic::transport::Channel;
 use crate::infrastructure::consumer::{
-    run_author_location_consumer, run_author_tier_consumer, run_moderation_consumer,
+    run_author_location_consumer, run_author_tier_consumer, run_moderation_consumer, AuthorSettings,
 };
 use crate::infrastructure::grpc::handler::post_service_handler::PostServiceServer;
 use crate::infrastructure::grpc::handler::PostServiceHandler;
@@ -124,11 +124,16 @@ impl Service for PostService {
         spawn_author_tier_consumer(Arc::clone(&app.author_tier_store));
         // Inbound integration: authors' ghost mode / location precision → the
         // location GetPost shows anyone but the author.
-        spawn_author_location_consumer(
-            Arc::clone(&app.author_location_store),
-            Arc::clone(&app.author_window_store),
-            Arc::clone(&app.reuse_registry),
-        );
+        // … and their privacy: a private author's post media goes SIGNED,
+        // back to PUBLIC when it goes public (#919 step 3).
+        spawn_author_location_consumer(Arc::new(AuthorSettings {
+            locations: Arc::clone(&app.author_location_store),
+            windows:   Arc::clone(&app.author_window_store),
+            reuse:     Arc::clone(&app.reuse_registry),
+            privacy:   Arc::clone(&app.author_privacy),
+            posts:     Arc::clone(&app.posts),
+            media:     media.clone().map(|m| m as Arc<dyn crate::application::port::MediaCatalog>),
+        }));
         // Inbound integration: moderation outcomes (takedowns, reversals) → the
         // restriction post's reads apply.
         spawn_moderation_consumer(Arc::clone(&app.command_bus));
@@ -188,11 +193,7 @@ fn build_author_tier_consumer() -> anyhow::Result<(KafkaConsumerHandle, KafkaPro
 /// `post.author_location_settings`). A new group starts from the earliest
 /// offset: settings made before it first ran (teen profiles are created
 /// ghosted) must not be skipped.
-fn spawn_author_location_consumer(
-    store: Arc<dyn AuthorLocationStore>,
-    windows: Arc<dyn AuthorWindowStore>,
-    reuse: Arc<dyn ReuseRegistry>,
-) {
+fn spawn_author_location_consumer(settings: Arc<AuthorSettings>) {
     tokio::spawn(async move {
         loop {
             let built = build_consumer(
@@ -203,14 +204,7 @@ fn spawn_author_location_consumer(
             );
             match built {
                 Ok((consumer, producer)) => {
-                    run_author_location_consumer(
-                        consumer,
-                        Arc::clone(&store),
-                        Arc::clone(&windows),
-                        Arc::clone(&reuse),
-                        producer,
-                    )
-                    .await;
+                    run_author_location_consumer(consumer, Arc::clone(&settings), producer).await;
                     tracing::warn!("author-location consumer exited; respawning after backoff");
                 }
                 Err(error) => {

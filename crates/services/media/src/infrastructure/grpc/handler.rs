@@ -54,9 +54,9 @@ pub struct MediaServiceHandler {
 }
 
 /// Who may change a delivery visibility (#919): it can make private media
-/// public. No service drives it yet — #919 step 3 names the caller (the one
-/// that knows an account went private) — so, enforced, every call is refused.
-const VISIBILITY_CALLERS: &[&str] = &[];
+/// public. post: a private profile's post media goes SIGNED, and back to
+/// PUBLIC when the profile goes public (#919 step 3).
+const VISIBILITY_CALLERS: &[&str] = &["post-server"];
 
 impl MediaServiceHandler {
     pub fn new(

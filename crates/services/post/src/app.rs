@@ -24,7 +24,8 @@ use crate::application::command::restore_post::{RestorePostCommand, RestorePostH
 use crate::application::query::list_recently_deleted::{ListRecentlyDeletedHandler, ListRecentlyDeletedQuery};
 use crate::application::command::update_post::{UpdatePostCommand, UpdatePostHandler};
 use crate::application::port::{
-    AudienceGate, AuthorLocationStore, AuthorTierStore, AuthorWindowStore, CreateKeys, EventPublisher, MediaCatalog,
+    AudienceGate, AuthorLocationStore, AuthorPrivacy, AuthorTierStore, AuthorWindowStore, CreateKeys, EventPublisher,
+    MediaCatalog, PostRepository,
     RecentlyDeleted, ReuseRegistry,
 };
 use crate::application::query::get_post::{GetPostHandler, GetPostQuery};
@@ -33,7 +34,7 @@ use crate::application::query::list_posts_by_profile::{
     ListPostsByProfileHandler, ListPostsByProfileQuery,
 };
 use crate::infrastructure::persistence::{
-    ScyllaAuthorLocationStore, ScyllaAuthorTierStore, ScyllaAuthorWindowStore, ScyllaCreateKeys,
+    ScyllaAuthorLocationStore, ScyllaAuthorPrivacy, ScyllaAuthorTierStore, ScyllaAuthorWindowStore, ScyllaCreateKeys,
     ScyllaPostRepository, ScyllaRecentlyDeleted, ScyllaReuseRegistry,
 };
 
@@ -68,6 +69,10 @@ pub struct App {
     /// The authors' reuse defaults and sound origins (#669), exposed for the
     /// author-settings consumer.
     pub reuse_registry: Arc<dyn ReuseRegistry>,
+    /// Which authors are private (#919 step 3), exposed likewise.
+    pub author_privacy: Arc<dyn AuthorPrivacy>,
+    /// The posts, for the author-settings consumer's media walk (#919).
+    pub posts: Arc<dyn PostRepository>,
 }
 
 impl App {
@@ -92,6 +97,7 @@ impl App {
         let author_window_store: Arc<dyn AuthorWindowStore> =
             Arc::new(ScyllaAuthorWindowStore::new(Arc::clone(&scylla_client)));
         let create_keys: Arc<dyn CreateKeys> = Arc::new(ScyllaCreateKeys::new(Arc::clone(&scylla_client)));
+        let author_privacy: Arc<dyn AuthorPrivacy> = Arc::new(ScyllaAuthorPrivacy::new(Arc::clone(&scylla_client)));
         let create_handler = || CreatePostHandler {
             repository: Arc::clone(&repository),
             publisher:  Arc::clone(&publisher),
@@ -99,6 +105,7 @@ impl App {
             audience:   Arc::clone(&audience),
             keys:       Arc::clone(&create_keys),
             media:      media.clone(),
+            privacy:    Arc::clone(&author_privacy),
         };
         let creator: Arc<dyn CreatePosts> = Arc::new(create_handler());
 
@@ -115,6 +122,7 @@ impl App {
                     publisher:  Arc::clone(&publisher),
                     audience:   Arc::clone(&audience),
                     media:      media.clone(),
+                    privacy:    Arc::clone(&author_privacy),
                 })?
                 .register::<DeletePostCommand, _>(DeletePostHandler {
                     repository:       Arc::clone(&repository),
@@ -168,6 +176,8 @@ impl App {
             author_location_store,
             author_window_store,
             reuse_registry,
+            author_privacy,
+            posts: repository,
         })
     }
 }
