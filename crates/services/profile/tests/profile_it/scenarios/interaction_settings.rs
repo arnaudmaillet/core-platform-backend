@@ -408,3 +408,48 @@ async fn the_backfill_reannounces_non_default_tab_settings_only() {
     assert!(ids.contains(&hidden_id), "the profile hiding its Likes tab is announced");
     assert!(!ids.contains(&plain_id), "defaults are not");
 }
+
+/// The one-off visibility backfill (#927): every private profile is
+/// announced again (post's SIGNED-media projection), public ones not.
+#[tokio::test]
+async fn the_backfill_reannounces_private_profiles_only() {
+    use std::sync::{Arc, Mutex};
+
+    use profile::application::backfill::backfill_visibility;
+    use profile::application::command::SetVisibilityCommand;
+    use profile::application::port::EventPublisher;
+    use profile::domain::event::DomainEvent;
+    use profile::domain::value_object::ProfileVisibility;
+    use profile::error::ProfileError;
+
+    /// The profiles announced private.
+    #[derive(Default)]
+    struct Announced(Mutex<Vec<String>>);
+
+    #[async_trait::async_trait]
+    impl EventPublisher for Announced {
+        async fn publish(&self, event: &DomainEvent) -> Result<(), ProfileError> {
+            if let DomainEvent::VisibilityChanged(e) = event {
+                assert_eq!(e.visibility, ProfileVisibility::Private, "only private profiles are announced");
+                self.0.lock().unwrap().push(e.profile_id.to_string());
+            }
+            Ok(())
+        }
+    }
+
+    let h = TestHarness::start().await;
+    let (private, public) = (harness::random_handle(), harness::random_handle());
+    h.create(&harness::random_account_id(), &private, "Private").await;
+    h.create(&harness::random_account_id(), &public, "Public").await;
+    let private_id = h.get_by_handle(&private).await.unwrap().id;
+    let public_id = h.get_by_handle(&public).await.unwrap().id;
+    let cmd = SetVisibilityCommand { profile_id: private_id.clone(), visibility: "private".into() };
+    h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("set private");
+
+    let announced = Arc::new(Announced::default());
+    let publisher: Arc<dyn EventPublisher> = announced.clone();
+    backfill_visibility(&h.repository, &publisher, chrono::Utc::now()).await.expect("backfill");
+    let ids = announced.0.lock().unwrap().clone();
+    assert!(ids.contains(&private_id), "the private profile is announced");
+    assert!(!ids.contains(&public_id), "a public one is not");
+}
