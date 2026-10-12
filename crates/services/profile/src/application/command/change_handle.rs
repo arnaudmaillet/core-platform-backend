@@ -81,6 +81,8 @@ impl CommandHandler<ChangeHandleCommand> for ChangeHandleHandler {
         }
         // The profile now carries the new handle: release the old one.
         self.repo.tombstone_handle(&old_handle, profile.verified()).await?;
+        // The account's profile list reads its own index: keep it in step.
+        self.repo.save_account_index(&profile).await?;
 
         for event in profile.drain_events() {
             self.publisher.publish(&event).await?;

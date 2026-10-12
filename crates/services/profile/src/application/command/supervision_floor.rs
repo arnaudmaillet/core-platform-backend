@@ -44,6 +44,8 @@ pub struct ApplySupervisionFloorHandler {
 impl ApplySupervisionFloorHandler {
     async fn save(&self, profile: &mut crate::domain::aggregate::Profile) -> Result<(), ProfileError> {
         self.repo.save(profile).await?;
+        // The account's profile list reads its own index (visibility).
+        self.repo.save_account_index(profile).await?;
         for event in profile.drain_events() {
             self.publisher.publish(&event).await?;
         }
