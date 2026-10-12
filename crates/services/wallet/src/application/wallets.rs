@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, DurationRound, TimeDelta, Utc};
+use chrono::{DateTime, DurationRound, NaiveDate, TimeDelta, Utc};
 use uuid::Uuid;
 
 use crate::application::port::{
@@ -13,7 +13,8 @@ use crate::application::port::{
 };
 use crate::config::WalletConfig;
 use crate::domain::{
-    AccountId, ClaimState, Currency, IdempotencyKey, Operation, StakeAsk, StakeTarget, Transaction, TransactionKind,
+    AccountId, CalibrationReport, ClaimState, Currency, IdempotencyKey, Operation, StakeAsk, StakeTarget, Transaction,
+    TransactionKind,
     Wallet,
 };
 use crate::error::WalletError;
@@ -443,6 +444,14 @@ impl Wallets {
             computed += 1;
         }
         Ok(computed)
+    }
+
+    /// `day`'s shadow-mode calibration report (#893): the settlements its
+    /// envelope counted, every shard, against the envelope's summary.
+    pub async fn calibration_report(&self, day: NaiveDate) -> Result<CalibrationReport, WalletError> {
+        let rows = self.store.calibration_rows(day).await?;
+        let envelope = self.store.envelope_day(day).await?;
+        Ok(CalibrationReport::compute(day, &rows, envelope, self.config.envelope.top_percent))
     }
 
     /// One page of the account's history, newest first.
@@ -1031,6 +1040,34 @@ pub(crate) mod fakes {
             self.envelope_days.lock().unwrap().insert(day, (None, Some(summary.clone())));
             Ok(())
         }
+
+        async fn calibration_rows(&self, day: chrono::NaiveDate) -> Result<Vec<crate::domain::CalibrationRow>, WalletError> {
+            let settlements = self.settlements.lock().unwrap();
+            Ok(self
+                .allocations
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, (counted, _))| *counted == day)
+                .filter_map(|(slot, (_, allocation))| {
+                    let s = settlements.get(slot)?;
+                    Some(crate::domain::CalibrationRow {
+                        account:          s.account,
+                        target:           s.target.reference(),
+                        points:           s.points,
+                        earliness:        s.earliness,
+                        outcome:          allocation.outcome,
+                        provisional_gems: allocation.provisional_gems,
+                    })
+                })
+                .collect())
+        }
+
+        async fn envelope_day(&self, day: chrono::NaiveDate) -> Result<Option<crate::domain::EnvelopeDay>, WalletError> {
+            Ok(self.envelope_days.lock().unwrap().get(&day).and_then(|(_, summary)| summary.as_ref()).map(|s| {
+                crate::domain::EnvelopeDay { pool: s.pool, allocated: s.allocated, targets: s.targets }
+            }))
+        }
     }
 
     /// Posts and comments by id: (author, stakeable).
@@ -1325,6 +1362,14 @@ mod tests {
         let summary = store.envelope_days.lock().unwrap()[&day].1.clone().unwrap();
         assert_eq!((summary.pool, summary.allocated, summary.positions, summary.targets), (1_000, 20, 2, 1));
         assert_eq!(w.get(&me, next_day).await.unwrap().wallet.gems, gems, "shadow mode: still no gems minted");
+
+        // #893: the day's calibration reads what the envelope counted.
+        let report = w.calibration_report(day).await.unwrap();
+        assert_eq!((report.positions, report.accounts, report.targets), (2, 2, 1));
+        assert_eq!((report.pool, report.allocated, report.top_targets, report.expected_top_targets), (1_000, 20, 1, 1));
+        assert!((report.top1_share - 0.5).abs() < 1e-9, "two accounts at 10 gems each");
+        let empty = w.calibration_report(day.pred_opt().unwrap()).await.unwrap();
+        assert_eq!((empty.positions, empty.pool), (0, 0), "a day without an envelope");
 
         // Erasure takes the settlements with the wallet.
         w.erase(&me_id).await.unwrap();

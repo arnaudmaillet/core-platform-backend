@@ -137,6 +137,21 @@ last settlements land), the positions settled that day share a fixed pool —
    0006; on the nil UUID's shard). A day is leased to one replica; recomputing it gives the same
    shares. **Still nothing minted.**
 
+**Calibration report (#893, the Go / No-Go checks of charter §40–§41).** An operator runs
+`wallet-server calibration-report [YYYY-MM-DD]` inside a wallet pod (default: yesterday, UTC). It reads
+every shard's settlements counted in that day's envelope, writes nothing, and prints JSON:
+- **economy:** `pool`, `allocated`, `rewarded_accounts`, and the share of the allocated gems the top
+  account / top 10 / top 1 % got (`top1_share`, `top10_share`, `top1pct_share`; concentration);
+- **curation:** the top rate by **earliness** quartile, earliest first, then `unknown`. A flat line means
+  early stakes carry no information. Also the top rate by **stake size** (1, 2–5, 6–25, 26–100, 101–250
+  points) and `single_point_share`: mostly one-point positions mean the stake is a like under another name;
+- **#868's tie check:** `top_targets` against `expected_top_targets` (`top_percent` of the day's targets,
+  rounded up) and their ratio `top_inflation`. Well above 1 means ties at the threshold diluted the top,
+  and the tie-break of #868 is due.
+
+Comments, cohorts and Sybil signals join the report with their features (#889, #891). The app measures
+the UX criteria of §41.
+
 > **Invariants** (and where enforced): balances ≥ 0 (`CHECK`); each balance = Σ its ledger deltas
 > (same transaction, row lock; IT-checked); one movement per scoped key (`UNIQUE`); one claim per
 > interval and one pack at a time (row lock + domain rule); the caller's own wallet only

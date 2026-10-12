@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use crate::domain::event::WalletEvent;
 use crate::domain::{
-    AccountId, Allocation, ClaimPolicy, Currency, DayPosition, DuePosition, IdempotencyKey, Observed, Settlement, StakeAsk, StakePackPolicy,
+    AccountId, Allocation, CalibrationRow, ClaimPolicy, Currency, DayPosition, DuePosition, EnvelopeDay, IdempotencyKey, Observed, Settlement,
+    StakeAsk, StakePackPolicy,
     StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
@@ -269,6 +270,13 @@ pub trait WalletStore: Send + Sync + 'static {
 
     /// Marks `day`'s envelope computed, with its summary.
     async fn complete_envelope_day(&self, day: NaiveDate, summary: &EnvelopeSummary) -> Result<(), WalletError>;
+
+    /// The settlements counted in `day`'s envelope (every shard), for the
+    /// calibration report (#893).
+    async fn calibration_rows(&self, day: NaiveDate) -> Result<Vec<CalibrationRow>, WalletError>;
+
+    /// `day`'s envelope summary, once computed (#893).
+    async fn envelope_day(&self, day: NaiveDate) -> Result<Option<EnvelopeDay>, WalletError>;
 
     /// The account's wallet, without opening one (the GDPR export).
     async fn peek(&self, account: &AccountId) -> Result<Option<Wallet>, WalletError>;
