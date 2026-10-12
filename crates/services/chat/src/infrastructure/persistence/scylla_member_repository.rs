@@ -253,9 +253,13 @@ impl MemberRepository for ScyllaMemberRepository {
     }
 
     async fn backfill_member_index(&self) -> Result<u64, ChatError> {
+        // Each index row is written with its roster row's own write time: a
+        // departure or a removal that lands while the scan runs (newer) always
+        // wins, so the backfill never resurrects a membership nor clears a
+        // `left_at` (it copies what was, at the time it was).
         let mut scan = fast(
             &self.client,
-            "SELECT conversation_id, member_id, role, joined_at FROM chat.members_by_conversation",
+            "SELECT conversation_id, member_id, role, joined_at, WRITETIME(role) FROM chat.members_by_conversation",
         );
         scan.set_page_size(BACKFILL_PAGE_SIZE);
         let mut paging = scylla::response::PagingState::start();
@@ -266,16 +270,17 @@ impl MemberRepository for ScyllaMemberRepository {
             let rows = result
                 .into_rows_result()
                 .map_err(|e| row_err("member.backfill:rows", e))?
-                .rows::<(uuid::Uuid, uuid::Uuid, i8, scylla::value::CqlTimestamp)>()
+                .rows::<(uuid::Uuid, uuid::Uuid, i8, scylla::value::CqlTimestamp, i64)>()
                 .map_err(|e| row_err("member.backfill:iter", e))?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| row_err("member.backfill:deser", e))?;
-            for (conversation_id, member_id, role, joined_at) in rows {
-                let stmt = strict(
+            for (conversation_id, member_id, role, joined_at, written_at) in rows {
+                let mut stmt = strict(
                     &self.client,
                     "INSERT INTO chat.conversations_by_member (member_id, conversation_id, role, joined_at, left_at) \
                      VALUES (?, ?, ?, ?, null)",
                 );
+                stmt.set_timestamp(Some(written_at));
                 self.client
                     .session
                     .execute_unpaged(stmt, (member_id, conversation_id, role, joined_at))

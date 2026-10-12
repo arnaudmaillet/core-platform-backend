@@ -64,19 +64,60 @@ async fn a_profiles_conversations_page_by_id_and_follow_the_roster() {
 #[tokio::test]
 async fn memberships_from_before_the_index_are_found_after_the_backfill() {
     let h = TestHarness::start(HarnessOptions::default()).await;
-    let owner = harness::random_profile();
-    let conv = h.create_private_group(&owner).await;
+    // A membership from before the index existed (migration 0009): a roster
+    // row with no index row — written directly, as the old code did.
+    let (member, conversation) = (Uuid::now_v7(), Uuid::now_v7());
     h.scylla
         .session
         .execute_unpaged(
-            "DELETE FROM chat.conversations_by_member WHERE member_id = ?",
-            (Uuid::parse_str(&owner.as_str()).unwrap(),),
+            "INSERT INTO chat.members_by_conversation (conversation_id, member_id, role, joined_at) VALUES (?, ?, 2, toTimestamp(now()))",
+            (conversation, member),
         )
         .await
         .unwrap();
-    assert!(conversations_of(&h, &owner.as_str()).await.is_empty());
+    assert!(conversations_of(&h, &member.to_string()).await.is_empty());
 
     assert!(h.member_repo.backfill_member_index().await.unwrap() >= 1);
     h.member_repo.backfill_member_index().await.unwrap();
-    assert_eq!(conversations_of(&h, &owner.as_str()).await, vec![conv.as_str()]);
+    assert_eq!(conversations_of(&h, &member.to_string()).await, vec![conversation.to_string()]);
+
+    // The index row carries its roster row's write time: a removal or a
+    // departure landing while a backfill scans (newer) always wins, so the
+    // backfill never resurrects a membership (the flake of
+    // a_profiles_conversations_page_by_id_and_follow_the_roster: the two
+    // scenarios share the keyspace and run at once).
+    let written_at = |cql: &'static str| {
+        let session = &h.scylla.session;
+        async move {
+            session
+                .execute_unpaged(cql, (member, conversation))
+                .await
+                .unwrap()
+                .into_rows_result()
+                .unwrap()
+                .single_row::<(i64,)>()
+                .unwrap()
+                .0
+        }
+    };
+    assert_eq!(
+        written_at("SELECT WRITETIME(role) FROM chat.conversations_by_member WHERE member_id = ? AND conversation_id = ?").await,
+        written_at("SELECT WRITETIME(role) FROM chat.members_by_conversation WHERE member_id = ? AND conversation_id = ? ALLOW FILTERING").await,
+    );
+    // A removal after the scan read the roster stays a removal: the
+    // backfill's late write is older than the removal's tombstone.
+    let id = chat::domain::value_object::ConversationId::try_from(conversation.to_string().as_str()).unwrap();
+    let who = chat::domain::value_object::ProfileId::try_from(member.to_string().as_str()).unwrap();
+    let stale = written_at("SELECT WRITETIME(role) FROM chat.members_by_conversation WHERE member_id = ? AND conversation_id = ? ALLOW FILTERING").await;
+    h.member_repo.delete(&id, &who).await.unwrap();
+    h.scylla
+        .session
+        .execute_unpaged(
+            "INSERT INTO chat.conversations_by_member (member_id, conversation_id, role, joined_at, left_at) \
+             VALUES (?, ?, 2, toTimestamp(now()), null) USING TIMESTAMP ?",
+            (member, conversation, stale),
+        )
+        .await
+        .unwrap();
+    assert!(conversations_of(&h, &member.to_string()).await.is_empty(), "not resurrected");
 }
