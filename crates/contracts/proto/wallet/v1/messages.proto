@@ -51,6 +51,10 @@ message Wallet {
     // clamped to what fits, and at the cap `claim_available` is false with no
     // `next_claim_at` (ClaimReward answers CLAIM_OUTCOME_BALANCE_FULL).
     int64                     points_cap              = 20;
+
+    // The probability each conviction level C1–C4 stands for (#888, server
+    // policy; C1 first): shown when the curator picks a level.
+    repeated double           conviction_probabilities = 21;
 }
 
 message GetWalletRequest {
@@ -145,6 +149,9 @@ message StakeRequest {
     // When the batch's first tap was made (the device's clock): a batch older
     // than 24 hours is EXPIRED.
     google.protobuf.Timestamp first_tap_at = 8;
+    // How sure the curator is (#888): recorded with the batch, frozen, and
+    // scored later; no effect on the stake. UNSPECIFIED: a quick stake.
+    Conviction conviction = 9;
 }
 
 message StakeResponse {
@@ -193,6 +200,9 @@ message StakePosition {
     google.protobuf.Timestamp last_at    = 5;
     // Absent until it settles (a day after its first stake).
     StakeSettlement           settlement = 6;
+    // The conviction of the position's first batch (#888); UNSPECIFIED for a
+    // quick stake or a position from before.
+    Conviction                first_conviction = 7;
 }
 
 // A position's settlement (shadow mode: the gems are provisional, never

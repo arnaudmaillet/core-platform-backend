@@ -108,3 +108,16 @@ enum StakeVerdict {
     STAKE_VERDICT_REWARDED     = 2;
     STAKE_VERDICT_NOT_REWARDED = 3;
 }
+
+// How sure the curator is that the target ends the day in the top (#888,
+// charter §6–§9): a frozen prediction, scored later against the outcome. The
+// probability each level stands for is server policy
+// (`Wallet.conviction_probabilities`).
+enum Conviction {
+    // The quick stake: no level chosen (its default is decided by scoring).
+    CONVICTION_UNSPECIFIED = 0;
+    CONVICTION_C1          = 1;
+    CONVICTION_C2          = 2;
+    CONVICTION_C3          = 3;
+    CONVICTION_C4          = 4;
+}

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 72c5d269bca194984d170fb2c4419c2bf735ce32bc5710036541b8f44d092aa6
+  source_sha256: d910095ad0b9e1247740f95c71dd218e2fd748edad96a0741a5ec1f6894dd6f2
   translated_at: 2026-10-12
   status: complete
 ---
@@ -246,7 +246,19 @@ l'appelant : la première mise la plus récente d'abord, filtrées `ACTIVE` / `S
 `settles_at` (première mise + `WALLET_SETTLEMENT_DELAY_SECS`), `settled_at` une fois réglée, et un
 `StakeVerdict` : `PENDING` tant que l'enveloppe du jour n'est pas calculée, puis `REWARDED` /
 `NOT_REWARDED`. **Aucune gem tant que le règlement est en mode shadow** (décision produit du
-2026-10-11) : l'app n'affiche jamais de gems absentes du solde. **Les appelants mesh sont vérifiés (#852, `MESH_CALLER_GATE`) :** `SpendGems` n'accepte que
+2026-10-11) : l'app n'affiche jamais de gems absentes du solde.
+
+**Conviction (#888, charte §6–§9).** `StakeRequest.conviction` (C1–C4 ; `UNSPECIFIED` = un stake rapide)
+dit à quel point le curateur est sûr que la cible finira la journée dans le top : une prédiction
+enregistrée et **figée**, notée plus tard (#889), **sans effet** sur le stake.
+- **Stockage :** le niveau de chaque lot va sur sa ligne du registre (`wallet_transactions.conviction`).
+  Celui du premier lot de la position va sur la position (`stakes.first_conviction`, jamais mis à jour)
+  et dans l'export (`StakePosition.first_conviction`). Un stake rapide enregistre NULL, et le niveau par
+  défaut est laissé à la notation.
+- **Probabilités :** `Wallet.conviction_probabilities` donne la probabilité que représente chaque niveau
+  (`WALLET_CONVICTION_PROBABILITIES`, par défaut 0,25 / 0,40 / 0,60 / 0,80).
+
+**Les appelants mesh sont vérifiés (#852, `MESH_CALLER_GATE`) :** `SpendGems` n'accepte que
 **geo-discovery**, et le jeton edge de l'utilisateur qu'il transmet (`authorization`) doit désigner le
 propriétaire du compte, majeur ; les lectures d'export (et `ListWalletTransactions` sur le mesh)
 n'acceptent qu'**account** — le jeton de ServiceAccount de l'appelant, `x-mesh-token`. `off` tant que
@@ -346,6 +358,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_CURATOR_DAILY_CAP` | `40` | le maximum qu'un compte reçoit de l'enveloppe d'un jour |
 | `WALLET_ENVELOPE_TARGET_CAP_BPS` | `200` | le maximum que les positions d'une cible reçoivent ensemble, en points de base du pool (≤ 10000) |
 | `WALLET_OUTCOME_TOP_PERCENT` | `15` | une cible marque quand elle finit la journée dans cette part du top des cibles du jour (1–100) |
+| `WALLET_CONVICTION_PROBABILITIES` | `0.25,0.40,0.60,0.80` | la probabilité que représente chaque niveau de conviction C1–C4 (#888) : quatre valeurs croissantes dans ]0, 1[ ; toute autre valeur garde le défaut |
 | `WALLET_ENVELOPE_SECS` | `600` | fréquence à laquelle l'enveloppe cherche une journée terminée |
 | `WALLET_ALLOW_LOG_PUBLISHER` | non défini | `true` : démarrer sans `KAFKA_BROKERS`, en journalisant les événements (local seulement) |
 
@@ -367,7 +380,9 @@ du jeton edge (edge client), OTel.
 Migrations : `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.sql` (`ref_id`),
 `0003_create_stakes.sql` (`stakes`, l'index de l'heure), `0004_create_outbox.sql` (`wallet_outbox`),
 `0005_create_settlements.sql` (`settlements` ; `stakes.settled_at` / `settle_claimed_until`),
-`0006_create_envelope_days.sql` (`envelope_days` ; les parts des règlements), appliquées par `migrator wallet` (init
+`0006_create_envelope_days.sql` (`envelope_days` ; les parts des règlements), `0007_stakes_by_account_recent.sql`
+(`ListMyStakes`), `0008_stake_conviction.sql` (`wallet_transactions.conviction`, `stakes.first_conviction`, #888),
+appliquées par `migrator wallet` (init
 container) avant le binaire. Infra (dépôt ECR, manifests, `wallet-postgres`, route d'ingress,
 NetworkPolicy) : core-platform-infra#41 — le binaire rejoint `FLEET_BINS` dès que son dépôt ECR
 existe. Retour arrière : le binaire est sans état ; le schéma est additif.
