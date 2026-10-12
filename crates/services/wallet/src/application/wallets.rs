@@ -879,6 +879,11 @@ pub(crate) mod fakes {
             now: DateTime<Utc>,
         ) -> Result<crate::application::port::WelcomeGiftOutcome, WalletError> {
             use crate::application::port::WelcomeGiftOutcome;
+            let elsewhere =
+                self.welcome.lock().unwrap().iter().any(|(device, holder)| device != device_key_hash && *holder == Some(*account));
+            if elsewhere {
+                return Ok(WelcomeGiftOutcome::AlreadyGiven);
+            }
             let holder = *self.welcome.lock().unwrap().entry(device_key_hash.to_owned()).or_insert(Some(*account));
             if holder != Some(*account) {
                 return Ok(WelcomeGiftOutcome::AlreadyGiven);
@@ -1458,6 +1463,9 @@ mod tests {
         let wallet = w.get(&me.to_string(), at).await.unwrap().wallet;
         assert_eq!((wallet.points, wallet.points_earned), (100, 100), "credited once");
         assert_eq!(w.welcome_gift(&you, &device, since, at).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven);
+
+        // Once per account too: another of its devices gets nothing more.
+        assert_eq!(w.welcome_gift(&me, &"f".repeat(64), since, at).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven);
 
         w.erase(&me).await.unwrap();
         assert_eq!(w.welcome_gift(&you, &device, since, at).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven, "still welcomed");

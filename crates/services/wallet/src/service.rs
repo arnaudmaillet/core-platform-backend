@@ -199,7 +199,7 @@ fn mesh_channel(env_key: &str, default: &str) -> anyhow::Result<tonic::transport
         .connect_lazy())
 }
 
-/// Spawns the supervised account consumer.
+/// Spawns the supervised auth consumer (#827: the welcome gift).
 fn spawn_auth_consumer(wallets: Arc<Wallets>) {
     tokio::spawn(async move {
         loop {
@@ -215,6 +215,7 @@ fn spawn_auth_consumer(wallets: Arc<Wallets>) {
     });
 }
 
+/// Spawns the supervised account consumer.
 fn spawn_account_consumer(wallets: Arc<Wallets>) {
     tokio::spawn(async move {
         loop {

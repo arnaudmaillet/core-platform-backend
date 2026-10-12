@@ -283,9 +283,11 @@ pub trait WalletStore: Send + Sync + 'static {
     /// Marks `day`'s envelope computed, with its summary.
     async fn complete_envelope_day(&self, day: NaiveDate, summary: &EnvelopeSummary) -> Result<(), WalletError>;
 
-    /// Credits the welcome gift (#827) to `account` — once per device: the
-    /// device (`device_key_hash`) is claimed on the nil UUID's shard first;
-    /// one already claimed by another account gets nothing. `amount` is
+    /// Credits the welcome gift (#827) to `account` — once per device and
+    /// once per account: the device (`device_key_hash`) is claimed on the nil
+    /// UUID's shard first; one already claimed by another account, or an
+    /// account that already claimed another device (even for a gift the cap
+    /// held to 0), gets nothing. `amount` is
     /// clamped to the room under `points_cap`. A redelivery to the same
     /// account answers what it credited.
     #[allow(clippy::too_many_arguments)]

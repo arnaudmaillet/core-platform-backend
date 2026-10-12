@@ -232,6 +232,8 @@ else its device id — never the raw id) and when the guest first launched. The 
 pile at that moment as points (`WELCOME_GIFT`), **once per device, whoever signs in**:
 - **Once per device:** the device is claimed on the nil UUID's shard first (`welcome_gifts`, migration
   0009), so another account on that device gets nothing.
+- **Once per account:** an account that already claimed another device gets nothing more, even if the cap
+  held its first gift to 0.
 - **Idempotent:** the credit uses the service's key `sys:welcome-gift`, so a redelivery answers it.
 - **Cap:** the credit is clamped under `points_cap`.
 - **Erasure:** erasing the account unlinks the device but keeps it welcomed.

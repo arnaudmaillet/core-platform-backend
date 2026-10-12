@@ -642,4 +642,12 @@ async fn the_welcome_gift_is_credited_once_per_device_over_postgres() {
         .unwrap();
     assert_eq!(holder, None, "unlinked from the erased account");
     assert_eq!(gift(&you).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven, "the device stays welcomed");
+
+    // Once per account too, even when the cap held the gift to 0 (no
+    // ledger row): another device of the same account gets nothing.
+    let full = AccountId::from_uuid(Uuid::now_v7());
+    fund(&pool, &store, &full, 2_000).await;
+    let (first, second) = (format!("{:0>64}", Uuid::now_v7().simple()), format!("{:0>64}", Uuid::now_v7().simple()));
+    assert_eq!(store.welcome_gift(&full, &first, 125, 2_000, 0, now).await.unwrap(), WelcomeGiftOutcome::Credited(0));
+    assert_eq!(store.welcome_gift(&full, &second, 125, 2_000, 0, now).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven);
 }
