@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: fd879147eb8c6c49a7183265836d349077cac1353d31c8b280086bc74401c73d
+  source_sha256: a6a214806cf533f5de9ed51a82286ec322de1f4eb13c7655f161b4fabff1ef8f
   translated_at: 2026-10-12
   status: complete
 ---
@@ -321,6 +321,7 @@ async fn main() -> anyhow::Result<()> {
 | `PROFILE_GRPC_ADDR` | No | `0.0.0.0:50052` | gRPC bind address. |
 | `PROFILE_MEDIA_GRPC_ENDPOINT` | No | — | endpoint mesh de media : vérifie les documents privés d'une demande de vérification (#777) et les assets des avatars / bannières à l'écriture ; les livre à la lecture (#907, fail-open). Non définie : les demandes ne prennent que des liens, les images que leurs URLs. |
 | `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS` | No | `500` / `1000` | délais de ces appels. |
+| `PROFILE_BACKFILL_VISIBILITY` | No | non défini | `1`/`true`/`yes` : au démarrage, ré-annonce une fois la visibilité de chaque profil **privé** (`ProfileVisibilityChanged`, #927). Post en déduit qu'il doit passer en SIGNED les images d'un auteur privé (#919), et les profils déjà privés avant que post ne projette cette visibilité ne l'ont jamais ré-annoncée. Public est la valeur par défaut partout, donc les profils publics sont ignorés. Mêmes règles d'exécution unique que le backfill des onglets ci-dessous : à définir le temps d'un déploiement, avec ou avant post → media (core-platform-infra#88), puis à retirer. |
 | `PROFILE_BACKFILL_TAB_SETTINGS` | No | non défini | `1`/`true`/`yes` : au démarrage, ré-annonce une fois les réglages d'onglets non par défaut de chaque profil (`ProfileTabSettingsChanged`, #873), pour les consommateurs démarrés après que ces événements ont quitté la rétention de `profile.v1.events` (engagement, post). Chaque réplica le lance, à chaque démarrage (les répétitions sont sans effet, le dernier écrit l'emporte) : à définir le temps d'un déploiement, au premier déploiement, puis à retirer ; lancé pendant que des propriétaires modifient leurs réglages, une ancienne valeur ré-annoncée peut arriver après une plus récente. |
 
 > Le réglage complet `SCYLLA_*` / `REDIS_*` / `KAFKA_*` est documenté dans les crates partagés

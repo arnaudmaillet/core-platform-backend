@@ -14,7 +14,7 @@ use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStora
 use crate::application::port::{ProfileRepository, ProfileSummary, HANDLE_RESERVATION_DAYS};
 use crate::domain::aggregate::Profile;
 use crate::domain::entity::ProfileLink;
-use crate::domain::value_object::{AccountId, BusinessInfo, Handle, MediaAssetId, ProfileId, TabSettings};
+use crate::domain::value_object::{AccountId, BusinessInfo, Handle, MediaAssetId, ProfileId, ProfileVisibility, TabSettings};
 use crate::error::ProfileError;
 use crate::infrastructure::persistence::model::ProfileRow;
 
@@ -407,6 +407,46 @@ impl ProfileRepository for ScyllaProfileRepository {
                 continue;
             }
             page.push((ProfileId::from_uuid(row.profile_id), TabSettings::from_json(row.tab_settings.as_deref())));
+        }
+        // The cursor is the raw page's: deleted profiles skipped do not end it.
+        Ok((page, last.filter(|_| seen == limit)))
+    }
+
+    async fn visibility_page(
+        &self,
+        after: Option<&ProfileId>,
+        limit: i32,
+    ) -> Result<(Vec<(ProfileId, ProfileVisibility)>, Option<ProfileId>), ProfileError> {
+        #[derive(DeserializeRow)]
+        struct VisibilityRow {
+            profile_id: Uuid,
+            status:     String,
+            visibility: String,
+        }
+        let result = match after {
+            Some(after) => {
+                let stmt = self.fast_stmt(
+                    "SELECT profile_id, status, visibility FROM profile.profiles \
+                     WHERE token(profile_id) > token(?) LIMIT ?",
+                );
+                self.client.session.execute_unpaged(stmt, (after.as_uuid(), limit)).await
+            }
+            None => {
+                let stmt = self.fast_stmt("SELECT profile_id, status, visibility FROM profile.profiles LIMIT ?");
+                self.client.session.execute_unpaged(stmt, (limit,)).await
+            }
+        }
+        .map_err(scylla_err)?;
+        let rows = result.into_rows_result().map_err(|e| row_err("visibility_page_rows", e))?;
+        let (mut page, mut seen, mut last) = (Vec::new(), 0, None);
+        for row in rows.rows::<VisibilityRow>().map_err(|e| row_err("visibility_page_iter", e))? {
+            let row = row.map_err(|e| row_err("visibility_page_deser", e))?;
+            seen += 1;
+            last = Some(ProfileId::from_uuid(row.profile_id));
+            if row.status == "deleted" {
+                continue;
+            }
+            page.push((ProfileId::from_uuid(row.profile_id), ProfileVisibility::try_from(row.visibility.as_str())?));
         }
         // The cursor is the raw page's: deleted profiles skipped do not end it.
         Ok((page, last.filter(|_| seen == limit)))

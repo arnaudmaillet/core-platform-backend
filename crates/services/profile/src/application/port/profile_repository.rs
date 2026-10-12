@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use crate::domain::aggregate::Profile;
-use crate::domain::value_object::{AccountId, Handle, MediaAssetId, ProfileId, TabSettings};
+use crate::domain::value_object::{AccountId, Handle, MediaAssetId, ProfileId, ProfileVisibility, TabSettings};
 use crate::error::ProfileError;
 
 /// Days a released handle stays reserved before anyone may claim it again.
@@ -55,6 +55,14 @@ pub trait ProfileRepository: Send + Sync + 'static {
         after: Option<&ProfileId>,
         limit: i32,
     ) -> Result<(Vec<(ProfileId, TabSettings)>, Option<ProfileId>), ProfileError>;
+
+    /// A page of every profile's visibility (#927: the one-off backfill), as
+    /// [`tab_settings_page`](Self::tab_settings_page) pages.
+    async fn visibility_page(
+        &self,
+        after: Option<&ProfileId>,
+        limit: i32,
+    ) -> Result<(Vec<(ProfileId, ProfileVisibility)>, Option<ProfileId>), ProfileError>;
 
     /// Returns a page of lightweight summaries and the next page token.
     /// `page_token` is an opaque cursor; `None` starts from the beginning.
