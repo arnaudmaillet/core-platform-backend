@@ -199,7 +199,9 @@ SIGNED asset's renditions (a video's whole HLS tree too) under its own
 `restricted/{kind}/{asset_id}/…` instead of the shared content-addressed `{kind}/{hash}/…`: per asset,
 so never shared across owners nor guessable from the bytes, and under a prefix the CDN denies
 (core-platform-infra#87), so only a signed URL reaches them. `ChangeDeliveryVisibility` (mesh only; the
-services that know why, e.g. a private account, call it) changes a READY asset's visibility and moves its
+services that know why, e.g. a private account, call it — it can make private media public, so it takes
+its intended mesh callers only (#852 `MeshCallerGate`): none is named yet, so an enforced gate refuses
+every caller until #919 step 3 names one) changes a READY asset's visibility and moves its
 objects: to SIGNED, into its restricted tree (bytes another asset shares are copied and stay public for
 it; bytes it alone holds are moved and the CDN is purged of their public paths); to PUBLIC, back to the
 content-addressed tree. Objects move before the row is saved, driven by listing, so a retry completes a

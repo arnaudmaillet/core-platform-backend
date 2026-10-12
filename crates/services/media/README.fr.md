@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 426ab8766fd3870b2437f1b42a2e6922103719090761a4ae8c65cbf8513491fd
+  source_sha256: b1543647adc07a82813f122936bb08667f0db9c249dd0bb99ec0a486429b140d
   translated_at: 2026-10-12
   status: complete
 ---
@@ -218,7 +218,9 @@ n'est jamais dédupliqué sur un asset existant, et aucun upload n'est jamais d�
 à l'asset, donc jamais partagé entre propriétaires ni devinable à partir des octets, et sous un préfixe
 que le CDN refuse (core-platform-infra#87), si bien que seule une URL signée y accède.
 `ChangeDeliveryVisibility` (mesh uniquement ; les services qui savent pourquoi, p. ex. un compte privé,
-l'appellent) change la visibilité d'un asset READY et déplace ses objets : vers SIGNED, dans son arbre
+l'appellent — il peut rendre public un média privé, donc il n'accepte que ses appelants mesh prévus
+(#852 `MeshCallerGate`) : aucun n'est encore désigné, si bien qu'une gate en mode enforce refuse tout
+appelant jusqu'à ce que #919 étape 3 en désigne un) change la visibilité d'un asset READY et déplace ses objets : vers SIGNED, dans son arbre
 restreint (les octets qu'un autre asset partage sont copiés et restent publics pour lui ; ceux qu'il est
 seul à détenir sont déplacés et le CDN est purgé de leurs chemins publics) ; vers PUBLIC, retour à l'arbre
 adressé par contenu. Les objets bougent avant l'enregistrement de la ligne, pilotés par un listing : une

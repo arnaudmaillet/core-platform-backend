@@ -349,6 +349,51 @@ mod tests {
         assert_eq!(status.code(), Code::NotFound);
     }
 
+    /// Mesh tokens `namespace/service-account`.
+    struct MeshTokens;
+
+    impl transport::grpc::mesh::MeshVerifier for MeshTokens {
+        fn verify<'a>(&'a self, token: &'a str) -> transport::grpc::mesh::MeshVerification<'a> {
+            Box::pin(async move {
+                let (namespace, name) = token.split_once('/').ok_or_else(|| "bad".to_owned())?;
+                Ok(auth_context::mesh::MeshCaller { namespace: namespace.into(), service_account: name.into() })
+            })
+        }
+    }
+
+    /// #919: changing a delivery visibility can make private media public, so
+    /// it takes its intended mesh callers only — none yet: enforced, every
+    /// caller is refused; off (the default), the owner check still holds.
+    #[tokio::test]
+    async fn changing_a_visibility_takes_no_mesh_caller_until_one_is_named() {
+        use transport::grpc::mesh::{MeshCallerGate, MeshGateMode, MESH_TOKEN_HEADER};
+        let fx = Fixture::new();
+        let (id, owner) = fx.ready_asset(crate::domain::value_object::MediaKind::PostImage).await;
+        let call = || {
+            let mut request = Request::new(proto::ChangeDeliveryVisibilityRequest {
+                asset_id: id.to_string(),
+                owner_id: owner.to_string(),
+                delivery_visibility: proto::DeliveryVisibility::MediaDeliveryVisibilitySigned as i32,
+            });
+            request.metadata_mut().insert(MESH_TOKEN_HEADER, "core/staging-profile-server".parse().unwrap());
+            request
+        };
+        let gated = |mode| {
+            handler_from_fakes(&fx).with_mesh_gate(MeshCallerGate::new(mode, Some(Arc::new(MeshTokens)), None))
+        };
+
+        let status = gated(MeshGateMode::Enforce).change_delivery_visibility(call()).await.unwrap_err();
+        assert_eq!(status.code(), Code::PermissionDenied);
+        let asset = fx.assets.find_by_id(&id).await.unwrap().unwrap();
+        assert_eq!(asset.delivery_visibility(), crate::domain::value_object::DeliveryVisibility::Public);
+
+        let changed = gated(MeshGateMode::Off).change_delivery_visibility(call()).await.unwrap().into_inner();
+        assert_eq!(
+            changed.asset.unwrap().delivery_visibility,
+            proto::DeliveryVisibility::MediaDeliveryVisibilitySigned as i32
+        );
+    }
+
     /// An edge call from `account` (its token's `sub`).
     fn as_caller<T>(account: &str, message: T) -> Request<T> {
         let raw: auth_context::OidcClaims =
