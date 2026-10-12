@@ -905,6 +905,19 @@ impl WalletStore for PgWalletStore {
         starter_gems: i64,
         now: DateTime<Utc>,
     ) -> Result<WelcomeGiftOutcome, WalletError> {
+        // Once per account: one that claimed another device was welcomed
+        // already — even when the cap held its gift to 0 (no ledger row).
+        let (elsewhere,): (bool,) = sqlx::query_as(
+            "SELECT EXISTS (SELECT 1 FROM welcome_gifts WHERE account_id = $1 AND device_key_hash <> $2)",
+        )
+        .bind(account.as_uuid())
+        .bind(device_key_hash)
+        .fetch_one(self.envelope_pool()?)
+        .await
+        .map_err(storage)?;
+        if elsewhere {
+            return Ok(WelcomeGiftOutcome::AlreadyGiven);
+        }
         // The device first, on the nil UUID's shard: once per device, whoever
         // signs in. A redelivery to the same account goes on to its credit.
         let claimed = sqlx::query(

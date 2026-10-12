@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 4b683af8b3c79a75fbddc44e869656373c6683b5931ea4d66fc2e84ccfcd7e86
+  source_sha256: 11c238c47534c459cb1b72275532651efb351a396ac708a053a3ef8e110f0c44
   translated_at: 2026-10-12
   status: complete
 ---
@@ -257,6 +257,8 @@ premier lancement de l'invité. Le wallet crédite alors le tas à cet instant e
 **une fois par appareil, quel que soit le compte qui se connecte** :
 - **Une fois par appareil :** l'appareil est d'abord réservé sur le shard de l'UUID nul
   (`welcome_gifts`, migration 0009), si bien qu'un autre compte sur cet appareil ne reçoit rien.
+- **Une fois par compte :** un compte qui a déjà réservé un autre appareil ne reçoit plus rien, même si le
+  plafond a ramené son premier cadeau à 0.
 - **Idempotent :** le crédit utilise la clé du service `sys:welcome-gift`, donc une redélivrance renvoie
   le même crédit.
 - **Plafond :** le crédit est borné sous `points_cap`.
