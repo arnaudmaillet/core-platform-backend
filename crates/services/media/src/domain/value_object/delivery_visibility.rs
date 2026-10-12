@@ -30,6 +30,16 @@ impl DeliveryVisibility {
     pub fn is_expiring(&self) -> bool {
         matches!(self, Self::Signed)
     }
+
+    /// The stricter of the two (#919): an asset's visibility is never relaxed
+    /// by a request — a caller may ask for SIGNED, never PUBLIC for a SIGNED
+    /// asset.
+    pub fn stricter(self, requested: Option<Self>) -> Self {
+        match (self, requested) {
+            (Self::Signed, _) | (_, Some(Self::Signed)) => Self::Signed,
+            _ => Self::Public,
+        }
+    }
 }
 
 impl Default for DeliveryVisibility {

@@ -179,8 +179,19 @@ out.
 characters; `MED-1008` otherwise) is stored on the asset it reserves (`assets.upload_key`, unique per owner
 among live assets). A ticket retried under the same key reserves nothing and answers that asset: a fresh
 upload URL while it is still `PENDING`, no upload (`deduplicated`) once it is past `PENDING`. The same key
-for another kind, declared type or content fails `FAILED_PRECONDITION` (`MED-1007`). Deleting or aborting
+for another kind, declared type, content or delivery visibility (#919) fails `FAILED_PRECONDITION` (`MED-1007`). Deleting or aborting
 the asset frees its key.
+
+**Delivery visibility is the server's (#919).** Each asset carries a `delivery_visibility` (in its stored
+document; one written before reads as PUBLIC): the kind's default (PUBLIC; a private document is never
+delivered) or what its owner asked for in `IssueUploadTicketRequest.delivery_visibility` — SIGNED for
+media that must never sit behind a permanent public URL. `ResolveDelivery` / `BatchResolveDelivery`
+deliver it that way: the request's `visibility` may only make it **stricter** (PUBLIC asked for a SIGNED
+asset still resolves SIGNED). `GetAsset` shows a SIGNED asset's `content_hash` and rendition
+`storage_key`s to its owner and the mesh only (anyone else gets them empty: with them a reader could fetch
+or guess the bytes past the signed delivery); `Asset.delivery_visibility` says which. A SIGNED upload is
+never deduplicated onto an existing asset. Next (#919 step 2): SIGNED renditions under a per-asset
+`restricted/` prefix the CDN never serves, behind `MEDIA_RESTRICTED_PREFIX_ENABLED`.
 
 **Private documents (#777).** `MEDIA_KIND_PRIVATE_DOCUMENT` holds verification evidence (profile
 `RequestVerification`): JPEG, PNG, HEIC or PDF, ≤ 10 MiB, owned by the account like any asset. **Off by

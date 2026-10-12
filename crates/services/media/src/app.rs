@@ -286,6 +286,7 @@ mod tests {
             declared_size_bytes: 2_000_000,
             content_sha256: String::new(),
             idempotency_key: String::new(),
+            ..Default::default()
         });
         let resp = handler.issue_upload_ticket(request).await.unwrap().into_inner();
         assert!(!resp.deduplicated);
@@ -305,6 +306,7 @@ mod tests {
             declared_size_bytes: 999_999_999,
             content_sha256: String::new(),
             idempotency_key: String::new(),
+            ..Default::default()
         });
         let status = handler.issue_upload_ticket(request).await.unwrap_err();
         assert_eq!(status.code(), Code::InvalidArgument);
@@ -336,6 +338,57 @@ mod tests {
         });
         let status = handler.get_asset(request).await.unwrap_err();
         assert_eq!(status.code(), Code::NotFound);
+    }
+
+    /// An edge call from `account` (its token's `sub`).
+    fn as_caller<T>(account: &str, message: T) -> Request<T> {
+        let raw: auth_context::OidcClaims =
+            serde_json::from_value(serde_json::json!({ "sub": account, "exp": 4_102_444_800_i64 })).unwrap();
+        let mut request = Request::new(message);
+        request.extensions_mut().insert(transport::grpc::edge::EdgePrincipal::new(Arc::new(
+            auth_context::CurrentPrincipal {
+                user_id: auth_context::PrincipalId::new(account),
+                tenant_id: None,
+                permissions: vec![auth_context::Permission::new("read:public")],
+                raw_claims: raw,
+            },
+        )));
+        request
+    }
+
+    /// #919: a SIGNED asset's content hash and rendition keys are its owner's
+    /// (and the mesh's); anyone else gets the asset without them. A PUBLIC
+    /// asset's are anyone's.
+    #[tokio::test]
+    async fn a_signed_assets_keys_are_hidden_from_everyone_but_its_owner() {
+        let fx = Fixture::new();
+        let handler = handler_from_fakes(&fx);
+        let (signed, owner) = fx.ready_signed_asset(crate::domain::value_object::MediaKind::PostImage).await;
+        let get = |caller: Option<String>, id: String| {
+            let message = proto::GetAssetRequest { asset_id: id };
+            match caller {
+                Some(account) => as_caller(&account, message),
+                None => Request::new(message),
+            }
+        };
+        let keys = |asset: &proto::Asset| {
+            (!asset.content_hash.is_empty(), asset.renditions.iter().all(|r| !r.storage_key.is_empty()))
+        };
+
+        let stranger = uuid::Uuid::now_v7().to_string();
+        let seen = handler.get_asset(get(Some(stranger.clone()), signed.as_str())).await.unwrap().into_inner().asset.unwrap();
+        assert_eq!(seen.delivery_visibility, proto::DeliveryVisibility::MediaDeliveryVisibilitySigned as i32);
+        assert!(!seen.renditions.is_empty());
+        assert_eq!(keys(&seen), (false, false), "hidden from another account");
+        assert!(seen.renditions.iter().all(|r| r.storage_key.is_empty()));
+        for caller in [Some(owner.as_str()), None] {
+            let seen = handler.get_asset(get(caller, signed.as_str())).await.unwrap().into_inner().asset.unwrap();
+            assert_eq!(keys(&seen), (true, true), "the owner and the mesh see them");
+        }
+
+        let (public, _) = fx.ready_asset(crate::domain::value_object::MediaKind::PostImage).await;
+        let seen = handler.get_asset(get(Some(stranger), public.as_str())).await.unwrap().into_inner().asset.unwrap();
+        assert_eq!(keys(&seen), (true, true), "a public asset's are anyone's");
     }
 
     /// Bearer tokens as staff tooling sends them on the mesh (#837).

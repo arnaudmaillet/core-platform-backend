@@ -38,6 +38,11 @@ message Asset {
     repeated Rendition          renditions   = 11;
     google.protobuf.Timestamp   created_at   = 12;
     google.protobuf.Timestamp   updated_at   = 13;
+    // How its renditions are delivered (#919): decided by the server — the
+    // kind's default, or what the owner asked for at upload. For a SIGNED
+    // asset, `content_hash` and every rendition's `storage_key` are empty for
+    // anyone but its owner (and the mesh).
+    DeliveryVisibility          delivery_visibility = 14;
 }
 
 // One derivative in an asset's catalog. `storage_key` is an object-store key, not a
@@ -74,6 +79,11 @@ message IssueUploadTicketRequest {
     // key for another kind, declared type or content fails FAILED_PRECONDITION
     // (MED-1007). Deleting or aborting the asset frees its key.
     string     idempotency_key     = 6;
+    // How the asset is delivered (#919): SIGNED for media that must never be
+    // served from a public, permanent URL (a private account's, a message's).
+    // UNSPECIFIED ⇒ the kind's default (PUBLIC). Never relaxed afterwards by a
+    // reader's request.
+    DeliveryVisibility  delivery_visibility = 7;
 }
 
 message IssueUploadTicketResponse {
@@ -184,7 +194,8 @@ message ResolveDeliveryRequest {
     string              asset_id   = 1;
     // Preferred rendition; UNSPECIFIED ⇒ a sensible default for the asset's kind.
     RenditionKind       preferred  = 2;
-    // Requested visibility; UNSPECIFIED ⇒ the asset's default delivery policy.
+    // Requested visibility; UNSPECIFIED ⇒ the asset's own (#919). It can only
+    // make delivery stricter: PUBLIC for a SIGNED asset still resolves SIGNED.
     DeliveryVisibility  visibility = 3;
 }
 
@@ -222,6 +233,8 @@ message DeliveredRendition {
 message BatchResolveDeliveryRequest {
     repeated string     asset_ids  = 1;
     RenditionKind       preferred  = 2;
+    // As ResolveDeliveryRequest.visibility: only ever stricter than each
+    // asset's own (#919).
     DeliveryVisibility  visibility = 3;
 }
 

@@ -25,6 +25,9 @@ pub struct IssueUploadTicketCommand {
     /// Optional caller idempotency key (#876): a retried ticket under the same
     /// key answers the asset the first one reserved.
     pub idempotency_key: Option<String>,
+    /// How the owner wants it delivered (#919); `None` ⇒ the kind's default.
+    /// Never laxer than the kind's.
+    pub delivery_visibility: Option<crate::domain::value_object::DeliveryVisibility>,
 }
 
 /// The pre-signed plan returned to the client (absent when the upload deduped onto
@@ -83,9 +86,13 @@ impl IssueUploadTicketHandler {
 
         // Dedup short-circuit (fork B) — only when enabled and a hash is supplied.
         // Never for a private document (#777), either way: its bytes are its
-        // owner's alone, and no other upload is handed its asset.
+        // owner's alone, and no other upload is handed its asset. Nor for an
+        // upload its owner wants SIGNED (#919): it must not be handed another
+        // owner's public asset.
+        let signed = cmd.delivery_visibility == Some(crate::domain::value_object::DeliveryVisibility::Signed);
         if self.policy.dedup_enabled
             && !cmd.kind.is_private()
+            && !signed
             && let Some(sha) = cmd.content_sha256.as_deref()
         {
             // A key that already reserved an asset answers it first: a READY
@@ -115,6 +122,7 @@ impl IssueUploadTicketHandler {
                 kind: cmd.kind,
                 declared_mime: cmd.declared_mime.clone(),
                 declared_size: cmd.declared_size,
+                delivery_visibility: cmd.delivery_visibility,
             },
             &constraints,
             now,
@@ -143,7 +151,10 @@ impl IssueUploadTicketHandler {
             .as_deref()
             .zip(asset.content_hash())
             .is_some_and(|(declared, stored)| !declared.eq_ignore_ascii_case(stored.as_str()));
-        if asset.kind() != cmd.kind || asset.declared_mime() != &cmd.declared_mime || other_content {
+        // Another visibility is another upload too (#919): a retry must never
+        // turn a SIGNED request into the PUBLIC asset the key reserved first.
+        let other_visibility = asset.delivery_visibility() != cmd.kind.default_visibility().stricter(cmd.delivery_visibility);
+        if asset.kind() != cmd.kind || asset.declared_mime() != &cmd.declared_mime || other_content || other_visibility {
             return Err(MediaError::UploadKeyConflict);
         }
         if asset.state() != AssetState::Pending {
@@ -186,6 +197,7 @@ mod tests {
 
     fn cmd() -> IssueUploadTicketCommand {
         IssueUploadTicketCommand {
+            delivery_visibility: None,
             owner_id: OwnerId::from_uuid(Uuid::from_u128(7)),
             kind: MediaKind::PostImage,
             declared_mime: MimeType::new("image/jpeg").unwrap(),
@@ -247,6 +259,40 @@ mod tests {
         assert!(out.deduplicated);
         assert!(out.upload.is_none(), "no upload needed on a dedup hit");
         assert_eq!(out.asset_id, existing, "reuses the existing asset");
+    }
+
+    /// #919: an upload its owner wants SIGNED is never handed another
+    /// owner's existing (public) asset, even with dedup on; it is reserved
+    /// SIGNED.
+    #[tokio::test]
+    async fn a_signed_upload_never_dedups_onto_existing_bytes() {
+        let mut fx = Fixture::new();
+        fx.policy.dedup_enabled = true;
+        let existing = fx.seed_ready_asset(TEST_HASH).await;
+
+        let mut c = cmd();
+        c.content_sha256 = Some(TEST_HASH.to_owned());
+        c.delivery_visibility = Some(crate::domain::value_object::DeliveryVisibility::Signed);
+        let out = fx.issue_ticket_handler().handle(env(c), t0()).await.unwrap();
+
+        assert!(!out.deduplicated);
+        assert_ne!(out.asset_id, existing);
+        let reserved = fx.assets.find_by_id(&out.asset_id).await.unwrap().unwrap();
+        assert_eq!(reserved.delivery_visibility(), crate::domain::value_object::DeliveryVisibility::Signed);
+    }
+
+    /// #919: the same idempotency key with another visibility is another
+    /// upload (MED-1007), never the asset the key reserved first.
+    #[tokio::test]
+    async fn the_same_key_with_another_visibility_is_a_conflict() {
+        let fx = Fixture::new();
+        let first = fx.issue_ticket_handler().handle(env(keyed("vis-key-0001")), t0()).await.unwrap();
+        let mut signed = keyed("vis-key-0001");
+        signed.delivery_visibility = Some(crate::domain::value_object::DeliveryVisibility::Signed);
+        let err = fx.issue_ticket_handler().handle(env(signed), t0()).await.unwrap_err();
+        assert!(matches!(err, MediaError::UploadKeyConflict), "{err:?}");
+        let again = fx.issue_ticket_handler().handle(env(keyed("vis-key-0001")), t0()).await.unwrap();
+        assert_eq!(again.asset_id, first.asset_id, "the same request still replays");
     }
 
     /// #777: off by default, a private document cannot be uploaded at all —

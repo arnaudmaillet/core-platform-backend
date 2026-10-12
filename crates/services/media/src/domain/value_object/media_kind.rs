@@ -38,6 +38,13 @@ impl MediaKind {
         }
     }
 
+    /// How an asset of this kind is delivered unless its owner asks for
+    /// stricter (#919): every public kind is PUBLIC; a private document is
+    /// never delivered at all, SIGNED as a backstop.
+    pub fn default_visibility(&self) -> super::DeliveryVisibility {
+        if self.is_private() { super::DeliveryVisibility::Signed } else { super::DeliveryVisibility::Public }
+    }
+
     /// Never served publicly: no renditions, no CDN, no `ResolveDelivery`.
     pub fn is_private(&self) -> bool {
         matches!(self, Self::PrivateDocument)
