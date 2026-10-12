@@ -222,7 +222,8 @@ HLS tree. With `MEDIA_CDN_COOKIE_KEY_PAIR_ID` + `MEDIA_CDN_COOKIE_PRIVATE_KEY` s
 `BatchResolveDelivery` answer a SIGNED video as follows:
 - the renditions' URLs are plain CDN URLs (`MEDIA_CDN_BASE_URL/…`);
 - `DeliveredMedia.cdn_cookies` carries `CloudFront-Policy`, `CloudFront-Signature` and
-  `CloudFront-Key-Pair-Id` for the CDN host, path `/`;
+  `CloudFront-Key-Pair-Id` for the CDN host, path = the asset's own tree (so several videos' cookies coexist in a
+  shared cookie jar);
 - the policy is a custom one on the asset's tree (`{base}/{tree}/*`) until `expires_at`
   (`MEDIA_CDN_COOKIE_TTL_SECS`, 1 h; the renditions' `url_expires_at` match it);
 - the signature is RSA-SHA1 PKCS#1 v1.5 with CloudFront's base64 substitutions.

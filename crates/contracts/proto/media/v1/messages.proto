@@ -240,7 +240,8 @@ message DeliveredMedia {
 message SignedCookie {
     string                    name       = 1;
     string                    value      = 2;
-    // The CDN host it is sent to, and the path.
+    // The CDN host it is sent to, and the path: the asset's own tree, so several
+    // videos' cookies (all named CloudFront-*) coexist in one cookie jar.
     string                    domain     = 3;
     string                    path       = 4;
     google.protobuf.Timestamp expires_at = 5;

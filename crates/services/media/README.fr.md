@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 92c67948dc134b1071bdeb7626c4e23d345f14854b3757d0edf043dbe268f7c0
+  source_sha256: 9b4f89be0428ba051e7750ae458f68c7c9d5cf8342de821c255b3e4fe0abc54a
   translated_at: 2026-10-13
   status: complete
 ---
@@ -244,7 +244,8 @@ présignée ne peut pas couvrir un arbre HLS. Avec `MEDIA_CDN_COOKIE_KEY_PAIR_ID
 SIGNED comme suit :
 - les URLs des renditions sont de simples URLs CDN (`MEDIA_CDN_BASE_URL/…`) ;
 - `DeliveredMedia.cdn_cookies` porte `CloudFront-Policy`, `CloudFront-Signature` et
-  `CloudFront-Key-Pair-Id` pour l'hôte du CDN, chemin `/` ;
+  `CloudFront-Key-Pair-Id` pour l'hôte du CDN, chemin = l'arbre propre à l'asset (les cookies de plusieurs vidéos
+  coexistent ainsi dans un même stockage de cookies) ;
 - la politique est une politique personnalisée sur l'arbre de l'asset (`{base}/{arbre}/*`) jusqu'à
   `expires_at` (`MEDIA_CDN_COOKIE_TTL_SECS`, 1 h ; les `url_expires_at` des renditions s'y alignent) ;
 - la signature est en RSA-SHA1 PKCS#1 v1.5 avec les substitutions base64 de CloudFront.
