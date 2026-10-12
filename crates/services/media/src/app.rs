@@ -19,7 +19,8 @@ use transport::kafka::config::producer::ProducerConfig;
 use transport::kafka::producer::KafkaProducerBuilder;
 
 use crate::application::command::{
-    ApplyModerationHandler, CommitUploadHandler, DeleteAssetHandler, DocumentRetention, IssueUploadTicketHandler,
+    ApplyModerationHandler, ChangeVisibilityHandler, CommitUploadHandler, DeleteAssetHandler, DocumentRetention,
+    IssueUploadTicketHandler,
     OwnerErasure,
     ProcessAssetHandler, TranscodeAssetHandler,
 };
@@ -119,9 +120,17 @@ impl App {
             Arc::clone(&deps.access_log),
             deps.policy.signed_url_ttl,
         ));
+        let visibility = Arc::new(ChangeVisibilityHandler::new(
+            Arc::clone(&deps.assets),
+            Arc::clone(&deps.store),
+            Arc::clone(&deps.cdn),
+            Arc::clone(&deps.cache),
+            deps.policy.clone(),
+        ));
         MediaServiceHandler::new(issue, commit, delete, process, get, resolve)
             .with_list_by_owner(by_owner)
             .with_private_documents(private_documents)
+            .with_visibility_changes(visibility)
     }
 
     /// Builds the process + moderation handlers shared between the gRPC handler and

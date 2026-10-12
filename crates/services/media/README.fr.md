@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: fa740133e9a3a6f7244623b26b3f568c72ec5db797453d1da6140e053d1ffd35
+  source_sha256: 426ab8766fd3870b2437f1b42a2e6922103719090761a4ae8c65cbf8513491fd
   translated_at: 2026-10-12
   status: complete
 ---
@@ -173,6 +173,7 @@ service MediaService {
   // Métadonnées d'asset
   rpc GetAsset          (GetAssetRequest)          returns (GetAssetResponse);
   rpc DeleteAsset       (DeleteAssetRequest)       returns (DeleteAssetResponse);
+  rpc ChangeDeliveryVisibility (ChangeDeliveryVisibilityRequest) returns (ChangeDeliveryVisibilityResponse); // mesh uniquement
   rpc ListAssetsByOwner (ListAssetsByOwnerRequest) returns (ListAssetsByOwnerResponse); // mesh uniquement
   // Plan C — résolution de diffusion (lecture chaude ; URLs CDN / signées)
   rpc ResolveDelivery      (ResolveDeliveryRequest)      returns (ResolveDeliveryResponse);
@@ -208,9 +209,24 @@ la requête ne peut que la rendre **plus stricte** (PUBLIC demandé pour un asse
 `GetAsset` ne montre le `content_hash` et les `storage_key` des renditions d'un asset SIGNED qu'à son
 propriétaire et au mesh (tout autre les reçoit vides : avec eux un lecteur pourrait récupérer ou deviner
 les octets en contournant la livraison signée) ; `Asset.delivery_visibility` dit laquelle. Un upload SIGNED
-n'est jamais dédupliqué sur un asset existant. Ensuite (#919 étape 2) : les renditions SIGNED sous un
-préfixe `restricted/` propre à chaque asset que le CDN ne sert jamais, derrière
-`MEDIA_RESTRICTED_PREFIX_ENABLED`.
+n'est jamais dédupliqué sur un asset existant, et aucun upload n'est jamais dédupliqué sur un asset SIGNED
+(un hash déclaré ne prouve pas qu'on détient les octets).
+
+**Clés restreintes (#919, désactivées par défaut).** Avec `MEDIA_RESTRICTED_PREFIX_ENABLED`, le pipeline
+écrit les renditions d'un asset SIGNED (tout l'arbre HLS d'une vidéo aussi) sous son propre
+`restricted/{kind}/{asset_id}/…` au lieu de l'arbre partagé adressé par contenu `{kind}/{hash}/…` : propre
+à l'asset, donc jamais partagé entre propriétaires ni devinable à partir des octets, et sous un préfixe
+que le CDN refuse (core-platform-infra#87), si bien que seule une URL signée y accède.
+`ChangeDeliveryVisibility` (mesh uniquement ; les services qui savent pourquoi, p. ex. un compte privé,
+l'appellent) change la visibilité d'un asset READY et déplace ses objets : vers SIGNED, dans son arbre
+restreint (les octets qu'un autre asset partage sont copiés et restent publics pour lui ; ceux qu'il est
+seul à détenir sont déplacés et le CDN est purgé de leurs chemins publics) ; vers PUBLIC, retour à l'arbre
+adressé par contenu. Les objets bougent avant l'enregistrement de la ligne, pilotés par un listing : une
+nouvelle tentative termine un déplacement interrompu, et la même visibilité redemandée termine un
+déplacement que le flag avait retenu. Désactivé, seule la visibilité change ; les objets restent où ils
+sont (toujours livrés uniquement signés). À activer seulement une fois que le CDN refuse `restricted/`, et
+pas tant que des vidéos SIGNED sont uploadées : une playlist maître présignée n'autorise pas ses segments,
+qui cesseraient d'être lus jusqu'à la livraison HLS signée (#921).
 
 **Clés d'idempotence d'upload (#876).** `IssueUploadTicketRequest.idempotency_key` (1 à 128 caractères
 ASCII imprimables ; `MED-1008` sinon) est enregistrée sur l'asset qu'elle réserve (`assets.upload_key`,
@@ -379,6 +395,7 @@ async fn main() -> anyhow::Result<()> {
 | `MEDIA_UPLOAD_TICKET_TTL_SECS` | Non | `900` | fenêtre de validité de l'upload pré-signé |
 | `MEDIA_SIGNED_URL_TTL_SECS` | Non | `300` | validité de l'URL de diffusion privée (signée) |
 | `MEDIA_PRIVATE_DOCUMENTS_ENABLED` | Non | `false` | autorise l'upload de documents privés (#777) ; à activer seulement une fois `private/` hors de l'accès d'origine du CDN (core-platform-infra#37) |
+| `MEDIA_RESTRICTED_PREFIX_ENABLED` | Non | `false` | les renditions des assets SIGNED sont écrites dans, et déplacées vers, leur propre arbre `restricted/` (#919) ; à activer seulement une fois que le CDN refuse `restricted/` (core-platform-infra#87) |
 | `MEDIA_DOCUMENT_RETENTION_DAYS` | Non | `30` | durée de vie d'un document privé après la décision de sa demande de vérification (#777) |
 | `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS` | Non | `3600` | fréquence de purge des documents privés échus |
 | `MEDIA_DEDUP_ENABLED` | Non | `false` | dédup par hash de contenu (off tant que le purge-refcount n'est pas durci) |

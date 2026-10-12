@@ -7,7 +7,7 @@ use image::{DynamicImage, ImageFormat};
 use crate::application::port::{DerivedRenditions, ImageProcessor};
 use crate::domain::aggregate::Rendition;
 use crate::domain::value_object::{
-    Blurhash, ContentHash, Dimensions, MediaKind, MimeType, RenditionKind, StorageKey,
+    Blurhash, Dimensions, MediaKind, MimeType, ObjectRoot, RenditionKind, StorageKey,
 };
 use crate::error::MediaError;
 
@@ -25,7 +25,8 @@ const LADDER: &[(RenditionKind, u32)] = &[
 
 /// `image`-backed [`ImageProcessor`]. v1 encodes every rendition as JPEG (broad
 /// support); WebP/AVIF format optimization is a follow-up. Derivatives are written
-/// to content-addressed keys, so identical bytes always land on identical URLs.
+/// under the root they are given: content-addressed keys (identical bytes land on
+/// identical URLs), or a SIGNED asset's own restricted tree (#919).
 pub struct ImageRenditionProcessor {
     store: Arc<S3Client>,
 }
@@ -35,20 +36,19 @@ impl ImageRenditionProcessor {
         Self { store }
     }
 
-    /// Encodes an image as JPEG, uploads it to its content-addressed key, and
-    /// builds the [`Rendition`] record.
+    /// Encodes an image as JPEG, uploads it to its key under `root`, and builds
+    /// the [`Rendition`] record.
     async fn encode_put(
         &self,
         img: &DynamicImage,
-        kind: MediaKind,
-        hash: &ContentHash,
+        root: &ObjectRoot,
         rk: RenditionKind,
     ) -> Result<Rendition, MediaError> {
         let mut buf = Vec::new();
         img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg).map_err(|e| {
             MediaError::ProcessingFailed { reason: format!("jpeg encode failed: {e}") }
         })?;
-        let key = StorageKey::rendition(kind, hash, rk, "jpg");
+        let key = root.rendition(rk, "jpg");
         let byte_size = buf.len() as u64;
         self.store.put_bytes(key.as_str(), buf, "image/jpeg").await?;
         Ok(Rendition::new(
@@ -66,8 +66,8 @@ impl ImageProcessor for ImageRenditionProcessor {
     async fn derive(
         &self,
         source: &StorageKey,
-        kind: MediaKind,
-        hash: &ContentHash,
+        _kind: MediaKind,
+        root: &ObjectRoot,
     ) -> Result<DerivedRenditions, MediaError> {
         let bytes = self.store.get_bytes(source.as_str()).await?;
         let img = image::load_from_memory(&bytes).map_err(|e| MediaError::CorruptMedia {
@@ -77,12 +77,12 @@ impl ImageProcessor for ImageRenditionProcessor {
 
         let mut renditions = Vec::new();
         // The master, re-encoded at full resolution.
-        renditions.push(self.encode_put(&img, kind, hash, RenditionKind::Original).await?);
+        renditions.push(self.encode_put(&img, root, RenditionKind::Original).await?);
         // The ladder: thumbnail always; larger buckets only if the source exceeds them.
         for &(rk, target) in LADDER {
             if rk == RenditionKind::Thumbnail || target < longest {
                 let resized = img.resize(target, target, image::imageops::FilterType::Triangle);
-                renditions.push(self.encode_put(&resized, kind, hash, rk).await?);
+                renditions.push(self.encode_put(&resized, root, rk).await?);
             }
         }
 

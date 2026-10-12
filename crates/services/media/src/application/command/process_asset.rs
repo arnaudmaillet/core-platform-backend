@@ -131,7 +131,12 @@ impl ProcessAssetHandler {
 
         // 3. Derive the rendition ladder + BlurHash from the validated master.
         asset.begin_processing(now)?;
-        let derived = self.processor.derive(&staging, asset.kind(), &hash).await?;
+        // A SIGNED asset's own restricted tree, once enabled (#919).
+        let root = asset.storage_root(self.policy.restricted_prefix_enabled).ok_or(MediaError::DomainViolation {
+            field: "content_hash".into(),
+            message: "a finalized asset must carry a content hash".into(),
+        })?;
+        let derived = self.processor.derive(&staging, asset.kind(), &root).await?;
         asset.set_blurhash(derived.blurhash, now)?;
         for rendition in derived.renditions {
             asset.attach_rendition(rendition, now)?;

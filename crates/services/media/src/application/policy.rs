@@ -24,6 +24,12 @@ pub struct MediaPolicy {
     /// out of the CDN's origin access (core-platform-infra#37); off, a
     /// `PRIVATE_DOCUMENT` upload ticket is refused (`MED-1006`).
     pub private_documents_enabled: bool,
+    /// `MEDIA_RESTRICTED_PREFIX_ENABLED` (default **false**, #919): whether a
+    /// SIGNED asset's renditions are written to (and moved into) its own
+    /// `restricted/{kind}/{asset_id}/` tree. Off until the CDN denies
+    /// `restricted/` (core-platform-infra#87); off, they stay in the shared
+    /// content-addressed tree, still delivered by signed URL only.
+    pub restricted_prefix_enabled: bool,
 }
 
 impl MediaPolicy {
@@ -36,6 +42,7 @@ impl MediaPolicy {
             dedup_enabled: false,
             screen_timeout: StdDuration::from_millis(200),
             private_documents_enabled: false,
+            restricted_prefix_enabled: false,
         }
     }
 

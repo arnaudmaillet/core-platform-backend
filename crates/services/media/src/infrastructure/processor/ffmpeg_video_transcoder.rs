@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use crate::application::port::{TranscodeOutput, VideoTranscoder};
 use crate::domain::aggregate::Rendition;
-use crate::domain::value_object::{Blurhash, ContentHash, Dimensions, MediaKind, MimeType, StorageKey};
+use crate::domain::value_object::{Blurhash, ContentHash, Dimensions, MimeType, ObjectRoot, StorageKey};
 use crate::error::MediaError;
 
 use crate::infrastructure::store::S3Client;
@@ -54,6 +54,7 @@ impl VideoTranscoder for FfmpegVideoTranscoder {
         &self,
         source: &StorageKey,
         hash: &ContentHash,
+        root: &ObjectRoot,
     ) -> Result<TranscodeOutput, MediaError> {
         let bytes = self.store.get_bytes(source.as_str()).await?;
         let hash_hex = hash.as_str().to_owned();
@@ -63,23 +64,23 @@ impl VideoTranscoder for FfmpegVideoTranscoder {
             .await
             .map_err(|e| MediaError::ProcessingFailed { reason: format!("transcode task panicked: {e}") })??;
 
-        // Publish the whole content-addressed tree to the store.
+        // Publish the whole tree to the store, under its root (#919).
         for file in &artifacts.files {
-            let key = StorageKey::video_object(MediaKind::Video, hash, &file.relative);
+            let key = root.object(&file.relative);
             self.store.put_bytes(key.as_str(), file.bytes.clone(), file.content_type).await?;
         }
 
         let manifest = Rendition::new(
             crate::domain::value_object::RenditionKind::Manifest,
             MimeType::new(MANIFEST_MIME)?,
-            StorageKey::video_object(MediaKind::Video, hash, "master.m3u8"),
+            root.object("master.m3u8"),
             artifacts.top_dimensions,
             artifacts.master_size,
         );
         let poster = Rendition::new(
             crate::domain::value_object::RenditionKind::Poster,
             MimeType::new("image/jpeg")?,
-            StorageKey::video_object(MediaKind::Video, hash, "poster.jpg"),
+            root.object("poster.jpg"),
             artifacts.poster_dimensions,
             artifacts.poster_size,
         );

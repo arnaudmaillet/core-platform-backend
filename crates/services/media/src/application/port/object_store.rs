@@ -51,4 +51,8 @@ pub trait ObjectStore: Send + Sync + 'static {
     /// Moves `from` to `to` (server-side copy, then delete). Idempotent: an
     /// absent `from` (already moved) is `Ok`.
     async fn relocate(&self, from: &StorageKey, to: &StorageKey) -> Result<(), MediaError>;
+
+    /// Copies `from` to `to`, keeping `from` (#919: bytes another asset still
+    /// shares). An absent `from` is `Ok`.
+    async fn copy(&self, from: &StorageKey, to: &StorageKey) -> Result<(), MediaError>;
 }

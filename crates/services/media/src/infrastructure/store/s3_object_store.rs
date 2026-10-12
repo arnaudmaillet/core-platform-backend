@@ -20,6 +20,16 @@ impl S3ObjectStore {
     pub fn new(client: Arc<S3Client>) -> Self {
         Self { client }
     }
+
+    /// Copies through the service (rusty-s3 has no CopyObject); `false` when
+    /// `from` is absent.
+    async fn copy_object(&self, from: &StorageKey, to: &StorageKey) -> Result<bool, MediaError> {
+        let Some((bytes, content_type)) = self.client.get_object(from.as_str()).await? else {
+            return Ok(false);
+        };
+        self.client.put_bytes(to.as_str(), bytes, &content_type).await?;
+        Ok(true)
+    }
 }
 
 #[async_trait]
@@ -60,12 +70,15 @@ impl ObjectStore for S3ObjectStore {
     }
 
     async fn relocate(&self, from: &StorageKey, to: &StorageKey) -> Result<(), MediaError> {
-        // Copy through the service (rusty-s3 has no CopyObject), then delete: a
-        // retry after a crash between the two re-copies the same bytes.
-        let Some((bytes, content_type)) = self.client.get_object(from.as_str()).await? else {
+        // Copy, then delete: a retry after a crash between the two re-copies
+        // the same bytes.
+        if !self.copy_object(from, to).await? {
             return Ok(());
-        };
-        self.client.put_bytes(to.as_str(), bytes, &content_type).await?;
+        }
         self.client.delete(from.as_str()).await
+    }
+
+    async fn copy(&self, from: &StorageKey, to: &StorageKey) -> Result<(), MediaError> {
+        self.copy_object(from, to).await.map(drop)
     }
 }

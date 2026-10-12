@@ -64,6 +64,13 @@ service MediaService {
     // legal hold is active.
     rpc DeleteAsset(DeleteAssetRequest) returns (DeleteAssetResponse);
 
+    // MESH ONLY (#919): the owner changes how a READY asset is delivered.
+    // SIGNED moves its renditions into its own restricted tree (once enabled)
+    // and purges their public CDN paths; PUBLIC moves them back. Idempotent.
+    // Not READY ⇒ FAILED_PRECONDITION (MED-2002); a private kind never goes
+    // PUBLIC (MED-9001); another owner's asset ⇒ NOT_FOUND.
+    rpc ChangeDeliveryVisibility(ChangeDeliveryVisibilityRequest) returns (ChangeDeliveryVisibilityResponse);
+
     // ── Plane C — delivery resolution (hot read) ──────────────────────────────
 
     // Resolve one asset to a delivery URL set (CDN immutable or short-lived

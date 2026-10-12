@@ -14,17 +14,31 @@ use crate::error::MediaError;
 
 /// Whether the asset's objects are its own to delete. Identical bytes share
 /// content-addressed keys: while another (not deleted) asset holds the same
-/// bytes, a delete leaves the shared objects to it.
+/// bytes there, a delete leaves the shared objects to it. A restricted tree
+/// (#919) is never shared.
 pub(crate) async fn owns_objects(assets: &dyn AssetRepository, asset: &Asset) -> Result<bool, MediaError> {
+    if restricted(asset) {
+        return Ok(true);
+    }
     let Some(hash) = asset.content_hash() else { return Ok(true) };
-    let others = assets.find_by_content_hash(hash).await?.into_iter().filter(|a| a.id() != asset.id()).count();
+    let others = assets
+        .find_by_content_hash(hash)
+        .await?
+        .into_iter()
+        .filter(|a| a.id() != asset.id() && !restricted(a))
+        .count();
     if others > 0 {
         tracing::info!(asset.id = %asset.id(), others, "objects shared with other assets (same bytes) kept on delete");
     }
     Ok(others == 0)
 }
 
-/// The asset's content-addressed trees.
+/// Whether its renditions live in its own restricted tree (#919).
+fn restricted(asset: &Asset) -> bool {
+    asset.object_root().is_some_and(|root| root.is_restricted())
+}
+
+/// The asset's trees (content-addressed, or its restricted one).
 fn trees(asset: &Asset) -> BTreeSet<String> {
     asset.renditions().iter().map(|r| r.storage_key().tree_prefix()).collect()
 }

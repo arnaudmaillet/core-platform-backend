@@ -5,6 +5,7 @@
 
 pub mod apply_moderation;
 mod asset_objects;
+pub mod change_visibility;
 pub mod commit_upload;
 pub mod delete_asset;
 pub mod document_retention;
@@ -16,6 +17,7 @@ pub mod transcode_asset;
 pub use apply_moderation::{
     ApplyModerationCommand, ApplyModerationHandler, ApplyModerationOutcome, ModerationAction,
 };
+pub use change_visibility::{ChangeVisibilityCommand, ChangeVisibilityHandler};
 pub use commit_upload::{CommitUploadCommand, CommitUploadHandler};
 pub use delete_asset::{DeleteAssetCommand, DeleteAssetHandler, DeleteOutcome};
 pub use document_retention::DocumentRetention;

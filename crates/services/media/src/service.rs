@@ -311,5 +311,9 @@ mod tests {
         // edge; the mesh call carries the staff token, checked in the handler.
         let staff = "/media.v1.MediaService/GetPrivateDocumentUrl";
         assert!(MediaService::EDGE_POLICY.iter().all(|rule| rule.method != staff));
+        // #919: changing a delivery visibility moves objects; the services
+        // that own the reason (a private account) call it over the mesh.
+        let visibility = "/media.v1.MediaService/ChangeDeliveryVisibility";
+        assert!(MediaService::EDGE_POLICY.iter().all(|rule| rule.method != visibility));
     }
 }

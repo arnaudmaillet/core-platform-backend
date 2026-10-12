@@ -7,8 +7,8 @@ use crate::domain::event::{
     AssetVariantReady, DomainEvent,
 };
 use crate::domain::value_object::{
-    AssetId, AssetState, Blurhash, ContentHash, DeliveryVisibility, Dimensions, MediaKind, MimeType, OwnerId,
-    RenditionKind, StorageKey, UploadConstraints,
+    AssetId, AssetState, Blurhash, ContentHash, DeliveryVisibility, Dimensions, MediaKind, MimeType, ObjectRoot,
+    OwnerId, RenditionKind, StorageKey, UploadConstraints,
 };
 use crate::error::MediaError;
 
@@ -283,7 +283,61 @@ impl Asset {
         self.purge_after
     }
 
+    /// Where its renditions live (#919): its own restricted tree when they were
+    /// written there, else the content-addressed tree of its bytes (`None`
+    /// before the bytes are known).
+    pub fn object_root(&self) -> Option<ObjectRoot> {
+        if self.renditions.iter().any(|r| r.storage_key().is_restricted()) {
+            return Some(ObjectRoot::restricted(self.kind, self.id));
+        }
+        self.content_hash.as_ref().map(|hash| ObjectRoot::content_addressed(self.kind, hash))
+    }
+
+    /// Where its renditions belong (#919): a SIGNED asset's in its own
+    /// restricted tree once `restricted` (`MEDIA_RESTRICTED_PREFIX_ENABLED`)
+    /// is on; otherwise the content-addressed tree of its bytes.
+    pub fn storage_root(&self, restricted: bool) -> Option<ObjectRoot> {
+        if restricted && self.delivery_visibility == DeliveryVisibility::Signed {
+            return Some(ObjectRoot::restricted(self.kind, self.id));
+        }
+        self.content_hash.as_ref().map(|hash| ObjectRoot::content_addressed(self.kind, hash))
+    }
+
     // ─── Commands ────────────────────────────────────────────────────────────
+
+    /// Changes how its renditions are delivered (#919); `true` when it changed.
+    /// Only a READY asset changes (the pipeline would otherwise write its
+    /// renditions under the visibility it read); a private kind is never public.
+    pub fn change_visibility(&mut self, visibility: DeliveryVisibility, now: DateTime<Utc>) -> Result<bool, MediaError> {
+        if visibility == self.delivery_visibility {
+            return Ok(false);
+        }
+        if self.kind.default_visibility() == DeliveryVisibility::Signed && visibility == DeliveryVisibility::Public {
+            return Err(MediaError::DomainViolation {
+                field:   "delivery_visibility".into(),
+                message: format!("a '{}' asset is never public", self.kind),
+            });
+        }
+        if self.state != AssetState::Ready {
+            return Err(MediaError::InvalidStateTransition {
+                from: self.state.to_string(),
+                to:   "change_visibility(ready)".into(),
+            });
+        }
+        self.delivery_visibility = visibility;
+        self.updated_at = now;
+        Ok(true)
+    }
+
+    /// Records that its renditions moved from one root to another (#919).
+    pub fn rebase_renditions(&mut self, from: &ObjectRoot, to: &ObjectRoot, now: DateTime<Utc>) {
+        for rendition in &mut self.renditions {
+            if let Some(key) = rendition.storage_key.rebased(from, to) {
+                rendition.storage_key = key;
+            }
+        }
+        self.updated_at = now;
+    }
 
     /// A private document's verification request was decided (#777): it is
     /// purged at `at` (the decision + the retention). Other kinds refuse.

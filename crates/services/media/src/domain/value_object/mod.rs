@@ -27,6 +27,6 @@ pub use ids::{AssetId, OwnerId};
 pub use media_kind::MediaKind;
 pub use mime_type::MimeType;
 pub use rendition_kind::RenditionKind;
-pub use storage_key::StorageKey;
+pub use storage_key::{ObjectRoot, StorageKey};
 pub use upload_key::UploadKey;
 pub use upload_ticket::UploadTicket;

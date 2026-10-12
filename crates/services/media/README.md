@@ -151,6 +151,7 @@ service MediaService {
   // Asset metadata
   rpc GetAsset          (GetAssetRequest)          returns (GetAssetResponse);
   rpc DeleteAsset       (DeleteAssetRequest)       returns (DeleteAssetResponse);
+  rpc ChangeDeliveryVisibility (ChangeDeliveryVisibilityRequest) returns (ChangeDeliveryVisibilityResponse); // mesh only
   rpc ListAssetsByOwner (ListAssetsByOwnerRequest) returns (ListAssetsByOwnerResponse); // mesh only
   // Plane C — delivery resolution (hot read; CDN / signed URLs)
   rpc ResolveDelivery      (ResolveDeliveryRequest)      returns (ResolveDeliveryResponse);
@@ -190,8 +191,22 @@ deliver it that way: the request's `visibility` may only make it **stricter** (P
 asset still resolves SIGNED). `GetAsset` shows a SIGNED asset's `content_hash` and rendition
 `storage_key`s to its owner and the mesh only (anyone else gets them empty: with them a reader could fetch
 or guess the bytes past the signed delivery); `Asset.delivery_visibility` says which. A SIGNED upload is
-never deduplicated onto an existing asset. Next (#919 step 2): SIGNED renditions under a per-asset
-`restricted/` prefix the CDN never serves, behind `MEDIA_RESTRICTED_PREFIX_ENABLED`.
+never deduplicated onto an existing asset, and no upload is ever deduplicated onto a SIGNED one (a declared
+hash is no proof of possession).
+
+**Restricted keys (#919, off by default).** With `MEDIA_RESTRICTED_PREFIX_ENABLED`, the pipeline writes a
+SIGNED asset's renditions (a video's whole HLS tree too) under its own
+`restricted/{kind}/{asset_id}/…` instead of the shared content-addressed `{kind}/{hash}/…`: per asset,
+so never shared across owners nor guessable from the bytes, and under a prefix the CDN denies
+(core-platform-infra#87), so only a signed URL reaches them. `ChangeDeliveryVisibility` (mesh only; the
+services that know why, e.g. a private account, call it) changes a READY asset's visibility and moves its
+objects: to SIGNED, into its restricted tree (bytes another asset shares are copied and stay public for
+it; bytes it alone holds are moved and the CDN is purged of their public paths); to PUBLIC, back to the
+content-addressed tree. Objects move before the row is saved, driven by listing, so a retry completes a
+move cut short, and the same visibility again completes a move the flag held back. Off, only the
+visibility changes; objects stay where they are (still delivered signed only). Turn it on only once the
+CDN denies `restricted/`, and not while SIGNED videos are uploaded: a presigned master playlist does not
+authorize its segments, so they would stop playing until signed HLS delivery lands (#921).
 
 **Private documents (#777).** `MEDIA_KIND_PRIVATE_DOCUMENT` holds verification evidence (profile
 `RequestVerification`): JPEG, PNG, HEIC or PDF, ≤ 10 MiB, owned by the account like any asset. **Off by
@@ -344,6 +359,7 @@ async fn main() -> anyhow::Result<()> {
 | `MEDIA_UPLOAD_TICKET_TTL_SECS` | No | `900` | pre-signed upload validity window |
 | `MEDIA_SIGNED_URL_TTL_SECS` | No | `300` | private (signed) delivery URL validity; also the staff link to a private document |
 | `MEDIA_PRIVATE_DOCUMENTS_ENABLED` | No | `false` | private documents may be uploaded (#777); turn on only once `private/` is outside the CDN's origin access (core-platform-infra#37) |
+| `MEDIA_RESTRICTED_PREFIX_ENABLED` | No | `false` | SIGNED assets' renditions are written to, and moved into, their own `restricted/` tree (#919); turn on only once the CDN denies `restricted/` (core-platform-infra#87) |
 | `MEDIA_DOCUMENT_RETENTION_DAYS` | No | `30` | a private document's life after its verification request's decision (#777) |
 | `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS` | No | `3600` | how often due private documents are purged |
 | `MEDIA_DEDUP_ENABLED` | No | `false` | content-hash dedup (off until refcount-purge is hardened) |
