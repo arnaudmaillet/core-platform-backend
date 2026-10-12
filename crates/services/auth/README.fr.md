@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a14abf28a00fd1c93a41addb86d04b922bfd7dda864572ba2c52db9e616b5198
-  translated_at: 2026-10-11
+  source_sha256: 0be3d805c12a4b6942aa850a3268c4bdc787323430b23361b2189dc574d61271
+  translated_at: 2026-10-12
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -20,7 +20,7 @@ i18n:
 > | **Tier** | **TIER-0** — chaque requête authentifiée dépend des jetons émis par ce service |
 > | **Déployable** | `crates/apps/auth-server` (crate bibliothèque : `crates/services/auth`) |
 > | **Stockage** | PostgreSQL/CockroachDB (db `auth`) · Redis Cluster (sessions/blacklist) |
-> | **Asynchrone** | publie `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked/AppAuthorized/AppAuthorizationRevoked) · consomme `account.v1.events` (`account_deleted` → effacement RGPD ; `account_suspended` / `account_deactivated` / `role_revoked` → déconnexion partout) |
+> | **Asynchrone** | publie `auth.v1.events` (SessionIssued/SessionRevoked/SubjectLinked/AppAuthorized/AppAuthorizationRevoked/GuestUpgraded — l'appareil d'un invité est devenu membre, pour le cadeau de bienvenue du wallet, #827) · consomme `account.v1.events` (`account_deleted` → effacement RGPD ; `account_suspended` / `account_deactivated` / `role_revoked` → déconnexion partout) |
 > | **Appelants amont** | gateway / edge, clients utilisateurs (login & refresh) |
 > | **Dépendances aval** | `account` (gRPC, SoR d'identité), PostgreSQL, Redis Cluster, JWKS Apple / Google (clés des id_tokens), Amazon SES / SNS (codes) |
 > | **SLO** | `<TODO: 99.95%>` dispo · login p99 `<TODO>` · refresh p99 `<TODO>` |

@@ -45,6 +45,8 @@ pub enum TransactionKind {
     CountryUnlock,
     /// Likes staked on a post or a comment (`ref_id`: `post:<id>`).
     Stake,
+    /// The likes a guest collected, credited when it became a member (#827).
+    WelcomeGift,
     /// Written by a newer version of this service.
     Unknown,
 }
@@ -57,6 +59,7 @@ impl TransactionKind {
             Self::StakePack => "stake_pack",
             Self::CountryUnlock => "country_unlock",
             Self::Stake => "stake",
+            Self::WelcomeGift => "welcome_gift",
             Self::Unknown => "unknown",
         }
     }
@@ -68,6 +71,7 @@ impl TransactionKind {
             "stake_pack" => Self::StakePack,
             "country_unlock" => Self::CountryUnlock,
             "stake" => Self::Stake,
+            "welcome_gift" => Self::WelcomeGift,
             _ => Self::Unknown,
         }
     }
@@ -157,7 +161,13 @@ mod tests {
         for c in [Currency::Points, Currency::Gems] {
             assert_eq!(Currency::parse(c.as_str()), Some(c));
         }
-        for k in [TransactionKind::Claim, TransactionKind::StarterGift, TransactionKind::StakePack, TransactionKind::CountryUnlock] {
+        for k in [
+            TransactionKind::Claim,
+            TransactionKind::StarterGift,
+            TransactionKind::StakePack,
+            TransactionKind::CountryUnlock,
+            TransactionKind::WelcomeGift,
+        ] {
             assert_eq!(TransactionKind::parse(k.as_str()), k);
         }
         assert_eq!(TransactionKind::parse("boost_spend"), TransactionKind::Unknown);

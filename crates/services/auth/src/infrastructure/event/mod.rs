@@ -28,5 +28,6 @@ pub(crate) fn event_key(event: &DomainEvent) -> AccountId {
         DomainEvent::AppAuthorizationRevoked(e) => e.account_id,
         DomainEvent::StaffEnrollmentGranted(e) => e.account_id,
         DomainEvent::StaffPasskeyEnrolled(e) => e.account_id,
+        DomainEvent::GuestUpgraded(e) => e.account_id,
     }
 }

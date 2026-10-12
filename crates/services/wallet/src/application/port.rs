@@ -13,6 +13,15 @@ use crate::domain::{
 };
 use crate::error::WalletError;
 
+/// What a welcome gift came to (#827).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WelcomeGiftOutcome {
+    /// Points credited (0 when the balance had no room).
+    Credited(i64),
+    /// The device's gift went to another account.
+    AlreadyGiven,
+}
+
 /// How a claim ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimOutcome {
@@ -273,6 +282,22 @@ pub trait WalletStore: Send + Sync + 'static {
 
     /// Marks `day`'s envelope computed, with its summary.
     async fn complete_envelope_day(&self, day: NaiveDate, summary: &EnvelopeSummary) -> Result<(), WalletError>;
+
+    /// Credits the welcome gift (#827) to `account` — once per device: the
+    /// device (`device_key_hash`) is claimed on the nil UUID's shard first;
+    /// one already claimed by another account gets nothing. `amount` is
+    /// clamped to the room under `points_cap`. A redelivery to the same
+    /// account answers what it credited.
+    #[allow(clippy::too_many_arguments)]
+    async fn welcome_gift(
+        &self,
+        account: &AccountId,
+        device_key_hash: &str,
+        amount: i64,
+        points_cap: i64,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<WelcomeGiftOutcome, WalletError>;
 
     /// The settlements counted in `day`'s envelope (every shard), for the
     /// calibration report (#893).

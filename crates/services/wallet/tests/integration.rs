@@ -608,3 +608,38 @@ async fn my_stakes_page_newest_first_and_filter_by_settlement() {
     let stranger = AccountId::from_uuid(Uuid::now_v7());
     assert!(store.my_stakes(&stranger, StakeStatus::All, None, 10).await.unwrap().is_empty());
 }
+
+/// #827: the welcome gift over Postgres — the device claimed on the nil
+/// shard, the credit once per account, another account on that device gets
+/// nothing, and erasure unlinks the device without freeing it.
+#[tokio::test]
+async fn the_welcome_gift_is_credited_once_per_device_over_postgres() {
+    use wallet::application::port::WelcomeGiftOutcome;
+
+    let pool = pool().await;
+    let store = store(&pool);
+    let (me, you) = (AccountId::from_uuid(Uuid::now_v7()), AccountId::from_uuid(Uuid::now_v7()));
+    let device = format!("{:0>64}", Uuid::now_v7().simple());
+    let now = Utc::now();
+
+    let gift = |account| store.welcome_gift(account, &device, 125, 2_000, 0, now);
+    assert_eq!(gift(&me).await.unwrap(), WelcomeGiftOutcome::Credited(125));
+    assert_eq!(gift(&me).await.unwrap(), WelcomeGiftOutcome::Credited(125), "a redelivery answers the same");
+    assert_eq!(gift(&you).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven);
+    let (points,): (i64,) = sqlx::query_as("SELECT points FROM wallets WHERE account_id = $1")
+        .bind(me.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(points, 125, "credited once");
+    assert_reconciles(&pool, &me).await;
+
+    store.erase(&me).await.unwrap();
+    let (holder,): (Option<Uuid>,) = sqlx::query_as("SELECT account_id FROM welcome_gifts WHERE device_key_hash = $1")
+        .bind(&device)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(holder, None, "unlinked from the erased account");
+    assert_eq!(gift(&you).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven, "the device stays welcomed");
+}

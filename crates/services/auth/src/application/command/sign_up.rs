@@ -524,6 +524,21 @@ mod tests {
         assert_eq!(guest_session.kind(), SessionKind::Guest);
         assert_eq!(guest_session.status(), SessionStatus::Revoked);
         assert_eq!(*fx.guests.upgrades.lock().unwrap(), vec![(guest.account_id, account_id)]);
+        // #827: the wallet hears of it once, with the device hashed.
+        let upgraded: Vec<_> = fx
+            .publisher
+            .events()
+            .into_iter()
+            .filter_map(|e| match e {
+                crate::domain::event::DomainEvent::GuestUpgraded(u) => Some(u),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(upgraded.len(), 1);
+        assert_eq!(upgraded[0].account_id, account_id);
+        assert_eq!(upgraded[0].guest_since, t0());
+        assert_eq!(upgraded[0].device_key_hash.len(), 64);
+        assert!(!upgraded[0].device_key_hash.contains("device-1"), "never the raw id");
 
         // A member's refresh token is never treated as a guest's.
         let member_refresh = {

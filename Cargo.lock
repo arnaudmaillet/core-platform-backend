@@ -7325,6 +7325,7 @@ dependencies = [
  "account",
  "anyhow",
  "async-trait",
+ "auth",
  "auth-context",
  "chrono",
  "comment-api",

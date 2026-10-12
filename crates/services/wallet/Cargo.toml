@@ -51,5 +51,7 @@ integration-wallet = []
 auth-context = { workspace = true }
 # Wire-contract test: account_deleted read as account's own type serializes it.
 account      = { workspace = true }
+# Wire-contract test: guest_upgraded read as auth's own type serializes it (#827).
+auth         = { workspace = true }
 # Live integration suite: the shared Postgres container.
 test-support = { workspace = true }

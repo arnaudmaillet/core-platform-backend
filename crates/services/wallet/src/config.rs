@@ -3,7 +3,9 @@
 
 use chrono::TimeDelta;
 
-use crate::domain::{ClaimPolicy, EnvelopePolicy, SettlementPolicy, StakePackPolicy, StakePolicy, DEFAULT_CONVICTION_BPS};
+use crate::domain::{
+    ClaimPolicy, EnvelopePolicy, SettlementPolicy, StakePackPolicy, StakePolicy, WelcomeGiftPolicy, DEFAULT_CONVICTION_BPS,
+};
 
 /// Gems every wallet opens with.
 pub const DEFAULT_STARTER_GEMS: i64 = 100;
@@ -22,6 +24,8 @@ pub struct WalletConfig {
     /// The probability each conviction level C1–C4 stands for (#888), in
     /// basis points, ascending.
     pub conviction_bps: [i64; 4],
+    /// The welcome gift a guest's device gets when it becomes a member (#827).
+    pub welcome:      WelcomeGiftPolicy,
 }
 
 impl Default for WalletConfig {
@@ -34,6 +38,7 @@ impl Default for WalletConfig {
             settlement:   SettlementPolicy::default(),
             envelope:     EnvelopePolicy::default(),
             conviction_bps: DEFAULT_CONVICTION_BPS,
+            welcome:      WelcomeGiftPolicy::default(),
         }
     }
 }
@@ -51,7 +56,9 @@ impl WalletConfig {
     /// `WALLET_ENVELOPE_TARGET_CAP_BPS` (200 = 2 % of the pool per target),
     /// `WALLET_OUTCOME_TOP_PERCENT` (15), `WALLET_CONVICTION_PROBABILITIES`
     /// (`0.25,0.40,0.60,0.80`: four ascending probabilities in (0, 1), C1
-    /// first). An unparsable or negative value keeps the default.
+    /// first), `WALLET_WELCOME_GIFT_FIRST` (50), `WALLET_WELCOME_GIFT_DAILY` (25),
+    /// `WALLET_WELCOME_GIFT_DAYS` (3). An unparsable or negative value keeps
+    /// the default.
     pub fn from_env() -> Self {
         Self::from_lookup(|name| std::env::var(name).ok())
     }
@@ -108,6 +115,11 @@ impl WalletConfig {
             conviction_bps: get("WALLET_CONVICTION_PROBABILITIES")
                 .and_then(|v| conviction_bps(&v))
                 .unwrap_or(defaults.conviction_bps),
+            welcome: WelcomeGiftPolicy {
+                first_launch: number("WALLET_WELCOME_GIFT_FIRST").unwrap_or(defaults.welcome.first_launch),
+                daily:        number("WALLET_WELCOME_GIFT_DAILY").unwrap_or(defaults.welcome.daily),
+                daily_days:   number("WALLET_WELCOME_GIFT_DAYS").unwrap_or(defaults.welcome.daily_days),
+            },
         }
     }
 }

@@ -164,8 +164,10 @@ pub const CONSUMERS: &[(&str, &str)] = &[
     ("counter.v1.popularity", "realtime"),
     ("counter.v1.popularity", "geo-discovery"),
     ("counter.v1.popularity", "timeline"),
-    // auth lifecycle → compliance plane
+    // auth lifecycle → compliance plane; a guest becoming a member → its
+    // welcome gift (#827)
     ("auth.v1.events", "audit"),
+    ("auth.v1.events", "wallet"),
     // moderation decisions → compliance plane, search visibility, media takedown,
     // post read restriction, map suppression, discovery feed suppression,
     // appeal outcomes told to the appellant's profiles
