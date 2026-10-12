@@ -2,4 +2,4 @@
 
 pub mod grpc_private_documents;
 
-pub use grpc_private_documents::GrpcPrivateDocuments;
+pub use grpc_private_documents::{GrpcPrivateDocuments, MediaDelivery};

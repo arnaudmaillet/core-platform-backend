@@ -54,6 +54,8 @@ type ProfileServer =
 /// The profile service as hosted by [`service_runtime`].
 pub struct ProfileService {
     app: App,
+    /// media (#907: avatars and banners delivered on read), when configured.
+    media: Option<Arc<crate::infrastructure::client::GrpcPrivateDocuments>>,
 }
 
 #[async_trait]
@@ -115,7 +117,14 @@ impl Service for ProfileService {
         let publisher: Arc<dyn EventPublisher> = Arc::new(KafkaProfileEventPublisher::new(producer));
 
         let backfill_publisher = Arc::clone(&publisher);
-        let app = App::build(backends, cache_registry, publisher, private_documents_from_env()?)
+        let media = media_from_env()?;
+        let app = App::build(
+            backends,
+            cache_registry,
+            publisher,
+            media.clone().map(|m| m as Arc<dyn crate::application::port::PrivateDocuments>),
+            media.clone().map(|m| m as Arc<dyn crate::application::port::MediaImages>),
+        )
             .await
             .map_err(|e| anyhow::anyhow!("profile app build: {e}"))?;
 
@@ -134,7 +143,7 @@ impl Service for ProfileService {
             });
         }
 
-        Ok(Self { app })
+        Ok(Self { app, media })
     }
 
     fn health_probes(&self) -> Vec<Arc<dyn HealthProbe>> {
@@ -152,6 +161,10 @@ impl Service for ProfileService {
         )
         // Staff verification review on the mesh checks the staff token (#837).
         .with_staff_gate(service_runtime::staff_gate_from_env());
+        let handler = match self.media {
+            Some(media) => handler.with_media(media),
+            None => handler,
+        };
 
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
@@ -232,13 +245,15 @@ fn build_author_tier_consumer(
         .context("build author tier dead-letter producer")?;
     Ok((consumer, producer))
 }
-/// Verification evidence checks (#777), asked of media at
-/// `PROFILE_MEDIA_GRPC_ENDPOINT` (lazily connected; request / connect deadlines
-/// `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS`, 500 ms /
-/// 1 s). Unset: a verification request carries links only.
-fn private_documents_from_env() -> anyhow::Result<Option<Arc<dyn crate::application::port::PrivateDocuments>>> {
+/// media at `PROFILE_MEDIA_GRPC_ENDPOINT` (lazily connected; request /
+/// connect deadlines `PROFILE_MEDIA_RPC_TIMEOUT_MS` /
+/// `PROFILE_MEDIA_CONNECT_TIMEOUT_MS`, 500 ms / 1 s): verification evidence
+/// checks (#777), avatar / banner assets checked on write and delivered on
+/// read (#907, fail-open). Unset: a verification request carries links only,
+/// and avatars / banners their URLs only.
+fn media_from_env() -> anyhow::Result<Option<Arc<crate::infrastructure::client::GrpcPrivateDocuments>>> {
     let Some(endpoint) = std::env::var("PROFILE_MEDIA_GRPC_ENDPOINT").ok().filter(|v| !v.trim().is_empty()) else {
-        tracing::warn!("PROFILE_MEDIA_GRPC_ENDPOINT unset: verification requests take links only");
+        tracing::warn!("PROFILE_MEDIA_GRPC_ENDPOINT unset: verification requests take links only, images their URLs only");
         return Ok(None);
     };
     let ms = |key: &str, default: u64| {

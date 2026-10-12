@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use crate::domain::aggregate::Profile;
-use crate::domain::value_object::{AccountId, Handle, ProfileId, TabSettings};
+use crate::domain::value_object::{AccountId, Handle, MediaAssetId, ProfileId, TabSettings};
 use crate::error::ProfileError;
 
 /// Days a released handle stays reserved before anyone may claim it again.
@@ -18,6 +18,8 @@ pub struct ProfileSummary {
     pub handle: String,
     pub display_name: String,
     pub avatar_url: Option<String>,
+    /// The avatar's media asset (#907).
+    pub avatar_asset_id: Option<MediaAssetId>,
     pub profile_kind: String,
     pub visibility: String,
     pub status: String,

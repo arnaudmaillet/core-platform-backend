@@ -20,6 +20,7 @@ use thiserror::Error;
 /// | PRF-5004 | VerificationDocumentInvalid | 422 | Low     | No        |
 /// | PRF-5005 | MediaUnavailable         | 503  | Medium   | **Yes**   |
 /// | PRF-5006 | SupervisionLocked        | 422  | Low      | No        |
+/// | PRF-5007 | MediaAssetNotUsable      | 422  | Low      | No        |
 /// | PRF-9001 | DomainViolation          | 422  | Medium   | No        |
 /// | PRF-9002 | InvalidProfileId         | 422  | Low      | No        |
 /// | PRF-9003 | InvalidHandle            | 422  | Low      | No        |
@@ -92,6 +93,11 @@ pub enum ProfileError {
     #[error("{setting} is set by your supervisor")]
     SupervisionLocked { setting: String },
 
+    /// An avatar's or banner's media asset is not a usable image of the
+    /// profile's account (#907). One answer for every case.
+    #[error("media asset '{id}' is not a usable image of this account")]
+    MediaAssetNotUsable { id: String },
+
     /// media could not check a private document (#777).
     #[error("media is unavailable: {reason}")]
     MediaUnavailable { reason: String },
@@ -151,6 +157,7 @@ impl AppError for ProfileError {
             ProfileError::VerificationDocumentInvalid { .. } => "PRF-5004",
             ProfileError::MediaUnavailable { .. } => "PRF-5005",
             ProfileError::SupervisionLocked { .. } => "PRF-5006",
+            ProfileError::MediaAssetNotUsable { .. } => "PRF-5007",
 
             ProfileError::DomainViolation { .. }  => "PRF-9001",
             ProfileError::InvalidProfileId(_)     => "PRF-9002",
@@ -239,6 +246,7 @@ impl AppError for ProfileError {
             ProfileError::VerificationDocumentInvalid { .. } => "A document is not one of your uploaded private documents.",
             ProfileError::MediaUnavailable { .. }       => "Your documents cannot be checked right now. Please retry.",
             ProfileError::SupervisionLocked { .. }      => "Your supervisor set this; you can only make it stricter.",
+            ProfileError::MediaAssetNotUsable { .. }    => "This image can't be used here.",
             ProfileError::TooManyCustomLinks { .. }     => "You may have at most 5 custom links.",
             _                                           => "A domain constraint was violated.",
         }

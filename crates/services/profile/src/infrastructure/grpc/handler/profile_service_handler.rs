@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
@@ -17,6 +19,7 @@ use crate::application::command::{
 };
 use crate::application::port::{ProfileSummary, ProfileView};
 use crate::domain::value_object::Viewer;
+use crate::infrastructure::client::MediaDelivery;
 use crate::application::query::{
     GetProfileByHandleQuery, GetProfileByIdQuery, ListProfilesByAccountQuery,
 };
@@ -39,6 +42,9 @@ where
     query_bus:   QB,
     /// Verifies the staff token on staff calls (#837); denies all by default.
     staff:       edge::StaffGate,
+    /// Delivers avatars and banners on read (#907); `None` when media is not
+    /// configured.
+    media:       Option<Arc<dyn MediaDelivery>>,
 }
 
 impl<CB, QB> ProfileServiceHandler<CB, QB>
@@ -47,7 +53,19 @@ where
     QB: QueryBus + Send + Sync + 'static,
 {
     pub fn new(command_bus: CB, query_bus: QB) -> Self {
-        Self { command_bus, query_bus, staff: edge::StaffGate::deny_all() }
+        Self { command_bus, query_bus, staff: edge::StaffGate::deny_all(), media: None }
+    }
+
+    /// Avatars and banners carry their media asset's delivery (#907).
+    pub fn with_media(mut self, media: Arc<dyn MediaDelivery>) -> Self {
+        self.media = Some(media);
+        self
+    }
+
+    /// Only for clients: a mesh reader has no use for renditions, and would
+    /// only load media.
+    fn media_for(&self, internal: bool) -> Option<&dyn MediaDelivery> {
+        if internal { None } else { self.media.as_deref() }
     }
 
     /// The staff-token verifier for the verification review RPCs (#837).
@@ -153,6 +171,7 @@ where
         let cmd = UpdateAvatarCommand {
             profile_id: req.profile_id.clone(),
             avatar_url: Some(req.avatar_url).filter(|s| !s.is_empty()),
+            avatar_asset_id: Some(req.avatar_asset_id).filter(|s| !s.is_empty()),
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -170,6 +189,7 @@ where
         let cmd = UpdateBannerCommand {
             profile_id: req.profile_id.clone(),
             banner_url: Some(req.banner_url).filter(|s| !s.is_empty()),
+            banner_asset_id: Some(req.banner_asset_id).filter(|s| !s.is_empty()),
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -617,6 +637,7 @@ where
         request: Request<proto::GetProfileByIdRequest>,
     ) -> Result<Response<proto::ProfileView>, Status> {
         let viewer = viewer_of(&request);
+        let internal = viewer == Viewer::Internal;
         let req = request.into_inner();
         let query = GetProfileByIdQuery { profile_id: req.profile_id, viewer };
         let view: Option<ProfileView> = self.query_bus
@@ -624,9 +645,7 @@ where
             .await
             .map_err(cqrs_error_to_status)?;
 
-        view.map(profile_view_to_proto)
-            .map(Response::new)
-            .ok_or_else(|| Status::not_found("profile not found"))
+        self.deliver_view(view, internal).await
     }
 
     /// The owner's QR / share-link token (#661), issued on first ask.
@@ -670,10 +689,11 @@ where
     ) -> Result<Response<proto::ProfileView>, Status> {
         use crate::application::query::ResolveShareTokenQuery;
         let viewer = viewer_of(&request);
+        let internal = viewer == Viewer::Internal;
         let query = ResolveShareTokenQuery { token: request.into_inner().token, viewer };
         let view: Option<ProfileView> =
             self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.map_err(cqrs_error_to_status)?;
-        view.map(profile_view_to_proto).map(Response::new).ok_or_else(|| Status::not_found("profile not found"))
+        self.deliver_view(view, internal).await
     }
 
     pub async fn get_profile_by_handle(
@@ -681,6 +701,7 @@ where
         request: Request<proto::GetProfileByHandleRequest>,
     ) -> Result<Response<proto::ProfileView>, Status> {
         let viewer = viewer_of(&request);
+        let internal = viewer == Viewer::Internal;
         let req = request.into_inner();
         let query = GetProfileByHandleQuery { handle: req.handle, viewer };
         let view: Option<ProfileView> = self.query_bus
@@ -688,9 +709,7 @@ where
             .await
             .map_err(cqrs_error_to_status)?;
 
-        view.map(profile_view_to_proto)
-            .map(Response::new)
-            .ok_or_else(|| Status::not_found("profile not found"))
+        self.deliver_view(view, internal).await
     }
 
     pub async fn check_handle_availability(
@@ -729,6 +748,7 @@ where
         request: Request<proto::ListProfilesByAccountRequest>,
     ) -> Result<Response<proto::ListProfilesByAccountResponse>, Status> {
         edge::require_account(&request, &request.get_ref().account_id)?;
+        let internal = viewer_of(&request) == Viewer::Internal;
         let req = request.into_inner();
         let limit = req.limit.clamp(1, 100) as u32;
         let query = ListProfilesByAccountQuery {
@@ -743,10 +763,53 @@ where
             .await
             .map_err(cqrs_error_to_status)?;
 
+        let mut profiles: Vec<proto::ProfileSummaryView> = summaries.into_iter().map(summary_to_proto).collect();
+        deliver_media(
+            self.media_for(internal),
+            profiles.iter_mut().map(|p| (p.avatar_asset_id.as_str(), &mut p.avatar)).collect(),
+        )
+        .await;
         Ok(Response::new(proto::ListProfilesByAccountResponse {
-            profiles:        summaries.into_iter().map(summary_to_proto).collect(),
+            profiles,
             next_page_token: next_page_token.unwrap_or_default(),
         }))
+    }
+
+    /// A profile view for the wire, its avatar and banner delivered (#907).
+    async fn deliver_view(&self, view: Option<ProfileView>, internal: bool) -> Result<Response<proto::ProfileView>, Status> {
+        let mut view = view.map(profile_view_to_proto).ok_or_else(|| Status::not_found("profile not found"))?;
+        let proto::ProfileView { avatar_asset_id, avatar, banner_asset_id, banner, .. } = &mut view;
+        deliver_media(
+            self.media_for(internal),
+            vec![(avatar_asset_id.as_str(), avatar), (banner_asset_id.as_str(), banner)],
+        )
+        .await;
+        Ok(Response::new(view))
+    }
+}
+
+/// Fills each `(asset id, slot)` with the asset's delivery (#907): one media
+/// call for all of them. Fail-open — media unreachable or slow, the profiles
+/// go out with their URLs only.
+async fn deliver_media(media: Option<&dyn MediaDelivery>, slots: Vec<(&str, &mut Option<media_api::DeliveredMedia>)>) {
+    let Some(media) = media else { return };
+    let mut ids: Vec<String> = slots.iter().map(|(id, _)| (*id).to_owned()).filter(|id| !id.is_empty()).collect();
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        return;
+    }
+    let delivered = match media.deliver(&ids).await {
+        Ok(delivered) => delivered,
+        Err(status) => {
+            tracing::warn!(%status, assets = ids.len(), "media delivery unavailable; images served by URL");
+            return;
+        }
+    };
+    let by_id: std::collections::HashMap<&str, &media_api::DeliveredMedia> =
+        delivered.iter().map(|m| (m.asset_id.as_str(), m)).collect();
+    for (id, slot) in slots {
+        *slot = by_id.get(id).map(|m| (*m).clone());
     }
 }
 
@@ -777,6 +840,10 @@ fn profile_view_to_proto(v: ProfileView) -> proto::ProfileView {
         bio:               v.bio.unwrap_or_default(),
         avatar_url:        v.avatar_url.unwrap_or_default(),
         banner_url:        v.banner_url.unwrap_or_default(),
+        avatar_asset_id:   v.avatar_asset_id.unwrap_or_default(),
+        banner_asset_id:   v.banner_asset_id.unwrap_or_default(),
+        avatar:            None,
+        banner:            None,
         website_url:       v.website_url.unwrap_or_default(),
         custom_links:      v.custom_links.into_iter()
             .map(|l| proto::ProfileLinkProto { label: l.label, url: l.url })
@@ -900,6 +967,8 @@ fn summary_to_proto(s: ProfileSummary) -> proto::ProfileSummaryView {
         handle:       s.handle,
         display_name: s.display_name,
         avatar_url:   s.avatar_url.unwrap_or_default(),
+        avatar_asset_id: s.avatar_asset_id.map(|a| a.as_str()).unwrap_or_default(),
+        avatar:       None,
         profile_kind: profile_kind_str_to_i32(&s.profile_kind),
         visibility:   profile_visibility_str_to_i32(&s.visibility),
         status:       profile_status_str_to_i32(&s.status),
@@ -1115,5 +1184,76 @@ mod staff_gate_tests {
         // A reviewer gets through the gate (the empty bus then answers).
         let reviewer = handler.list_pending_verification_requests(with_token(list(), Some("reviewer"))).await.unwrap_err();
         assert!(!matches!(reviewer.code(), Code::PermissionDenied | Code::Unauthenticated));
+    }
+}
+
+/// #907: avatars and banners carry their asset's delivery, fail-open.
+#[cfg(test)]
+mod media_delivery_tests {
+    use async_trait::async_trait;
+    use media_api::DeliveredMedia;
+
+    use super::*;
+
+    struct FakeMedia(Result<Vec<DeliveredMedia>, Status>);
+
+    #[async_trait]
+    impl MediaDelivery for FakeMedia {
+        async fn deliver(&self, _asset_ids: &[String]) -> Result<Vec<DeliveredMedia>, Status> {
+            self.0.clone()
+        }
+    }
+
+    fn delivered(id: &str) -> DeliveredMedia {
+        DeliveredMedia { asset_id: id.to_owned(), blurhash: format!("bh-{id}"), ..Default::default() }
+    }
+
+    #[tokio::test]
+    async fn each_image_with_an_asset_gets_its_delivery() {
+        let media = FakeMedia(Ok(vec![delivered("a")]));
+        let (mut avatar, mut banner, mut none) = (None, None, None);
+        deliver_media(Some(&media), vec![("a", &mut avatar), ("unknown", &mut banner), ("", &mut none)]).await;
+        assert_eq!(avatar.map(|m| m.blurhash), Some("bh-a".to_owned()));
+        assert!(banner.is_none() && none.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_media_outage_leaves_the_urls_alone() {
+        let media = FakeMedia(Err(Status::unavailable("down")));
+        let mut avatar = None;
+        deliver_media(Some(&media), vec![("a", &mut avatar)]).await;
+        assert!(avatar.is_none());
+    }
+
+    #[test]
+    fn a_cached_view_from_before_reads_without_assets() {
+        let mut cached = serde_json::to_value(ProfileView::from(&sample())).unwrap();
+        let fields = cached.as_object_mut().unwrap();
+        fields.remove("avatar_asset_id");
+        fields.remove("banner_asset_id");
+        let view: ProfileView = serde_json::from_value(cached).unwrap();
+        assert_eq!(view.avatar_asset_id, None);
+        assert_eq!(profile_view_to_proto(view).avatar_asset_id, "");
+    }
+
+    fn sample() -> crate::domain::aggregate::Profile {
+        use crate::domain::aggregate::ProfileCreateParams;
+        use crate::domain::value_object::*;
+        crate::domain::aggregate::Profile::create(ProfileCreateParams {
+            account_id: AccountId::try_from(Uuid::now_v7().to_string().as_str()).unwrap(),
+            handle: Handle::new("alicehandle").unwrap(),
+            display_name: DisplayName::new("Alice").unwrap(),
+            bio: None,
+            avatar_url: None,
+            banner_url: None,
+            profile_kind: ProfileKind::try_from("personal").unwrap(),
+            locale: Locale::new("en-US").unwrap(),
+            visibility: ProfileVisibility::Public,
+            interaction: InteractionSettings::default(),
+            location: LocationSettings::default(),
+            discovery: DiscoverySettings::default(),
+            feed: FeedSettings::default(),
+            correlation_id: Uuid::now_v7(),
+        })
     }
 }

@@ -170,6 +170,23 @@ view. Anyone else gets an **active** profile only (hidden, suspended and deleted
 profiles together), `locale`, `timezone`, `masked_at`, `masking_reason`. A private profile still
 returns its header; its posts and lists are what privacy withholds.
 
+**Avatar and banner media assets (#907).** `UpdateAvatar` / `UpdateBanner` may name the media asset
+the image shows (`avatar_asset_id` / `banner_asset_id`, the id `media.IssueUploadTicket` returned). Profile
+asks media (`GetAsset`) and refuses it with `PRF-5007` unless it is an image (`AVATAR` or `POST_IMAGE`)
+of the **profile's account** that is not failed, quarantined or deleted. Otherwise anyone could show
+someone's SIGNED media. The refusal is the same in every case. If media does not answer, the update
+fails with `PRF-5005` (retryable). The asset goes with each update: an image set by URL alone, or
+cleared, has none.
+
+It is stored beside the URL (`profiles.avatar_asset_id` / `banner_asset_id` and
+`profiles_by_account.avatar_asset_id`, migration 0017); `UpdateAvatar` now also refreshes the
+account's profile list. Reads (`GetProfileById/ByHandle`, `ResolveShareToken`,
+`ListProfilesByAccount`) return the asset ids and, for clients only, `avatar` / `banner`: media's
+`DeliveredMedia`, with the blurhash and, once READY, every rendition with its URL, size, visibility
+and expiry. They are resolved in one `BatchResolveDelivery` per response, **fail-open**: if media is
+slow or down they are absent and the URLs still deliver. Without `PROFILE_MEDIA_GRPC_ENDPOINT`, asset
+ids are dropped on write. `CreateProfile` still takes URLs only.
+
 ### Rust ports (hexagonal contract)
 
 ```rust
@@ -193,8 +210,9 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 | PRF-5002 | `VerificationPending` (a request is already under review) | 409 | No |
 | PRF-5003 | `NoPendingVerification` (nothing to decide) | 409 | No |
 | PRF-5004 | `VerificationDocumentInvalid` (a private document is not the requester's own ready one) | 422 | No |
-| PRF-5005 | `MediaUnavailable` (media could not check a private document) | 503 | **Yes** |
+| PRF-5005 | `MediaUnavailable` (media could not check a private document, or an avatar's / banner's asset) | 503 | **Yes** |
 | PRF-5006 | `SupervisionLocked` (a supervisor's floor holds this setting: only stricter is allowed, #670) | 422 | No |
+| PRF-5007 | `MediaAssetNotUsable` (an avatar's / banner's asset is not a usable image of the profile's account, #907) | 422 | No |
 | PRF-9001–9010 | domain / parse / validation | 422 | No |
 | SDB-* / RDB-* | storage (delegated) | varies | varies |
 
@@ -283,8 +301,8 @@ async fn main() -> anyhow::Result<()> {
 | `KAFKA_BROKERS` | **Yes** | `127.0.0.1:9092` | Kafka brokers. |
 | `KAFKA_CONSUMER_GROUP` | No | `profile-service` | account-event consumer group. |
 | `PROFILE_GRPC_ADDR` | No | `0.0.0.0:50052` | gRPC bind address. |
-| `PROFILE_MEDIA_GRPC_ENDPOINT` | No | — | media's mesh endpoint: checks a verification request's private documents (#777). Unset: requests take links only. |
-| `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS` | No | `500` / `1000` | deadlines of that call. |
+| `PROFILE_MEDIA_GRPC_ENDPOINT` | No | — | media's mesh endpoint: checks a verification request's private documents (#777), and avatars' / banners' assets on write; delivers them on read (#907, fail-open). Unset: requests take links only, images their URLs only. |
+| `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS` | No | `500` / `1000` | deadlines of those calls. |
 | `PROFILE_BACKFILL_TAB_SETTINGS` | No | unset | `1`/`true`/`yes`: at boot, re-announce every profile's non-default tab settings once (`ProfileTabSettingsChanged`, #873), for consumers that started after those events left `profile.v1.events`' retention (engagement, post). Every replica runs it, at each start (repeats are harmless, last writer wins): set it for one rollout at the first deployment, then unset it; run while owners edit their settings, a re-announced old value may land after a newer one. |
 
 > Full `SCYLLA_*` / `REDIS_*` / `KAFKA_*` tuning is documented in the shared storage/transport crates.
@@ -297,7 +315,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Deployment, Migrations & Rollback
 
-- **Migrations:** `crates/services/profile/migrations/000{1..4}_*.cql` against the `profile` keyspace,
+- **Migrations:** `crates/services/profile/migrations/00{01..17}_*.cql` against the `profile` keyspace,
   applied **before** first start.
 - **Cache version bump:** to invalidate cache fleet-wide during a schema change, bump the `v1:` key
   prefix — no flush, no downtime.

@@ -9,7 +9,7 @@ use crate::domain::event::{
 };
 use crate::domain::value_object::{
     AccountId, AvatarUrl, BannerUrl, Bio, BusinessInfo, CommentFilters, DisplayName, DiscoverySettings, Handle, InteractionSettings,
-    FeedSettings, Locale, LocationSettings, TabSettings,
+    FeedSettings, Locale, LocationSettings, MediaAssetId, TabSettings,
     MaskingReason, ProfileId, ProfileKind, ProfileStatus, ProfileVisibility, VerificationKind,
     WebsiteUrl,
 };
@@ -61,6 +61,11 @@ pub struct Profile {
     bio: Option<Bio>,
     avatar_url: Option<AvatarUrl>,
     banner_url: Option<BannerUrl>,
+    /// The media assets the avatar / banner show (#907), when set with one.
+    #[serde(default)]
+    avatar_asset_id: Option<MediaAssetId>,
+    #[serde(default)]
+    banner_asset_id: Option<MediaAssetId>,
     website_url: Option<WebsiteUrl>,
     custom_links: Vec<ProfileLink>,
     profile_kind: ProfileKind,
@@ -130,6 +135,8 @@ impl Profile {
             bio: params.bio,
             avatar_url: params.avatar_url,
             banner_url: params.banner_url,
+            avatar_asset_id: None,
+            banner_asset_id: None,
             website_url: None,
             custom_links: Vec::new(),
             profile_kind: params.profile_kind,
@@ -240,6 +247,8 @@ impl Profile {
             bio,
             avatar_url,
             banner_url,
+            avatar_asset_id: None,
+            banner_asset_id: None,
             website_url,
             custom_links,
             profile_kind,
@@ -324,12 +333,17 @@ impl Profile {
         Ok(old_handle)
     }
 
+    /// Sets (or clears) the avatar; `asset` is the media asset it shows
+    /// (#907), and goes with it: an avatar set by URL alone, or cleared, has
+    /// none.
     pub fn update_avatar(
         &mut self,
         url: Option<AvatarUrl>,
+        asset: Option<MediaAssetId>,
         correlation_id: Uuid,
     ) -> Result<(), ProfileError> {
         self.require_active()?;
+        self.avatar_asset_id = asset.filter(|_| url.is_some());
         self.avatar_url = url;
         let now = self.touch_now();
         self.pending_events.push(DomainEvent::ProfileUpdated(ProfileUpdated {
@@ -340,12 +354,15 @@ impl Profile {
         Ok(())
     }
 
+    /// As [`update_avatar`](Self::update_avatar), for the banner.
     pub fn update_banner(
         &mut self,
         url: Option<BannerUrl>,
+        asset: Option<MediaAssetId>,
         correlation_id: Uuid,
     ) -> Result<(), ProfileError> {
         self.require_active()?;
+        self.banner_asset_id = asset.filter(|_| url.is_some());
         self.banner_url = url;
         let now = self.touch_now();
         self.pending_events.push(DomainEvent::ProfileUpdated(ProfileUpdated {
@@ -409,6 +426,13 @@ impl Profile {
 
     /// Restores the stored location settings (a column added after
     /// [`Self::reconstitute`]'s set).
+    /// Reconstitution: the avatar's and banner's media assets (#907).
+    pub fn with_media_assets(mut self, avatar: Option<MediaAssetId>, banner: Option<MediaAssetId>) -> Self {
+        self.avatar_asset_id = avatar;
+        self.banner_asset_id = banner;
+        self
+    }
+
     pub fn with_location(mut self, settings: LocationSettings) -> Self {
         self.location = settings;
         self
@@ -747,6 +771,8 @@ impl Profile {
     pub fn bio(&self) -> Option<&Bio> { self.bio.as_ref() }
     pub fn avatar_url(&self) -> Option<&AvatarUrl> { self.avatar_url.as_ref() }
     pub fn banner_url(&self) -> Option<&BannerUrl> { self.banner_url.as_ref() }
+    pub fn avatar_asset_id(&self) -> Option<MediaAssetId> { self.avatar_asset_id }
+    pub fn banner_asset_id(&self) -> Option<MediaAssetId> { self.banner_asset_id }
     pub fn website_url(&self) -> Option<&WebsiteUrl> { self.website_url.as_ref() }
     pub fn custom_links(&self) -> &[ProfileLink] { &self.custom_links }
     pub fn profile_kind(&self) -> ProfileKind { self.profile_kind }
@@ -934,5 +960,24 @@ mod tests {
     fn set_tier_rejects_unknown_tier() {
         let mut p = sample_profile();
         assert!(p.set_tier(5, Uuid::now_v7()).is_err());
+    }
+
+    /// #907: an image's media asset goes with it — replaced by URL alone, or
+    /// cleared, the image has none.
+    #[test]
+    fn an_images_media_asset_follows_each_update() {
+        let mut p = sample_profile();
+        let asset = MediaAssetId::from_uuid(Uuid::now_v7());
+        let url = || Some(AvatarUrl::new("https://cdn.example/a.jpg").unwrap());
+        p.update_avatar(url(), Some(asset), Uuid::now_v7()).unwrap();
+        assert_eq!(p.avatar_asset_id(), Some(asset));
+        p.update_avatar(url(), None, Uuid::now_v7()).unwrap();
+        assert_eq!(p.avatar_asset_id(), None, "set by URL alone");
+        p.update_avatar(url(), Some(asset), Uuid::now_v7()).unwrap();
+        p.update_avatar(None, Some(asset), Uuid::now_v7()).unwrap();
+        assert_eq!(p.avatar_asset_id(), None, "cleared with the avatar");
+        let banner = || Some(BannerUrl::new("https://cdn.example/b.jpg").unwrap());
+        p.update_banner(banner(), Some(asset), Uuid::now_v7()).unwrap();
+        assert_eq!(p.banner_asset_id(), Some(asset));
     }
 }

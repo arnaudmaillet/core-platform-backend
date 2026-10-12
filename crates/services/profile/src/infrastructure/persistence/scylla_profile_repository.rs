@@ -14,7 +14,7 @@ use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStora
 use crate::application::port::{ProfileRepository, ProfileSummary, HANDLE_RESERVATION_DAYS};
 use crate::domain::aggregate::Profile;
 use crate::domain::entity::ProfileLink;
-use crate::domain::value_object::{AccountId, BusinessInfo, Handle, ProfileId, TabSettings};
+use crate::domain::value_object::{AccountId, BusinessInfo, Handle, MediaAssetId, ProfileId, TabSettings};
 use crate::error::ProfileError;
 use crate::infrastructure::persistence::model::ProfileRow;
 
@@ -65,6 +65,8 @@ struct ProfileInsert {
     tab_settings: String,
     feed_settings: String,
     business_info: Option<String>,
+    avatar_asset_id: Option<Uuid>,
+    banner_asset_id: Option<Uuid>,
 }
 
 /// Values for the 21-column LWT UPDATE of `profile.profiles`.
@@ -104,6 +106,8 @@ struct ProfileUpdate {
     tab_settings: String,
     feed_settings: String,
     business_info: Option<String>,
+    avatar_asset_id: Option<Uuid>,
+    banner_asset_id: Option<Uuid>,
     profile_kind:  String,
     new_version:       i64,
     profile_id:        Uuid,
@@ -251,8 +255,8 @@ impl ProfileRepository for ScyllaProfileRepository {
                  (profile_id, account_id, version, handle, display_name, bio, avatar_url, \
                   banner_url, website_url, custom_links, profile_kind, visibility, verified, \
                   verification_kind, locale, timezone, status, suspension_reason, masked_at, \
-                  masking_reason, created_at, updated_at, deleted_at, tier, interaction_settings, location_settings, discovery_settings, comment_filters, tab_settings, feed_settings, business_info) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  masking_reason, created_at, updated_at, deleted_at, tier, interaction_settings, location_settings, discovery_settings, comment_filters, tab_settings, feed_settings, business_info, avatar_asset_id, banner_asset_id) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             );
             let values = ProfileInsert {
                 profile_id:        profile.id().as_uuid(),
@@ -286,6 +290,8 @@ impl ProfileRepository for ScyllaProfileRepository {
                 tab_settings: profile.tab_settings().to_json(),
                 feed_settings: profile.feed_settings().to_json(),
                 business_info: profile.business_info().map(BusinessInfo::to_json),
+                avatar_asset_id: profile.avatar_asset_id().map(|a| a.as_uuid()),
+                banner_asset_id: profile.banner_asset_id().map(|a| a.as_uuid()),
             };
             self.client.session.execute_unpaged(stmt, values).await.map_err(scylla_err)?;
         } else {
@@ -296,7 +302,7 @@ impl ProfileRepository for ScyllaProfileRepository {
                      website_url = ?, custom_links = ?, visibility = ?, verified = ?, \
                      verification_kind = ?, locale = ?, timezone = ?, status = ?, \
                      suspension_reason = ?, masked_at = ?, masking_reason = ?, \
-                     updated_at = ?, deleted_at = ?, tier = ?, interaction_settings = ?, location_settings = ?, discovery_settings = ?, comment_filters = ?, tab_settings = ?, feed_settings = ?, business_info = ?, profile_kind = ?, version = ? \
+                     updated_at = ?, deleted_at = ?, tier = ?, interaction_settings = ?, location_settings = ?, discovery_settings = ?, comment_filters = ?, tab_settings = ?, feed_settings = ?, business_info = ?, avatar_asset_id = ?, banner_asset_id = ?, profile_kind = ?, version = ? \
                  WHERE profile_id = ? \
                  IF version = ?",
             );
@@ -327,6 +333,8 @@ impl ProfileRepository for ScyllaProfileRepository {
                 tab_settings: profile.tab_settings().to_json(),
                 feed_settings: profile.feed_settings().to_json(),
                 business_info: profile.business_info().map(BusinessInfo::to_json),
+                avatar_asset_id: profile.avatar_asset_id().map(|a| a.as_uuid()),
+                banner_asset_id: profile.banner_asset_id().map(|a| a.as_uuid()),
                 profile_kind:  profile.profile_kind().as_str().to_owned(),
                 new_version:       profile.version(),
                 profile_id:        profile.id().as_uuid(),
@@ -350,7 +358,7 @@ impl ProfileRepository for ScyllaProfileRepository {
             "SELECT profile_id, account_id, version, handle, display_name, bio, avatar_url, \
                     banner_url, website_url, custom_links, profile_kind, visibility, verified, \
                     verification_kind, tier, locale, timezone, status, suspension_reason, masked_at, \
-                    masking_reason, created_at, updated_at, deleted_at, interaction_settings, location_settings, discovery_settings, comment_filters, tab_settings, feed_settings, business_info \
+                    masking_reason, created_at, updated_at, deleted_at, interaction_settings, location_settings, discovery_settings, comment_filters, tab_settings, feed_settings, business_info, avatar_asset_id, banner_asset_id \
              FROM profile.profiles WHERE profile_id = ?",
         );
         let result = self.client.session
@@ -453,6 +461,7 @@ impl ProfileRepository for ScyllaProfileRepository {
             visibility:   String,
             status:       String,
             created_at:   CqlTimestamp,
+            avatar_asset_id: Option<Uuid>,
         }
 
         // CQL `LIMIT` is a native `int` (i32); binding an i64 makes the driver
@@ -475,7 +484,7 @@ impl ProfileRepository for ScyllaProfileRepository {
         let rows_result = if let Some(ref tok) = token {
             let stmt = self.fast_stmt(
                 "SELECT profile_id, handle, display_name, avatar_url, profile_kind, \
-                        visibility, status, created_at \
+                        visibility, status, created_at, avatar_asset_id \
                  FROM profile.profiles_by_account \
                  WHERE account_id = ? AND created_at < ? LIMIT ?",
             );
@@ -486,7 +495,7 @@ impl ProfileRepository for ScyllaProfileRepository {
         } else {
             let stmt = self.fast_stmt(
                 "SELECT profile_id, handle, display_name, avatar_url, profile_kind, \
-                        visibility, status, created_at \
+                        visibility, status, created_at, avatar_asset_id \
                  FROM profile.profiles_by_account \
                  WHERE account_id = ? LIMIT ?",
             );
@@ -517,6 +526,7 @@ impl ProfileRepository for ScyllaProfileRepository {
                 handle:       row.handle.clone(),
                 display_name: row.display_name.clone(),
                 avatar_url:   row.avatar_url.clone(),
+                avatar_asset_id: row.avatar_asset_id.map(MediaAssetId::from_uuid),
                 profile_kind: row.profile_kind.clone(),
                 visibility:   row.visibility.clone(),
                 status:       row.status.clone(),
@@ -667,8 +677,8 @@ impl ProfileRepository for ScyllaProfileRepository {
         let stmt = self.strict_stmt(
             "INSERT INTO profile.profiles_by_account \
              (account_id, created_at, profile_id, handle, display_name, avatar_url, \
-              profile_kind, visibility, status) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              profile_kind, visibility, status, avatar_asset_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         );
         let values = (
             profile.account_id().as_uuid(),
@@ -680,6 +690,7 @@ impl ProfileRepository for ScyllaProfileRepository {
             profile.profile_kind().as_str().to_owned(),
             profile.visibility().as_str().to_owned(),
             profile.status().as_str().to_owned(),
+            profile.avatar_asset_id().map(|a| a.as_uuid()),
         );
         self.client.session.execute_unpaged(stmt, values).await.map_err(scylla_err)?;
         Ok(())

@@ -105,6 +105,20 @@ impl FakePrivateDocuments {
     }
 }
 
+/// Media, as far as avatars and banners go (#907): an image is usable by the
+/// account that uploaded it ([`FakePrivateDocuments::upload`]).
+#[async_trait::async_trait]
+impl profile::application::port::MediaImages for FakePrivateDocuments {
+    async fn check_image(
+        &self,
+        asset: &profile::domain::value_object::MediaAssetId,
+        account: &AccountId,
+    ) -> Result<(), ProfileError> {
+        let owned = self.owned.lock().unwrap().iter().any(|(a, o)| *a == asset.as_str() && *o == account.to_string());
+        if owned { Ok(()) } else { Err(ProfileError::MediaAssetNotUsable { id: asset.as_str() }) }
+    }
+}
+
 #[async_trait::async_trait]
 impl PrivateDocuments for FakePrivateDocuments {
     async fn check_owned(&self, asset_id: &str, account: &AccountId) -> Result<(), ProfileError> {
@@ -167,6 +181,7 @@ impl TestHarness {
             cache_registry,
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
             Some(Arc::clone(&documents) as Arc<dyn PrivateDocuments>),
+            Some(Arc::clone(&documents) as Arc<dyn profile::application::port::MediaImages>),
         )
         .await
         .expect("integration: build profile app");

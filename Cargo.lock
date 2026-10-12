@@ -4413,6 +4413,7 @@ dependencies = [
 name = "profile-api"
 version = "0.1.0"
 dependencies = [
+ "media-api",
  "prost 0.14.4",
  "prost-types",
  "tonic 0.14.6",
