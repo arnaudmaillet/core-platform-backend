@@ -132,7 +132,6 @@ impl Service for ProfileService {
         spawn_account_event_consumer(Arc::clone(&app.command_bus));
         // Inbound integration: author-tier signal → denormalized profile tier.
         spawn_author_tier_consumer(Arc::clone(&app.command_bus));
-        // Tab settings older than the topic's retention (#873): opt-in, once.
         // Private profiles older than post's visibility projection (#927): opt-in, once.
         if std::env::var("PROFILE_BACKFILL_VISIBILITY").is_ok_and(|v| matches!(v.trim(), "1" | "true" | "yes")) {
             let (repository, publisher) = (Arc::clone(&app.repository), Arc::clone(&backfill_publisher));
@@ -143,6 +142,7 @@ impl Service for ProfileService {
                 }
             });
         }
+        // Tab settings older than the topic's retention (#873): opt-in, once.
         if std::env::var("PROFILE_BACKFILL_TAB_SETTINGS").is_ok_and(|v| matches!(v.trim(), "1" | "true" | "yes")) {
             let repository = Arc::clone(&app.repository);
             tokio::spawn(async move {

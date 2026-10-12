@@ -104,19 +104,27 @@ impl IssueUploadTicketHandler {
                 return self.replay(holder, &cmd, now).await;
             }
             let hash = ContentHash::new(sha)?;
-            // Only onto public bytes: a declared hash is no proof of possession,
-            // and a SIGNED asset is its owner's alone (#919).
+            // Only onto public bytes of the same kind: a declared hash is no
+            // proof of possession, and a SIGNED asset is its owner's alone
+            // (#919). The uploader gets an asset of its own over those bytes
+            // (#924), never someone else's id: attaching it, or changing its
+            // visibility, is the uploader's business only.
             if let Some(existing) = self
                 .assets
                 .find_ready_by_content_hash(&hash)
                 .await?
-                .filter(|a| !a.kind().is_private() && a.delivery_visibility() == DeliveryVisibility::Public)
+                .filter(|a| a.kind() == cmd.kind && a.delivery_visibility() == DeliveryVisibility::Public)
+                && let Ok(asset) = Asset::share_bytes(AssetId::new(), cmd.owner_id, &existing, now)
             {
-                return Ok(IssueUploadTicketOutcome {
-                    asset_id: existing.id(),
-                    upload: None,
-                    deduplicated: true,
-                });
+                match &key {
+                    Some(key) => {
+                        if let Some(holder) = self.assets.insert_keyed(&asset, key).await? {
+                            return self.replay(holder, &cmd, now).await;
+                        }
+                    }
+                    None => self.assets.save(&asset).await?,
+                }
+                return Ok(IssueUploadTicketOutcome { asset_id: asset.id(), upload: None, deduplicated: true });
             }
         }
 
@@ -264,7 +272,38 @@ mod tests {
 
         assert!(out.deduplicated);
         assert!(out.upload.is_none(), "no upload needed on a dedup hit");
-        assert_eq!(out.asset_id, existing, "reuses the existing asset");
+        // #924: an asset of the uploader's own, over the same bytes.
+        assert_ne!(out.asset_id, existing, "never someone else's asset id");
+        let (mine, theirs) = (
+            fx.assets.find_by_id(&out.asset_id).await.unwrap().unwrap(),
+            fx.assets.find_by_id(&existing).await.unwrap().unwrap(),
+        );
+        assert_eq!(mine.owner_id(), cmd().owner_id);
+        assert_eq!(mine.state(), AssetState::Ready);
+        assert_eq!(mine.renditions(), theirs.renditions(), "the shared content-addressed objects");
+        assert_eq!(mine.content_hash(), theirs.content_hash());
+        assert_eq!(mine.delivery_visibility(), DeliveryVisibility::Public);
+    }
+
+    /// #924: another kind's bytes are not shared (another rendition ladder and
+    /// path), and a keyed dedup answers its own asset on retry.
+    #[tokio::test]
+    async fn dedup_shares_only_the_same_kind_and_replays_under_its_key() {
+        let mut fx = Fixture::new();
+        fx.policy.dedup_enabled = true;
+        fx.seed_ready_asset(TEST_HASH).await; // a POST_IMAGE
+
+        let mut avatar = cmd();
+        avatar.kind = MediaKind::Avatar;
+        avatar.content_sha256 = Some(TEST_HASH.to_owned());
+        assert!(!fx.issue_ticket_handler().handle(env(avatar), t0()).await.unwrap().deduplicated);
+
+        let mut keyed = keyed("dedup-key-0001");
+        keyed.content_sha256 = Some(TEST_HASH.to_owned());
+        let first = fx.issue_ticket_handler().handle(env(keyed.clone()), t0()).await.unwrap();
+        let again = fx.issue_ticket_handler().handle(env(keyed), t0()).await.unwrap();
+        assert!(first.deduplicated && again.deduplicated);
+        assert_eq!(again.asset_id, first.asset_id, "the key answers the asset it got");
     }
 
     /// #919: an upload its owner wants SIGNED is never handed another

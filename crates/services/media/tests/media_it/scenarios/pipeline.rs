@@ -59,5 +59,9 @@ async fn identical_bytes_dedup_onto_the_existing_asset() {
     let second = h.issue_ticket(1, Some(sha), true).await.unwrap();
     assert!(second.deduplicated, "the second upload deduplicated");
     assert!(second.upload.is_none(), "no upload needed on a dedup hit");
-    assert_eq!(second.asset_id, first.asset_id, "reuses the existing asset");
+    // #924: an asset of its own over the same bytes, never another's id.
+    assert_ne!(second.asset_id, first.asset_id);
+    let (mine, theirs) = (h.get(second.asset_id).await.unwrap(), h.get(first.asset_id).await.unwrap());
+    assert_eq!(mine.state(), AssetState::Ready);
+    assert_eq!(mine.renditions(), theirs.renditions(), "the same content-addressed objects");
 }
