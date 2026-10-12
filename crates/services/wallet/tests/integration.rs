@@ -198,7 +198,7 @@ async fn concurrent_pack_buys_charge_once_and_gem_spends_are_recorded() {
 }
 
 fn announcement() -> StakeAnnouncement {
-    StakeAnnouncement { profile_id: "liker".into(), author_profile_id: "author".into() }
+    StakeAnnouncement { profile_id: "liker".into(), author_profile_id: "author".into(), conviction: None }
 }
 
 /// Funds `account` with `points` (direct, for the test: claims are hourly).
@@ -457,6 +457,53 @@ async fn a_finished_days_envelope_is_computed_once_over_postgres() {
         .await
         .unwrap();
     assert_eq!(pending, 1, "the next day is not over");
+
+    // #893: the day's calibration report reads it back over Postgres.
+    let report = w1.calibration_report(day).await.unwrap();
+    assert_eq!((report.positions, report.accounts, report.targets, report.top_targets), (2, 2, 1, 1));
+    assert_eq!((report.pool, report.allocated, report.rewarded_accounts), (1_000, 20, 1));
+    assert!((report.top1_share - 1.0).abs() < 1e-9, "a got all 20 gems");
+    assert_eq!(report.earliness[0].positions, 1, "a, earliest");
+    assert_eq!(report.earliness[3].positions, 1, "b, latest");
+}
+
+/// #888: each batch's conviction is recorded on its ledger row, the
+/// position's first one on the position (and in the export); a quick stake
+/// records none.
+#[tokio::test]
+async fn a_stakes_conviction_is_recorded_per_batch_and_frozen_on_the_position() {
+    use wallet::domain::Conviction;
+
+    let pool = pool().await;
+    let store = store(&pool);
+    let account = AccountId::from_uuid(Uuid::now_v7());
+    fund(&pool, &store, &account, 100).await;
+    let target = StakeTarget::Post(format!("post-{}", Uuid::now_v7()));
+    let (policy, pack) = (StakePolicy::default(), StakePackPolicy::default());
+    for (batch, conviction) in [("conv-batch-1", Some(Conviction::C3)), ("conv-batch-2", Some(Conviction::C1)), ("conv-batch-3", None)] {
+        let key = IdempotencyKey::for_operation(Operation::Stake, batch).unwrap();
+        let who = StakeAnnouncement { conviction, ..announcement() };
+        store.stake(&account, &key, &target, StakeAsk::Points(2), &who, &policy, &pack, 0, Utc::now()).await.unwrap();
+    }
+
+    let levels: Vec<(Option<i16>,)> = sqlx::query_as(
+        "SELECT conviction FROM wallet_transactions WHERE account_id = $1 AND kind = 'stake' ORDER BY created_at, id",
+    )
+    .bind(account.as_uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(levels, vec![(Some(3),), (Some(1),), (None,)]);
+    let (first,): (Option<i16>,) =
+        sqlx::query_as("SELECT first_conviction FROM stakes WHERE account_id = $1 AND target_id = $2")
+            .bind(account.as_uuid())
+            .bind(target.id())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(first, Some(3), "frozen at the first batch");
+    let exported = store.stake_positions(&account, None, 10).await.unwrap();
+    assert_eq!(exported[0].first_conviction, Some(Conviction::C3));
 }
 
 /// The GDPR export (#653, #665): a wallet is read without being opened, and

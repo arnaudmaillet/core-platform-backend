@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use crate::domain::event::WalletEvent;
 use crate::domain::{
-    AccountId, Allocation, CalibrationRow, ClaimPolicy, Currency, DayPosition, DuePosition, EnvelopeDay, IdempotencyKey, Observed, Settlement,
-    StakeAsk, StakePackPolicy,
+    AccountId, Allocation, CalibrationRow, ClaimPolicy, Conviction, Currency, DayPosition, DuePosition, EnvelopeDay,
+    IdempotencyKey, Observed, Settlement, StakeAsk, StakePackPolicy,
     StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
@@ -89,6 +89,9 @@ pub struct StakeResult {
 pub struct StakeAnnouncement {
     pub profile_id:        String,
     pub author_profile_id: String,
+    /// How sure the curator is (#888); `None`: a quick stake. Recorded with
+    /// the batch (and as the position's first, on its first batch).
+    pub conviction:        Option<Conviction>,
 }
 
 /// An event written to the outbox, to publish.
@@ -339,6 +342,8 @@ pub struct StakePositionRecord {
     pub first_at:   DateTime<Utc>,
     pub last_at:    DateTime<Utc>,
     pub settlement: Option<SettlementRecord>,
+    /// Its first batch's conviction (#888).
+    pub first_conviction: Option<Conviction>,
 }
 
 /// A recorded settlement and, once the day's envelope is computed, its share.

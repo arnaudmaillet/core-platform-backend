@@ -16,8 +16,8 @@ use crate::application::port::{
 };
 use crate::domain::event::{StakeCommitted, WalletEvent};
 use crate::domain::{
-    AccountId, Allocation, CalibrationRow, ClaimDecision, ClaimPolicy, Currency, DayPosition, DuePosition, EnvelopeDay, IdempotencyKey,
-    PackDecision, Settlement, StakeAsk,
+    AccountId, Allocation, CalibrationRow, ClaimDecision, ClaimPolicy, Conviction, Currency, DayPosition, DuePosition, EnvelopeDay,
+    IdempotencyKey, PackDecision, Settlement, StakeAsk,
     StakeDecision, StakePackPolicy, StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
@@ -116,6 +116,8 @@ struct Movement<'a> {
     balance_after: i64,
     kind:          TransactionKind,
     ref_id:        Option<&'a str>,
+    /// A stake batch's conviction level (#888).
+    conviction:    Option<i16>,
 }
 
 type WalletRow = (
@@ -180,6 +182,7 @@ async fn ensure_open(
             balance_after: starter_gems,
             kind:          TransactionKind::StarterGift,
             ref_id:        None,
+            conviction:    None,
         };
         record(conn, account, gift, &IdempotencyKey::system(STARTER_KEY), now).await?;
     }
@@ -195,8 +198,8 @@ async fn record(
 ) -> Result<(), WalletError> {
     sqlx::query(
         "INSERT INTO wallet_transactions \
-         (id, account_id, currency, delta, balance_after, kind, ref_id, idempotency_key, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+         (id, account_id, currency, delta, balance_after, kind, ref_id, idempotency_key, created_at, conviction) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(Uuid::now_v7())
     .bind(account.as_uuid())
@@ -207,6 +210,7 @@ async fn record(
     .bind(movement.ref_id)
     .bind(key.as_str())
     .bind(now)
+    .bind(movement.conviction)
     .execute(conn)
     .await
     .map_err(storage)?;
@@ -274,6 +278,7 @@ impl WalletStore for PgWalletStore {
                     balance_after: wallet.points,
                     kind:          TransactionKind::Claim,
                     ref_id:        None,
+                    conviction:    None,
                 };
                 record(&mut tx, account, movement, key, now).await?;
                 (ClaimOutcome::Claimed, awarded)
@@ -309,6 +314,7 @@ impl WalletStore for PgWalletStore {
                         balance_after: wallet.gems,
                         kind:          TransactionKind::StakePack,
                         ref_id:        None,
+                        conviction:    None,
                     };
                     record(&mut tx, account, movement, key, now).await?;
                     PackOutcome::Bought
@@ -342,6 +348,7 @@ impl WalletStore for PgWalletStore {
                 balance_after: wallet.gems,
                 kind:          spend.kind,
                 ref_id:        spend.ref_id.as_deref(),
+                conviction:    None,
             };
             record(&mut tx, account, movement, key, now).await?;
             SpendOutcome::Spent
@@ -401,8 +408,8 @@ impl WalletStore for PgWalletStore {
                 .await
                 .map_err(storage)?;
                 sqlx::query(
-                    "INSERT INTO stakes (account_id, target_kind, target_id, total, first_key, first_at, last_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $6) \
+                    "INSERT INTO stakes (account_id, target_kind, target_id, total, first_key, first_at, last_at, first_conviction) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $6, $7) \
                      ON CONFLICT (account_id, target_kind, target_id) \
                      DO UPDATE SET total = stakes.total + EXCLUDED.total, last_at = EXCLUDED.last_at",
                 )
@@ -412,6 +419,7 @@ impl WalletStore for PgWalletStore {
                 .bind(points)
                 .bind(key.as_str())
                 .bind(now)
+                .bind(announcement.conviction.map(Conviction::level))
                 .execute(&mut *tx)
                 .await
                 .map_err(storage)?;
@@ -422,6 +430,7 @@ impl WalletStore for PgWalletStore {
                     balance_after: wallet.points,
                     kind:          TransactionKind::Stake,
                     ref_id:        Some(&reference),
+                    conviction:    announcement.conviction.map(Conviction::level),
                 };
                 record(&mut tx, account, movement, key, now).await?;
                 // The announcement, in the same transaction: never a stake
@@ -808,7 +817,7 @@ impl WalletStore for PgWalletStore {
         let rows: Vec<PositionRow> = sqlx::query_as(
             "SELECT s.target_kind, s.target_id, s.total, s.first_at, s.last_at, \
                t.settled_at, t.points, t.count_on_arrival, t.count_at_settlement, t.earliness, t.pre_score, \
-               t.model, t.outcome, t.score, t.provisional_gems, t.envelope_day \
+               t.model, t.outcome, t.score, t.provisional_gems, t.envelope_day, s.first_conviction \
              FROM stakes s LEFT JOIN settlements t \
                ON t.account_id = s.account_id AND t.target_kind = s.target_kind AND t.target_id = s.target_id \
              WHERE s.account_id = $1 AND (s.target_kind, s.target_id) > ($2, $3) \
@@ -972,6 +981,7 @@ struct PositionRow {
     score:               Option<f64>,
     provisional_gems:    Option<i64>,
     envelope_day:        Option<NaiveDate>,
+    first_conviction:    Option<i16>,
 }
 
 impl PositionRow {
@@ -995,6 +1005,13 @@ impl PositionRow {
             provisional_gems: self.provisional_gems,
             envelope_day: self.envelope_day,
         });
-        Some(StakePositionRecord { target, points: self.total, first_at: self.first_at, last_at: self.last_at, settlement })
+        Some(StakePositionRecord {
+            target,
+            points: self.total,
+            first_at: self.first_at,
+            last_at: self.last_at,
+            settlement,
+            first_conviction: self.first_conviction.and_then(Conviction::from_level),
+        })
     }
 }

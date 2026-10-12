@@ -224,6 +224,15 @@ newest first stake first, filtered `ACTIVE` / `SETTLED` (or both), ≤ 100 a pag
 `WALLET_SETTLEMENT_DELAY_SECS`), `settled_at` once settled, and a `StakeVerdict`: `PENDING` until the
 day's envelope is computed, then `REWARDED` / `NOT_REWARDED`. **No gems while settlement is shadow
 mode** (product decision 2026-10-11): the app never shows gems the balance does not hold.
+**Conviction (#888, charter §6–§9).** `StakeRequest.conviction` (C1–C4; `UNSPECIFIED` = a quick stake)
+is how sure the curator is that the target ends the day in the top: a prediction recorded and
+**frozen**, scored later (#889), with **no effect** on the stake.
+- **Storage:** each batch's level goes on its ledger row (`wallet_transactions.conviction`). The
+  position's first batch's goes on the position (`stakes.first_conviction`, never updated) and in the
+  export (`StakePosition.first_conviction`). A quick stake records NULL, so its default level is left
+  to the scoring.
+- **Probabilities:** `Wallet.conviction_probabilities` gives the probability each level stands for
+  (`WALLET_CONVICTION_PROBABILITIES`, default 0.25 / 0.40 / 0.60 / 0.80).
 **Mesh callers are checked (#852, `MESH_CALLER_GATE`):** `SpendGems` takes **geo-discovery** only, and
 the end user's edge token it forwards (`authorization`) must name the account's owner, an adult; the
 export reads (and `ListWalletTransactions` over the mesh) take **account** only — the caller's
@@ -321,6 +330,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_CURATOR_DAILY_CAP` | `40` | the most one account receives from a day's envelope |
 | `WALLET_ENVELOPE_TARGET_CAP_BPS` | `200` | the most one target's positions receive together, in basis points of the pool (≤ 10000) |
 | `WALLET_OUTCOME_TOP_PERCENT` | `15` | a target scores when it ends the day in this top share of the day's targets (1–100) |
+| `WALLET_CONVICTION_PROBABILITIES` | `0.25,0.40,0.60,0.80` | the probability each conviction level C1–C4 stands for (#888): four ascending values in (0, 1); anything else keeps the default |
 | `WALLET_ENVELOPE_SECS` | `600` | how often the envelope checks for a finished day |
 | `WALLET_ALLOW_LOG_PUBLISHER` | unset | `true`: start without `KAFKA_BROKERS`, logging events (local only) |
 
@@ -342,7 +352,9 @@ settings (client edge), OTel.
 Migrations: `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.sql` (`ref_id`),
 `0003_create_stakes.sql` (`stakes`, the hour's index), `0004_create_outbox.sql` (`wallet_outbox`),
 `0005_create_settlements.sql` (`settlements`; `stakes.settled_at` / `settle_claimed_until`),
-`0006_create_envelope_days.sql` (`envelope_days`; the settlements' shares), applied by `migrator wallet` (init
+`0006_create_envelope_days.sql` (`envelope_days`; the settlements' shares), `0007_stakes_by_account_recent.sql`
+(`ListMyStakes`), `0008_stake_conviction.sql` (`wallet_transactions.conviction`, `stakes.first_conviction`, #888),
+applied by `migrator wallet` (init
 container) before the binary. Infra (ECR repo, manifests, `wallet-postgres`, ingress route,
 NetworkPolicy): core-platform-infra#41 — the binary joins `FLEET_BINS` once its ECR repo exists.
 Rollback: the binary is stateless; the schema is additive.

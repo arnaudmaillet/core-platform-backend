@@ -3,7 +3,7 @@
 
 use chrono::TimeDelta;
 
-use crate::domain::{ClaimPolicy, EnvelopePolicy, SettlementPolicy, StakePackPolicy, StakePolicy};
+use crate::domain::{ClaimPolicy, EnvelopePolicy, SettlementPolicy, StakePackPolicy, StakePolicy, DEFAULT_CONVICTION_BPS};
 
 /// Gems every wallet opens with.
 pub const DEFAULT_STARTER_GEMS: i64 = 100;
@@ -19,6 +19,9 @@ pub struct WalletConfig {
     pub settlement:   SettlementPolicy,
     /// The daily curator envelope (shadow mode: provisional gems).
     pub envelope:     EnvelopePolicy,
+    /// The probability each conviction level C1–C4 stands for (#888), in
+    /// basis points, ascending.
+    pub conviction_bps: [i64; 4],
 }
 
 impl Default for WalletConfig {
@@ -30,6 +33,7 @@ impl Default for WalletConfig {
             stakes:       StakePolicy::default(),
             settlement:   SettlementPolicy::default(),
             envelope:     EnvelopePolicy::default(),
+            conviction_bps: DEFAULT_CONVICTION_BPS,
         }
     }
 }
@@ -45,8 +49,9 @@ impl WalletConfig {
     /// commitment is the per-target cap), `WALLET_CURATOR_ENVELOPE_DAILY`
     /// (1000 gems), `WALLET_CURATOR_DAILY_CAP` (40 gems per account),
     /// `WALLET_ENVELOPE_TARGET_CAP_BPS` (200 = 2 % of the pool per target),
-    /// `WALLET_OUTCOME_TOP_PERCENT` (15). An unparsable or negative value
-    /// keeps the default.
+    /// `WALLET_OUTCOME_TOP_PERCENT` (15), `WALLET_CONVICTION_PROBABILITIES`
+    /// (`0.25,0.40,0.60,0.80`: four ascending probabilities in (0, 1), C1
+    /// first). An unparsable or negative value keeps the default.
     pub fn from_env() -> Self {
         Self::from_lookup(|name| std::env::var(name).ok())
     }
@@ -100,8 +105,21 @@ impl WalletConfig {
                     .filter(|v| (1..=100).contains(v))
                     .unwrap_or(defaults.envelope.top_percent),
             },
+            conviction_bps: get("WALLET_CONVICTION_PROBABILITIES")
+                .and_then(|v| conviction_bps(&v))
+                .unwrap_or(defaults.conviction_bps),
         }
     }
+}
+
+/// Four ascending probabilities in (0, 1), comma-separated, as basis points.
+fn conviction_bps(value: &str) -> Option<[i64; 4]> {
+    let bps: Vec<i64> = value
+        .split(',')
+        .map(|p| p.trim().parse::<f64>().ok().filter(|p| *p > 0.0 && *p < 1.0).map(|p| (p * 10_000.0).round() as i64))
+        .collect::<Option<_>>()?;
+    let bps: [i64; 4] = bps.try_into().ok()?;
+    bps.windows(2).all(|w| w[0] < w[1]).then_some(bps)
 }
 
 #[cfg(test)]
@@ -122,5 +140,14 @@ mod tests {
         let capped = |v: &str| WalletConfig::from_lookup(|name| (name == "WALLET_POINTS_CAP").then(|| v.into())).claim.points_cap;
         assert_eq!(capped("500"), 500);
         assert_eq!(capped("0"), 2_000, "a zero cap keeps the default");
+    }
+
+    #[test]
+    fn conviction_probabilities_are_four_ascending_ones() {
+        let bps = |v: &str| WalletConfig::from_lookup(|name| (name == "WALLET_CONVICTION_PROBABILITIES").then(|| v.into())).conviction_bps;
+        assert_eq!(bps("0.2, 0.4, 0.6, 0.9"), [2_000, 4_000, 6_000, 9_000]);
+        for bad in ["0.4,0.2,0.6,0.8", "0.25,0.4,0.6", "0.25,0.4,0.6,1.0", "x"] {
+            assert_eq!(bps(bad), DEFAULT_CONVICTION_BPS, "{bad:?} keeps the default");
+        }
     }
 }

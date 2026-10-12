@@ -45,6 +45,43 @@ impl StakeTarget {
     }
 }
 
+/// How sure a curator is that the target ends the day in the top (#888,
+/// charter §6–§9): recorded with the batch and frozen, scored later against
+/// the outcome. No effect on the stake itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Conviction {
+    C1,
+    C2,
+    C3,
+    C4,
+}
+
+impl Conviction {
+    /// Its level, 1–4 (what the ledger stores).
+    pub fn level(self) -> i16 {
+        match self {
+            Self::C1 => 1,
+            Self::C2 => 2,
+            Self::C3 => 3,
+            Self::C4 => 4,
+        }
+    }
+
+    pub fn from_level(level: i16) -> Option<Self> {
+        match level {
+            1 => Some(Self::C1),
+            2 => Some(Self::C2),
+            3 => Some(Self::C3),
+            4 => Some(Self::C4),
+            _ => None,
+        }
+    }
+}
+
+/// The probability each conviction level stands for (#888), in basis points
+/// (2500 = 0.25), C1 first: server policy, shown with the wallet.
+pub const DEFAULT_CONVICTION_BPS: [i64; 4] = [2_500, 4_000, 6_000, 8_000];
+
 /// What a batch asks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StakeAsk {

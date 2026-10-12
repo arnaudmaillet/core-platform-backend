@@ -63,6 +63,8 @@ pub struct StakeBatch {
     pub ask:          StakeAsk,
     pub key:          String,
     pub first_tap_at: DateTime<Utc>,
+    /// How sure the curator is (#888); `None`: a quick stake.
+    pub conviction:   Option<crate::domain::Conviction>,
 }
 
 /// One page of stake positions; `next_page_token` is `None` on the last.
@@ -310,7 +312,11 @@ impl Wallets {
                 StakeResult { outcome, spent: 0, my_total, first: false, wallet, outbox: None }
             }
             Ok(info) => {
-                let announcement = StakeAnnouncement { profile_id: batch.profile_id, author_profile_id: info.author_profile_id };
+                let announcement = StakeAnnouncement {
+                    profile_id:        batch.profile_id,
+                    author_profile_id: info.author_profile_id,
+                    conviction:        batch.conviction,
+                };
                 let result = self
                     .store
                     .stake(
@@ -906,6 +912,7 @@ pub(crate) mod fakes {
                     points:     stakes.get(slot).map_or(0, |(total, _)| *total),
                     first_at:   *first_at,
                     last_at:    *first_at,
+                    first_conviction: None,
                     settlement: settlements.get(slot).map(|s| crate::application::port::SettlementRecord {
                         settled_at:          s.settled_at,
                         points:              s.points,
@@ -1275,6 +1282,7 @@ mod tests {
             ask,
             key: key.into(),
             first_tap_at,
+            conviction: None,
         }
     }
 

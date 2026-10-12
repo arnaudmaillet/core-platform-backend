@@ -14,7 +14,7 @@ use crate::application::port::{
 };
 use crate::application::wallets::StakeBatch;
 use crate::application::{MyStake, StakeVerdict, Wallets, WalletView};
-use crate::domain::{StakeAsk, StakeTarget};
+use crate::domain::{Conviction, StakeAsk, StakeTarget};
 use crate::config::WalletConfig;
 use crate::domain::{Currency, Transaction, TransactionKind};
 use crate::error::WalletError;
@@ -128,7 +128,14 @@ impl WalletServiceHandler {
             .first_tap_at
             .and_then(|t| DateTime::from_timestamp(t.seconds, u32::try_from(t.nanos).unwrap_or(0)))
             .ok_or_else(|| Status::invalid_argument("first_tap_at is required"))?;
-        let batch = StakeBatch { profile_id: req.profile_id, target, ask, key: req.idempotency_key, first_tap_at };
+        let conviction = match proto::Conviction::try_from(req.conviction).unwrap_or_default() {
+            proto::Conviction::Unspecified => None,
+            proto::Conviction::C1 => Some(Conviction::C1),
+            proto::Conviction::C2 => Some(Conviction::C2),
+            proto::Conviction::C3 => Some(Conviction::C3),
+            proto::Conviction::C4 => Some(Conviction::C4),
+        };
+        let batch = StakeBatch { profile_id: req.profile_id, target, ask, key: req.idempotency_key, first_tap_at, conviction };
         let reply = self.wallets.stake(&req.account_id, batch, &own, Utc::now()).await.map_err(to_status)?;
         Ok(Response::new(proto::StakeResponse {
             outcome:  match reply.outcome {
@@ -311,6 +318,7 @@ fn wallet_to_proto(view: &WalletView, config: &WalletConfig, restricted: bool) -
         stake_pack_price: config.stake_pack.price_gems,
         stake_pack_shots: config.stake_pack.shots,
         points_per_shot: config.stake_pack.points_per_shot,
+        conviction_probabilities: config.conviction_bps.iter().map(|bps| *bps as f64 / 10_000.0).collect(),
     }
 }
 
@@ -369,6 +377,12 @@ fn position_to_proto(p: &StakePositionRecord) -> proto::StakePosition {
         first_at:   Some(timestamp(p.first_at)),
         last_at:    Some(timestamp(p.last_at)),
         settlement: p.settlement.as_ref().map(settlement_to_proto),
+        first_conviction: p.first_conviction.map_or(proto::Conviction::Unspecified, |c| match c {
+            Conviction::C1 => proto::Conviction::C1,
+            Conviction::C2 => proto::Conviction::C2,
+            Conviction::C3 => proto::Conviction::C3,
+            Conviction::C4 => proto::Conviction::C4,
+        }) as i32,
     }
 }
 
@@ -663,6 +677,7 @@ mod tests {
             use_stake_shot:  false,
             idempotency_key: Uuid::now_v7().to_string(),
             first_tap_at:    Some(timestamp(Utc::now())),
+            conviction:      0,
         };
         let other = h.stake(as_caller(&me, stake("someone-else"))).await.unwrap_err();
         assert_eq!(other.code(), Code::PermissionDenied, "not the caller's profile");
