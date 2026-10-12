@@ -194,6 +194,13 @@ or guess the bytes past the signed delivery); `Asset.delivery_visibility` says w
 never deduplicated onto an existing asset, and no upload is ever deduplicated onto a SIGNED one (a declared
 hash is no proof of possession).
 
+**A dedup hit is the uploader's own asset (#924).** With `MEDIA_DEDUP_ENABLED`, a ticket whose declared
+hash matches a READY, PUBLIC asset **of the same kind** creates a new READY asset owned by the uploader.
+It shares the existing content-addressed renditions, and a delete keeps them while another asset holds
+them. It is never the other owner's id: post / profile / chat accept only the caller's own assets
+(#907, #919), and visibility changes are per asset. Under an idempotency key, the new asset is saved
+under that key, so a retry answers it.
+
 **Restricted keys (#919, off by default).** With `MEDIA_RESTRICTED_PREFIX_ENABLED`, the pipeline writes a
 SIGNED asset's renditions (a video's whole HLS tree too) under its own
 `restricted/{kind}/{asset_id}/…` instead of the shared content-addressed `{kind}/{hash}/…`: per asset,
@@ -364,7 +371,7 @@ async fn main() -> anyhow::Result<()> {
 | `MEDIA_RESTRICTED_PREFIX_ENABLED` | No | `false` | SIGNED assets' renditions are written to, and moved into, their own `restricted/` tree (#919); turn on only once the CDN denies `restricted/` (core-platform-infra#87) |
 | `MEDIA_DOCUMENT_RETENTION_DAYS` | No | `30` | a private document's life after its verification request's decision (#777) |
 | `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS` | No | `3600` | how often due private documents are purged |
-| `MEDIA_DEDUP_ENABLED` | No | `false` | content-hash dedup (off until refcount-purge is hardened) |
+| `MEDIA_DEDUP_ENABLED` | No | `false` | content-hash dedup: a hit gives the uploader its own asset over the shared bytes (#924); off until refcount-purge is hardened |
 | `MEDIA_SCREEN_GRPC_ENDPOINT` | No | `http://localhost:50061` | moderation Screen gate endpoint |
 | `MEDIA_SCREEN_TIMEOUT_MS` | No | `200` | fail-closed Screen hard timeout |
 

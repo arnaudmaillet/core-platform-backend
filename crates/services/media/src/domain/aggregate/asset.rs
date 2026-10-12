@@ -221,6 +221,46 @@ impl Asset {
         }
     }
 
+    /// A dedup hit (#924): a new READY asset for `owner` over `source`'s bytes
+    /// — its own id, owner and lifecycle, sharing `source`'s content-addressed
+    /// renditions (a delete keeps them while another asset holds them). Only
+    /// from a READY, PUBLIC source whose renditions are in the shared tree:
+    /// a SIGNED asset's bytes are its owner's alone (#919).
+    pub fn share_bytes(id: AssetId, owner_id: OwnerId, source: &Asset, now: DateTime<Utc>) -> Result<Self, MediaError> {
+        let shared = source.state == AssetState::Ready
+            && source.delivery_visibility == DeliveryVisibility::Public
+            && !source.kind.is_private()
+            && source.object_root().is_some_and(|root| !root.is_restricted());
+        if !shared {
+            return Err(MediaError::DomainViolation {
+                field:   "dedup".into(),
+                message: "only a ready, public asset's bytes are shared".into(),
+            });
+        }
+        Ok(Self {
+            id,
+            owner_id,
+            kind: source.kind,
+            state: AssetState::Ready,
+            declared_mime: source.declared_mime.clone(),
+            declared_size: source.declared_size,
+            mime_type: source.mime_type.clone(),
+            byte_size: source.byte_size,
+            dimensions: source.dimensions,
+            content_hash: source.content_hash.clone(),
+            blurhash: source.blurhash.clone(),
+            renditions: source.renditions.clone(),
+            legal_hold: false,
+            prior_state: None,
+            enforcements: BTreeSet::new(),
+            purge_after: None,
+            delivery_visibility: DeliveryVisibility::Public,
+            created_at: now,
+            updated_at: now,
+            pending_events: Vec::new(),
+        })
+    }
+
     // ─── Queries ─────────────────────────────────────────────────────────────
 
     pub fn id(&self) -> AssetId {

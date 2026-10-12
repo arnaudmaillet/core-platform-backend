@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: e0bbba64d786ded4f87cae1986967459fefacec152bd90228bdee84324ace437
+  source_sha256: e022ef1f8949c27837da07ec897feff8de1b18c00eef1fbb82eb94fe3812c1c8
   translated_at: 2026-10-12
   status: complete
 ---
@@ -212,6 +212,14 @@ les octets en contournant la livraison signée) ; `Asset.delivery_visibility` di
 n'est jamais dédupliqué sur un asset existant, et aucun upload n'est jamais dédupliqué sur un asset SIGNED
 (un hash déclaré ne prouve pas qu'on détient les octets).
 
+**Une correspondance de dédup est l'asset de l'uploadeur (#924).** Avec `MEDIA_DEDUP_ENABLED`, un ticket
+dont le hash déclaré correspond à un asset READY et PUBLIC **du même type** crée un nouvel asset READY
+appartenant à l'uploadeur. Il partage les renditions existantes adressées par contenu, et une
+suppression les garde tant qu'un autre asset les détient. Ce n'est jamais l'id de l'autre propriétaire :
+post / profile / chat n'acceptent que les assets de l'appelant (#907, #919), et les changements de
+visibilité se font par asset. Sous une clé d'idempotence, le nouvel asset est enregistré sous cette clé,
+si bien qu'une nouvelle tentative le renvoie.
+
 **Clés restreintes (#919, désactivées par défaut).** Avec `MEDIA_RESTRICTED_PREFIX_ENABLED`, le pipeline
 écrit les renditions d'un asset SIGNED (tout l'arbre HLS d'une vidéo aussi) sous son propre
 `restricted/{kind}/{asset_id}/…` au lieu de l'arbre partagé adressé par contenu `{kind}/{hash}/…` : propre
@@ -400,7 +408,7 @@ async fn main() -> anyhow::Result<()> {
 | `MEDIA_RESTRICTED_PREFIX_ENABLED` | Non | `false` | les renditions des assets SIGNED sont écrites dans, et déplacées vers, leur propre arbre `restricted/` (#919) ; à activer seulement une fois que le CDN refuse `restricted/` (core-platform-infra#87) |
 | `MEDIA_DOCUMENT_RETENTION_DAYS` | Non | `30` | durée de vie d'un document privé après la décision de sa demande de vérification (#777) |
 | `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS` | Non | `3600` | fréquence de purge des documents privés échus |
-| `MEDIA_DEDUP_ENABLED` | Non | `false` | dédup par hash de contenu (off tant que le purge-refcount n'est pas durci) |
+| `MEDIA_DEDUP_ENABLED` | Non | `false` | dédup par hash de contenu : une correspondance donne à l'uploadeur son propre asset sur les octets partagés (#924) ; off tant que le purge-refcount n'est pas durci |
 | `MEDIA_SCREEN_GRPC_ENDPOINT` | Non | `http://localhost:50061` | endpoint de la porte Screen de moderation |
 | `MEDIA_SCREEN_TIMEOUT_MS` | Non | `200` | hard timeout fail-closed du Screen |
 
