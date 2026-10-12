@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 29128efd4e1b509c99911396d53208fcf3f1c0c561f8d2a0e029c9485edfbdca
+  source_sha256: 3e833969ff0e494db45f95c16d61719c6b6d7a5ba024b9b72c7a27fc19cfc040
   translated_at: 2026-10-12
   status: complete
 ---
@@ -227,6 +227,7 @@ seulement et pour l'auteur du post seulement (le champ d'un appelant edge est é
 | PST-2001..2003 | carousel cardinality / video length | 422 |
 | PST-3001..3004 | thumbnail / MIME / CDN URL / dimensions | 422 |
 | PST-3005 | `MediaAssetNotUsable` (l'`asset_id` d'une pièce jointe n'est pas une image ou vidéo de post utilisable de l'appelant, #907) | 422 |
+| PST-3006 | `MediaNotSigned` (la pièce jointe d'un auteur privé est encore en traitement et n'a pas été uploadée SIGNED, #919) | 422 |
 | PST-9001/9002 | invalid post/profile ID | 422 |
 | PST-9003 | `AttachmentsCorrupted` (JSON deser) | 500 |
 | PST-9004 | `DomainViolation` | 422 |
@@ -253,6 +254,22 @@ seulement : un lecteur du mesh (l'hydratation de search) reçoit `asset_id` sans
 livrent toujours. Les timelines, le feed découverte et search renvoient des ids de posts et hydratent via
 `GetPost`, ils en profitent donc aussi. Sans `POST_MEDIA_GRPC_ENDPOINT`, les ids d'assets sont ignorés à
 l'écriture et rien n'est résolu.
+
+**Les images d'un auteur privé sont SIGNED (#919 étape 3).** Post projette quels auteurs sont privés
+(`post.author_visibility`, migration 0016) à partir du `ProfileVisibilityChanged` de profile, émis aussi
+quand un profil est créé privé.
+- **À l'écriture**, pour un auteur privé : un asset public READY est passé en SIGNED (media
+  `ChangeDeliveryVisibility`, qui n'accepte que post). Un asset encore en traitement doit avoir été
+  uploadé SIGNED (`IssueUploadTicketRequest.delivery_visibility`), car media ne change la visibilité que
+  d'un asset READY : sinon `PST-3006`.
+- **Quand un auteur bascule**, le consumer des réglages auteur l'enregistre d'abord, puis parcourt tous
+  ses posts et livre chaque asset SIGNED, ou de nouveau PUBLIC quand l'auteur redevient public. Le
+  parcours est idempotent : une redélivrance le refait ; une panne de media est rejouée. Un asset encore
+  en traitement à ce moment garde sa livraison, ce qui est journalisé.
+- **Les vidéos restent telles quelles** jusqu'à la livraison HLS signée (#921) : une playlist maître
+  présignée n'autorise pas ses segments, donc une vidéo SIGNED ne se lirait pas.
+
+Les appels portent le jeton mesh de post (`MESH_TOKEN_FILE`).
 
 **Création idempotente (#876).** `CreatePostRequest.idempotency_key` fait qu'un CreatePost rejoué ne crée
 rien et renvoie le `post_id` du premier appel, pendant 24 heures, par auteur. La clé vit dans
@@ -282,7 +299,7 @@ pendant que le premier appel est encore en attente reçoit `PST-1010` (`ABORTED`
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `profile.v1.events` | `post-author-tier` | dénormalise `ProfileTierChanged` dans la projection `author_tiers` (`profile_id → tier`) ; lue sur le chemin de publication pour estampiller `author_tier` sur les posts publiés. Les autres types committent en no-op | DLQ `profile.v1.events.dlq` |
-| `profile.v1.events` | `post-author-location` | projette `ProfileLocationSettingsChanged` dans `author_location_settings` (`profile_id → ghost, city`), que `GetPost` applique à la localisation montrée à tout autre que l'auteur, et `ProfileTabSettingsChanged` dans `author_post_windows` (`profile_id → window_days, show_reposts, show_places`), que les deux lectures appliquent. Démarre au plus ancien offset (un profil adolescent est créé en mode fantôme). Les autres types committent en no-op | DLQ `profile.v1.events.dlq` |
+| `profile.v1.events` | `post-author-location` | projette `ProfileVisibilityChanged` dans `author_visibility` et parcourt les posts de l'auteur pour que leurs médias suivent (SIGNED si privé, #919), `ProfileLocationSettingsChanged` dans `author_location_settings` (`profile_id → ghost, city`), que `GetPost` applique à la localisation montrée à tout autre que l'auteur, et `ProfileTabSettingsChanged` dans `author_post_windows` (`profile_id → window_days, show_reposts, show_places`), que les deux lectures appliquent. Démarre au plus ancien offset (un profil adolescent est créé en mode fantôme). Les autres types committent en no-op | DLQ `profile.v1.events.dlq` |
 | `moderation.v1.events` | `post-moderation` | enregistre `enforcement_applied` / `enforcement_reversed` sur un **post** comme sa restriction de modération (`remove_content` → Removed, `visibility_limit` → Limited, `age_gate` → AgeGated ; réversion → None), gardé par l'`EnforcementVersion` par sujet de moderation pour que la redélivrance converge. Les autres entités, les actions au niveau de l'acteur et les autres types committent en no-op | DLQ `moderation.v1.events.dlq` |
 
 > **Contrat d'exécution :** l'événement est publié après le dual-write durable. Les consommateurs aval

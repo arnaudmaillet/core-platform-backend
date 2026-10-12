@@ -15,6 +15,24 @@ pub struct MediaAssetFacts {
     /// Not failed, quarantined or deleted (a pending or processing asset is
     /// fine: the post shows its blurhash until it is ready).
     pub usable:           bool,
+    /// Delivered SIGNED only (#919).
+    pub signed:           bool,
+    /// READY: its delivery visibility may change.
+    pub ready:            bool,
+    /// A video: it stays PUBLIC for now — a presigned HLS master does not
+    /// authorize its segments, so a SIGNED video would not play (#921).
+    pub video:            bool,
+}
+
+/// What a delivery-visibility change came to (#919 step 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetDelivery {
+    /// It is delivered that way now (or already was).
+    Done,
+    /// Not READY yet: its visibility cannot change (media refuses).
+    NotReady,
+    /// media does not know it (deleted).
+    Gone,
 }
 
 /// media's asset metadata (`GetAsset`).
@@ -23,6 +41,11 @@ pub trait MediaCatalog: Send + Sync + 'static {
     /// The asset, or `None` when media does not know it. Errors are
     /// `MediaUnavailable`; the write fails closed.
     async fn asset(&self, id: &MediaAssetId) -> Result<Option<MediaAssetFacts>, PostError>;
+
+    /// Delivers the asset SIGNED (`signed`) or PUBLIC (#919 step 3), as its
+    /// owning account (`owner`; looked up when `None`). Idempotent. Errors are
+    /// `MediaUnavailable`.
+    async fn set_delivery(&self, id: &MediaAssetId, owner: Option<&str>, signed: bool) -> Result<SetDelivery, PostError>;
 }
 
 /// Checks the media assets attachments name (#907): each must be a usable
@@ -31,9 +54,29 @@ pub trait MediaCatalog: Send + Sync + 'static {
 /// answer for all refusals, so a probe learns nothing of others' assets. With
 /// no `catalog` (media not configured), the assets are dropped: the
 /// attachments still deliver by their URLs.
+///
+/// A private author's images are SIGNED only (#919 step 3): a READY public one
+/// is made SIGNED here; one still processing must have been uploaded SIGNED
+/// (`PST-3006`), as its visibility cannot change before it is ready. Videos
+/// are left as they are until signed HLS delivery exists (#921).
+/// Whether `author`'s attachments must be SIGNED: asked only when one names
+/// an asset that media will check.
+pub async fn author_private_for(
+    privacy: &dyn crate::application::port::AuthorPrivacy,
+    catalog: Option<&dyn MediaCatalog>,
+    author: &crate::domain::value_object::ProfileId,
+    attachments: &[MediaAttachment],
+) -> Result<bool, PostError> {
+    if catalog.is_none() || attachments.iter().all(|a| a.asset_id.is_none()) {
+        return Ok(false);
+    }
+    privacy.is_private(author).await
+}
+
 pub async fn check_media(
     catalog: Option<&dyn MediaCatalog>,
     account: Option<&str>,
+    author_private: bool,
     attachments: &mut [MediaAttachment],
 ) -> Result<(), PostError> {
     let Some(catalog) = catalog else {
@@ -48,11 +91,20 @@ pub async fn check_media(
         attachments.iter().enumerate().filter_map(|(index, a)| a.asset_id.map(|id| (index, id))).collect();
     let found = futures::future::try_join_all(named.iter().map(|(_, id)| catalog.asset(id))).await?;
     for ((index, id), facts) in named.into_iter().zip(found) {
-        let ok = facts.is_some_and(|facts| {
+        let Some(facts) = facts.filter(|facts| {
             facts.attachable && facts.usable && account.is_none_or(|account| facts.owner_account_id == account)
-        });
-        if !ok {
+        }) else {
             return Err(PostError::MediaAssetNotUsable { index, asset_id: id.as_str() });
+        };
+        if author_private && !facts.signed && !facts.video {
+            if !facts.ready {
+                return Err(PostError::MediaNotSigned { index, asset_id: id.as_str() });
+            }
+            match catalog.set_delivery(&id, Some(&facts.owner_account_id), true).await? {
+                SetDelivery::Done => {}
+                SetDelivery::NotReady => return Err(PostError::MediaNotSigned { index, asset_id: id.as_str() }),
+                SetDelivery::Gone => return Err(PostError::MediaAssetNotUsable { index, asset_id: id.as_str() }),
+            }
         }
     }
     Ok(())
@@ -65,7 +117,7 @@ mod tests {
     use super::*;
     use crate::domain::value_object::{CdnUrl, MimeType};
 
-    struct FakeCatalog(Result<HashMap<String, MediaAssetFacts>, ()>);
+    struct FakeCatalog(Result<HashMap<String, MediaAssetFacts>, ()>, std::sync::Mutex<Vec<(String, bool)>>);
 
     #[async_trait]
     impl MediaCatalog for FakeCatalog {
@@ -75,17 +127,32 @@ mod tests {
                 Err(()) => Err(PostError::MediaUnavailable { reason: "down".into() }),
             }
         }
+
+        async fn set_delivery(&self, id: &MediaAssetId, _owner: Option<&str>, signed: bool) -> Result<SetDelivery, PostError> {
+            self.1.lock().unwrap().push((id.as_str(), signed));
+            Ok(SetDelivery::Done)
+        }
+    }
+
+    impl FakeCatalog {
+        fn new(assets: Result<HashMap<String, MediaAssetFacts>, ()>) -> Self {
+            Self(assets, Default::default())
+        }
+
+        fn changes(&self) -> Vec<(String, bool)> {
+            self.1.lock().unwrap().clone()
+        }
     }
 
     const MINE: &str = "0199b8c4-0000-7000-8000-000000000001";
     const ACCOUNT: &str = "acct-1";
 
     fn facts(owner: &str, attachable: bool, usable: bool) -> MediaAssetFacts {
-        MediaAssetFacts { owner_account_id: owner.into(), attachable, usable }
+        MediaAssetFacts { owner_account_id: owner.into(), attachable, usable, signed: false, ready: true, video: false }
     }
 
     fn catalog(f: MediaAssetFacts) -> FakeCatalog {
-        FakeCatalog(Ok(HashMap::from([(MINE.to_owned(), f)])))
+        FakeCatalog::new(Ok(HashMap::from([(MINE.to_owned(), f)])))
     }
 
     fn attachments(asset: Option<&str>) -> Vec<MediaAttachment> {
@@ -103,7 +170,7 @@ mod tests {
     #[tokio::test]
     async fn the_callers_own_usable_post_media_is_accepted() {
         let mut a = attachments(Some(MINE));
-        check_media(Some(&catalog(facts(ACCOUNT, true, true))), Some(ACCOUNT), &mut a).await.unwrap();
+        check_media(Some(&catalog(facts(ACCOUNT, true, true))), Some(ACCOUNT), false, &mut a).await.unwrap();
         assert!(a[0].asset_id.is_some());
     }
 
@@ -119,7 +186,7 @@ mod tests {
             (catalog(facts(ACCOUNT, true, true)), other_unknown),
         ];
         for (catalog, asset) in cases {
-            let err = check_media(Some(&catalog), Some(ACCOUNT), &mut attachments(Some(asset))).await.unwrap_err();
+            let err = check_media(Some(&catalog), Some(ACCOUNT), false, &mut attachments(Some(asset))).await.unwrap_err();
             assert!(matches!(err, PostError::MediaAssetNotUsable { index: 0, .. }), "{err:?}");
         }
     }
@@ -127,12 +194,12 @@ mod tests {
     #[tokio::test]
     async fn a_mesh_caller_is_not_bound_to_an_account() {
         let mut a = attachments(Some(MINE));
-        check_media(Some(&catalog(facts("acct-2", true, true))), None, &mut a).await.unwrap();
+        check_media(Some(&catalog(facts("acct-2", true, true))), None, false, &mut a).await.unwrap();
     }
 
     #[tokio::test]
     async fn media_down_fails_the_write_retryably() {
-        let err = check_media(Some(&FakeCatalog(Err(()))), Some(ACCOUNT), &mut attachments(Some(MINE))).await.unwrap_err();
+        let err = check_media(Some(&FakeCatalog::new(Err(()))), Some(ACCOUNT), false, &mut attachments(Some(MINE))).await.unwrap_err();
         assert!(matches!(err, PostError::MediaUnavailable { .. }));
         assert!(error::AppError::is_retryable(&err));
     }
@@ -141,9 +208,34 @@ mod tests {
     #[tokio::test]
     async fn without_media_the_assets_are_dropped() {
         let mut a = attachments(Some(MINE));
-        check_media(None, Some(ACCOUNT), &mut a).await.unwrap();
+        check_media(None, Some(ACCOUNT), false, &mut a).await.unwrap();
         assert!(a[0].asset_id.is_none());
-        check_media(None, Some(ACCOUNT), &mut attachments(None)).await.unwrap();
+        check_media(None, Some(ACCOUNT), false, &mut attachments(None)).await.unwrap();
+    }
+
+    /// #919 step 3: a private author's READY public asset is made SIGNED; one
+    /// still processing must have been uploaded SIGNED; a SIGNED one is fine.
+    #[tokio::test]
+    async fn a_private_authors_media_goes_signed() {
+        let ready = catalog(facts(ACCOUNT, true, true));
+        check_media(Some(&ready), Some(ACCOUNT), true, &mut attachments(Some(MINE))).await.unwrap();
+        assert_eq!(ready.changes(), vec![(MINE.to_owned(), true)]);
+
+        let processing = catalog(MediaAssetFacts { ready: false, ..facts(ACCOUNT, true, true) });
+        let err = check_media(Some(&processing), Some(ACCOUNT), true, &mut attachments(Some(MINE))).await.unwrap_err();
+        assert!(matches!(err, PostError::MediaNotSigned { index: 0, .. }), "{err:?}");
+
+        let signed = catalog(MediaAssetFacts { ready: false, signed: true, ..facts(ACCOUNT, true, true) });
+        check_media(Some(&signed), Some(ACCOUNT), true, &mut attachments(Some(MINE))).await.unwrap();
+        assert!(signed.changes().is_empty());
+
+        let video = catalog(MediaAssetFacts { video: true, ..facts(ACCOUNT, true, true) });
+        check_media(Some(&video), Some(ACCOUNT), true, &mut attachments(Some(MINE))).await.unwrap();
+        assert!(video.changes().is_empty(), "a video stays public until #921");
+
+        let public_author = catalog(facts(ACCOUNT, true, true));
+        check_media(Some(&public_author), Some(ACCOUNT), false, &mut attachments(Some(MINE))).await.unwrap();
+        assert!(public_author.changes().is_empty(), "a public author's media is left as it is");
     }
 
     /// Attachments stored before #907 read back without an asset.

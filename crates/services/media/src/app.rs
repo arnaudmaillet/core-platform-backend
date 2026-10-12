@@ -362,32 +362,31 @@ mod tests {
     }
 
     /// #919: changing a delivery visibility can make private media public, so
-    /// it takes its intended mesh callers only — none yet: enforced, every
-    /// caller is refused; off (the default), the owner check still holds.
+    /// it takes its intended mesh caller only — post (a private profile's
+    /// media); enforced, any other caller is refused.
     #[tokio::test]
-    async fn changing_a_visibility_takes_no_mesh_caller_until_one_is_named() {
+    async fn changing_a_visibility_takes_post_only() {
         use transport::grpc::mesh::{MeshCallerGate, MeshGateMode, MESH_TOKEN_HEADER};
         let fx = Fixture::new();
         let (id, owner) = fx.ready_asset(crate::domain::value_object::MediaKind::PostImage).await;
-        let call = || {
+        let call = |caller: &str| {
             let mut request = Request::new(proto::ChangeDeliveryVisibilityRequest {
                 asset_id: id.to_string(),
                 owner_id: owner.to_string(),
                 delivery_visibility: proto::DeliveryVisibility::MediaDeliveryVisibilitySigned as i32,
             });
-            request.metadata_mut().insert(MESH_TOKEN_HEADER, "core/staging-profile-server".parse().unwrap());
+            request.metadata_mut().insert(MESH_TOKEN_HEADER, caller.parse().unwrap());
             request
         };
-        let gated = |mode| {
-            handler_from_fakes(&fx).with_mesh_gate(MeshCallerGate::new(mode, Some(Arc::new(MeshTokens)), None))
-        };
+        let enforced = handler_from_fakes(&fx)
+            .with_mesh_gate(MeshCallerGate::new(MeshGateMode::Enforce, Some(Arc::new(MeshTokens)), None));
 
-        let status = gated(MeshGateMode::Enforce).change_delivery_visibility(call()).await.unwrap_err();
+        let status = enforced.change_delivery_visibility(call("core/staging-profile-server")).await.unwrap_err();
         assert_eq!(status.code(), Code::PermissionDenied);
         let asset = fx.assets.find_by_id(&id).await.unwrap().unwrap();
         assert_eq!(asset.delivery_visibility(), crate::domain::value_object::DeliveryVisibility::Public);
 
-        let changed = gated(MeshGateMode::Off).change_delivery_visibility(call()).await.unwrap().into_inner();
+        let changed = enforced.change_delivery_visibility(call("core/staging-post-server")).await.unwrap().into_inner();
         assert_eq!(
             changed.asset.unwrap().delivery_visibility,
             proto::DeliveryVisibility::MediaDeliveryVisibilitySigned as i32

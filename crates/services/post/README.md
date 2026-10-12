@@ -208,6 +208,7 @@ caller's field is dropped before the query).
 | PST-2001..2003 | carousel cardinality / video length | 422 |
 | PST-3001..3004 | thumbnail / MIME / CDN URL / dimensions | 422 |
 | PST-3005 | `MediaAssetNotUsable` (an attachment's `asset_id` is not the caller's usable post image or video, #907) | 422 |
+| PST-3006 | `MediaNotSigned` (a private author's attachment is still processing and was not uploaded SIGNED, #919) | 422 |
 | PST-9001/9002 | invalid post/profile ID | 422 |
 | PST-9003 | `AttachmentsCorrupted` (JSON deser) | 500 |
 | PST-9004 | `DomainViolation` | 422 |
@@ -232,6 +233,22 @@ reader (search's hydration) gets `asset_id` without `media`. That read is **fail
 media slow or down, `media` is absent and `cdn_url` / `thumbnail_url` still deliver. Timelines, the
 discovery feed and search return post ids and hydrate through `GetPost`, so they get the same. Without
 `POST_MEDIA_GRPC_ENDPOINT`, asset ids are dropped on write and nothing is resolved.
+
+**A private author's images are SIGNED (#919 step 3).** Post projects which authors are private
+(`post.author_visibility`, migration 0016) from profile's `ProfileVisibilityChanged`, which is also
+emitted when a profile is created private.
+- **On write**, for a private author: a READY public asset is made SIGNED (media
+  `ChangeDeliveryVisibility`, which takes post only). One still processing must have been uploaded SIGNED
+  (`IssueUploadTicketRequest.delivery_visibility`), as media changes only a READY asset's visibility:
+  otherwise `PST-3006`.
+- **When an author switches**, the author-settings consumer records it first, then walks all their posts
+  and delivers every asset SIGNED, or PUBLIC again when the author goes public. The walk is idempotent, so
+  a redelivery walks again; a media outage is retried. An asset still processing at that moment keeps its
+  delivery, which is logged.
+- **Videos are left as they are** until signed HLS delivery exists (#921): a presigned master playlist does
+  not authorize its segments, so a SIGNED video would not play.
+
+The calls carry post's mesh token (`MESH_TOKEN_FILE`).
 
 **Idempotent create (#876).** `CreatePostRequest.idempotency_key` makes a retried CreatePost create
 nothing and answer the first call's `post_id`, for 24 hours, per author. The key lives in
@@ -260,7 +277,7 @@ pending gets `PST-1010` (`ABORTED`): retry it.
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
 | `profile.v1.events` | `post-author-tier` | denormalize `ProfileTierChanged` into the `author_tiers` projection (`profile_id → tier`); read on the publish path to stamp `author_tier` onto published posts. Other event types commit as no-ops | DLQ `profile.v1.events.dlq` |
-| `profile.v1.events` | `post-author-location` | project `ProfileLocationSettingsChanged` into `author_location_settings` (`profile_id → ghost, city`), which `GetPost` applies to the location it shows anyone but the author, and `ProfileTabSettingsChanged` into `author_post_windows` (`profile_id → window_days, show_reposts, show_places`), which both reads apply. Starts from the earliest offset (a teen profile is created ghosted). Other event types commit as no-ops | DLQ `profile.v1.events.dlq` |
+| `profile.v1.events` | `post-author-location` | project `ProfileVisibilityChanged` into `author_visibility` and walk the author's posts so their media follows (SIGNED when private, #919), `ProfileLocationSettingsChanged` into `author_location_settings` (`profile_id → ghost, city`), which `GetPost` applies to the location it shows anyone but the author, and `ProfileTabSettingsChanged` into `author_post_windows` (`profile_id → window_days, show_reposts, show_places`), which both reads apply. Starts from the earliest offset (a teen profile is created ghosted). Other event types commit as no-ops | DLQ `profile.v1.events.dlq` |
 | `moderation.v1.events` | `post-moderation` | record `enforcement_applied` / `enforcement_reversed` on a **post** as its moderation restriction (`remove_content` → Removed, `visibility_limit` → Limited, `age_gate` → AgeGated; reversal → None), version-guarded by moderation's per-subject `EnforcementVersion` so redelivery converges. Other entities, actor-level actions and other event types commit as no-ops | DLQ `moderation.v1.events.dlq` |
 
 > **Runtime contract:** the event is published after the durable dual-write. Downstream consumers own

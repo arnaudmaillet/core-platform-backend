@@ -4,3 +4,4 @@ pub mod delete_post;
 pub mod publish_post;
 pub mod update_post;
 pub mod restore_post;
+pub mod sync_author_media;

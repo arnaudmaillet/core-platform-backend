@@ -6,7 +6,7 @@ use validate_core::{FieldViolation, Validate};
 use crate::{
     application::{
         command::create_post::{AttachmentInput, parse_attachments},
-        port::{check_media, check_mentions, AudienceGate, EventPublisher, MediaCatalog, PostRepository},
+        port::{author_private_for, check_media, check_mentions, AuthorPrivacy, AudienceGate, EventPublisher, MediaCatalog, PostRepository},
     },
     domain::value_object::{Caption, PostId, ProfileId},
     error::PostError,
@@ -43,6 +43,8 @@ pub struct UpdatePostHandler<R, P> {
     pub audience:   Arc<dyn AudienceGate>,
     /// The attachments' media assets (#907); `None` when not configured.
     pub media:      Option<Arc<dyn MediaCatalog>>,
+    /// Which authors are private (#919): their media goes SIGNED.
+    pub privacy:    Arc<dyn AuthorPrivacy>,
 }
 
 impl<R, P> CommandHandler<UpdatePostCommand> for UpdatePostHandler<R, P>
@@ -70,7 +72,9 @@ where
 
         let caption     = Caption::new(&cmd.caption)?;
         let mut attachments = parse_attachments(&cmd.attachments)?;
-        check_media(self.media.as_deref(), cmd.account_id.as_deref(), &mut attachments).await?;
+        let private =
+            author_private_for(self.privacy.as_ref(), self.media.as_deref(), &profile_id, &attachments).await?;
+        check_media(self.media.as_deref(), cmd.account_id.as_deref(), private, &mut attachments).await?;
         // Every mentioned profile must take mentions from the author (#656).
         check_mentions(self.audience.as_ref(), &profile_id, &caption).await?;
 

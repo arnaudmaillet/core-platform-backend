@@ -81,6 +81,9 @@ pub enum PostError {
     #[error("attachment at index {index}: media asset {asset_id} is not a usable post image or video of this account")]
     MediaAssetNotUsable { index: usize, asset_id: String },
 
+    #[error("attachment at index {index}: a private profile's media must be uploaded SIGNED (asset {asset_id} is still processing)")]
+    MediaNotSigned { index: usize, asset_id: String },
+
     #[error("media unavailable: {reason}")]
     MediaUnavailable { reason: String },
 
@@ -125,6 +128,7 @@ impl AppError for PostError {
             Self::InvalidCdnUrl { .. }        => "PST-3003",
             Self::InvalidDimensions { .. }    => "PST-3004",
             Self::MediaAssetNotUsable { .. }  => "PST-3005",
+            Self::MediaNotSigned { .. }       => "PST-3006",
             Self::InvalidPostId(_)            => "PST-9001",
             Self::InvalidProfileId(_)         => "PST-9002",
             Self::AttachmentsCorrupted { .. } => "PST-9003",
@@ -159,6 +163,7 @@ impl AppError for PostError {
             | Self::InvalidCdnUrl { .. }
             | Self::InvalidDimensions { .. }
             | Self::MediaAssetNotUsable { .. }
+            | Self::MediaNotSigned { .. }
             | Self::InvalidMediaAssetId(_)
             | Self::InvalidPostId(_)
             | Self::InvalidProfileId(_)
@@ -212,7 +217,8 @@ impl AppError for PostError {
             | Self::InvalidMimeType { .. }
             | Self::InvalidCdnUrl { .. }
             | Self::InvalidDimensions { .. }
-            | Self::MediaAssetNotUsable { .. }  => "attachment",
+            | Self::MediaAssetNotUsable { .. }
+            | Self::MediaNotSigned { .. }       => "attachment",
             Self::AccessCheckUnavailable { .. }
             | Self::MediaUnavailable { .. }     => "dependency",
             _                                   => "PST",
@@ -246,6 +252,7 @@ impl AppError for PostError {
             Self::InvalidAudioId(_)             => "The provided audio ID is not valid.",
             Self::InvalidMediaAssetId(_)        => "The provided media asset ID is not valid.",
             Self::MediaAssetNotUsable { .. }    => "This media can't be attached to a post.",
+            Self::MediaNotSigned { .. }         => "Media for a private profile must be uploaded as private.",
             Self::MediaUnavailable { .. }       => "Media is temporarily unavailable. Please try again later.",
             Self::InvalidIdempotencyKey         => "This request key is not valid.",
             Self::DomainViolation { .. }        => "A domain constraint was violated.",

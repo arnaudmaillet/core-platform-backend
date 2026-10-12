@@ -3,11 +3,16 @@
 
 use async_trait::async_trait;
 use media_api::media_service_client::MediaServiceClient;
-use media_api::{AssetState, BatchResolveDeliveryRequest, DeliveredMedia, GetAssetRequest, MediaKind};
+use media_api::{
+    AssetState, BatchResolveDeliveryRequest, ChangeDeliveryVisibilityRequest, DeliveredMedia, DeliveryVisibility,
+    GetAssetRequest, MediaKind,
+};
+use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tonic::Code;
+use transport::grpc::mesh::MeshTokenInterceptor;
 
-use crate::application::port::{MediaAssetFacts, MediaCatalog};
+use crate::application::port::{MediaAssetFacts, MediaCatalog, SetDelivery};
 use crate::domain::value_object::MediaAssetId;
 use crate::error::PostError;
 
@@ -24,14 +29,15 @@ pub trait MediaDelivery: Send + Sync + 'static {
 }
 
 /// The media client. The channel is `Arc`-backed, so each call clones the
-/// client. It must carry a request timeout: tonic has none by default.
+/// client. It must carry a request timeout: tonic has none by default. Calls
+/// carry post's mesh token: `ChangeDeliveryVisibility` takes post only (#919).
 pub struct GrpcMedia {
-    media: MediaServiceClient<Channel>,
+    media: MediaServiceClient<InterceptedService<Channel, MeshTokenInterceptor>>,
 }
 
 impl GrpcMedia {
     pub fn new(media: Channel) -> Self {
-        Self { media: MediaServiceClient::new(media) }
+        Self { media: MediaServiceClient::with_interceptor(media, MeshTokenInterceptor::from_env()) }
     }
 }
 
@@ -51,8 +57,34 @@ impl MediaCatalog for GrpcMedia {
                 Ok(AssetState::MediaAssetStateFailed | AssetState::MediaAssetStateQuarantined | AssetState::MediaAssetStateDeleted)
                     | Err(_)
             ),
+            signed: asset.delivery_visibility == DeliveryVisibility::MediaDeliveryVisibilitySigned as i32,
+            ready: asset.state == AssetState::MediaAssetStateReady as i32,
+            video: asset.kind == MediaKind::Video as i32,
             owner_account_id: asset.owner_id,
         }))
+    }
+
+    async fn set_delivery(&self, id: &MediaAssetId, owner: Option<&str>, signed: bool) -> Result<SetDelivery, PostError> {
+        let owner = match owner {
+            Some(owner) => owner.to_owned(),
+            None => match self.asset(id).await? {
+                Some(facts) => facts.owner_account_id,
+                None => return Ok(SetDelivery::Gone),
+            },
+        };
+        let visibility = if signed {
+            DeliveryVisibility::MediaDeliveryVisibilitySigned
+        } else {
+            DeliveryVisibility::MediaDeliveryVisibilityPublic
+        };
+        let request = ChangeDeliveryVisibilityRequest { asset_id: id.as_str(), owner_id: owner, delivery_visibility: visibility as i32 };
+        match self.media.clone().change_delivery_visibility(request).await {
+            Ok(_) => Ok(SetDelivery::Done),
+            Err(status) if status.code() == Code::NotFound => Ok(SetDelivery::Gone),
+            // MED-2002: not READY yet.
+            Err(status) if status.code() == Code::FailedPrecondition => Ok(SetDelivery::NotReady),
+            Err(status) => Err(PostError::MediaUnavailable { reason: status.to_string() }),
+        }
     }
 }
 

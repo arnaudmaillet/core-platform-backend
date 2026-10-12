@@ -1,4 +1,5 @@
 pub mod audience_gate;
+pub mod author_privacy;
 pub mod author_location_store;
 pub mod author_tier_store;
 pub mod author_window_store;
@@ -10,12 +11,13 @@ pub mod recently_deleted;
 pub mod reuse_registry;
 
 pub use audience_gate::{author_visible_to, check_mentions, AudienceGate};
+pub use author_privacy::AuthorPrivacy;
 pub use author_location_store::AuthorLocationStore;
 pub use author_tier_store::AuthorTierStore;
 pub use author_window_store::{window_start, AuthorTabs, AuthorWindowStore};
 pub use create_keys::{CreateClaim, CreateKeys};
 pub use event_publisher::EventPublisher;
-pub use media_catalog::{check_media, MediaAssetFacts, MediaCatalog};
+pub use media_catalog::{author_private_for, check_media, MediaAssetFacts, MediaCatalog, SetDelivery};
 pub use recently_deleted::RecentlyDeleted;
 pub use reuse_registry::{ReuseDefaults, ReuseRegistry};
 pub use post_repository::{PostRepository, PostSummary};
