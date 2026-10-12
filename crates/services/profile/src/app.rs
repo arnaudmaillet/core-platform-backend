@@ -79,12 +79,14 @@ impl App {
     /// hot-reload watcher, so a TTL change reaches the live cache with no rebuild.
     ///
     /// `documents` checks a verification request's private documents with media
-    /// (#777); `None`: requests carry links only.
+    /// (#777); `None`: requests carry links only. `images` checks an avatar's
+    /// or banner's media asset (#907); `None`: they carry URLs only.
     pub async fn build(
         backends: Backends,
         cache_registry: Arc<CacheRegistry>,
         publisher: Arc<dyn EventPublisher>,
         documents: Option<Arc<dyn PrivateDocuments>>,
+        images: Option<Arc<dyn crate::application::port::MediaImages>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let Backends { scylla, redis } = backends;
 
@@ -156,16 +158,14 @@ impl App {
                     Arc::clone(&cache),
                     Arc::clone(&publisher),
                 ))?
-                .register::<UpdateAvatarCommand, _>(UpdateAvatarHandler::new(
-                    Arc::clone(&repository),
-                    Arc::clone(&cache),
-                    Arc::clone(&publisher),
-                ))?
-                .register::<UpdateBannerCommand, _>(UpdateBannerHandler::new(
-                    Arc::clone(&repository),
-                    Arc::clone(&cache),
-                    Arc::clone(&publisher),
-                ))?
+                .register::<UpdateAvatarCommand, _>(
+                    UpdateAvatarHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))
+                        .with_images(images.clone()),
+                )?
+                .register::<UpdateBannerCommand, _>(
+                    UpdateBannerHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))
+                        .with_images(images),
+                )?
                 .register::<SetVisibilityCommand, _>(
                     SetVisibilityHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))
                         .with_floors(Arc::clone(&floors)),

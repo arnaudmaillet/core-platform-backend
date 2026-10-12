@@ -7,6 +7,7 @@ mod event_emission;
 mod handle_availability;
 mod handle_claim_race;
 mod list_by_account;
+mod media_assets;
 mod viewer_and_account_masking;
 mod interaction_settings;
 mod share_tokens;

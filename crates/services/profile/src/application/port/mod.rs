@@ -13,3 +13,5 @@ pub mod share_token_store;
 pub use share_token_store::{is_share_token, new_share_token, ShareTokenStore};
 pub mod supervision_floors;
 pub use supervision_floors::SupervisionFloors;
+pub mod media_images;
+pub use media_images::{checked_image, MediaImages};

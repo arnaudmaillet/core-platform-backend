@@ -4,6 +4,7 @@ package profile.v1;
 
 import "profile/v1/enums.proto";
 import "google/protobuf/timestamp.proto";
+import "media/v1/messages.proto";
 
 option java_package = "com.coreplatform.profile.v1";
 option java_multiple_files = true;
@@ -55,6 +56,16 @@ message ProfileView {
     // Everyone: which of the profile's tabs its owner shows (#829), so a
     // visitor's app leaves a hidden tab out.
     VisibleTabs                     visible_tabs         = 29;
+    // #907: the avatar's / banner's media asset, when set with one — a stable
+    // cache key (unlike a SIGNED URL). Empty for ones set by URL only.
+    string                          avatar_asset_id      = 30;
+    string                          banner_asset_id      = 31;
+    // #907: how to deliver them, resolved per client read: the blurhash, and
+    // for a READY asset every rendition (URL, size, visibility, expiry); one
+    // still processing has its blurhash only. Absent without an asset id, or
+    // when media could not answer in time (fail-open: the URLs still deliver).
+    media.v1.DeliveredMedia         avatar               = 32;
+    media.v1.DeliveredMedia         banner               = 33;
 }
 
 // Which of a profile's tabs others see (#829). post serves the Reposts and
@@ -75,6 +86,9 @@ message ProfileSummaryView {
     ProfileKind       profile_kind = 5;
     ProfileVisibility visibility   = 6;
     ProfileStatus     status       = 7;
+    // #907: as on ProfileView.
+    string                  avatar_asset_id = 8;
+    media.v1.DeliveredMedia avatar          = 9;
 }
 
 message CommandResponse {
@@ -112,11 +126,19 @@ message ChangeHandleRequest {
 message UpdateAvatarRequest {
     string profile_id = 1;
     string avatar_url = 2;
+    // #907: the media asset avatar_url shows (media IssueUploadTicket's
+    // asset_id). Optional; it follows each update (an avatar set without one,
+    // or cleared, has none). It must be an image (AVATAR or POST_IMAGE) of the
+    // profile's account, not failed, quarantined or deleted: otherwise
+    // FAILED_PRECONDITION (PRF-5007). Media unreachable ⇒ UNAVAILABLE (PRF-5005).
+    string avatar_asset_id = 3;
 }
 
 message UpdateBannerRequest {
     string profile_id = 1;
     string banner_url = 2;
+    // #907: as UpdateAvatarRequest.avatar_asset_id.
+    string banner_asset_id = 3;
 }
 
 message SetVisibilityRequest {

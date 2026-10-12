@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::port::{EventPublisher, ProfileCache, ProfileRepository};
+use crate::application::port::{checked_image, EventPublisher, MediaImages, ProfileCache, ProfileRepository};
 use crate::domain::value_object::{AvatarUrl, ProfileId};
 use crate::error::ProfileError;
 
@@ -12,6 +12,8 @@ pub struct UpdateAvatarCommand {
     pub profile_id: String,
     /// Empty string or None clears the avatar.
     pub avatar_url: Option<String>,
+    /// The media asset it shows (#907); checked against media.
+    pub avatar_asset_id: Option<String>,
 }
 
 impl Command for UpdateAvatarCommand {}
@@ -30,11 +32,19 @@ pub struct UpdateAvatarHandler {
     repo: Arc<dyn ProfileRepository>,
     cache: Arc<dyn ProfileCache>,
     publisher: Arc<dyn EventPublisher>,
+    /// media's images (#907); `None` when not configured.
+    images: Option<Arc<dyn MediaImages>>,
 }
 
 impl UpdateAvatarHandler {
     pub fn new(repo: Arc<dyn ProfileRepository>, cache: Arc<dyn ProfileCache>, publisher: Arc<dyn EventPublisher>) -> Self {
-        Self { repo, cache, publisher }
+        Self { repo, cache, publisher, images: None }
+    }
+
+    /// Checks the avatar's media asset (#907).
+    pub fn with_images(mut self, images: Option<Arc<dyn MediaImages>>) -> Self {
+        self.images = images;
+        self
     }
 }
 
@@ -56,8 +66,14 @@ impl CommandHandler<UpdateAvatarCommand> for UpdateAvatarHandler {
             _ => None,
         };
 
-        profile.update_avatar(url, envelope.correlation_id)?;
+        let asset = match &url {
+            Some(_) => checked_image(self.images.as_deref(), cmd.avatar_asset_id.as_deref(), &profile.account_id()).await?,
+            None => None,
+        };
+        profile.update_avatar(url, asset, envelope.correlation_id)?;
         self.repo.save(&profile).await?;
+        // The account's profile list shows the avatar from its own index.
+        self.repo.save_account_index(&profile).await?;
 
         for event in profile.drain_events() {
             self.publisher.publish(&event).await?;

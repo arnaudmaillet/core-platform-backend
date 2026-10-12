@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Generated gRPC contract for profile.v1 — server + client stubs and reflection descriptor."
 
 [dependencies]
+media-api   = { workspace = true }   # media.v1.DeliveredMedia on avatar/banner (#907)
 tonic       = { workspace = true }
 tonic-prost = { workspace = true }
 prost       = { workspace = true }

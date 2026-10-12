@@ -79,6 +79,11 @@ pub struct ProfileView {
     /// `tab_settings` for each reader, never cached on its own.
     #[serde(skip)]
     pub visible_tabs: Option<VisibleTabs>,
+    /// The avatar's / banner's media assets (#907), shown to everyone.
+    #[serde(default)]
+    pub avatar_asset_id: Option<String>,
+    #[serde(default)]
+    pub banner_asset_id: Option<String>,
 }
 
 impl From<&Profile> for ProfileView {
@@ -91,6 +96,8 @@ impl From<&Profile> for ProfileView {
             bio: p.bio().map(|b| b.as_str().to_owned()),
             avatar_url: p.avatar_url().map(|u| u.as_str().to_owned()),
             banner_url: p.banner_url().map(|u| u.as_str().to_owned()),
+            avatar_asset_id: p.avatar_asset_id().map(|a| a.as_str()),
+            banner_asset_id: p.banner_asset_id().map(|a| a.as_str()),
             website_url: p.website_url().map(|u| u.as_str().to_owned()),
             custom_links: p.custom_links().iter().map(ProfileLinkView::from).collect(),
             profile_kind: p.profile_kind().as_str().to_owned(),
@@ -192,6 +199,8 @@ mod viewer_tests {
             display_name: "Alice".into(),
             bio: Some("hi".into()),
             avatar_url: None,
+            avatar_asset_id: None,
+            banner_asset_id: None,
             banner_url: None,
             website_url: Some("https://alice.example".into()),
             custom_links: Vec::new(),

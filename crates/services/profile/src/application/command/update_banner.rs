@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::port::{EventPublisher, ProfileCache, ProfileRepository};
+use crate::application::port::{checked_image, EventPublisher, MediaImages, ProfileCache, ProfileRepository};
 use crate::domain::value_object::{BannerUrl, ProfileId};
 use crate::error::ProfileError;
 
@@ -12,6 +12,8 @@ pub struct UpdateBannerCommand {
     pub profile_id: String,
     /// Empty string or None clears the banner.
     pub banner_url: Option<String>,
+    /// The media asset it shows (#907); checked against media.
+    pub banner_asset_id: Option<String>,
 }
 
 impl Command for UpdateBannerCommand {}
@@ -30,11 +32,19 @@ pub struct UpdateBannerHandler {
     repo: Arc<dyn ProfileRepository>,
     cache: Arc<dyn ProfileCache>,
     publisher: Arc<dyn EventPublisher>,
+    /// media's images (#907); `None` when not configured.
+    images: Option<Arc<dyn MediaImages>>,
 }
 
 impl UpdateBannerHandler {
     pub fn new(repo: Arc<dyn ProfileRepository>, cache: Arc<dyn ProfileCache>, publisher: Arc<dyn EventPublisher>) -> Self {
-        Self { repo, cache, publisher }
+        Self { repo, cache, publisher, images: None }
+    }
+
+    /// Checks the banner's media asset (#907).
+    pub fn with_images(mut self, images: Option<Arc<dyn MediaImages>>) -> Self {
+        self.images = images;
+        self
     }
 }
 
@@ -56,7 +66,11 @@ impl CommandHandler<UpdateBannerCommand> for UpdateBannerHandler {
             _ => None,
         };
 
-        profile.update_banner(url, envelope.correlation_id)?;
+        let asset = match &url {
+            Some(_) => checked_image(self.images.as_deref(), cmd.banner_asset_id.as_deref(), &profile.account_id()).await?,
+            None => None,
+        };
+        profile.update_banner(url, asset, envelope.correlation_id)?;
         self.repo.save(&profile).await?;
 
         for event in profile.drain_events() {

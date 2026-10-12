@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 6eadf11db36fb5af5a7605d0de1b538215eb29fb62393439c45ca6c77a684e36
-  translated_at: 2026-10-10
+  source_sha256: fd879147eb8c6c49a7183265836d349077cac1353d31c8b280086bc74401c73d
+  translated_at: 2026-10-12
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -184,6 +184,24 @@ ou supprimé → `NOT_FOUND`), sans les champs réservés au propriétaire : `ac
 entre eux les profils d'un compte), `locale`, `timezone`, `masked_at`, `masking_reason`. Un profil
 privé renvoie toujours son en-tête ; ce sont ses posts et ses listes que la confidentialité retient.
 
+**Assets média de l'avatar et de la bannière (#907).** `UpdateAvatar` / `UpdateBanner` peuvent nommer
+l'asset média que montre l'image (`avatar_asset_id` / `banner_asset_id`, l'id renvoyé par
+`media.IssueUploadTicket`). Profile interroge media (`GetAsset`) et le refuse avec `PRF-5007`, sauf
+s'il s'agit d'une image (`AVATAR` ou `POST_IMAGE`) du **compte du profil** qui n'est ni en échec, ni en
+quarantaine, ni supprimée. Sinon n'importe qui pourrait montrer le média SIGNED de quelqu'un. Le refus
+est identique dans tous les cas. Si media ne répond pas, la mise à jour échoue avec `PRF-5005`
+(rejouable). L'asset suit chaque mise à jour : une image définie par URL seule, ou effacée, n'en a pas.
+
+Il est stocké à côté de l'URL (`profiles.avatar_asset_id` / `banner_asset_id` et
+`profiles_by_account.avatar_asset_id`, migration 0017) ; `UpdateAvatar` rafraîchit désormais aussi la
+liste des profils du compte. Les lectures (`GetProfileById/ByHandle`, `ResolveShareToken`,
+`ListProfilesByAccount`) renvoient les ids d'assets et, pour les clients seulement, `avatar` / `banner` :
+le `DeliveredMedia` de media, avec le blurhash et, une fois READY, chaque rendition avec son URL, sa
+taille, sa visibilité et son expiration. Ils sont résolus en un seul `BatchResolveDelivery` par réponse,
+en **fail-open** : si media est lent ou indisponible, ils sont absents et les URLs livrent toujours.
+Sans `PROFILE_MEDIA_GRPC_ENDPOINT`, les ids d'assets sont ignorés à l'écriture. `CreateProfile` ne prend
+toujours que des URLs.
+
 ### Ports Rust (contrat hexagonal)
 
 ```rust
@@ -208,8 +226,9 @@ réactivement).
 | PRF-5002 | `VerificationPending` (une demande est déjà en cours d'examen) | 409 | No |
 | PRF-5003 | `NoPendingVerification` (rien à décider) | 409 | No |
 | PRF-5004 | `VerificationDocumentInvalid` (un document privé n'est pas un document prêt du demandeur) | 422 | No |
-| PRF-5005 | `MediaUnavailable` (media n'a pas pu vérifier un document privé) | 503 | **Yes** |
+| PRF-5005 | `MediaUnavailable` (media n'a pas pu vérifier un document privé, ni l'asset d'un avatar / d'une bannière) | 503 | **Yes** |
 | PRF-5006 | `SupervisionLocked` (un plancher posé par un superviseur tient ce réglage : seul plus strict est permis, #670) | 422 | No |
+| PRF-5007 | `MediaAssetNotUsable` (l'asset d'un avatar / d'une bannière n'est pas une image utilisable du compte du profil, #907) | 422 | No |
 | PRF-9001–9010 | domain / parse / validation | 422 | No |
 | SDB-* / RDB-* | storage (delegated) | varies | varies |
 
@@ -300,8 +319,8 @@ async fn main() -> anyhow::Result<()> {
 | `KAFKA_BROKERS` | **Yes** | `127.0.0.1:9092` | Kafka brokers. |
 | `KAFKA_CONSUMER_GROUP` | No | `profile-service` | account-event consumer group. |
 | `PROFILE_GRPC_ADDR` | No | `0.0.0.0:50052` | gRPC bind address. |
-| `PROFILE_MEDIA_GRPC_ENDPOINT` | No | — | endpoint mesh de media : vérifie les documents privés d'une demande de vérification (#777). Non définie : les demandes ne prennent que des liens. |
-| `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS` | No | `500` / `1000` | délais de cet appel. |
+| `PROFILE_MEDIA_GRPC_ENDPOINT` | No | — | endpoint mesh de media : vérifie les documents privés d'une demande de vérification (#777) et les assets des avatars / bannières à l'écriture ; les livre à la lecture (#907, fail-open). Non définie : les demandes ne prennent que des liens, les images que leurs URLs. |
+| `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS` | No | `500` / `1000` | délais de ces appels. |
 | `PROFILE_BACKFILL_TAB_SETTINGS` | No | non défini | `1`/`true`/`yes` : au démarrage, ré-annonce une fois les réglages d'onglets non par défaut de chaque profil (`ProfileTabSettingsChanged`, #873), pour les consommateurs démarrés après que ces événements ont quitté la rétention de `profile.v1.events` (engagement, post). Chaque réplica le lance, à chaque démarrage (les répétitions sont sans effet, le dernier écrit l'emporte) : à définir le temps d'un déploiement, au premier déploiement, puis à retirer ; lancé pendant que des propriétaires modifient leurs réglages, une ancienne valeur ré-annoncée peut arriver après une plus récente. |
 
 > Le réglage complet `SCYLLA_*` / `REDIS_*` / `KAFKA_*` est documenté dans les crates partagés
@@ -314,7 +333,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Déploiement, migrations & rollback
 
-- **Migrations :** `crates/services/profile/migrations/000{1..4}_*.cql` sur le keyspace `profile`,
+- **Migrations :** `crates/services/profile/migrations/00{01..17}_*.cql` sur le keyspace `profile`,
   appliquées **avant** le premier démarrage.
 - **Bump de version de cache :** pour invalider le cache à l'échelle de la flotte lors d'un changement de
   schéma, incrémenter le préfixe de clé `v1:` — sans flush, sans interruption.
