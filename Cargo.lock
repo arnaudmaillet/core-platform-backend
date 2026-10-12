@@ -4210,6 +4210,7 @@ dependencies = [
  "futures",
  "h3o",
  "http",
+ "media-api",
  "moderation",
  "post-api",
  "profile",
@@ -4235,6 +4236,7 @@ dependencies = [
 name = "post-api"
 version = "0.1.0"
 dependencies = [
+ "media-api",
  "prost 0.14.4",
  "prost-types",
  "tonic 0.14.6",

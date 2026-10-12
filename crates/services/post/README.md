@@ -82,6 +82,7 @@ Every write **dual-writes both tables sequentially**. Attachments are stored as 
 |---|---|---|---|
 | ScyllaDB (`post`) | durable store | reads + writes fail | **Hard** — `UNAVAILABLE` |
 | Kafka | event emission | downstream projections stall | **Soft** — writes commit; see note |
+| media (`GetAsset`, `BatchResolveDelivery`, #907) | attachments' media assets | writes naming an asset fail; reads lose renditions | **Write:** `UNAVAILABLE` (`PST-5002`, retryable). **Read:** fail-open — attachments keep their URLs |
 
 **Upstream (blast radius — `post.*` events feed most of the read fleet):**
 
@@ -206,11 +207,31 @@ caller's field is dropped before the query).
 | PST-1010 | `CreateInFlight` (a CreatePost with this idempotency key is still being written, #876; retryable) | 409 → `ABORTED` |
 | PST-2001..2003 | carousel cardinality / video length | 422 |
 | PST-3001..3004 | thumbnail / MIME / CDN URL / dimensions | 422 |
+| PST-3005 | `MediaAssetNotUsable` (an attachment's `asset_id` is not the caller's usable post image or video, #907) | 422 |
 | PST-9001/9002 | invalid post/profile ID | 422 |
 | PST-9003 | `AttachmentsCorrupted` (JSON deser) | 500 |
 | PST-9004 | `DomainViolation` | 422 |
 | PST-9006 | `InvalidIdempotencyKey` (not 8–64 letters, digits, `-`, `_`) | 422 |
+| PST-9007 | `InvalidMediaAssetId` (not a UUID) | 422 |
 | PST-5001 | `AccessCheckUnavailable` (social-graph `CheckAccess` did not answer; retryable) | 503 → `UNAVAILABLE` |
+| PST-5002 | `MediaUnavailable` (media `GetAsset` did not answer a write naming an asset; retryable) | 503 → `UNAVAILABLE` |
+
+**Media assets (#907).** An attachment may name its media asset (`MediaAttachmentInput.asset_id`, the
+id `media.IssueUploadTicket` returned). On write, post asks media (`GetAsset`) and refuses it with
+`PST-3005` unless it is a post image or video that is not failed, quarantined or deleted, and, from the
+edge, the caller's account's own. Otherwise anyone could show someone's SIGNED media through a post. The
+refusal is the same in every case, so a probe learns nothing of others' assets. On read (`GetPost`,
+`ListRecentlyDeleted`), each such attachment carries `asset_id` (a stable cache key, unlike a SIGNED URL)
+and `media`, media's `DeliveredMedia`:
+- the blurhash;
+- for a READY asset, every rendition with its URL, size, visibility and expiry;
+- for one still processing, the blurhash only.
+
+All attachments of a response are resolved in one `BatchResolveDelivery`, for clients only: a mesh
+reader (search's hydration) gets `asset_id` without `media`. That read is **fail-open**:
+media slow or down, `media` is absent and `cdn_url` / `thumbnail_url` still deliver. Timelines, the
+discovery feed and search return post ids and hydrate through `GetPost`, so they get the same. Without
+`POST_MEDIA_GRPC_ENDPOINT`, asset ids are dropped on write and nothing is resolved.
 
 **Idempotent create (#876).** `CreatePostRequest.idempotency_key` makes a retried CreatePost create
 nothing and answer the first call's `post_id`, for 24 hours, per author. The key lives in
@@ -301,6 +322,8 @@ async fn main() -> anyhow::Result<()> {
 | `POST_GRPC_ADDR` | No | `0.0.0.0:50056` | gRPC bind address. |
 | `POST_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Yes** (prod) | `http://localhost:50053` | social-graph mesh endpoint for the audience check (`CheckAccess`). Reads by anyone but the author fail closed (`PST-5001`, `UNAVAILABLE`) when it does not answer. |
 | `POST_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Deadlines for that call. |
+| `POST_MEDIA_GRPC_ENDPOINT` | No | unset | media mesh endpoint (#907): checks attachments' assets on write, delivers them on read. Unset: asset ids are dropped, attachments keep their URLs. |
+| `POST_MEDIA_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | No | `300` / `1000` | Deadlines for those calls (short: reads fail open). |
 
 > Full `SCYLLA_*` / `KAFKA_*` tuning lives in the shared storage/transport crates.
 

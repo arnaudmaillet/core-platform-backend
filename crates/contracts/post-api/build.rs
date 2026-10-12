@@ -5,6 +5,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::path::PathBuf::from(std::env::var("OUT_DIR")?).join("post_descriptor.bin");
 
     tonic_prost_build::configure()
+        // #907: attachments carry media.v1's DeliveredMedia — the media-api
+        // crate's type, not a copy.
+        .extern_path(".media.v1", "::media_api")
         .build_server(true)
         .build_client(true)
         .file_descriptor_set_path(&descriptor_path)

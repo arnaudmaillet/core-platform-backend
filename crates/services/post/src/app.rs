@@ -24,7 +24,7 @@ use crate::application::command::restore_post::{RestorePostCommand, RestorePostH
 use crate::application::query::list_recently_deleted::{ListRecentlyDeletedHandler, ListRecentlyDeletedQuery};
 use crate::application::command::update_post::{UpdatePostCommand, UpdatePostHandler};
 use crate::application::port::{
-    AudienceGate, AuthorLocationStore, AuthorTierStore, AuthorWindowStore, CreateKeys, EventPublisher,
+    AudienceGate, AuthorLocationStore, AuthorTierStore, AuthorWindowStore, CreateKeys, EventPublisher, MediaCatalog,
     RecentlyDeleted, ReuseRegistry,
 };
 use crate::application::query::get_post::{GetPostHandler, GetPostQuery};
@@ -77,6 +77,7 @@ impl App {
         backends:  Backends,
         publisher: Arc<P>,
         audience:  Arc<dyn AudienceGate>,
+        media:     Option<Arc<dyn MediaCatalog>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let scylla_client = Arc::new(ScyllaSessionBuilder::new(backends.scylla).build().await?);
         let repository = Arc::new(ScyllaPostRepository::new(Arc::clone(&scylla_client)));
@@ -97,6 +98,7 @@ impl App {
             reuse:      Arc::clone(&reuse_registry),
             audience:   Arc::clone(&audience),
             keys:       Arc::clone(&create_keys),
+            media:      media.clone(),
         };
         let creator: Arc<dyn CreatePosts> = Arc::new(create_handler());
 
@@ -112,6 +114,7 @@ impl App {
                     repository: Arc::clone(&repository),
                     publisher:  Arc::clone(&publisher),
                     audience:   Arc::clone(&audience),
+                    media:      media.clone(),
                 })?
                 .register::<DeletePostCommand, _>(DeletePostHandler {
                     repository:       Arc::clone(&repository),

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::domain::value_object::{CdnUrl, MimeType};
+use crate::domain::value_object::{CdnUrl, MediaAssetId, MimeType};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaAttachment {
@@ -9,6 +9,10 @@ pub struct MediaAttachment {
     pub height:           u32,
     pub thumbnail_url:    Option<CdnUrl>,
     pub duration_seconds: Option<f32>,
+    /// The media asset it shows (#907), checked against media when written.
+    /// Absent on attachments stored before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_id:         Option<MediaAssetId>,
 }
 
 impl MediaAttachment {

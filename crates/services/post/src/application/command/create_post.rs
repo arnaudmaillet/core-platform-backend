@@ -5,13 +5,16 @@ use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
 use crate::{
-    application::port::{check_mentions, AudienceGate, CreateClaim, CreateKeys, EventPublisher, PostRepository, ReuseRegistry},
+    application::port::{
+        check_media, check_mentions, AudienceGate, CreateClaim, CreateKeys, EventPublisher, MediaCatalog, PostRepository,
+        ReuseRegistry,
+    },
     domain::{
         aggregate::{Post, ReuseOverrides},
         entity::MediaAttachment,
         value_object::{
-            AudioId, AudioKind, AudioReference, Caption, CdnUrl, GeoPoint, IdempotencyKey, MimeType, PostId, PostKind,
-            ProfileId,
+            AudioId, AudioKind, AudioReference, Caption, CdnUrl, GeoPoint, IdempotencyKey, MediaAssetId, MimeType, PostId,
+            PostKind, ProfileId,
         },
     },
     error::PostError,
@@ -24,6 +27,8 @@ pub struct AttachmentInput {
     pub height:           u32,
     pub thumbnail_url:    Option<String>,
     pub duration_seconds: Option<f32>,
+    /// The media asset it shows (#907).
+    pub asset_id:         Option<String>,
 }
 
 pub struct CreatePostCommand {
@@ -44,6 +49,9 @@ pub struct CreatePostCommand {
     pub reuse:       ReuseOverrides,
     /// The client's key for this post, reused on its retries (#876).
     pub idempotency_key: Option<String>,
+    /// The edge caller's account (#907): attachments' media assets must be
+    /// its own. `None` on the mesh.
+    pub account_id:  Option<String>,
 }
 
 impl Command for CreatePostCommand {}
@@ -75,6 +83,10 @@ pub(crate) fn parse_attachments(inputs: &[AttachmentInput]) -> Result<Vec<MediaA
                 .filter(|s| !s.is_empty())
                 .map(CdnUrl::new)
                 .transpose()?;
+            let asset_id = a.asset_id.as_deref()
+                .filter(|s| !s.is_empty())
+                .map(MediaAssetId::try_from)
+                .transpose()?;
             Ok(MediaAttachment {
                 cdn_url,
                 mime_type,
@@ -82,6 +94,7 @@ pub(crate) fn parse_attachments(inputs: &[AttachmentInput]) -> Result<Vec<MediaA
                 height:           a.height,
                 thumbnail_url,
                 duration_seconds: a.duration_seconds,
+                asset_id,
             })
         })
         .collect()
@@ -111,6 +124,9 @@ pub struct CreatePostHandler<R, P> {
     pub audience:   Arc<dyn AudienceGate>,
     /// CreatePost's idempotency keys (#876).
     pub keys:       Arc<dyn CreateKeys>,
+    /// The attachments' media assets (#907); `None` when media is not
+    /// configured.
+    pub media:      Option<Arc<dyn MediaCatalog>>,
 }
 
 /// May `author` reuse `audio`? Allowed unless the sound's original post (by
@@ -209,7 +225,8 @@ where
         };
 
         let caption     = Caption::new(&cmd.caption)?;
-        let attachments = parse_attachments(&cmd.attachments)?;
+        let mut attachments = parse_attachments(&cmd.attachments)?;
+        check_media(self.media.as_deref(), cmd.account_id.as_deref(), &mut attachments).await?;
         // Every mentioned profile must take mentions from the author (#656).
         check_mentions(self.audience.as_ref(), &profile_id, &caption).await?;
 

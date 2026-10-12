@@ -75,6 +75,15 @@ pub enum PostError {
     #[error("invalid profile ID: {0}")]
     InvalidProfileId(String),
 
+    #[error("invalid media asset ID: {0}")]
+    InvalidMediaAssetId(String),
+
+    #[error("attachment at index {index}: media asset {asset_id} is not a usable post image or video of this account")]
+    MediaAssetNotUsable { index: usize, asset_id: String },
+
+    #[error("media unavailable: {reason}")]
+    MediaUnavailable { reason: String },
+
     #[error("invalid audio ID: {0}")]
     InvalidAudioId(String),
 
@@ -115,13 +124,16 @@ impl AppError for PostError {
             Self::InvalidMimeType { .. }      => "PST-3002",
             Self::InvalidCdnUrl { .. }        => "PST-3003",
             Self::InvalidDimensions { .. }    => "PST-3004",
+            Self::MediaAssetNotUsable { .. }  => "PST-3005",
             Self::InvalidPostId(_)            => "PST-9001",
             Self::InvalidProfileId(_)         => "PST-9002",
             Self::AttachmentsCorrupted { .. } => "PST-9003",
             Self::DomainViolation { .. }      => "PST-9004",
             Self::InvalidAudioId(_)           => "PST-9005",
             Self::InvalidIdempotencyKey       => "PST-9006",
+            Self::InvalidMediaAssetId(_)      => "PST-9007",
             Self::AccessCheckUnavailable { .. } => "PST-5001",
+            Self::MediaUnavailable { .. }       => "PST-5002",
         }
     }
 
@@ -146,13 +158,16 @@ impl AppError for PostError {
             | Self::InvalidMimeType { .. }
             | Self::InvalidCdnUrl { .. }
             | Self::InvalidDimensions { .. }
+            | Self::MediaAssetNotUsable { .. }
+            | Self::InvalidMediaAssetId(_)
             | Self::InvalidPostId(_)
             | Self::InvalidProfileId(_)
             | Self::InvalidAudioId(_)
             | Self::InvalidIdempotencyKey
             | Self::DomainViolation { .. }    => StatusCode::UNPROCESSABLE_ENTITY,
             Self::AttachmentsCorrupted { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-            Self::AccessCheckUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            Self::AccessCheckUnavailable { .. }
+            | Self::MediaUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -163,7 +178,8 @@ impl AppError for PostError {
             Self::AttachmentsCorrupted { .. } => Severity::High,
             Self::AuthorMismatch { .. }
             | Self::DomainViolation { .. }
-            | Self::AccessCheckUnavailable { .. } => Severity::Medium,
+            | Self::AccessCheckUnavailable { .. }
+            | Self::MediaUnavailable { .. } => Severity::Medium,
             _                                 => Severity::Low,
         }
     }
@@ -172,6 +188,7 @@ impl AppError for PostError {
         match self {
             Self::Storage(e) => e.is_retryable(),
             Self::AccessCheckUnavailable { .. }
+            | Self::MediaUnavailable { .. }
             | Self::CreateInFlight => true,
             _                => false,
         }
@@ -194,8 +211,10 @@ impl AppError for PostError {
             Self::MissingVideoThumbnail { .. }
             | Self::InvalidMimeType { .. }
             | Self::InvalidCdnUrl { .. }
-            | Self::InvalidDimensions { .. }    => "attachment",
-            Self::AccessCheckUnavailable { .. } => "dependency",
+            | Self::InvalidDimensions { .. }
+            | Self::MediaAssetNotUsable { .. }  => "attachment",
+            Self::AccessCheckUnavailable { .. }
+            | Self::MediaUnavailable { .. }     => "dependency",
             _                                   => "PST",
         }
     }
@@ -225,6 +244,9 @@ impl AppError for PostError {
             Self::InvalidPostId(_)              => "The provided post ID is not valid.",
             Self::InvalidProfileId(_)           => "The provided profile ID is not valid.",
             Self::InvalidAudioId(_)             => "The provided audio ID is not valid.",
+            Self::InvalidMediaAssetId(_)        => "The provided media asset ID is not valid.",
+            Self::MediaAssetNotUsable { .. }    => "This media can't be attached to a post.",
+            Self::MediaUnavailable { .. }       => "Media is temporarily unavailable. Please try again later.",
             Self::InvalidIdempotencyKey         => "This request key is not valid.",
             Self::DomainViolation { .. }        => "A domain constraint was violated.",
             Self::Validation(e)                 => e.user_facing_message(),

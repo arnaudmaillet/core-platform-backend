@@ -21,7 +21,7 @@ use transport::kafka::producer::{KafkaProducerBuilder, KafkaProducerHandle};
 
 use crate::app::{App, Backends};
 use crate::application::port::{AudienceGate, AuthorLocationStore, AuthorTierStore, AuthorWindowStore, ReuseRegistry};
-use crate::infrastructure::client::GrpcAudienceGate;
+use crate::infrastructure::client::{GrpcAudienceGate, GrpcMedia};
 use tonic::transport::Channel;
 use crate::infrastructure::consumer::{
     run_author_location_consumer, run_author_tier_consumer, run_moderation_consumer,
@@ -50,6 +50,8 @@ type PostServer =
 /// The post service as hosted by [`service_runtime`].
 pub struct PostService {
     app: App,
+    /// media (#907), when configured.
+    media: Option<Arc<GrpcMedia>>,
 }
 
 #[async_trait]
@@ -94,7 +96,26 @@ impl Service for PostService {
             .connect_lazy();
         let audience: Arc<dyn AudienceGate> = Arc::new(GrpcAudienceGate::new(social_graph));
 
-        let app = App::build(backends, publisher, audience)
+        // media (#907): checks attachments' assets on write, delivers them on
+        // read. Optional: unset, attachments keep only their URLs. Writes naming
+        // an asset fail closed when it does not answer; reads fail open, so its
+        // deadline is short.
+        let media = match std::env::var("POST_MEDIA_GRPC_ENDPOINT").ok().filter(|e| !e.is_empty()) {
+            Some(endpoint) => {
+                let channel = Channel::from_shared(endpoint)
+                    .map_err(|e| anyhow::anyhow!("invalid POST_MEDIA_GRPC_ENDPOINT: {e}"))?
+                    .timeout(env_ms("POST_MEDIA_RPC_TIMEOUT_MS", 300))
+                    .connect_timeout(env_ms("POST_MEDIA_CONNECT_TIMEOUT_MS", 1_000))
+                    .connect_lazy();
+                Some(Arc::new(GrpcMedia::new(channel)))
+            }
+            None => {
+                tracing::warn!("POST_MEDIA_GRPC_ENDPOINT unset: attachments carry no media asset (#907)");
+                None
+            }
+        };
+
+        let app = App::build(backends, publisher, audience, media.clone().map(|m| m as _))
             .await
             .map_err(|e| anyhow::anyhow!("post app build: {e}"))?;
 
@@ -112,7 +133,7 @@ impl Service for PostService {
         // restriction post's reads apply.
         spawn_moderation_consumer(Arc::clone(&app.command_bus));
 
-        Ok(Self { app })
+        Ok(Self { app, media })
     }
 
     fn health_probes(&self) -> Vec<Arc<dyn HealthProbe>> {
@@ -120,11 +141,14 @@ impl Service for PostService {
     }
 
     fn register(self, routes: &mut RoutesBuilder) -> anyhow::Result<()> {
-        let handler = PostServiceHandler::new(
+        let mut handler = PostServiceHandler::new(
             Arc::clone(&self.app.command_bus),
             Arc::clone(&self.app.query_bus),
             Arc::clone(&self.app.creator),
         );
+        if let Some(media) = self.media {
+            handler = handler.with_media(media);
+        }
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
             .build_v1()?;
