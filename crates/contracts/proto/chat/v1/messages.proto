@@ -3,6 +3,7 @@ syntax = "proto3";
 package chat.v1;
 
 import "chat/v1/enums.proto";
+import "media/v1/messages.proto";
 
 // ── Shared view types ───────────────────────────────────────────────────────
 
@@ -16,6 +17,15 @@ message MessageView {
     string      media_ref     = 5; // empty unless content_type == MEDIA
     string      reply_to      = 6; // empty unless this is a threaded reply
     int64       created_at_ms = 7;
+    // #919: the media asset a MEDIA message shows, when sent with one — a
+    // stable cache key. Its delivery is SIGNED: GetHistory carries it in
+    // `media`; on the live streams resolve it (GetHistory, or media's
+    // ResolveDelivery) as the signed URLs expire.
+    string      media_asset_id = 8;
+    // #919: GetHistory only — the blurhash and, once READY, every rendition
+    // (signed URL, size, expiry). Absent when media could not answer in time
+    // (fail-open).
+    media.v1.DeliveredMedia media = 9;
 }
 
 // Projection of a member-roster entry.
@@ -106,6 +116,13 @@ message SendMessageRequest {
     // While that first send is still in flight a repeat fails ABORTED
     // (CHT-1013): retry it. Empty: no deduplication.
     string      idempotency_key = 7;
+    // #919: the media asset a MEDIA message shows (media IssueUploadTicket's
+    // asset_id). Optional; media_ref may then stay empty. It must be an image
+    // or video of the sender's account, not failed, quarantined or deleted
+    // (FAILED_PRECONDITION, CHT-2011). Chat media is SIGNED: a READY image is
+    // made SIGNED, one still processing must have been uploaded SIGNED
+    // (CHT-2012). Media unreachable ⇒ UNAVAILABLE (CHT-5002).
+    string      media_asset_id  = 8;
 }
 message SendMessageResponse {
     // The stored message; on a repeated idempotency key, the first send's.

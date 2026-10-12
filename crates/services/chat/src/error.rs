@@ -81,6 +81,10 @@ pub enum ChatError {
     #[error("interaction check unavailable: {reason}")]
     InteractionCheckUnavailable { reason: String },
 
+    /// media did not answer a send naming an asset (#919 step 3).
+    #[error("media unavailable: {reason}")]
+    MediaUnavailable { reason: String },
+
     // ── CHT-2xxx: Domain validation ───────────────────────────────────────────
     #[error("unknown conversation kind: '{kind}'")]
     UnknownConversationKind { kind: String },
@@ -102,6 +106,16 @@ pub enum ChatError {
 
     #[error("a media message requires a media reference")]
     MediaReferenceMissing,
+
+    /// The asset a message names is not a usable image or video of the
+    /// sender's account (#919 step 3). One answer for every case.
+    #[error("media asset {asset_id} is not a usable image or video of this account")]
+    MediaAssetNotUsable { asset_id: String },
+
+    /// A message's image is still processing and was uploaded public: chat
+    /// media is SIGNED only (#919 step 3).
+    #[error("media asset {asset_id} must be uploaded SIGNED (it is still processing)")]
+    MediaNotSigned { asset_id: String },
 
     #[error("role '{role}' belongs to the audience plane and cannot be a participant")]
     InvalidParticipantRole { role: String },
@@ -156,6 +170,7 @@ impl AppError for ChatError {
             Self::SendInFlight { .. }               => "CHT-1013",
 
             Self::InteractionCheckUnavailable { .. } => "CHT-5001",
+            Self::MediaUnavailable { .. }            => "CHT-5002",
 
             Self::UnknownConversationKind { .. } => "CHT-2001",
             Self::UnknownVisibility { .. }       => "CHT-2002",
@@ -164,6 +179,8 @@ impl AppError for ChatError {
             Self::EmptyMessage                   => "CHT-2005",
             Self::MessageTooLong { .. }          => "CHT-2006",
             Self::MediaReferenceMissing          => "CHT-2007",
+            Self::MediaAssetNotUsable { .. }     => "CHT-2011",
+            Self::MediaNotSigned { .. }          => "CHT-2012",
             Self::InvalidParticipantRole { .. }  => "CHT-2008",
             Self::InvalidPageToken { .. }        => "CHT-2009",
             Self::InvalidIdempotencyKey          => "CHT-2010",
@@ -204,7 +221,8 @@ impl AppError for ChatError {
             Self::MessageRequestPending { .. }
             | Self::NoMessageRequest { .. } => StatusCode::UNPROCESSABLE_ENTITY,
 
-            Self::InteractionCheckUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            Self::InteractionCheckUnavailable { .. }
+            | Self::MediaUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
 
             Self::UnknownConversationKind { .. }
             | Self::UnknownVisibility { .. }
@@ -213,6 +231,8 @@ impl AppError for ChatError {
             | Self::EmptyMessage
             | Self::MessageTooLong { .. }
             | Self::MediaReferenceMissing
+            | Self::MediaAssetNotUsable { .. }
+            | Self::MediaNotSigned { .. }
             | Self::InvalidParticipantRole { .. }
             | Self::InvalidPageToken { .. }
             | Self::InvalidIdempotencyKey
@@ -234,7 +254,8 @@ impl AppError for ChatError {
             Self::EventPublishFailed { .. } => Severity::High,
 
             Self::StreamSendFailed { .. }
-            | Self::InteractionCheckUnavailable { .. } => Severity::Medium,
+            | Self::InteractionCheckUnavailable { .. }
+            | Self::MediaUnavailable { .. } => Severity::Medium,
 
             Self::Validation(e) => e.severity(),
 
@@ -245,6 +266,8 @@ impl AppError for ChatError {
             | Self::EmptyMessage
             | Self::MessageTooLong { .. }
             | Self::MediaReferenceMissing
+            | Self::MediaAssetNotUsable { .. }
+            | Self::MediaNotSigned { .. }
             | Self::InvalidParticipantRole { .. }
             | Self::InvalidPageToken { .. }
             | Self::InvalidIdempotencyKey
@@ -274,6 +297,7 @@ impl AppError for ChatError {
             Self::Scylla(e) => e.is_retryable(),
             Self::Redis(e)  => e.is_retryable(),
             Self::InteractionCheckUnavailable { .. }
+            | Self::MediaUnavailable { .. }
             | Self::SendInFlight { .. } => true,
             _               => false,
         }
@@ -349,6 +373,15 @@ impl AppError for ChatError {
 
             Self::MediaReferenceMissing =>
                 "The media attachment is missing.",
+
+            Self::MediaAssetNotUsable { .. } =>
+                "This media can't be sent here.",
+
+            Self::MediaNotSigned { .. } =>
+                "Media sent in a conversation must be uploaded as private.",
+
+            Self::MediaUnavailable { .. } =>
+                "Media is temporarily unavailable. Please try again later.",
 
             Self::InvalidParticipantRole { .. } =>
                 "The requested role is not valid for this action.",

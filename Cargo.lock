@@ -849,6 +849,7 @@ dependencies = [
  "futures",
  "http",
  "infra-config",
+ "media-api",
  "profile",
  "rdkafka",
  "redis-storage",
@@ -879,6 +880,7 @@ dependencies = [
 name = "chat-api"
 version = "0.1.0"
 dependencies = [
+ "media-api",
  "prost 0.14.4",
  "prost-types",
  "tonic 0.14.6",

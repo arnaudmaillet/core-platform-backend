@@ -311,6 +311,23 @@ beyond that has to read chat's log in Scylla, not the topic.
   (`members_by_conversation.muted_until`, migration 0014, written with `IF EXISTS` so a racing
   departure never leaves a role-less row), so leaving clears it. A non-member is answered like
   `MarkRead` (`NOT_FOUND` on a private conversation); a past or over-a-year end is `CHT-9004`.
+- **Message media is SIGNED (#919 step 3).** `SendMessageRequest.media_asset_id` names the media asset
+  of a MEDIA message (the id `media.IssueUploadTicket` returned); `media_ref` may then stay empty.
+  - **Check:** chat asks media (`GetAsset`). The asset must be an image or a video of the sender's
+    account (the token's `sub`; not checked on the mesh) that is not failed, quarantined or deleted.
+    Otherwise `CHT-2011`, the same answer in every case.
+  - **SIGNED:** a READY public image is made SIGNED (media `ChangeDeliveryVisibility`, which takes
+    post and chat only; the calls carry chat's mesh token). One still processing must have been
+    uploaded SIGNED: otherwise `CHT-2012`. Videos are left as they are until signed HLS (media #921).
+  - **Errors:** media unreachable → `CHT-5002`, retryable.
+  - **Storage:** the asset is kept on the message (`messages_by_conversation.media_asset_id`, migration
+    0015), the hot tail and the plane frame.
+  - **Reads:** `MessageView.media_asset_id` is on every read. `GetHistory` also carries `media`
+    (`DeliveredMedia`: blurhash and signed renditions), resolved in one `BatchResolveDelivery` per
+    page, **fail-open**. The live streams carry the asset id only: a reader resolves it through
+    `GetHistory` or media's `ResolveDelivery`, as signed URLs expire.
+  - **Not configured:** without `CHAT_MEDIA_GRPC_ENDPOINT`, asset ids are dropped and messages keep
+    their `media_ref`.
 - **Hidden requests (#810).** A request whose sender's message contains one of the caller's hidden
   words, or an offensive term while their offensive filter is on, lists under **HIDDEN_REQUESTS**
   instead of REQUESTS (the recipient can still open it; requests are never notified). It is sorted at
@@ -347,10 +364,10 @@ shared `error` crate:
 | Range | Class |
 |---|---|
 | `CHT-1xxx` | lifecycle |
-| `CHT-2xxx` | validation |
+| `CHT-2xxx` | validation (`CHT-2011` a message's media asset is not the sender's usable image / video; `CHT-2012` its image was uploaded public and is still processing — #919) |
 | `CHT-3xxx` | events |
 | `CHT-4xxx` | streaming |
-| `CHT-5xxx` | peer services (`CHT-5001`: social-graph's interaction check unavailable — retryable) |
+| `CHT-5xxx` | peer services (`CHT-5001`: social-graph's interaction check unavailable; `CHT-5002`: media did not answer a send naming an asset, #919 — both retryable) |
 | `CHT-9xxx` | identifiers |
 
 `CHT-1009` (private conversation the caller may not see) is deliberately rendered exactly like
@@ -483,6 +500,8 @@ async fn main() -> anyhow::Result<()> {
 | `CHAT_TYPING_TTL_SECS` | No | `6` | Typing-indicator expiry (short by design). |
 | `CHAT_SOCIAL_GRAPH_GRPC_ENDPOINT` | No | unset | social-graph's mesh gRPC (`CheckInteraction`, #656). Unset: direct messages off (`CHT-5001`), invitations unchecked. |
 | `CHAT_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `CHAT_SOCIAL_GRAPH_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Its request and connect timeouts. |
+| `CHAT_MEDIA_GRPC_ENDPOINT` | No | unset | media's mesh gRPC (#919): checks a message's asset and makes it SIGNED on send, delivers it in history (fail-open). Unset: asset ids are dropped. |
+| `CHAT_MEDIA_RPC_TIMEOUT_MS` / `CHAT_MEDIA_CONNECT_TIMEOUT_MS` | No | `300` / `1000` | Its request and connect timeouts (short: history fails open). |
 
 ### Inherited infrastructure variables
 

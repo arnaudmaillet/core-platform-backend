@@ -15,6 +15,7 @@ async fn send(h: &TestHarness, conv: &ConversationId, sender: &ProfileId, body: 
             content_type:    0, // Text
             body:            body.to_owned(),
             media_ref:       String::new(),
+            media_asset_id:  String::new(),
             reply_to:        String::new(),
             idempotency_key: key.to_owned(),
         }),

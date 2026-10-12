@@ -18,4 +18,6 @@ pub struct MessageRow {
     pub media_ref:    Option<String>,
     pub reply_to:     Option<Uuid>,
     pub withheld:     Option<bool>,
+    /// NULL before migration 0015, or without an asset (#919).
+    pub media_asset_id: Option<Uuid>,
 }

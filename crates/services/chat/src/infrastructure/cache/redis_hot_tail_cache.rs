@@ -42,6 +42,9 @@ struct CachedMessage {
     content_type:  i8,
     body:          String,
     media_ref:     Option<String>,
+    /// #919: absent from entries cached before.
+    #[serde(default)]
+    media_asset_id: Option<String>,
     reply_to:      Option<String>,
     created_at_ms: i64,
 }
@@ -131,6 +134,7 @@ fn encode(m: &MessageSummary) -> Result<String, ChatError> {
         content_type:  m.content_type.as_tinyint(),
         body:          m.body.clone(),
         media_ref:     m.media_ref.clone(),
+        media_asset_id: m.media_asset_id.map(|u| u.to_string()),
         reply_to:      m.reply_to.map(|u| u.to_string()),
         created_at_ms: m.created_at.timestamp_millis(),
     };
@@ -159,10 +163,29 @@ fn decode(raw: &str) -> Result<MessageSummary, ChatError> {
         content_type: ContentType::try_from(cm.content_type)?,
         body:         cm.body,
         media_ref:    cm.media_ref,
+        media_asset_id: cm.media_asset_id.and_then(|a| Uuid::parse_str(&a).ok()),
         reply_to,
         created_at:   DateTime::from_timestamp_millis(cm.created_at_ms)
             .unwrap_or(DateTime::UNIX_EPOCH),
         // A withheld message is never cached (see `MessageFanout`).
         withheld:     false,
     })
+}
+
+#[cfg(test)]
+mod media_asset_tests {
+    use super::*;
+
+    /// #919: an entry cached before the asset existed still decodes; a new one
+    /// round-trips its asset.
+    #[test]
+    fn cached_messages_carry_their_asset() {
+        let old = r#"{"message_id":"0199b8c4-0000-7000-8000-000000000001","sender_id":"0199b8c4-0000-7000-8000-000000000002","content_type":1,"body":"","media_ref":"https://cdn.example/a.jpg","reply_to":null,"created_at_ms":1}"#;
+        assert_eq!(decode(old).unwrap().media_asset_id, None);
+
+        let mut summary = decode(old).unwrap();
+        let asset = Uuid::now_v7();
+        summary.media_asset_id = Some(asset);
+        assert_eq!(decode(&encode(&summary).unwrap()).unwrap().media_asset_id, Some(asset));
+    }
 }

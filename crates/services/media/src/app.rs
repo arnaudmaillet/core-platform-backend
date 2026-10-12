@@ -362,10 +362,10 @@ mod tests {
     }
 
     /// #919: changing a delivery visibility can make private media public, so
-    /// it takes its intended mesh caller only — post (a private profile's
-    /// media); enforced, any other caller is refused.
+    /// it takes its intended mesh callers only — post (a private profile's
+    /// media) and chat (messages' media); enforced, any other is refused.
     #[tokio::test]
-    async fn changing_a_visibility_takes_post_only() {
+    async fn changing_a_visibility_takes_post_and_chat_only() {
         use transport::grpc::mesh::{MeshCallerGate, MeshGateMode, MESH_TOKEN_HEADER};
         let fx = Fixture::new();
         let (id, owner) = fx.ready_asset(crate::domain::value_object::MediaKind::PostImage).await;
@@ -386,11 +386,13 @@ mod tests {
         let asset = fx.assets.find_by_id(&id).await.unwrap().unwrap();
         assert_eq!(asset.delivery_visibility(), crate::domain::value_object::DeliveryVisibility::Public);
 
-        let changed = enforced.change_delivery_visibility(call("core/staging-post-server")).await.unwrap().into_inner();
-        assert_eq!(
-            changed.asset.unwrap().delivery_visibility,
-            proto::DeliveryVisibility::MediaDeliveryVisibilitySigned as i32
-        );
+        for caller in ["core/staging-post-server", "core/staging-chat-server"] {
+            let changed = enforced.change_delivery_visibility(call(caller)).await.unwrap().into_inner();
+            assert_eq!(
+                changed.asset.unwrap().delivery_visibility,
+                proto::DeliveryVisibility::MediaDeliveryVisibilitySigned as i32
+            );
+        }
     }
 
     /// An edge call from `account` (its token's `sub`).

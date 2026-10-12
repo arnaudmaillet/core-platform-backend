@@ -55,8 +55,9 @@ pub struct MediaServiceHandler {
 
 /// Who may change a delivery visibility (#919): it can make private media
 /// public. post: a private profile's post media goes SIGNED, and back to
-/// PUBLIC when the profile goes public (#919 step 3).
-const VISIBILITY_CALLERS: &[&str] = &["post-server"];
+/// PUBLIC when the profile goes public; chat: a message's media is SIGNED
+/// (#919 step 3).
+const VISIBILITY_CALLERS: &[&str] = &["post-server", "chat-server"];
 
 impl MediaServiceHandler {
     pub fn new(

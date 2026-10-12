@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 2261dbf16ca10e2a9d30d33131ffea1d74dcad72d95ee393393824f4bdc2c3a4
+  source_sha256: e0bbba64d786ded4f87cae1986967459fefacec152bd90228bdee84324ace437
   translated_at: 2026-10-12
   status: complete
 ---
@@ -219,8 +219,8 @@ n'est jamais dédupliqué sur un asset existant, et aucun upload n'est jamais d�
 que le CDN refuse (core-platform-infra#87), si bien que seule une URL signée y accède.
 `ChangeDeliveryVisibility` (mesh uniquement ; les services qui savent pourquoi, p. ex. un compte privé,
 l'appellent — il peut rendre public un média privé, donc il n'accepte que ses appelants mesh prévus
-(#852 `MeshCallerGate`) : `post-server`, qui garde SIGNED les médias des posts d'un profil privé, #919
-étape 3) change la visibilité d'un asset READY et déplace ses objets : vers SIGNED, dans son arbre
+(#852 `MeshCallerGate`) : `post-server`, qui garde SIGNED les médias des posts d'un profil privé, et `chat-server`, dont les médias
+des messages sont SIGNED, #919 étape 3) change la visibilité d'un asset READY et déplace ses objets : vers SIGNED, dans son arbre
 restreint (les octets qu'un autre asset partage sont copiés et restent publics pour lui ; ceux qu'il est
 seul à détenir sont déplacés et le CDN est purgé de leurs chemins publics) ; vers PUBLIC, retour à l'arbre
 adressé par contenu. Les objets bougent avant l'enregistrement de la ligne, pilotés par un listing : une

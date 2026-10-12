@@ -13,6 +13,9 @@ pub struct MessageFrame {
     pub content_type:  i8,
     pub body:          String,
     pub media_ref:     Option<String>,
+    /// The media asset it shows (#919 step 3); clients resolve its delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_asset_id: Option<String>,
     pub reply_to:      Option<String>,
     pub created_at_ms: i64,
     /// Its sender's alone (#656): every other member's stream drops it.
@@ -33,6 +36,7 @@ impl MessageFrame {
             content_type:  s.content_type.as_tinyint(),
             body:          s.body.clone(),
             media_ref:     s.media_ref.clone(),
+            media_asset_id: s.media_asset_id.map(|u| u.to_string()),
             reply_to:      s.reply_to.map(|u| u.to_string()),
             created_at_ms: s.created_at.timestamp_millis(),
             withheld:      s.withheld,
@@ -69,5 +73,22 @@ impl PlaneEvent {
             field:   "plane_event.decode".to_owned(),
             message: e.to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #919: a frame from a replica without the asset still decodes, and a
+    /// frame without one leaves the field off the wire.
+    #[test]
+    fn frames_carry_the_asset_only_when_there_is_one() {
+        let old = r#"{"message_id":"m","sender_id":"s","content_type":1,"body":"","media_ref":"r","reply_to":null,"created_at_ms":1}"#;
+        let frame: MessageFrame = serde_json::from_str(old).unwrap();
+        assert_eq!(frame.media_asset_id, None);
+        assert!(!serde_json::to_string(&frame).unwrap().contains("media_asset_id"));
+        let with = MessageFrame { media_asset_id: Some("a".into()), ..frame };
+        assert!(serde_json::to_string(&with).unwrap().contains(r#""media_asset_id":"a""#));
     }
 }

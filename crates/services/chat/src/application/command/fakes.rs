@@ -422,11 +422,17 @@ pub struct FakeMessages {
     floors:   Mutex<Vec<Option<i64>>>,
     withheld: Mutex<Vec<bool>>,
     seeded:   Mutex<Vec<MessageSummary>>,
+    /// Each stored message's `(media_ref, media_asset_id)` (#919).
+    media:    Mutex<Vec<(Option<String>, Option<uuid::Uuid>)>>,
 }
 
 impl FakeMessages {
     pub fn inserts(&self) -> usize {
         *self.inserts.lock().unwrap()
+    }
+
+    pub fn media(&self) -> Vec<(Option<String>, Option<uuid::Uuid>)> {
+        self.media.lock().unwrap().clone()
     }
 
     pub fn floors(&self) -> Vec<Option<i64>> {
@@ -449,6 +455,7 @@ impl MessageRepository for FakeMessages {
     async fn insert(&self, m: &Message) -> Result<(), ChatError> {
         *self.inserts.lock().unwrap() += 1;
         self.withheld.lock().unwrap().push(m.withheld());
+        self.media.lock().unwrap().push((m.media_ref().map(str::to_owned), m.media_asset_id()));
         Ok(())
     }
 
