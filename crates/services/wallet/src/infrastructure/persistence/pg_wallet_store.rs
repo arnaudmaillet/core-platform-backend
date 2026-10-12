@@ -16,7 +16,8 @@ use crate::application::port::{
 };
 use crate::domain::event::{StakeCommitted, WalletEvent};
 use crate::domain::{
-    AccountId, Allocation, ClaimDecision, ClaimPolicy, Currency, DayPosition, DuePosition, IdempotencyKey, PackDecision, Settlement, StakeAsk,
+    AccountId, Allocation, CalibrationRow, ClaimDecision, ClaimPolicy, Currency, DayPosition, DuePosition, EnvelopeDay, IdempotencyKey,
+    PackDecision, Settlement, StakeAsk,
     StakeDecision, StakePackPolicy, StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
@@ -875,6 +876,44 @@ impl WalletStore for PgWalletStore {
         .await
         .map_err(storage)?;
         Ok(())
+    }
+
+    async fn calibration_rows(&self, day: NaiveDate) -> Result<Vec<CalibrationRow>, WalletError> {
+        let mut rows = Vec::new();
+        for pool in self.tx.all_pools() {
+            let page: Vec<(Uuid, String, String, i64, Option<f64>, Option<i16>, Option<i64>)> = sqlx::query_as(
+                "SELECT account_id, target_kind, target_id, points, earliness, outcome, provisional_gems \
+                 FROM settlements WHERE envelope_day = $1",
+            )
+            .bind(day)
+            .fetch_all(pool)
+            .await
+            .map_err(storage)?;
+            rows.extend(page.into_iter().map(|(account, kind, id, points, earliness, outcome, gems)| CalibrationRow {
+                account: AccountId::from_uuid(account),
+                target: format!("{kind}:{id}"),
+                points,
+                earliness,
+                outcome: outcome.unwrap_or(0),
+                provisional_gems: gems.unwrap_or(0),
+            }));
+        }
+        Ok(rows)
+    }
+
+    async fn envelope_day(&self, day: NaiveDate) -> Result<Option<EnvelopeDay>, WalletError> {
+        let row: Option<(Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+            "SELECT pool, allocated, targets FROM envelope_days WHERE day = $1 AND computed_at IS NOT NULL",
+        )
+        .bind(day)
+        .fetch_optional(self.envelope_pool()?)
+        .await
+        .map_err(storage)?;
+        Ok(row.map(|(pool, allocated, targets)| EnvelopeDay {
+            pool:      pool.unwrap_or(0),
+            allocated: allocated.unwrap_or(0),
+            targets:   targets.unwrap_or(0),
+        }))
     }
 }
 

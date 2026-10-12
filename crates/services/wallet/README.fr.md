@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 9167b6c1728f50d7e528bb3e420f66eacc3169b41e462f7b80a3573d165060aa
-  translated_at: 2026-10-11
+  source_sha256: 72c5d269bca194984d170fb2c4419c2bf735ce32bc5710036541b8f44d092aa6
+  translated_at: 2026-10-12
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -155,6 +155,23 @@ un pool fixe — `WALLET_CURATOR_ENVELOPE_DAILY`, 1000 gems (charte économique 
    règlement, avec son `outcome`, son `score` et son `envelope_day`, et le résumé du jour dans
    **`envelope_days`** (migration 0006 ; sur le shard de l'UUID nul). Une journée est prise en bail
    par un seul réplica ; la recalculer donne les mêmes parts. **Toujours aucune gem créée.**
+
+**Rapport de calibration (#893, les contrôles Go / No-Go de la charte §40–§41).** Un opérateur lance
+`wallet-server calibration-report [AAAA-MM-JJ]` dans un pod wallet (par défaut : hier, UTC). Il lit sur
+tous les shards les règlements comptés dans l'enveloppe de ce jour, n'écrit rien et affiche du JSON :
+- **économie :** `pool`, `allocated`, `rewarded_accounts`, et la part des gems allouées reçue par le
+  premier compte / les 10 premiers / le premier 1 % (`top1_share`, `top10_share`, `top1pct_share` ;
+  concentration) ;
+- **curation :** le taux de top par quartile d'**earliness**, du plus précoce au plus tardif, puis
+  `unknown`. Une ligne plate veut dire que les stakes précoces ne portent aucune information. Aussi le
+  taux de top par **taille de stake** (1, 2–5, 6–25, 26–100, 101–250 points) et `single_point_share` :
+  une majorité de positions d'un point veut dire que le stake n'est qu'un like sous un autre nom ;
+- **contrôle des égalités de #868 :** `top_targets` face à `expected_top_targets` (`top_percent` des
+  cibles du jour, arrondi au-dessus) et leur rapport `top_inflation`. Bien au-dessus de 1, les égalités
+  au seuil ont dilué le top et le départage de #868 s'impose.
+
+Les commentaires, les cohortes et les signaux Sybil rejoindront le rapport avec leurs fonctionnalités
+(#889, #891). L'app mesure les critères UX de §41.
 
 > **Invariants** (et où ils sont tenus) : soldes ≥ 0 (`CHECK`) ; chaque solde = Σ des deltas de son
 > registre (même transaction, verrou de ligne ; vérifié en test d'intégration) ; un mouvement par
