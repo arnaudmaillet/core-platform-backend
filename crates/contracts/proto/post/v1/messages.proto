@@ -3,6 +3,7 @@ syntax = "proto3";
 package post.v1;
 
 import "post/v1/enums.proto";
+import "media/v1/messages.proto";
 
 message AudioReference {
     string    audio_id   = 1;
@@ -23,6 +24,11 @@ message MediaAttachmentInput {
     uint32 height           = 4;
     string thumbnail_url    = 5;
     float  duration_seconds = 6;
+    // #907: the media asset this attachment shows (media.v1 IssueUploadTicket's
+    // asset_id). Optional. It must be the caller's own POST_IMAGE or VIDEO asset
+    // (not failed, quarantined or deleted): otherwise FAILED_PRECONDITION
+    // (PST-3005). Media unreachable ⇒ UNAVAILABLE (PST-5002), retryable.
+    string asset_id         = 7;
 }
 
 message MediaAttachmentView {
@@ -32,6 +38,16 @@ message MediaAttachmentView {
     uint32 height           = 4;
     string thumbnail_url    = 5;
     float  duration_seconds = 6;
+    // #907: the media asset, when the attachment names one — a stable cache key
+    // (unlike a SIGNED URL). Empty for attachments made before.
+    string asset_id         = 7;
+    // #907: how to deliver it, resolved per read: the blurhash, and for a READY
+    // asset every rendition (THUMBNAIL / SMALL / MEDIUM / LARGE, or a video's
+    // MANIFEST + POSTER) with its URL, size, visibility and expiry. An asset still
+    // processing has its blurhash and no renditions. Absent when the attachment
+    // has no asset_id, or when media could not answer in time (fail-open:
+    // `cdn_url` and `thumbnail_url` still deliver it).
+    media.v1.DeliveredMedia media = 8;
 }
 
 message PostView {

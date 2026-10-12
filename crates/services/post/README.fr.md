@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 017d96c9d464726875a44b1d7bf09201eae69bbe8090687d8bcde26c688b471f
-  translated_at: 2026-10-10
+  source_sha256: 29128efd4e1b509c99911396d53208fcf3f1c0c561f8d2a0e029c9485edfbdca
+  translated_at: 2026-10-12
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -94,6 +94,7 @@ validé (une colonne `text`) pour éviter la complexité de migration des UDT Sc
 |---|---|---|---|
 | ScyllaDB (`post`) | store durable | lectures + écritures échouent | **Dur** — `UNAVAILABLE` |
 | Kafka | émission d'événements | les projections aval stagnent | **Souple** — les écritures committent ; voir note |
+| media (`GetAsset`, `BatchResolveDelivery`, #907) | assets média des pièces jointes | les écritures qui nomment un asset échouent ; les lectures perdent les renditions | **Écriture :** `UNAVAILABLE` (`PST-5002`, rejouable). **Lecture :** fail-open — les pièces jointes gardent leurs URLs |
 
 **Amont (rayon d'impact — les événements `post.*` alimentent une grande partie de la flotte de lecture) :**
 
@@ -225,11 +226,33 @@ seulement et pour l'auteur du post seulement (le champ d'un appelant edge est é
 | PST-1010 | `CreateInFlight` (un CreatePost avec cette clé d'idempotence est encore en cours d'écriture, #876 ; à réessayer) | 409 → `ABORTED` |
 | PST-2001..2003 | carousel cardinality / video length | 422 |
 | PST-3001..3004 | thumbnail / MIME / CDN URL / dimensions | 422 |
+| PST-3005 | `MediaAssetNotUsable` (l'`asset_id` d'une pièce jointe n'est pas une image ou vidéo de post utilisable de l'appelant, #907) | 422 |
 | PST-9001/9002 | invalid post/profile ID | 422 |
 | PST-9003 | `AttachmentsCorrupted` (JSON deser) | 500 |
 | PST-9004 | `DomainViolation` | 422 |
 | PST-9006 | `InvalidIdempotencyKey` (pas 8 à 64 lettres, chiffres, `-`, `_`) | 422 |
+| PST-9007 | `InvalidMediaAssetId` (pas un UUID) | 422 |
 | PST-5001 | `AccessCheckUnavailable` (social-graph `CheckAccess` did not answer; retryable) | 503 → `UNAVAILABLE` |
+| PST-5002 | `MediaUnavailable` (media `GetAsset` n'a pas répondu à une écriture qui nomme un asset ; rejouable) | 503 → `UNAVAILABLE` |
+
+**Assets média (#907).** Une pièce jointe peut nommer son asset média (`MediaAttachmentInput.asset_id`,
+l'id renvoyé par `media.IssueUploadTicket`). À l'écriture, post interroge media (`GetAsset`) et le refuse
+avec `PST-3005`, sauf s'il s'agit d'une image ou vidéo de post qui n'est ni en échec, ni en quarantaine,
+ni supprimée et, depuis l'edge, qui appartient au compte de l'appelant. Sinon n'importe qui pourrait
+montrer le média SIGNED de quelqu'un via un post. Le refus est identique dans tous les cas, si bien
+qu'une sonde n'apprend rien des assets des autres. À la lecture (`GetPost`, `ListRecentlyDeleted`),
+chacune de ces pièces jointes porte `asset_id` (une clé de cache stable, contrairement à une URL SIGNED)
+et `media`, le `DeliveredMedia` de media :
+- le blurhash ;
+- pour un asset READY, chaque rendition avec son URL, sa taille, sa visibilité et son expiration ;
+- pour un asset encore en traitement, le blurhash seul.
+
+Toutes les pièces jointes d'une réponse sont résolues en un seul `BatchResolveDelivery`, pour les clients
+seulement : un lecteur du mesh (l'hydratation de search) reçoit `asset_id` sans `media`. Cette lecture est
+**fail-open** : si media est lent ou indisponible, `media` est absent et `cdn_url` / `thumbnail_url`
+livrent toujours. Les timelines, le feed découverte et search renvoient des ids de posts et hydratent via
+`GetPost`, ils en profitent donc aussi. Sans `POST_MEDIA_GRPC_ENDPOINT`, les ids d'assets sont ignorés à
+l'écriture et rien n'est résolu.
 
 **Création idempotente (#876).** `CreatePostRequest.idempotency_key` fait qu'un CreatePost rejoué ne crée
 rien et renvoie le `post_id` du premier appel, pendant 24 heures, par auteur. La clé vit dans
@@ -322,6 +345,8 @@ async fn main() -> anyhow::Result<()> {
 | `POST_GRPC_ADDR` | No | `0.0.0.0:50056` | gRPC bind address. |
 | `POST_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Oui** (prod) | `http://localhost:50053` | Endpoint mesh de social-graph pour le contrôle d'audience (`CheckAccess`). Les lectures par tout autre que l'auteur échouent fermé (`PST-5001`, `UNAVAILABLE`) s'il ne répond pas. |
 | `POST_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | Non | `1000` / `1000` | Délais de cet appel. |
+| `POST_MEDIA_GRPC_ENDPOINT` | Non | non défini | endpoint mesh de media (#907) : vérifie les assets des pièces jointes à l'écriture, les livre à la lecture. Non défini : les ids d'assets sont ignorés, les pièces jointes gardent leurs URLs. |
+| `POST_MEDIA_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | Non | `300` / `1000` | Délais de ces appels (courts : les lectures sont fail-open). |
 
 > Le réglage complet `SCYLLA_*` / `KAFKA_*` vit dans les crates partagés storage/transport.
 

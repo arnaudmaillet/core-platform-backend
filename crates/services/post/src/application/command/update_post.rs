@@ -6,7 +6,7 @@ use validate_core::{FieldViolation, Validate};
 use crate::{
     application::{
         command::create_post::{AttachmentInput, parse_attachments},
-        port::{check_mentions, AudienceGate, EventPublisher, PostRepository},
+        port::{check_media, check_mentions, AudienceGate, EventPublisher, MediaCatalog, PostRepository},
     },
     domain::value_object::{Caption, PostId, ProfileId},
     error::PostError,
@@ -17,6 +17,8 @@ pub struct UpdatePostCommand {
     pub profile_id:  String,
     pub caption:     String,
     pub attachments: Vec<AttachmentInput>,
+    /// The edge caller's account (#907); `None` on the mesh.
+    pub account_id:  Option<String>,
 }
 
 impl Command for UpdatePostCommand {}
@@ -39,6 +41,8 @@ pub struct UpdatePostHandler<R, P> {
     pub publisher:  Arc<P>,
     /// Who takes mentions from whom (#656).
     pub audience:   Arc<dyn AudienceGate>,
+    /// The attachments' media assets (#907); `None` when not configured.
+    pub media:      Option<Arc<dyn MediaCatalog>>,
 }
 
 impl<R, P> CommandHandler<UpdatePostCommand> for UpdatePostHandler<R, P>
@@ -65,7 +69,8 @@ where
         }
 
         let caption     = Caption::new(&cmd.caption)?;
-        let attachments = parse_attachments(&cmd.attachments)?;
+        let mut attachments = parse_attachments(&cmd.attachments)?;
+        check_media(self.media.as_deref(), cmd.account_id.as_deref(), &mut attachments).await?;
         // Every mentioned profile must take mentions from the author (#656).
         check_mentions(self.audience.as_ref(), &profile_id, &caption).await?;
 

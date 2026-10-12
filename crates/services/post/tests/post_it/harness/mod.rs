@@ -83,7 +83,7 @@ impl TestHarness {
 
         let publisher = Arc::new(CapturingPublisher::new());
         let gate = Arc::new(ScriptedGate::default());
-        let app = App::build(backends, Arc::clone(&publisher), Arc::clone(&gate) as _)
+        let app = App::build(backends, Arc::clone(&publisher), Arc::clone(&gate) as _, None)
             .await
             .expect("integration: build post app");
 
@@ -142,6 +142,7 @@ impl TestHarness {
             profile_id:  profile_id.to_owned(),
             caption:     caption.to_owned(),
             attachments: Vec::new(),
+            account_id:  None,
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await
     }
@@ -337,6 +338,7 @@ fn create_command(post_id: String, profile_id: String) -> CreatePostCommand {
         location:    None,
         reuse:       Default::default(),
         idempotency_key: None,
+        account_id:  None,
     }
 }
 

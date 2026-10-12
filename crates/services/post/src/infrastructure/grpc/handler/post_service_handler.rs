@@ -24,6 +24,7 @@ use crate::application::query::{
 use crate::domain::aggregate::{Post, ReuseOverrides};
 use crate::domain::entity::MediaAttachment;
 use crate::domain::value_object::{AudioId, AudioKind, AudioReference, PostId, ProfileId, Viewer};
+use crate::infrastructure::client::MediaDelivery;
 
 // ── Proto inclusion ───────────────────────────────────────────────────────────
 
@@ -40,6 +41,9 @@ where
     query_bus:   QB,
     /// CreatePost, which answers the post it created or replayed (#876).
     creator:     Arc<dyn CreatePosts>,
+    /// Delivers attachments' media assets on read (#907); `None` when media
+    /// is not configured.
+    media:       Option<Arc<dyn MediaDelivery>>,
 }
 
 impl<CB, QB> PostServiceHandler<CB, QB>
@@ -48,8 +52,57 @@ where
     QB: QueryBus + Send + Sync + 'static,
 {
     pub fn new(command_bus: CB, query_bus: QB, creator: Arc<dyn CreatePosts>) -> Self {
-        Self { command_bus, query_bus, creator }
+        Self { command_bus, query_bus, creator, media: None }
     }
+
+    /// Attachments carry their media asset's delivery (#907).
+    pub fn with_media(mut self, media: Arc<dyn MediaDelivery>) -> Self {
+        self.media = Some(media);
+        self
+    }
+
+    /// Only for clients: a mesh reader (search's hydration, the export) has
+    /// no use for renditions, and would only load media.
+    async fn deliver_media(&self, viewer: &Viewer, posts: &mut [proto::PostView]) {
+        if *viewer != Viewer::Internal {
+            deliver_media(self.media.as_deref(), posts).await;
+        }
+    }
+}
+
+/// Adds each attachment's delivery (#907): one media call for all the posts.
+/// Fail-open — media unreachable or slow, the posts go out with their URLs
+/// only.
+async fn deliver_media(media: Option<&dyn MediaDelivery>, posts: &mut [proto::PostView]) {
+    let Some(media) = media else { return };
+    let mut ids: Vec<String> = posts
+        .iter()
+        .flat_map(|p| &p.attachments)
+        .map(|a| a.asset_id.clone())
+        .filter(|id| !id.is_empty())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        return;
+    }
+    let delivered = match media.deliver(&ids).await {
+        Ok(delivered) => delivered,
+        Err(status) => {
+            tracing::warn!(%status, assets = ids.len(), "media delivery unavailable; attachments served by URL");
+            return;
+        }
+    };
+    let by_id: std::collections::HashMap<&str, &media_api::DeliveredMedia> =
+        delivered.iter().map(|m| (m.asset_id.as_str(), m)).collect();
+    for attachment in posts.iter_mut().flat_map(|p| &mut p.attachments) {
+        attachment.media = by_id.get(attachment.asset_id.as_str()).map(|m| (*m).clone());
+    }
+}
+
+/// The edge caller's account (#907), `None` on the mesh.
+fn account_of<T>(request: &Request<T>) -> Option<String> {
+    edge::principal(request).map(|p| p.account_id().to_owned())
 }
 
 // ── Command RPC helpers ───────────────────────────────────────────────────────
@@ -64,6 +117,7 @@ where
         request: Request<proto::CreatePostRequest>,
     ) -> Result<Response<proto::CreatePostResponse>, Status> {
         edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let account_id = account_of(&request);
         let req        = request.into_inner();
         let profile_id = req.profile_id.clone();
 
@@ -81,6 +135,7 @@ where
             location:    req.location.map(|g| (g.lat, g.lng)),
             reuse:       ReuseOverrides { allow_remix: req.allow_remix, allow_sound_reuse: req.allow_sound_reuse },
             idempotency_key: Some(req.idempotency_key).filter(|k| !k.is_empty()),
+            account_id,
         };
 
         let created = self.creator.create(&cmd).await.map_err(|e| app_err_to_status(&e))?;
@@ -109,12 +164,14 @@ where
         request: Request<proto::UpdatePostRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
         edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let account_id = account_of(&request);
         let req = request.into_inner();
         let cmd = UpdatePostCommand {
             post_id:     req.post_id,
             profile_id:  req.profile_id,
             caption:     req.caption,
             attachments: req.attachments.into_iter().map(attachment_input_from_proto).collect(),
+            account_id,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
@@ -159,6 +216,7 @@ where
         request: Request<proto::ListRecentlyDeletedRequest>,
     ) -> Result<Response<proto::ListRecentlyDeletedResponse>, Status> {
         edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let viewer = viewer_of(&request);
         let req = request.into_inner();
         let query = ListRecentlyDeletedQuery {
             profile_id: req.profile_id,
@@ -170,10 +228,9 @@ where
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
-        Ok(Response::new(proto::ListRecentlyDeletedResponse {
-            posts:      posts.into_iter().map(post_to_proto).collect(),
-            next_token: next.unwrap_or_default(),
-        }))
+        let mut posts: Vec<proto::PostView> = posts.into_iter().map(post_to_proto).collect();
+        self.deliver_media(&viewer, &mut posts).await;
+        Ok(Response::new(proto::ListRecentlyDeletedResponse { posts, next_token: next.unwrap_or_default() }))
     }
 }
 
@@ -194,14 +251,17 @@ where
         // On the author's behalf: the mesh only; an edge caller's field is
         // dropped here, before the query.
         let as_author = (viewer == Viewer::Internal).then_some(req.as_author_id).filter(|a| !a.is_empty());
-        let query  = GetPostQuery { post_id: req.post_id, viewer, mature, as_author };
+        let query  = GetPostQuery { post_id: req.post_id, viewer: viewer.clone(), mature, as_author };
         let post: Post = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
 
-        Ok(Response::new(post_to_proto(post)))
+        let mut view = [post_to_proto(post)];
+        self.deliver_media(&viewer, &mut view).await;
+        let [view] = view;
+        Ok(Response::new(view))
     }
 
     /// Mesh only (#809): not in `EDGE_POLICY`.
@@ -295,6 +355,7 @@ fn attachment_input_from_proto(a: proto::MediaAttachmentInput) -> AttachmentInpu
         height:           a.height,
         thumbnail_url:    Some(a.thumbnail_url).filter(|s| !s.is_empty()),
         duration_seconds: if a.duration_seconds == 0.0 { None } else { Some(a.duration_seconds) },
+        asset_id:         Some(a.asset_id).filter(|s| !s.is_empty()),
     }
 }
 
@@ -306,6 +367,8 @@ fn attachment_to_proto(a: &MediaAttachment) -> proto::MediaAttachmentView {
         height:           a.height,
         thumbnail_url:    a.thumbnail_url.as_ref().map(|u| u.as_str().to_owned()).unwrap_or_default(),
         duration_seconds: a.duration_seconds.unwrap_or(0.0),
+        asset_id:         a.asset_id.map(|id| id.as_str()).unwrap_or_default(),
+        media:            None,
     }
 }
 
@@ -399,5 +462,77 @@ fn app_err_to_status(err: &impl error::AppError) -> Status {
         400 | 422 => Status::failed_precondition(msg),
         503 | 502 => Status::unavailable(msg),
         _         => Status::internal(msg),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use media_api::DeliveredMedia;
+
+    struct FakeMedia(Result<Vec<DeliveredMedia>, tonic::Status>);
+
+    #[async_trait]
+    impl MediaDelivery for FakeMedia {
+        async fn deliver(&self, _asset_ids: &[String]) -> Result<Vec<DeliveredMedia>, tonic::Status> {
+            self.0.clone()
+        }
+    }
+
+    fn view(asset_ids: &[&str]) -> proto::PostView {
+        proto::PostView {
+            attachments: asset_ids
+                .iter()
+                .map(|id| proto::MediaAttachmentView { asset_id: (*id).to_owned(), ..Default::default() })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn delivered(id: &str) -> DeliveredMedia {
+        DeliveredMedia { asset_id: id.to_owned(), blurhash: format!("bh-{id}"), ..Default::default() }
+    }
+
+    /// #907: each attachment naming an asset carries its delivery; one
+    /// without an asset, or one media did not resolve, carries none.
+    #[tokio::test]
+    async fn attachments_carry_their_assets_delivery() {
+        let media = FakeMedia(Ok(vec![delivered("a"), delivered("b")]));
+        let mut posts = [view(&["a", ""]), view(&["b", "unknown"])];
+        deliver_media(Some(&media), &mut posts).await;
+        let blurhashes: Vec<Option<String>> = posts
+            .iter()
+            .flat_map(|p| &p.attachments)
+            .map(|a| a.media.as_ref().map(|m| m.blurhash.clone()))
+            .collect();
+        assert_eq!(blurhashes, [Some("bh-a".into()), None, Some("bh-b".into()), None]);
+    }
+
+    /// #907: media down, the posts go out as before (fail-open).
+    #[tokio::test]
+    async fn a_media_outage_serves_the_posts_without_delivery() {
+        let media = FakeMedia(Err(tonic::Status::unavailable("down")));
+        let mut posts = [view(&["a"])];
+        deliver_media(Some(&media), &mut posts).await;
+        assert_eq!(posts[0].attachments[0].asset_id, "a");
+        assert!(posts[0].attachments[0].media.is_none());
+    }
+
+    #[test]
+    fn an_attachments_asset_id_round_trips_to_its_view() {
+        let input = proto::MediaAttachmentInput {
+            cdn_url: "https://cdn.example/a.jpg".into(),
+            mime_type: "image/jpeg".into(),
+            width: 10,
+            height: 10,
+            asset_id: "0199b8c4-0000-7000-8000-000000000001".into(),
+            ..Default::default()
+        };
+        let parsed = crate::application::command::create_post::parse_attachments(&[attachment_input_from_proto(input)])
+            .unwrap();
+        let view = attachment_to_proto(&parsed[0]);
+        assert_eq!(view.asset_id, "0199b8c4-0000-7000-8000-000000000001");
+        assert!(view.media.is_none(), "delivery is resolved per read");
     }
 }
