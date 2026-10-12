@@ -4,13 +4,13 @@ use std::time::Duration as StdDuration;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 
-use crate::application::port::{CdnGateway, ResolvedUrl};
+use crate::application::port::{CdnGateway, ResolvedUrl, SignedCookies};
 use crate::domain::value_object::{DeliveryVisibility, StorageKey};
 use crate::error::MediaError;
 
 use crate::infrastructure::store::S3Client;
 
-use super::CloudFrontInvalidator;
+use super::{CloudFrontCookieSigner, CloudFrontInvalidator};
 
 /// CDN gateway over a content-addressed origin. Public URLs are immutable (no
 /// expiry — an edit is a new asset/hash/URL); signed URLs are minted per request
@@ -22,11 +22,19 @@ pub struct CloudFrontCdnGateway {
     signed_ttl: Duration,
     /// Edge purges on takedown; `None` (no distribution configured) logs instead.
     invalidator: Option<CloudFrontInvalidator>,
+    /// Signed cookies for SIGNED videos (#921); `None`: not configured.
+    cookies: Option<CloudFrontCookieSigner>,
 }
 
 impl CloudFrontCdnGateway {
     pub fn new(base_url: String, store: Arc<S3Client>, signed_ttl: Duration) -> Self {
-        Self { base_url, store, signed_ttl, invalidator: None }
+        Self { base_url, store, signed_ttl, invalidator: None, cookies: None }
+    }
+
+    /// Signs cookies for SIGNED videos (#921).
+    pub fn with_cookie_signer(mut self, signer: CloudFrontCookieSigner) -> Self {
+        self.cookies = Some(signer);
+        self
     }
 
     /// Purges takedowns from this CloudFront distribution.
@@ -71,6 +79,10 @@ impl CdnGateway for CloudFrontCdnGateway {
         let ttl = ttl.clamp(chrono::Duration::seconds(60), chrono::Duration::days(7));
         let url = self.store.presign_get_public(key.as_str(), ttl.to_std().unwrap_or(StdDuration::from_secs(60)));
         Ok(ResolvedUrl { url: url.to_string(), expires_at: Some(now + ttl) })
+    }
+
+    async fn signed_cookies(&self, prefix: &str, now: DateTime<Utc>) -> Result<Option<SignedCookies>, MediaError> {
+        Ok(self.cookies.as_ref().map(|signer| signer.sign(prefix, now)))
     }
 
     async fn invalidate(&self, keys: &[StorageKey]) -> Result<(), MediaError> {

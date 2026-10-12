@@ -318,7 +318,8 @@ beyond that has to read chat's log in Scylla, not the topic.
     Otherwise `CHT-2011`, the same answer in every case.
   - **SIGNED:** a READY public image is made SIGNED (media `ChangeDeliveryVisibility`, which takes
     post and chat only; the calls carry chat's mesh token). One still processing must have been
-    uploaded SIGNED: otherwise `CHT-2012`. Videos are left as they are until signed HLS (media #921).
+    uploaded SIGNED: otherwise `CHT-2012`. Videos follow the same rule once `CHAT_SIGNED_VIDEOS_ENABLED` is on
+    (#921, after media signs cookies); until then they are left as they are.
   - **Errors:** media unreachable → `CHT-5002`, retryable.
   - **Storage:** the asset is kept on the message (`messages_by_conversation.media_asset_id`, migration
     0015), the hot tail and the plane frame.
@@ -502,6 +503,7 @@ async fn main() -> anyhow::Result<()> {
 | `CHAT_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `CHAT_SOCIAL_GRAPH_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Its request and connect timeouts. |
 | `CHAT_MEDIA_GRPC_ENDPOINT` | No | unset | media's mesh gRPC (#919): checks a message's asset and makes it SIGNED on send, delivers it in history (fail-open). Unset: asset ids are dropped. |
 | `CHAT_MEDIA_RPC_TIMEOUT_MS` / `CHAT_MEDIA_CONNECT_TIMEOUT_MS` | No | `300` / `1000` | Its request and connect timeouts (short: history fails open). |
+| `CHAT_SIGNED_VIDEOS_ENABLED` | No | `false` | message videos go SIGNED too (#921); on only once media plays SIGNED videos (`MEDIA_CDN_COOKIE_*`) |
 
 ### Inherited infrastructure variables
 

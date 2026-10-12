@@ -3,9 +3,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use cqrs::{Envelope, Query, QueryHandler};
 
-use crate::application::port::{AssetRepository, CdnGateway, DeliveryCache};
+use crate::application::port::{AssetRepository, CdnGateway, DeliveryCache, SignedCookies};
 use crate::domain::aggregate::Asset;
-use crate::domain::value_object::{AssetId, AssetState, DeliveryVisibility, RenditionKind};
+use crate::domain::value_object::{AssetId, AssetState, DeliveryVisibility, MediaKind, RenditionKind};
 use crate::error::MediaError;
 
 /// Resolve one asset to a delivery URL set (Plane C, hot read).
@@ -32,6 +32,10 @@ pub struct DeliveredMediaView {
     pub blurhash: Option<String>,
     pub renditions: Vec<DeliveredRenditionView>,
     pub degraded: bool,
+    /// A SIGNED video's signed cookies (#921): its renditions' URLs are plain
+    /// CDN URLs, and these cookies — sent by the player with every request
+    /// of the HLS tree — grant them until they expire.
+    pub cookies: Option<SignedCookies>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,6 +97,7 @@ impl ResolveDeliveryHandler {
                 blurhash,
                 renditions: Vec::new(),
                 degraded: true,
+                cookies: None,
             };
         }
 
@@ -102,18 +107,35 @@ impl ResolveDeliveryHandler {
         let mut views = Vec::new();
         let mut degraded = false;
 
+        // A SIGNED video plays through signed cookies on its tree (#921): a
+        // presigned master would not authorize its playlists and segments.
+        // Without a signer it falls back to presigned URLs (the master only).
+        let cookies = match (visibility, asset.kind(), asset.object_root()) {
+            (DeliveryVisibility::Signed, MediaKind::Video, Some(root)) => {
+                match self.cdn.signed_cookies(&root.prefix(), now).await {
+                    Ok(cookies) => cookies,
+                    Err(_) => {
+                        degraded = true;
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+        let url_visibility = if cookies.is_some() { DeliveryVisibility::Public } else { visibility };
+
         for rendition in asset.renditions() {
             if preferred.is_some_and(|k| k != rendition.kind()) {
                 continue;
             }
             // Per-rendition fail-open: a signing/CDN error degrades the result
             // rather than erroring the whole read.
-            match self.cdn.resolve(rendition.storage_key(), visibility, now).await {
+            match self.cdn.resolve(rendition.storage_key(), url_visibility, now).await {
                 Ok(resolved) => views.push(DeliveredRenditionView {
                     kind: rendition.kind(),
                     url: resolved.url,
                     visibility,
-                    expires_at: resolved.expires_at,
+                    expires_at: cookies.as_ref().map(|c| c.expires_at).or(resolved.expires_at),
                     width: rendition.dimensions().width(),
                     height: rendition.dimensions().height(),
                 }),
@@ -131,6 +153,7 @@ impl ResolveDeliveryHandler {
             blurhash,
             renditions: views,
             degraded,
+            cookies,
         }
     }
 
@@ -239,6 +262,36 @@ mod tests {
             .await
             .unwrap();
         assert!(stricter.renditions.iter().all(|r| r.visibility == DeliveryVisibility::Signed));
+    }
+
+    /// #921: a SIGNED video plays through signed cookies on its tree — plain
+    /// CDN URLs, expiring with the cookies; without a signer it falls back to
+    /// presigned URLs; a SIGNED image never gets cookies.
+    #[tokio::test]
+    async fn a_signed_video_resolves_to_cdn_urls_with_cookies_on_its_tree() {
+        let fx = Fixture::new();
+        let (video, _) = fx.ready_signed_asset(MediaKind::Video).await;
+        let (image, _) = fx.ready_signed_asset(MediaKind::PostImage).await;
+        let handler = fx.resolve_delivery_handler();
+        let resolve = |id| handler.handle_at(env(ResolveDeliveryQuery { asset_id: id, preferred: None, visibility: None }), t0());
+
+        let unsigned = resolve(video).await.unwrap();
+        assert!(unsigned.cookies.is_none(), "no signer: presigned URLs");
+        assert!(unsigned.renditions.iter().all(|r| r.expires_at == Some(t0() + chrono::Duration::minutes(5))));
+
+        fx.cdn.sign_cookies();
+        let view = resolve(video).await.unwrap();
+        let cookies = view.cookies.clone().expect("cookies for a SIGNED video");
+        let tree = fx.assets.find_by_id(&video).await.unwrap().unwrap().object_root().unwrap().prefix();
+        assert_eq!(cookies.cookies[0].1, format!("policy-for-{tree}"), "scoped to its tree");
+        assert!(!view.renditions.is_empty());
+        for r in &view.renditions {
+            assert_eq!(r.visibility, DeliveryVisibility::Signed);
+            assert!(r.url.starts_with("https://cdn.local/"), "a plain CDN URL: {}", r.url);
+            assert_eq!(r.expires_at, Some(cookies.expires_at));
+        }
+
+        assert!(resolve(image).await.unwrap().cookies.is_none(), "an image keeps its presigned URLs");
     }
 
     #[tokio::test]

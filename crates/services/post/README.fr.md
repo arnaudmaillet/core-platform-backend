@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3e833969ff0e494db45f95c16d61719c6b6d7a5ba024b9b72c7a27fc19cfc040
-  translated_at: 2026-10-12
+  source_sha256: 43c02badb34d4cea781e8b39c83aa387ef82ec19beeb9494f5e42b3adb117fcd
+  translated_at: 2026-10-13
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -266,8 +266,9 @@ quand un profil est créé privé.
   ses posts et livre chaque asset SIGNED, ou de nouveau PUBLIC quand l'auteur redevient public. Le
   parcours est idempotent : une redélivrance le refait ; une panne de media est rejouée. Un asset encore
   en traitement à ce moment garde sa livraison, ce qui est journalisé.
-- **Les vidéos restent telles quelles** jusqu'à la livraison HLS signée (#921) : une playlist maître
-  présignée n'autorise pas ses segments, donc une vidéo SIGNED ne se lirait pas.
+- **Les vidéos** suivent la même règle une fois `POST_SIGNED_VIDEOS_ENABLED` activé (#921 ; désactivé par
+  défaut). À activer seulement après que media signe des cookies pour les vidéos SIGNED
+  (`MEDIA_CDN_COOKIE_*`). D'ici là, elles restent telles quelles.
 
 Les appels portent le jeton mesh de post (`MESH_TOKEN_FILE`).
 
@@ -364,6 +365,7 @@ async fn main() -> anyhow::Result<()> {
 | `POST_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | Non | `1000` / `1000` | Délais de cet appel. |
 | `POST_MEDIA_GRPC_ENDPOINT` | Non | non défini | endpoint mesh de media (#907) : vérifie les assets des pièces jointes à l'écriture, les livre à la lecture. Non défini : les ids d'assets sont ignorés, les pièces jointes gardent leurs URLs. |
 | `POST_MEDIA_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | Non | `300` / `1000` | Délais de ces appels (courts : les lectures sont fail-open). |
+| `POST_SIGNED_VIDEOS_ENABLED` | Non | `false` | les vidéos d'un auteur privé passent aussi en SIGNED (#921) ; à activer seulement une fois que media lit les vidéos SIGNED (`MEDIA_CDN_COOKIE_*`) |
 
 > Le réglage complet `SCYLLA_*` / `KAFKA_*` vit dans les crates partagés storage/transport.
 

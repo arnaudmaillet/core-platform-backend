@@ -524,6 +524,22 @@ fn delivered_to_proto(view: DeliveredMediaView) -> proto::DeliveredMedia {
             })
             .collect(),
         degraded: view.degraded,
+        cdn_cookies: view
+            .cookies
+            .map(|signed| {
+                signed
+                    .cookies
+                    .into_iter()
+                    .map(|(name, value)| proto::SignedCookie {
+                        name,
+                        value,
+                        domain: signed.domain.clone(),
+                        path: signed.path.clone(),
+                        expires_at: Some(to_timestamp(signed.expires_at)),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 

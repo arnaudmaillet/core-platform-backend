@@ -1,7 +1,8 @@
 //! A profile switched between public and private (#919 step 3): every one of
 //! its posts' images follows — SIGNED for a private author, PUBLIC again for a
-//! public one. Videos stay as they are until signed HLS delivery exists
-//! (#921): a SIGNED video would not play.
+//! public one. Videos follow once signed videos are on (#921,
+//! `POST_SIGNED_VIDEOS_ENABLED`: media plays them through signed cookies);
+//! until then they stay as they are.
 
 use crate::application::port::{MediaCatalog, PostRepository, SetDelivery};
 use crate::domain::value_object::ProfileId;
@@ -17,7 +18,8 @@ pub struct MediaSync {
     /// Still processing: media refuses until READY. Such an asset was
     /// uploaded moments before the switch; a later switch catches it.
     pub not_ready: usize,
-    /// Videos, left as they are (#921).
+    /// Assets that cannot go SIGNED yet (videos before #921 is on), left as
+    /// they are.
     pub videos:    usize,
 }
 
@@ -38,7 +40,7 @@ pub async fn sync_author_media(
             let Some(post) = posts.find_by_id(&summary.post_id).await? else { continue };
             for asset in post.attachments().iter().filter_map(|a| a.asset_id) {
                 let Some(facts) = media.asset(&asset).await? else { continue };
-                if facts.video {
+                if !facts.signable {
                     sync.videos += 1;
                     continue;
                 }
@@ -130,7 +132,7 @@ mod tests {
                 usable:           true,
                 signed:           false,
                 ready:            true,
-                video:            self.2.contains(id),
+                signable:         !self.2.contains(id),
             }))
         }
         async fn set_delivery(&self, id: &MediaAssetId, owner: Option<&str>, signed: bool) -> Result<SetDelivery, PostError> {

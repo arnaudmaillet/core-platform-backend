@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: b3ef9ba9c1018cee505c90b73c086c99b10f05d801d96ba52ed12b3798e0b87e
-  translated_at: 2026-10-12
+  source_sha256: b60e371e611148fae195155785a0fe8462677fa30bb9340960a139556c61929d
+  translated_at: 2026-10-13
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -346,8 +346,9 @@ pas le topic.
     ni supprimée. Sinon `CHT-2011`, réponse identique dans tous les cas.
   - **SIGNED :** une image publique READY est passée en SIGNED (media `ChangeDeliveryVisibility`, qui
     n'accepte que post et chat ; les appels portent le jeton mesh de chat). Une image encore en
-    traitement doit avoir été uploadée SIGNED : sinon `CHT-2012`. Les vidéos restent telles quelles
-    jusqu'au HLS signé (media #921).
+    traitement doit avoir été uploadée SIGNED : sinon `CHT-2012`. Les vidéos suivent la même règle une fois
+    `CHAT_SIGNED_VIDEOS_ENABLED` activé (#921, après que media signe des cookies) ; d'ici là, elles restent
+    telles quelles.
   - **Erreurs :** media injoignable → `CHT-5002`, rejouable.
   - **Stockage :** l'asset est gardé sur le message (`messages_by_conversation.media_asset_id`,
     migration 0015), dans le hot tail et dans la frame du plan.
@@ -539,6 +540,7 @@ async fn main() -> anyhow::Result<()> {
 | `CHAT_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `CHAT_SOCIAL_GRAPH_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Ses délais de requête et de connexion. |
 | `CHAT_MEDIA_GRPC_ENDPOINT` | No | non défini | gRPC mesh de media (#919) : vérifie l'asset d'un message et le passe en SIGNED à l'envoi, le livre dans l'historique (fail-open). Non défini : les ids d'assets sont ignorés. |
 | `CHAT_MEDIA_RPC_TIMEOUT_MS` / `CHAT_MEDIA_CONNECT_TIMEOUT_MS` | No | `300` / `1000` | Ses délais de requête et de connexion (courts : l'historique est fail-open). |
+| `CHAT_SIGNED_VIDEOS_ENABLED` | No | `false` | les vidéos des messages passent aussi en SIGNED (#921) ; à activer seulement une fois que media lit les vidéos SIGNED (`MEDIA_CDN_COOKIE_*`) |
 
 ### Variables d'infrastructure héritées
 

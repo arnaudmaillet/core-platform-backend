@@ -64,6 +64,10 @@ image    = { workspace = true }
 blurhash = { workspace = true }
 sha2     = { workspace = true }
 url      = { workspace = true }
+# CloudFront signed cookies (#921): RSA-SHA1 PKCS#1 v1.5 over a custom policy.
+rsa      = { version = "0.9", features = ["pem"] }
+base64   = { workspace = true }
+sha1     = { version = "0.10", features = ["oid"] }
 
 # ── Server wiring (Phase 5): runtime, tonic ingress, reflection ────────────────
 service-runtime  = { workspace = true }

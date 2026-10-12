@@ -6,8 +6,10 @@
 //! configured, a log line otherwise (local runs, no CDN).
 
 pub mod cloudfront_cdn_gateway;
+pub mod cloudfront_cookie_signer;
 pub mod cloudfront_invalidator;
 mod sigv4;
 
 pub use cloudfront_cdn_gateway::CloudFrontCdnGateway;
+pub use cloudfront_cookie_signer::CloudFrontCookieSigner;
 pub use cloudfront_invalidator::{CloudFrontInvalidator, CloudFrontInvalidatorConfig};

@@ -245,8 +245,9 @@ emitted when a profile is created private.
   and delivers every asset SIGNED, or PUBLIC again when the author goes public. The walk is idempotent, so
   a redelivery walks again; a media outage is retried. An asset still processing at that moment keeps its
   delivery, which is logged.
-- **Videos are left as they are** until signed HLS delivery exists (#921): a presigned master playlist does
-  not authorize its segments, so a SIGNED video would not play.
+- **Videos** follow the same rule once `POST_SIGNED_VIDEOS_ENABLED` is on (#921; default off). Turn it on
+  only after media signs cookies for SIGNED videos (`MEDIA_CDN_COOKIE_*`). Until then, they are left as
+  they are.
 
 The calls carry post's mesh token (`MESH_TOKEN_FILE`).
 
@@ -341,6 +342,7 @@ async fn main() -> anyhow::Result<()> {
 | `POST_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Deadlines for that call. |
 | `POST_MEDIA_GRPC_ENDPOINT` | No | unset | media mesh endpoint (#907): checks attachments' assets on write, delivers them on read. Unset: asset ids are dropped, attachments keep their URLs. |
 | `POST_MEDIA_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | No | `300` / `1000` | Deadlines for those calls (short: reads fail open). |
+| `POST_SIGNED_VIDEOS_ENABLED` | No | `false` | a private author's videos go SIGNED too (#921); on only once media plays SIGNED videos (`MEDIA_CDN_COOKIE_*`) |
 
 > Full `SCYLLA_*` / `KAFKA_*` tuning lives in the shared storage/transport crates.
 
