@@ -61,6 +61,8 @@ impl CommandHandler<HideProfileCommand> for HideProfileHandler {
 
         profile.hide(reason, cmd.suspension_reason.clone(), envelope.correlation_id)?;
         self.repo.save(&profile).await?;
+        // The account's profile list reads its own index: keep it in step.
+        self.repo.save_account_index(&profile).await?;
 
         for event in profile.drain_events() {
             self.publisher.publish(&event).await?;
