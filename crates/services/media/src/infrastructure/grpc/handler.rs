@@ -158,6 +158,7 @@ impl MediaServiceHandler {
             declared_size: req.declared_size_bytes,
             content_sha256: optional(req.content_sha256),
             idempotency_key: optional(req.idempotency_key),
+            delivery_visibility: visibility_from_proto(req.delivery_visibility),
         };
         let outcome = self
             .issue
@@ -223,7 +224,11 @@ impl MediaServiceHandler {
             .handle(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(to_status)?;
-        Ok(Response::new(proto::GetAssetResponse { asset: Some(asset_to_proto(&asset)) }))
+        // A SIGNED asset's keys and hash are its owner's (#919): with them a
+        // reader could fetch, or guess, the bytes past its signed delivery.
+        let reveal_keys = asset.delivery_visibility() == DeliveryVisibility::Public
+            || caller.is_none_or(|c| c == asset.owner_id());
+        Ok(Response::new(proto::GetAssetResponse { asset: Some(asset_view_to_proto(&asset, reveal_keys)) }))
     }
 
     pub async fn delete_asset(
@@ -408,7 +413,25 @@ fn issue_outcome_to_proto(outcome: IssueUploadTicketOutcome) -> proto::IssueUplo
     }
 }
 
+/// The asset as its owner (or the mesh) sees it.
 fn asset_to_proto(a: &Asset) -> proto::Asset {
+    asset_view_to_proto(a, true)
+}
+
+/// The asset, with its content hash and rendition keys only when `reveal_keys`
+/// (#919: a SIGNED asset's are its owner's).
+fn asset_view_to_proto(a: &Asset, reveal_keys: bool) -> proto::Asset {
+    let mut asset = asset_fields_to_proto(a);
+    if !reveal_keys {
+        asset.content_hash.clear();
+        for rendition in &mut asset.renditions {
+            rendition.storage_key.clear();
+        }
+    }
+    asset
+}
+
+fn asset_fields_to_proto(a: &Asset) -> proto::Asset {
     proto::Asset {
         id: a.id().as_str(),
         owner_id: a.owner_id().as_str(),
@@ -423,6 +446,7 @@ fn asset_to_proto(a: &Asset) -> proto::Asset {
         renditions: a.renditions().iter().map(rendition_to_proto).collect(),
         created_at: Some(to_timestamp(a.created_at())),
         updated_at: Some(to_timestamp(a.updated_at())),
+        delivery_visibility: visibility_to_proto(a.delivery_visibility()),
     }
 }
 

@@ -282,6 +282,7 @@ impl Harness {
             declared_size: size,
             content_sha256: sha,
             idempotency_key: None,
+            delivery_visibility: None,
         };
         let handler = if dedup { &self.issue_dedup } else { &self.issue };
         handler.handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now()).await
@@ -297,6 +298,7 @@ impl Harness {
             declared_size: size,
             content_sha256: None,
             idempotency_key: Some(key.to_owned()),
+            delivery_visibility: None,
         };
         self.issue.handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now()).await
     }
@@ -392,6 +394,7 @@ impl Harness {
             declared_size: bytes.len() as u64,
             content_sha256: None,
             idempotency_key: None,
+            delivery_visibility: None,
         };
         let out = self.issue.handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now()).await.expect("ticket");
         let url = out.upload.expect("a fresh upload").presigned.url;
@@ -419,6 +422,7 @@ impl Harness {
             declared_size: bytes.len() as u64,
             content_sha256: None,
             idempotency_key: None,
+            delivery_visibility: None,
         };
         let out = self.issue.handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now()).await.expect("ticket");
         let url = out.upload.expect("a fresh upload").presigned.url;

@@ -700,6 +700,15 @@ impl Fixture {
 
     /// Reserves a `Pending` asset via the real handler; does NOT upload bytes.
     pub async fn reserve_only(&self, kind: MediaKind) -> AssetId {
+        self.reserve_only_as(kind, None).await
+    }
+
+    /// The same, with the delivery visibility its owner asks for (#919).
+    pub async fn reserve_only_as(
+        &self,
+        kind: MediaKind,
+        delivery_visibility: Option<crate::domain::value_object::DeliveryVisibility>,
+    ) -> AssetId {
         let cmd = IssueUploadTicketCommand {
             owner_id: owner(),
             kind,
@@ -707,6 +716,7 @@ impl Fixture {
             declared_size: 2_000_000,
             content_sha256: None,
             idempotency_key: None,
+            delivery_visibility,
         };
         self.issue_ticket_handler()
             .handle(Envelope::new(Uuid::now_v7(), cmd), t0())
@@ -736,6 +746,21 @@ impl Fixture {
             .await
             .unwrap();
         id
+    }
+
+    /// A `Ready` asset its owner uploaded as SIGNED (#919).
+    pub async fn ready_signed_asset(&self, kind: MediaKind) -> (AssetId, OwnerId) {
+        let id = self.reserve_only_as(kind, Some(crate::domain::value_object::DeliveryVisibility::Signed)).await;
+        self.store.put_object(&StorageKey::staging(id), 2_000_000, "etag-1");
+        self.commit_handler()
+            .handle(Envelope::new(Uuid::now_v7(), CommitUploadCommand { asset_id: id, etag: None, content_sha256: None }), t0())
+            .await
+            .unwrap();
+        self.process_handler()
+            .handle(Envelope::new(Uuid::now_v7(), ProcessAssetCommand { asset_id: id }), t0())
+            .await
+            .unwrap();
+        (id, owner())
     }
 
     /// Drives an asset all the way to `Ready` and returns `(id, owner)`.
@@ -778,6 +803,7 @@ impl Fixture {
             prior_state: None,
             enforcements: Default::default(),
             purge_after: None,
+            delivery_visibility: crate::domain::value_object::DeliveryVisibility::Public,
             created_at: t0(),
             updated_at: t0(),
         });

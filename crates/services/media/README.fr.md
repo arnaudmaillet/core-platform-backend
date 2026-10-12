@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 27b7c3414d9ebb206efba14ee2e0fb372a3a3c3a45c2e4edd4537723e5b4869c
-  translated_at: 2026-10-10
+  source_sha256: fa740133e9a3a6f7244623b26b3f568c72ec5db797453d1da6140e053d1ffd35
+  translated_at: 2026-10-12
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -199,12 +199,25 @@ quarantaine n'est jamais remis.
 `PERMISSION_DENIED` (`MED-7001`, 451) ; suppression sous blocage légal →
 `PERMISSION_DENIED` (`MED-7003`).
 
+**La visibilité de livraison est celle du serveur (#919).** Chaque asset porte une `delivery_visibility`
+(dans son document stocké ; un document écrit avant se lit PUBLIC) : celle par défaut de son type
+(PUBLIC ; un document privé n'est jamais livré) ou celle que son propriétaire a demandée dans
+`IssueUploadTicketRequest.delivery_visibility` — SIGNED pour un média qui ne doit jamais être derrière une
+URL publique permanente. `ResolveDelivery` / `BatchResolveDelivery` le livrent ainsi : la `visibility` de
+la requête ne peut que la rendre **plus stricte** (PUBLIC demandé pour un asset SIGNED se résout SIGNED).
+`GetAsset` ne montre le `content_hash` et les `storage_key` des renditions d'un asset SIGNED qu'à son
+propriétaire et au mesh (tout autre les reçoit vides : avec eux un lecteur pourrait récupérer ou deviner
+les octets en contournant la livraison signée) ; `Asset.delivery_visibility` dit laquelle. Un upload SIGNED
+n'est jamais dédupliqué sur un asset existant. Ensuite (#919 étape 2) : les renditions SIGNED sous un
+préfixe `restricted/` propre à chaque asset que le CDN ne sert jamais, derrière
+`MEDIA_RESTRICTED_PREFIX_ENABLED`.
+
 **Clés d'idempotence d'upload (#876).** `IssueUploadTicketRequest.idempotency_key` (1 à 128 caractères
 ASCII imprimables ; `MED-1008` sinon) est enregistrée sur l'asset qu'elle réserve (`assets.upload_key`,
 unique par propriétaire parmi les assets vivants). Un ticket rejoué sous la même clé ne réserve rien et
 renvoie cet asset : une nouvelle URL d'upload tant qu'il est `PENDING`, aucun upload (`deduplicated`) une
-fois passé `PENDING`. La même clé pour un autre type de média, un autre type déclaré ou un autre contenu
-échoue en `FAILED_PRECONDITION` (`MED-1007`). Supprimer ou abandonner l'asset libère sa clé.
+fois passé `PENDING`. La même clé pour un autre type de média, un autre type déclaré, un autre contenu ou
+une autre visibilité de livraison (#919) échoue en `FAILED_PRECONDITION` (`MED-1007`). Supprimer ou abandonner l'asset libère sa clé.
 
 **Documents privés (#777).** `MEDIA_KIND_PRIVATE_DOCUMENT` contient les pièces d'une demande de
 vérification (`RequestVerification` de profile) : JPEG, PNG, HEIC ou PDF, ≤ 10 Mio, possédés par le compte

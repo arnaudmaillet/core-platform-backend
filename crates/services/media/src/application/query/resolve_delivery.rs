@@ -14,7 +14,8 @@ pub struct ResolveDeliveryQuery {
     pub asset_id: AssetId,
     /// `None` ⇒ all renditions; `Some(k)` ⇒ just that rendition if present.
     pub preferred: Option<RenditionKind>,
-    /// `None` ⇒ the asset's default visibility (public).
+    /// `None` ⇒ the asset's own visibility. Only ever stricter (#919): PUBLIC
+    /// for a SIGNED asset still resolves SIGNED.
     pub visibility: Option<DeliveryVisibility>,
 }
 
@@ -95,7 +96,9 @@ impl ResolveDeliveryHandler {
             };
         }
 
-        let visibility = visibility.unwrap_or_default();
+        // The server decides (#919): the asset's own visibility, which a
+        // request may tighten but never relax.
+        let visibility = asset.delivery_visibility().stricter(visibility);
         let mut views = Vec::new();
         let mut degraded = false;
 
@@ -203,6 +206,39 @@ mod tests {
         // Public URLs are immutable — no expiry.
         assert!(view.renditions.iter().all(|r| r.expires_at.is_none()));
         assert!(view.renditions.iter().all(|r| r.url.contains("cdn")));
+    }
+
+    /// #919: the server decides. A SIGNED asset resolves SIGNED whatever the
+    /// request asks (none, or PUBLIC) — singly and in a batch; a PUBLIC one
+    /// may still be asked SIGNED (stricter).
+    #[tokio::test]
+    async fn a_signed_asset_never_resolves_public_whatever_the_request() {
+        let fx = Fixture::new();
+        let (signed, _) = fx.ready_signed_asset(MediaKind::PostImage).await;
+        let handler = fx.resolve_delivery_handler();
+        for asked in [None, Some(DeliveryVisibility::Public)] {
+            let view = handler
+                .handle_at(env(ResolveDeliveryQuery { asset_id: signed, preferred: None, visibility: asked }), t0())
+                .await
+                .unwrap();
+            assert!(!view.renditions.is_empty());
+            assert!(
+                view.renditions.iter().all(|r| r.visibility == DeliveryVisibility::Signed && r.expires_at.is_some()),
+                "{asked:?}"
+            );
+        }
+        let batch = handler.resolve_batch(&[signed], None, Some(DeliveryVisibility::Public), t0()).await.unwrap();
+        assert!(batch[0].renditions.iter().all(|r| r.visibility == DeliveryVisibility::Signed));
+
+        let (public, _) = fx.ready_asset(MediaKind::PostImage).await;
+        let stricter = handler
+            .handle_at(
+                env(ResolveDeliveryQuery { asset_id: public, preferred: None, visibility: Some(DeliveryVisibility::Signed) }),
+                t0(),
+            )
+            .await
+            .unwrap();
+        assert!(stricter.renditions.iter().all(|r| r.visibility == DeliveryVisibility::Signed));
     }
 
     #[tokio::test]

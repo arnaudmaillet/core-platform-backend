@@ -7,7 +7,7 @@ use crate::domain::event::{
     AssetVariantReady, DomainEvent,
 };
 use crate::domain::value_object::{
-    AssetId, AssetState, Blurhash, ContentHash, Dimensions, MediaKind, MimeType, OwnerId,
+    AssetId, AssetState, Blurhash, ContentHash, DeliveryVisibility, Dimensions, MediaKind, MimeType, OwnerId,
     RenditionKind, StorageKey, UploadConstraints,
 };
 use crate::error::MediaError;
@@ -65,6 +65,9 @@ pub struct ReserveParams {
     pub kind: MediaKind,
     pub declared_mime: MimeType,
     pub declared_size: u64,
+    /// The visibility the owner asked for at upload (#919); `None` ⇒ the
+    /// kind's default. Never laxer than the kind's.
+    pub delivery_visibility: Option<DeliveryVisibility>,
 }
 
 /// The verified facts established when an upload is finalized (from the server-side
@@ -102,6 +105,8 @@ pub struct AssetSnapshot {
     pub enforcements: BTreeSet<String>,
     /// When a private document is purged (#777); `None` for other kinds.
     pub purge_after: Option<DateTime<Utc>>,
+    /// How its renditions are delivered (#919).
+    pub delivery_visibility: DeliveryVisibility,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -144,6 +149,11 @@ pub struct Asset {
     /// the decision + retention once its verification request is decided.
     #[serde(default)]
     purge_after: Option<DateTime<Utc>>,
+    /// How its renditions are delivered (#919): decided by the server — the
+    /// kind's default, or what the owner asked for at upload — never by a
+    /// reader's request. Old cache entries without it read as public.
+    #[serde(default)]
+    delivery_visibility: DeliveryVisibility,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 
@@ -178,6 +188,7 @@ impl Asset {
             prior_state: None,
             enforcements: BTreeSet::new(),
             purge_after: None,
+            delivery_visibility: params.kind.default_visibility().stricter(params.delivery_visibility),
             created_at: now,
             updated_at: now,
             pending_events: Vec::new(),
@@ -203,6 +214,7 @@ impl Asset {
             prior_state: s.prior_state,
             enforcements: s.enforcements,
             purge_after: s.purge_after,
+            delivery_visibility: s.delivery_visibility,
             created_at: s.created_at,
             updated_at: s.updated_at,
             pending_events: Vec::new(),
@@ -213,6 +225,11 @@ impl Asset {
 
     pub fn id(&self) -> AssetId {
         self.id
+    }
+
+    /// How its renditions are delivered (#919).
+    pub fn delivery_visibility(&self) -> DeliveryVisibility {
+        self.delivery_visibility
     }
     pub fn owner_id(&self) -> OwnerId {
         self.owner_id
@@ -567,6 +584,7 @@ mod tests {
                 kind: MediaKind::PostImage,
                 declared_mime: MimeType::new("image/jpeg").unwrap(),
                 declared_size: 2_000_000,
+                delivery_visibility: None,
             },
             &constraints(),
             t0(),
@@ -613,6 +631,7 @@ mod tests {
                 kind: MediaKind::Avatar,
                 declared_mime: MimeType::new("image/png").unwrap(),
                 declared_size: MediaKind::Avatar.max_bytes() + 1,
+                delivery_visibility: None,
             },
             &UploadConstraints::for_kind(MediaKind::Avatar),
             t0(),
@@ -626,6 +645,7 @@ mod tests {
                 kind: MediaKind::Avatar,
                 declared_mime: MimeType::new("application/zip").unwrap(),
                 declared_size: 10,
+                delivery_visibility: None,
             },
             &UploadConstraints::for_kind(MediaKind::Avatar),
             t0(),
@@ -797,6 +817,7 @@ mod tests {
             prior_state: None,
             enforcements: Default::default(),
             purge_after: None,
+            delivery_visibility: crate::domain::value_object::DeliveryVisibility::Public,
             created_at: a.created_at(),
             updated_at: a.updated_at(),
         };
