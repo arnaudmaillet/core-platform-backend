@@ -214,8 +214,23 @@ it; bytes it alone holds are moved and the CDN is purged of their public paths);
 content-addressed tree. Objects move before the row is saved, driven by listing, so a retry completes a
 move cut short, and the same visibility again completes a move the flag held back. Off, only the
 visibility changes; objects stay where they are (still delivered signed only). Turn it on only once the
-CDN denies `restricted/`, and not while SIGNED videos are uploaded: a presigned master playlist does not
-authorize its segments, so they would stop playing until signed HLS delivery lands (#921).
+CDN serves `restricted/` to signed requests only. SIGNED videos need the cookie signer below (#921).
+
+**SIGNED videos play through CloudFront signed cookies (#921).** A player resolves the master playlist's
+relative URIs against the master's URL and drops its query string, so a presigned URL cannot cover an
+HLS tree. With `MEDIA_CDN_COOKIE_KEY_PAIR_ID` + `MEDIA_CDN_COOKIE_PRIVATE_KEY` set, `ResolveDelivery` /
+`BatchResolveDelivery` answer a SIGNED video as follows:
+- the renditions' URLs are plain CDN URLs (`MEDIA_CDN_BASE_URL/…`);
+- `DeliveredMedia.cdn_cookies` carries `CloudFront-Policy`, `CloudFront-Signature` and
+  `CloudFront-Key-Pair-Id` for the CDN host, path `/`;
+- the policy is a custom one on the asset's tree (`{base}/{tree}/*`) until `expires_at`
+  (`MEDIA_CDN_COOKIE_TTL_SECS`, 1 h; the renditions' `url_expires_at` match it);
+- the signature is RSA-SHA1 PKCS#1 v1.5 with CloudFront's base64 substitutions.
+
+The player sends these cookies with every request of the tree and re-resolves when they expire. The key
+pair must be in the distribution's trusted key group, and the `restricted/` behaviour must require it
+(core-platform-infra#87). A key that does not parse stops the start. Without a signer, a SIGNED video
+falls back to a presigned master that does not play. Images keep their presigned URLs.
 
 **Private documents (#777).** `MEDIA_KIND_PRIVATE_DOCUMENT` holds verification evidence (profile
 `RequestVerification`): JPEG, PNG, HEIC or PDF, ≤ 10 MiB, owned by the account like any asset. **Off by
@@ -368,6 +383,8 @@ async fn main() -> anyhow::Result<()> {
 | `MEDIA_UPLOAD_TICKET_TTL_SECS` | No | `900` | pre-signed upload validity window |
 | `MEDIA_SIGNED_URL_TTL_SECS` | No | `300` | private (signed) delivery URL validity; also the staff link to a private document |
 | `MEDIA_PRIVATE_DOCUMENTS_ENABLED` | No | `false` | private documents may be uploaded (#777); turn on only once `private/` is outside the CDN's origin access (core-platform-infra#37) |
+| `MEDIA_CDN_COOKIE_KEY_PAIR_ID` / `MEDIA_CDN_COOKIE_PRIVATE_KEY` | No | unset | the CloudFront key pair (id, PEM private key: PKCS#1 or PKCS#8) whose signed cookies play SIGNED videos (#921); it must be in the distribution's trusted key group |
+| `MEDIA_CDN_COOKIE_TTL_SECS` | No | `3600` | how long signed cookies grant a video's tree |
 | `MEDIA_RESTRICTED_PREFIX_ENABLED` | No | `false` | SIGNED assets' renditions are written to, and moved into, their own `restricted/` tree (#919); turn on only once the CDN denies `restricted/` (core-platform-infra#87) |
 | `MEDIA_DOCUMENT_RETENTION_DAYS` | No | `30` | a private document's life after its verification request's decision (#777) |
 | `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS` | No | `3600` | how often due private documents are purged |

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: e022ef1f8949c27837da07ec897feff8de1b18c00eef1fbb82eb94fe3812c1c8
-  translated_at: 2026-10-12
+  source_sha256: 92c67948dc134b1071bdeb7626c4e23d345f14854b3757d0edf043dbe268f7c0
+  translated_at: 2026-10-13
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -234,9 +234,26 @@ seul à détenir sont déplacés et le CDN est purgé de leurs chemins publics) 
 adressé par contenu. Les objets bougent avant l'enregistrement de la ligne, pilotés par un listing : une
 nouvelle tentative termine un déplacement interrompu, et la même visibilité redemandée termine un
 déplacement que le flag avait retenu. Désactivé, seule la visibilité change ; les objets restent où ils
-sont (toujours livrés uniquement signés). À activer seulement une fois que le CDN refuse `restricted/`, et
-pas tant que des vidéos SIGNED sont uploadées : une playlist maître présignée n'autorise pas ses segments,
-qui cesseraient d'être lus jusqu'à la livraison HLS signée (#921).
+sont (toujours livrés uniquement signés). À activer seulement une fois que le CDN ne sert `restricted/`
+qu'aux requêtes signées. Les vidéos SIGNED ont besoin du signataire de cookies ci-dessous (#921).
+
+**Les vidéos SIGNED se lisent par cookies signés CloudFront (#921).** Un lecteur résout les URI relatives
+de la playlist maître par rapport à l'URL de la maître et abandonne sa query string, donc une URL
+présignée ne peut pas couvrir un arbre HLS. Avec `MEDIA_CDN_COOKIE_KEY_PAIR_ID` +
+`MEDIA_CDN_COOKIE_PRIVATE_KEY` définis, `ResolveDelivery` / `BatchResolveDelivery` répondent pour une vidéo
+SIGNED comme suit :
+- les URLs des renditions sont de simples URLs CDN (`MEDIA_CDN_BASE_URL/…`) ;
+- `DeliveredMedia.cdn_cookies` porte `CloudFront-Policy`, `CloudFront-Signature` et
+  `CloudFront-Key-Pair-Id` pour l'hôte du CDN, chemin `/` ;
+- la politique est une politique personnalisée sur l'arbre de l'asset (`{base}/{arbre}/*`) jusqu'à
+  `expires_at` (`MEDIA_CDN_COOKIE_TTL_SECS`, 1 h ; les `url_expires_at` des renditions s'y alignent) ;
+- la signature est en RSA-SHA1 PKCS#1 v1.5 avec les substitutions base64 de CloudFront.
+
+Le lecteur envoie ces cookies avec chaque requête de l'arbre et résout à nouveau à leur expiration. La
+paire de clés doit être dans le trusted key group de la distribution, et le comportement `restricted/`
+doit l'exiger (core-platform-infra#87). Une clé qui ne se lit pas arrête le démarrage. Sans signataire,
+une vidéo SIGNED retombe sur une maître présignée qui ne se lit pas. Les images gardent leurs URLs
+présignées.
 
 **Clés d'idempotence d'upload (#876).** `IssueUploadTicketRequest.idempotency_key` (1 à 128 caractères
 ASCII imprimables ; `MED-1008` sinon) est enregistrée sur l'asset qu'elle réserve (`assets.upload_key`,
@@ -405,6 +422,8 @@ async fn main() -> anyhow::Result<()> {
 | `MEDIA_UPLOAD_TICKET_TTL_SECS` | Non | `900` | fenêtre de validité de l'upload pré-signé |
 | `MEDIA_SIGNED_URL_TTL_SECS` | Non | `300` | validité de l'URL de diffusion privée (signée) |
 | `MEDIA_PRIVATE_DOCUMENTS_ENABLED` | Non | `false` | autorise l'upload de documents privés (#777) ; à activer seulement une fois `private/` hors de l'accès d'origine du CDN (core-platform-infra#37) |
+| `MEDIA_CDN_COOKIE_KEY_PAIR_ID` / `MEDIA_CDN_COOKIE_PRIVATE_KEY` | Non | non défini | la paire de clés CloudFront (id, clé privée PEM : PKCS#1 ou PKCS#8) dont les cookies signés font lire les vidéos SIGNED (#921) ; elle doit être dans le trusted key group de la distribution |
+| `MEDIA_CDN_COOKIE_TTL_SECS` | Non | `3600` | combien de temps les cookies signés ouvrent l'arbre d'une vidéo |
 | `MEDIA_RESTRICTED_PREFIX_ENABLED` | Non | `false` | les renditions des assets SIGNED sont écrites dans, et déplacées vers, leur propre arbre `restricted/` (#919) ; à activer seulement une fois que le CDN refuse `restricted/` (core-platform-infra#87) |
 | `MEDIA_DOCUMENT_RETENTION_DAYS` | Non | `30` | durée de vie d'un document privé après la décision de sa demande de vérification (#777) |
 | `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS` | Non | `3600` | fréquence de purge des documents privés échus |

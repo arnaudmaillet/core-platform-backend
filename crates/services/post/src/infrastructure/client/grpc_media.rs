@@ -33,11 +33,16 @@ pub trait MediaDelivery: Send + Sync + 'static {
 /// carry post's mesh token: `ChangeDeliveryVisibility` takes post only (#919).
 pub struct GrpcMedia {
     media: MediaServiceClient<InterceptedService<Channel, MeshTokenInterceptor>>,
+    /// `POST_SIGNED_VIDEOS_ENABLED` (#921): videos go SIGNED too (media signs cookies).
+    signed_videos: bool,
 }
 
 impl GrpcMedia {
     pub fn new(media: Channel) -> Self {
-        Self { media: MediaServiceClient::with_interceptor(media, MeshTokenInterceptor::from_env()) }
+        Self {
+            media: MediaServiceClient::with_interceptor(media, MeshTokenInterceptor::from_env()),
+            signed_videos: std::env::var("POST_SIGNED_VIDEOS_ENABLED").is_ok_and(|v| matches!(v.trim(), "1" | "true" | "yes")),
+        }
     }
 }
 
@@ -59,7 +64,8 @@ impl MediaCatalog for GrpcMedia {
             ),
             signed: asset.delivery_visibility == DeliveryVisibility::MediaDeliveryVisibilitySigned as i32,
             ready: asset.state == AssetState::MediaAssetStateReady as i32,
-            video: asset.kind == MediaKind::Video as i32,
+            // A video goes SIGNED only once media plays SIGNED videos (#921).
+            signable: asset.kind != MediaKind::Video as i32 || self.signed_videos,
             owner_account_id: asset.owner_id,
         }))
     }

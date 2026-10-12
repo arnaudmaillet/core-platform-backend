@@ -19,9 +19,10 @@ pub struct MediaAssetFacts {
     pub signed:           bool,
     /// READY: its delivery visibility may change.
     pub ready:            bool,
-    /// A video: it stays PUBLIC for now — a presigned HLS master does not
-    /// authorize its segments, so a SIGNED video would not play (#921).
-    pub video:            bool,
+    /// Its delivery may go SIGNED: an image, or a video once media plays
+    /// SIGNED videos through signed cookies (#921; `POST_SIGNED_VIDEOS_ENABLED`).
+    /// An unsignable one is left as it is.
+    pub signable:         bool,
 }
 
 /// What a delivery-visibility change came to (#919 step 3).
@@ -58,7 +59,8 @@ pub trait MediaCatalog: Send + Sync + 'static {
 /// A private author's images are SIGNED only (#919 step 3): a READY public one
 /// is made SIGNED here; one still processing must have been uploaded SIGNED
 /// (`PST-3006`), as its visibility cannot change before it is ready. Videos
-/// are left as they are until signed HLS delivery exists (#921).
+/// follow once signed videos are enabled (#921); until then they are left as
+/// they are.
 /// Whether `author`'s attachments must be SIGNED: asked only when one names
 /// an asset that media will check.
 pub async fn author_private_for(
@@ -96,7 +98,7 @@ pub async fn check_media(
         }) else {
             return Err(PostError::MediaAssetNotUsable { index, asset_id: id.as_str() });
         };
-        if author_private && !facts.signed && !facts.video {
+        if author_private && !facts.signed && facts.signable {
             if !facts.ready {
                 return Err(PostError::MediaNotSigned { index, asset_id: id.as_str() });
             }
@@ -148,7 +150,7 @@ mod tests {
     const ACCOUNT: &str = "acct-1";
 
     fn facts(owner: &str, attachable: bool, usable: bool) -> MediaAssetFacts {
-        MediaAssetFacts { owner_account_id: owner.into(), attachable, usable, signed: false, ready: true, video: false }
+        MediaAssetFacts { owner_account_id: owner.into(), attachable, usable, signed: false, ready: true, signable: true }
     }
 
     fn catalog(f: MediaAssetFacts) -> FakeCatalog {
@@ -229,9 +231,9 @@ mod tests {
         check_media(Some(&signed), Some(ACCOUNT), true, &mut attachments(Some(MINE))).await.unwrap();
         assert!(signed.changes().is_empty());
 
-        let video = catalog(MediaAssetFacts { video: true, ..facts(ACCOUNT, true, true) });
+        let video = catalog(MediaAssetFacts { signable: false, ..facts(ACCOUNT, true, true) });
         check_media(Some(&video), Some(ACCOUNT), true, &mut attachments(Some(MINE))).await.unwrap();
-        assert!(video.changes().is_empty(), "a video stays public until #921");
+        assert!(video.changes().is_empty(), "a video stays public until signed videos are on (#921)");
 
         let public_author = catalog(facts(ACCOUNT, true, true));
         check_media(Some(&public_author), Some(ACCOUNT), false, &mut attachments(Some(MINE))).await.unwrap();

@@ -17,8 +17,9 @@ pub struct MediaAssetFacts {
     pub signed:           bool,
     /// READY: its delivery visibility may change.
     pub ready:            bool,
-    /// A video: left as it is until signed HLS exists (#921).
-    pub video:            bool,
+    /// Its delivery may go SIGNED: an image, or a video once media plays
+    /// SIGNED videos (#921; `CHAT_SIGNED_VIDEOS_ENABLED`).
+    pub signable:         bool,
 }
 
 /// media's asset metadata and delivery visibility.
@@ -37,8 +38,8 @@ pub trait MessageMedia: Send + Sync + 'static {
 /// video of the sender's account (`account`, the edge caller's; `None` on the
 /// mesh) that is usable — one answer for every refusal (`CHT-2011`). Chat
 /// media is SIGNED only: a READY public image is made SIGNED here; one still
-/// processing must have been uploaded SIGNED (`CHT-2012`). Videos are left as
-/// they are until signed HLS exists (#921). Without `media` (not configured)
+/// processing must have been uploaded SIGNED (`CHT-2012`). Videos follow once
+/// signed videos are on (#921, `CHAT_SIGNED_VIDEOS_ENABLED`). Without `media` (not configured)
 /// the asset is dropped: the message keeps its `media_ref`.
 pub async fn checked_media(
     media: Option<&dyn MessageMedia>,
@@ -57,7 +58,7 @@ pub async fn checked_media(
         .filter(|f| f.attachable && f.usable && account.is_none_or(|a| f.owner_account_id == a))
         .ok_or_else(not_usable)?;
     if !facts.signed
-        && !facts.video
+        && facts.signable
         && (!facts.ready || !media.make_signed(asset, &facts.owner_account_id).await?)
     {
         return Err(ChatError::MediaNotSigned { asset_id: asset.to_string() });
@@ -92,7 +93,7 @@ mod tests {
             usable:           true,
             signed:           false,
             ready:            true,
-            video:            false,
+            signable:         true,
         }
     }
 
@@ -109,7 +110,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_signed_image_or_a_video_is_left_as_it_is() {
-        for f in [MediaAssetFacts { signed: true, ready: false, ..facts() }, MediaAssetFacts { video: true, ..facts() }] {
+        for f in [MediaAssetFacts { signed: true, ready: false, ..facts() }, MediaAssetFacts { signable: false, ..facts() }] {
             let m = media(f);
             checked_media(Some(&m), Some("acct"), Some(Uuid::now_v7())).await.unwrap();
             assert!(m.1.lock().unwrap().is_empty());

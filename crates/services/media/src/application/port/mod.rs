@@ -24,7 +24,7 @@ pub mod video_transcoder;
 
 pub use access_log::{AccessLog, DocumentView};
 pub use asset_repository::AssetRepository;
-pub use cdn_gateway::{CdnGateway, ResolvedUrl};
+pub use cdn_gateway::{SignedCookies, CdnGateway, ResolvedUrl};
 pub use delivery_cache::DeliveryCache;
 pub use event_publisher::EventPublisher;
 pub use image_processor::{DerivedRenditions, ImageProcessor};

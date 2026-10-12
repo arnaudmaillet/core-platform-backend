@@ -195,7 +195,20 @@ impl App {
         // require the gate to be up at boot.
         let screen_channel = Channel::from_shared(config.screen_endpoint)?.connect_lazy();
 
-        let mut cdn = CloudFrontCdnGateway::new(config.cdn_base_url, Arc::clone(&store), config.policy.signed_url_ttl);
+        let mut cdn = CloudFrontCdnGateway::new(config.cdn_base_url.clone(), Arc::clone(&store), config.policy.signed_url_ttl);
+        // SIGNED videos play through signed cookies (#921). A key that does
+        // not parse stops the start: never a silently unplayable video.
+        match &config.cdn_cookie_key {
+            Some((key_pair_id, pem)) => {
+                cdn = cdn.with_cookie_signer(crate::infrastructure::cdn::CloudFrontCookieSigner::new(
+                    key_pair_id.clone(),
+                    pem,
+                    &config.cdn_base_url,
+                    config.cdn_cookie_ttl,
+                )?);
+            }
+            None => tracing::warn!("MEDIA_CDN_COOKIE_KEY_PAIR_ID / _PRIVATE_KEY not set: SIGNED videos do not play (#921)"),
+        }
         match config.cloudfront_distribution_id {
             Some(distribution_id) => {
                 cdn = cdn.with_invalidator(CloudFrontInvalidator::new(

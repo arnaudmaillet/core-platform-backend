@@ -674,7 +674,7 @@ mod tests {
                     usable:           true,
                     signed:           true,
                     ready:            true,
-                    video:            false,
+                    signable:         true,
                 }))
             }
             async fn make_signed(&self, _: Uuid, _: &str) -> Result<bool, ChatError> {

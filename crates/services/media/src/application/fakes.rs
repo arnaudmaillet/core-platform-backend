@@ -291,11 +291,22 @@ impl StubObjectStore {
 pub struct RecordingCdnGateway {
     invalidated: Mutex<Vec<String>>,
     failing: std::sync::atomic::AtomicBool,
+    /// Signs cookies for SIGNED videos (#921) once set.
+    cookies: std::sync::atomic::AtomicBool,
 }
 
 impl RecordingCdnGateway {
     pub fn new() -> Self {
-        Self { invalidated: Mutex::new(Vec::new()), failing: std::sync::atomic::AtomicBool::new(false) }
+        Self {
+            invalidated: Mutex::new(Vec::new()),
+            failing: std::sync::atomic::AtomicBool::new(false),
+            cookies: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// A cookie signer is configured (#921).
+    pub fn sign_cookies(&self) {
+        self.cookies.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub fn invalidated_keys(&self) -> Vec<String> {
@@ -330,6 +341,19 @@ impl CdnGateway for RecordingCdnGateway {
         now: DateTime<Utc>,
     ) -> Result<ResolvedUrl, MediaError> {
         Ok(ResolvedUrl { url: format!("https://signed.local/{}?ttl={}", key.as_str(), ttl.num_seconds()), expires_at: Some(now + ttl) })
+    }
+
+    async fn signed_cookies(
+        &self,
+        prefix: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<crate::application::port::SignedCookies>, MediaError> {
+        Ok(self.cookies.load(std::sync::atomic::Ordering::SeqCst).then(|| crate::application::port::SignedCookies {
+            cookies: vec![("CloudFront-Policy".into(), format!("policy-for-{prefix}"))],
+            domain: "cdn.local".into(),
+            path: "/".into(),
+            expires_at: now + Duration::hours(1),
+        }))
     }
 
     async fn invalidate(&self, keys: &[StorageKey]) -> Result<(), MediaError> {
@@ -775,10 +799,17 @@ impl Fixture {
             .handle(Envelope::new(Uuid::now_v7(), CommitUploadCommand { asset_id: id, etag: None, content_sha256: None }), t0())
             .await
             .unwrap();
-        self.process_handler()
-            .handle(Envelope::new(Uuid::now_v7(), ProcessAssetCommand { asset_id: id }), t0())
-            .await
-            .unwrap();
+        if kind == MediaKind::Video {
+            self.transcode_handler()
+                .handle(Envelope::new(Uuid::now_v7(), super::command::TranscodeAssetCommand { asset_id: id }), t0())
+                .await
+                .unwrap();
+        } else {
+            self.process_handler()
+                .handle(Envelope::new(Uuid::now_v7(), ProcessAssetCommand { asset_id: id }), t0())
+                .await
+                .unwrap();
+        }
         (id, owner())
     }
 

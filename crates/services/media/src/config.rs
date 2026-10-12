@@ -20,6 +20,14 @@ pub struct MediaConfig {
     /// (signed with the S3 keys, whose IAM user needs
     /// `cloudfront:CreateInvalidation`). Unset: takedowns only log.
     pub cloudfront_distribution_id: Option<String>,
+    /// `MEDIA_CDN_COOKIE_KEY_PAIR_ID` + `MEDIA_CDN_COOKIE_PRIVATE_KEY` (PEM):
+    /// the CloudFront key pair (in the distribution's trusted key group) that
+    /// signs cookies for SIGNED videos (#921). Unset: SIGNED videos resolve to
+    /// a presigned master only (their segments do not play).
+    pub cdn_cookie_key: Option<(String, String)>,
+    /// `MEDIA_CDN_COOKIE_TTL_SECS` (3600): how long signed cookies grant a
+    /// video's tree (a playback must fit; re-resolve to refresh).
+    pub cdn_cookie_ttl: Duration,
     /// gRPC endpoint of `moderation` (the pre-publish Screen gate).
     pub screen_endpoint: String,
     pub policy: MediaPolicy,
@@ -62,12 +70,21 @@ impl MediaConfig {
                 .ok()
                 .map(|id| id.trim().to_owned())
                 .filter(|id| !id.is_empty()),
+            cdn_cookie_key: match (non_empty("MEDIA_CDN_COOKIE_KEY_PAIR_ID"), non_empty("MEDIA_CDN_COOKIE_PRIVATE_KEY")) {
+                (Some(id), Some(pem)) => Some((id, pem)),
+                _ => None,
+            },
+            cdn_cookie_ttl: Duration::seconds(env_u64("MEDIA_CDN_COOKIE_TTL_SECS", 3_600).max(60) as i64),
             screen_endpoint: env_or("MEDIA_SCREEN_GRPC_ENDPOINT", "http://localhost:50061"),
             policy,
             document_retention: Duration::days(env_u64("MEDIA_DOCUMENT_RETENTION_DAYS", 30).max(1) as i64),
             document_sweep_interval: StdDuration::from_secs(env_u64("MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS", 3_600).max(60)),
         }
     }
+}
+
+fn non_empty(key: &str) -> Option<String> {
+    std::env::var(key).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
 
 fn env_or(key: &str, default: impl Into<String>) -> String {

@@ -229,6 +229,21 @@ message DeliveredMedia {
     // Fail-open marker: media could not fully resolve (engine/CDN partial); the
     // caller renders what it can.
     bool                         degraded   = 5;
+    // #921: a SIGNED video's signed cookies. Its renditions' URLs are then plain
+    // CDN URLs, and the player must send these cookies with every request of the
+    // HLS tree (master, rung playlists, segments): they grant the asset's whole
+    // tree until `expires_at` (re-resolve to refresh). Empty otherwise.
+    repeated SignedCookie        cdn_cookies = 6;
+}
+
+// A cookie the client sends to the CDN (#921).
+message SignedCookie {
+    string                    name       = 1;
+    string                    value      = 2;
+    // The CDN host it is sent to, and the path.
+    string                    domain     = 3;
+    string                    path       = 4;
+    google.protobuf.Timestamp expires_at = 5;
 }
 
 message DeliveredRendition {
