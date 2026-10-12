@@ -29,7 +29,7 @@ use crate::domain::aggregate::{Asset, AssetSnapshot, Rendition};
 use crate::domain::event::DomainEvent;
 use crate::domain::value_object::{
     AssetId, AssetState, Blurhash, ContentHash, DeliveryVisibility, Dimensions, MediaKind, MimeType,
-    OwnerId, RenditionKind, StorageKey, UploadKey,
+    ObjectRoot, OwnerId, RenditionKind, StorageKey, UploadKey,
 };
 use crate::error::MediaError;
 
@@ -267,6 +267,14 @@ impl ObjectStore for StubObjectStore {
         }
         Ok(())
     }
+
+    async fn copy(&self, from: &StorageKey, to: &StorageKey) -> Result<(), MediaError> {
+        let mut objects = self.objects.lock().unwrap();
+        if let Some(head) = objects.get(from.as_str()).cloned() {
+            objects.insert(to.as_str().to_owned(), head);
+        }
+        Ok(())
+    }
 }
 
 impl StubObjectStore {
@@ -389,20 +397,20 @@ impl ImageProcessor for StubImageProcessor {
     async fn derive(
         &self,
         _source: &StorageKey,
-        kind: MediaKind,
-        hash: &ContentHash,
+        _kind: MediaKind,
+        root: &ObjectRoot,
     ) -> Result<DerivedRenditions, MediaError> {
         let original = Rendition::new(
             RenditionKind::Original,
             jpeg(),
-            StorageKey::rendition(kind, hash, RenditionKind::Original, "jpg"),
+            root.rendition(RenditionKind::Original, "jpg"),
             Dimensions::new(1920, 1080).unwrap(),
             2_000_000,
         );
         let thumbnail = Rendition::new(
             RenditionKind::Thumbnail,
             MimeType::new("image/webp").unwrap(),
-            StorageKey::rendition(kind, hash, RenditionKind::Thumbnail, "webp"),
+            root.rendition(RenditionKind::Thumbnail, "webp"),
             Dimensions::new(320, 180).unwrap(),
             20_000,
         );
@@ -428,19 +436,20 @@ impl VideoTranscoder for StubVideoTranscoder {
     async fn transcode(
         &self,
         _source: &StorageKey,
-        hash: &ContentHash,
+        _hash: &ContentHash,
+        root: &ObjectRoot,
     ) -> Result<TranscodeOutput, MediaError> {
         let manifest = Rendition::new(
             RenditionKind::Manifest,
             MimeType::new("application/vnd.apple.mpegurl").unwrap(),
-            StorageKey::video_object(MediaKind::Video, hash, "master.m3u8"),
+            root.object("master.m3u8"),
             Dimensions::new(1080, 1920).unwrap(),
             1_200,
         );
         let poster = Rendition::new(
             RenditionKind::Poster,
             jpeg(),
-            StorageKey::video_object(MediaKind::Video, hash, "poster.jpg"),
+            root.object("poster.jpg"),
             Dimensions::new(1080, 1920).unwrap(),
             40_000,
         );
@@ -660,6 +669,16 @@ impl Fixture {
             Arc::clone(&self.transcoder) as _,
             Arc::clone(&self.cache) as _,
             Arc::clone(&self.publisher) as _,
+            self.policy.clone(),
+        )
+    }
+
+    pub fn change_visibility_handler(&self) -> super::command::ChangeVisibilityHandler {
+        super::command::ChangeVisibilityHandler::new(
+            Arc::clone(&self.assets) as _,
+            Arc::clone(&self.store) as _,
+            Arc::clone(&self.cdn) as _,
+            Arc::clone(&self.cache) as _,
             self.policy.clone(),
         )
     }

@@ -12,8 +12,10 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use transport::grpc::edge;
+use transport::grpc::mesh::MeshCallerGate;
 use crate::application::command::{
-    CommitUploadCommand, CommitUploadHandler, DeleteAssetCommand, DeleteAssetHandler,
+    ChangeVisibilityCommand, ChangeVisibilityHandler, CommitUploadCommand, CommitUploadHandler, DeleteAssetCommand,
+    DeleteAssetHandler,
     IssueUploadTicketCommand, IssueUploadTicketHandler, IssueUploadTicketOutcome,
     ProcessAssetCommand, ProcessAssetHandler,
 };
@@ -43,9 +45,18 @@ pub struct MediaServiceHandler {
     by_owner: Option<Arc<ListAssetsByOwnerHandler>>,
     /// Staff links to private documents (#777); `None` answers UNIMPLEMENTED.
     private_documents: Option<Arc<PrivateDocumentUrlHandler>>,
+    /// Delivery-visibility changes (#919); `None` answers UNIMPLEMENTED.
+    visibility: Option<Arc<ChangeVisibilityHandler>>,
     /// Verifies the staff token on staff calls (#837); denies all by default.
     staff: edge::StaffGate,
+    /// Which service calls a sensitive mesh RPC (#852); off by default.
+    mesh: MeshCallerGate,
 }
+
+/// Who may change a delivery visibility (#919): it can make private media
+/// public. No service drives it yet — #919 step 3 names the caller (the one
+/// that knows an account went private) — so, enforced, every call is refused.
+const VISIBILITY_CALLERS: &[&str] = &[];
 
 impl MediaServiceHandler {
     pub fn new(
@@ -65,7 +76,9 @@ impl MediaServiceHandler {
             resolve,
             by_owner: None,
             private_documents: None,
+            visibility: None,
             staff: edge::StaffGate::deny_all(),
+            mesh: MeshCallerGate::off(),
         }
     }
 
@@ -83,6 +96,17 @@ impl MediaServiceHandler {
 
     pub fn with_private_documents(mut self, handler: Arc<PrivateDocumentUrlHandler>) -> Self {
         self.private_documents = Some(handler);
+        self
+    }
+
+    /// The mesh caller check for sensitive mesh RPCs (#852).
+    pub fn with_mesh_gate(mut self, gate: MeshCallerGate) -> Self {
+        self.mesh = gate;
+        self
+    }
+
+    pub fn with_visibility_changes(mut self, handler: Arc<ChangeVisibilityHandler>) -> Self {
+        self.visibility = Some(handler);
         self
     }
 
@@ -246,6 +270,26 @@ impl MediaServiceHandler {
             .await
             .map_err(to_status)?;
         Ok(Response::new(proto::DeleteAssetResponse {}))
+    }
+
+    /// Mesh only (#919): not in the edge policy.
+    pub async fn change_delivery_visibility(
+        &self,
+        request: Request<proto::ChangeDeliveryVisibilityRequest>,
+    ) -> Result<Response<proto::ChangeDeliveryVisibilityResponse>, Status> {
+        let handler =
+            self.visibility.as_ref().ok_or_else(|| Status::unimplemented("visibility changes are not enabled"))?;
+        self.mesh.require(&request, "ChangeDeliveryVisibility", VISIBILITY_CALLERS).await?;
+        edge::require_account(&request, &request.get_ref().owner_id)?;
+        let req = request.into_inner();
+        let cmd = ChangeVisibilityCommand {
+            asset_id: AssetId::try_from(req.asset_id.as_str()).map_err(to_status)?,
+            owner_id: OwnerId::try_from(req.owner_id.as_str()).map_err(to_status)?,
+            visibility: visibility_from_proto(req.delivery_visibility)
+                .ok_or_else(|| Status::invalid_argument("delivery_visibility must be PUBLIC or SIGNED"))?,
+        };
+        let asset = handler.handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now()).await.map_err(to_status)?;
+        Ok(Response::new(proto::ChangeDeliveryVisibilityResponse { asset: Some(asset_to_proto(&asset)) }))
     }
 
     pub async fn resolve_delivery(

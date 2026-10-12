@@ -88,6 +88,8 @@ impl Service for MediaService {
             .map_err(|e| anyhow::anyhow!("media app build: {e}"))?;
         // Staff RPCs on the mesh verify the staff member's token (#837).
         app.handler = app.handler.with_staff_gate(service_runtime::staff_gate_from_env());
+        // Sensitive mesh RPCs check which service calls them (#852).
+        app.handler = app.handler.with_mesh_gate(service_runtime::mesh_gate_from_env());
 
         // Plane B pipeline (off media.v1.events) + moderation takedowns.
         spawn_process_consumer(Arc::clone(&app.process));
@@ -311,5 +313,9 @@ mod tests {
         // edge; the mesh call carries the staff token, checked in the handler.
         let staff = "/media.v1.MediaService/GetPrivateDocumentUrl";
         assert!(MediaService::EDGE_POLICY.iter().all(|rule| rule.method != staff));
+        // #919: changing a delivery visibility moves objects; the services
+        // that own the reason (a private account) call it over the mesh.
+        let visibility = "/media.v1.MediaService/ChangeDeliveryVisibility";
+        assert!(MediaService::EDGE_POLICY.iter().all(|rule| rule.method != visibility));
     }
 }

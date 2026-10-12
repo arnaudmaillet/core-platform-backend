@@ -37,7 +37,8 @@ pub trait CdnGateway: Send + Sync + 'static {
         now: DateTime<Utc>,
     ) -> Result<ResolvedUrl, MediaError>;
 
-    /// Invalidates edge caches for these keys — the takedown-only path (delete /
-    /// quarantine). Content-addressed immutability means this never fires on edit.
+    /// Invalidates edge caches for these keys — the takedown path (delete /
+    /// quarantine) and an asset going SIGNED (#919: its objects left their public
+    /// paths). Content-addressed immutability means this never fires on edit.
     async fn invalidate(&self, keys: &[StorageKey]) -> Result<(), MediaError>;
 }

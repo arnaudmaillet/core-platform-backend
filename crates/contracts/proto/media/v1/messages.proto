@@ -188,6 +188,19 @@ message DeleteAssetRequest {
 // active — compliance preservation overrides owner/GDPR erasure.
 message DeleteAssetResponse {}
 
+message ChangeDeliveryVisibilityRequest {
+    string             asset_id            = 1;
+    // The owning account; must own the asset.
+    string             owner_id            = 2;
+    // PUBLIC or SIGNED; UNSPECIFIED ⇒ INVALID_ARGUMENT.
+    DeliveryVisibility delivery_visibility = 3;
+}
+
+message ChangeDeliveryVisibilityResponse {
+    // The asset as it now is (its keys moved, if they did).
+    Asset asset = 1;
+}
+
 // ── Plane C · Delivery resolution (hot read; CDN / signed URLs, no bytes) ─────
 
 message ResolveDeliveryRequest {

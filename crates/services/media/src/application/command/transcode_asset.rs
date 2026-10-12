@@ -108,7 +108,12 @@ impl TranscodeAssetHandler {
 
         // 3. Transcode: HLS ladder + poster from the validated master.
         asset.begin_processing(now)?;
-        let output = self.transcoder.transcode(&staging, &hash).await?;
+        // A SIGNED asset's own restricted tree, once enabled (#919).
+        let root = asset.storage_root(self.policy.restricted_prefix_enabled).ok_or(MediaError::DomainViolation {
+            field: "content_hash".into(),
+            message: "a finalized asset must carry a content hash".into(),
+        })?;
+        let output = self.transcoder.transcode(&staging, &hash, &root).await?;
         asset.set_blurhash(output.blurhash, now)?;
         for rendition in output.renditions {
             asset.attach_rendition(rendition, now)?;

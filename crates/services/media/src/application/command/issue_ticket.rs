@@ -7,7 +7,8 @@ use crate::application::policy::MediaPolicy;
 use crate::application::port::{AssetRepository, ObjectStore, PresignedUpload};
 use crate::domain::aggregate::{Asset, ReserveParams};
 use crate::domain::value_object::{
-    AssetId, AssetState, ContentHash, MediaKind, MimeType, OwnerId, UploadConstraints, UploadKey, UploadTicket,
+    AssetId, AssetState, ContentHash, DeliveryVisibility, MediaKind, MimeType, OwnerId, UploadConstraints, UploadKey,
+    UploadTicket,
 };
 use crate::error::MediaError;
 
@@ -89,7 +90,7 @@ impl IssueUploadTicketHandler {
         // owner's alone, and no other upload is handed its asset. Nor for an
         // upload its owner wants SIGNED (#919): it must not be handed another
         // owner's public asset.
-        let signed = cmd.delivery_visibility == Some(crate::domain::value_object::DeliveryVisibility::Signed);
+        let signed = cmd.delivery_visibility == Some(DeliveryVisibility::Signed);
         if self.policy.dedup_enabled
             && !cmd.kind.is_private()
             && !signed
@@ -103,8 +104,13 @@ impl IssueUploadTicketHandler {
                 return self.replay(holder, &cmd, now).await;
             }
             let hash = ContentHash::new(sha)?;
-            if let Some(existing) =
-                self.assets.find_ready_by_content_hash(&hash).await?.filter(|a| !a.kind().is_private())
+            // Only onto public bytes: a declared hash is no proof of possession,
+            // and a SIGNED asset is its owner's alone (#919).
+            if let Some(existing) = self
+                .assets
+                .find_ready_by_content_hash(&hash)
+                .await?
+                .filter(|a| !a.kind().is_private() && a.delivery_visibility() == DeliveryVisibility::Public)
             {
                 return Ok(IssueUploadTicketOutcome {
                     asset_id: existing.id(),
@@ -272,13 +278,32 @@ mod tests {
 
         let mut c = cmd();
         c.content_sha256 = Some(TEST_HASH.to_owned());
-        c.delivery_visibility = Some(crate::domain::value_object::DeliveryVisibility::Signed);
+        c.delivery_visibility = Some(DeliveryVisibility::Signed);
         let out = fx.issue_ticket_handler().handle(env(c), t0()).await.unwrap();
 
         assert!(!out.deduplicated);
         assert_ne!(out.asset_id, existing);
         let reserved = fx.assets.find_by_id(&out.asset_id).await.unwrap().unwrap();
-        assert_eq!(reserved.delivery_visibility(), crate::domain::value_object::DeliveryVisibility::Signed);
+        assert_eq!(reserved.delivery_visibility(), DeliveryVisibility::Signed);
+    }
+
+    /// #919: a declared hash is no proof of possession — a public upload never
+    /// dedups onto someone's SIGNED asset (it would hand its id, and so its
+    /// signed URLs, to whoever knows the hash).
+    #[tokio::test]
+    async fn a_public_upload_never_dedups_onto_a_signed_asset() {
+        let mut fx = Fixture::new();
+        fx.policy.dedup_enabled = true;
+        let existing = fx.seed_ready_asset(TEST_HASH).await;
+        let mut held = fx.assets.find_by_id(&existing).await.unwrap().unwrap();
+        held.change_visibility(DeliveryVisibility::Signed, t0()).unwrap();
+        fx.assets.save(&held).await.unwrap();
+
+        let mut c = cmd();
+        c.content_sha256 = Some(TEST_HASH.to_owned());
+        let out = fx.issue_ticket_handler().handle(env(c), t0()).await.unwrap();
+        assert!(!out.deduplicated);
+        assert_ne!(out.asset_id, existing);
     }
 
     /// #919: the same idempotency key with another visibility is another
@@ -288,7 +313,7 @@ mod tests {
         let fx = Fixture::new();
         let first = fx.issue_ticket_handler().handle(env(keyed("vis-key-0001")), t0()).await.unwrap();
         let mut signed = keyed("vis-key-0001");
-        signed.delivery_visibility = Some(crate::domain::value_object::DeliveryVisibility::Signed);
+        signed.delivery_visibility = Some(DeliveryVisibility::Signed);
         let err = fx.issue_ticket_handler().handle(env(signed), t0()).await.unwrap_err();
         assert!(matches!(err, MediaError::UploadKeyConflict), "{err:?}");
         let again = fx.issue_ticket_handler().handle(env(keyed("vis-key-0001")), t0()).await.unwrap();

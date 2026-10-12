@@ -12,7 +12,7 @@
 use async_trait::async_trait;
 
 use crate::domain::aggregate::Rendition;
-use crate::domain::value_object::{Blurhash, ContentHash, StorageKey};
+use crate::domain::value_object::{Blurhash, ContentHash, ObjectRoot, StorageKey};
 use crate::error::MediaError;
 
 /// The derivatives produced for a video asset: the deliverable renditions (the
@@ -28,11 +28,13 @@ pub struct TranscodeOutput {
 #[async_trait]
 pub trait VideoTranscoder: Send + Sync + 'static {
     /// Transcodes the validated video master at `source` into the adaptive HLS
-    /// ladder + poster, writing every content-addressed object (keyed by `hash`)
-    /// to the store. Returns the deliverable renditions + poster BlurHash.
+    /// ladder + poster, writing every object to the store under `root` (the
+    /// content-addressed tree of `hash`, or a SIGNED asset's restricted tree,
+    /// #919). Returns the deliverable renditions + poster BlurHash.
     async fn transcode(
         &self,
         source: &StorageKey,
         hash: &ContentHash,
+        root: &ObjectRoot,
     ) -> Result<TranscodeOutput, MediaError>;
 }

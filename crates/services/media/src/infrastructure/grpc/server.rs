@@ -58,6 +58,13 @@ impl MediaService for MediaServiceHandler {
         self.delete_asset(request).await
     }
 
+    async fn change_delivery_visibility(
+        &self,
+        request: Request<proto::ChangeDeliveryVisibilityRequest>,
+    ) -> Result<Response<proto::ChangeDeliveryVisibilityResponse>, Status> {
+        self.change_delivery_visibility(request).await
+    }
+
     async fn resolve_delivery(
         &self,
         request: Request<proto::ResolveDeliveryRequest>,

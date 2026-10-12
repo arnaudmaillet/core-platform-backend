@@ -8,7 +8,7 @@
 use async_trait::async_trait;
 
 use crate::domain::aggregate::Rendition;
-use crate::domain::value_object::{Blurhash, ContentHash, MediaKind, StorageKey};
+use crate::domain::value_object::{Blurhash, MediaKind, ObjectRoot, StorageKey};
 use crate::error::MediaError;
 
 /// The derivatives produced for an asset: the rendition catalog plus the BlurHash
@@ -22,12 +22,13 @@ pub struct DerivedRenditions {
 #[async_trait]
 pub trait ImageProcessor: Send + Sync + 'static {
     /// Derives the rendition ladder for `kind` from the validated master at
-    /// `source`, writing each content-addressed derivative to the store. `hash`
-    /// keys the output objects.
+    /// `source`, writing each derivative to the store under `root` (the
+    /// content-addressed tree of its bytes, or a SIGNED asset's restricted
+    /// tree, #919).
     async fn derive(
         &self,
         source: &StorageKey,
         kind: MediaKind,
-        hash: &ContentHash,
+        root: &ObjectRoot,
     ) -> Result<DerivedRenditions, MediaError>;
 }
