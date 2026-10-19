@@ -125,7 +125,8 @@ service ProfileService {
   // Lifecycle (all return CommandResponse)
   rpc CreateProfile(CreateProfileRequest) returns (CommandResponse); // private when the token's `age` is 13–17
   rpc UpdateProfile(UpdateProfileRequest) returns (CommandResponse);
-  rpc ChangeHandle(ChangeHandleRequest) returns (CommandResponse);   // LWT
+  rpc ChangeHandle(ChangeHandleRequest) returns (CommandResponse);   // LWT; priced (#911)
+  rpc GetHandleChangePrice(GetHandleChangePriceRequest) returns (HandleChangePrice);   // #911 the next change's price / free-change cooldown
   rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);
   rpc UpdateBanner(UpdateBannerRequest) returns (CommandResponse);
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
@@ -207,6 +208,20 @@ slots owned never calls it. Gems, claims and caps stay per **account** in the wa
 one's own profiles is refused there, so extra profiles add no curation power. Erasing the account
 erases its slots.
 
+**Paid handle changes (#911).** A gem sink with no effect on ranking or visibility. An account's
+**first** handle change is free; later ones cost `PROFILE_HANDLE_CHANGE_PRICE` (100) gems. A caller
+who may not spend gems (under 18, or age unknown) changes for free, **once per 30 days**.
+`ChangeHandleRequest.expected_price` must be the price `GetHandleChangePrice` shows (it also gives a
+restricted caller's `next_change_at`). Refusals are in-band, with nothing changed and nothing charged:
+`CommandResponse.handle_change` = `PRICE_CHANGED`, `INSUFFICIENT_GEMS` or `COOLDOWN` (`CHANGED` on
+success). The gems are spent only **after** the new handle is claimed (a taken or invalid handle is never
+charged; an unpaid claim is given back), through the wallet's `SpendGems` (`HANDLE_CHANGE`, `ref_id` =
+the profile, keyed `handle-change-<n>` by the account's change number: a retry pays once). Asking
+for the profile's current handle changes nothing. The count (`profile.handle_changes`, migration 0019)
+grows once the change is saved; a crash in between leaves that change uncounted, never charged twice.
+Mesh callers change for free, uncounted. The wallet unreachable ⇒ `PRF-6003`. Erasing the account
+erases the count.
+
 ### Rust ports (hexagonal contract)
 
 ```rust
@@ -235,7 +250,10 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 | PRF-5007 | `MediaAssetNotUsable` (an avatar's / banner's asset is not a usable image of the profile's account, #907) | 422 | No |
 | PRF-6001 | `NoFreeProfileSlot` (every slot in use; `CreateProfile` answers it in-band, #916) | 422 | No |
 | PRF-6002 | `GemSpendingRestricted` (a slot is bought by an adult only, #916) | 403 | No |
-| PRF-6003 | `WalletUnavailable` (the wallet could not answer a slot purchase, #916) | 503 | **Yes** |
+| PRF-6003 | `WalletUnavailable` (the wallet could not answer a slot purchase or a paid handle change, #916, #911) | 503 | **Yes** |
+| PRF-6004 | `HandleChangePriceChanged` (not the shown price; `ChangeHandle` answers it in-band, #911) | 422 | No |
+| PRF-6005 | `HandleChangeCooldown` (a restricted caller changed less than 30 days ago; in-band, #911) | 422 | No |
+| PRF-6006 | `InsufficientGems` (in-band, #911) | 422 | No |
 | PRF-9001–9010 | domain / parse / validation | 422 | No |
 | SDB-* / RDB-* | storage (delegated) | varies | varies |
 
@@ -327,8 +345,9 @@ async fn main() -> anyhow::Result<()> {
 | `PROFILE_GRPC_ADDR` | No | `0.0.0.0:50052` | gRPC bind address. |
 | `PROFILE_MEDIA_GRPC_ENDPOINT` | No | — | media's mesh endpoint: checks a verification request's private documents (#777), and avatars' / banners' assets on write; delivers them on read (#907, fail-open). Unset: requests take links only, images their URLs only. |
 | `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS` | No | `500` / `1000` | deadlines of those calls. |
-| `PROFILE_WALLET_GRPC_ENDPOINT` | No | — | wallet's mesh endpoint (#916): profile slots' gems (`SpendGems`, this pod's mesh token). Unset: slots cannot be bought (`PRF-6003`). |
+| `PROFILE_WALLET_GRPC_ENDPOINT` | No | — | wallet's mesh endpoint (#916, #911): the gems of profile slots and paid handle changes (`SpendGems`, this pod's mesh token). Unset: neither can be bought (`PRF-6003`). |
 | `PROFILE_WALLET_RPC_TIMEOUT_MS` / `PROFILE_WALLET_CONNECT_TIMEOUT_MS` | No | `1000` / `500` | deadlines of that call. |
+| `PROFILE_HANDLE_CHANGE_PRICE` | No | `100` | a paid handle change's price in gems (#911; the first change is free). |
 | `PROFILE_MAX_SLOTS` / `PROFILE_SLOT_BASE_PRICE` | No | `5` / `100` | profile slots (#916): the cap, and the 2nd slot's price in gems (each later one doubles). |
 | `PROFILE_BACKFILL_VISIBILITY` | No | unset | `1`/`true`/`yes`: at boot, re-announce every **private** profile's visibility once (`ProfileVisibilityChanged`, #927). Post makes a private author's images SIGNED from it (#919), and profiles private before post projected it never re-announced. Public is the default everywhere, so public profiles are skipped. Same run-once rules as the tab settings backfill below: set it for one rollout, together with or before post → media (core-platform-infra#88), then unset it. |
 | `PROFILE_BACKFILL_TAB_SETTINGS` | No | unset | `1`/`true`/`yes`: at boot, re-announce every profile's non-default tab settings once (`ProfileTabSettingsChanged`, #873), for consumers that started after those events left `profile.v1.events`' retention (engagement, post). Every replica runs it, at each start (repeats are harmless, last writer wins): set it for one rollout at the first deployment, then unset it; run while owners edit their settings, a re-announced old value may land after a newer one. |
@@ -343,7 +362,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Deployment, Migrations & Rollback
 
-- **Migrations:** `crates/services/profile/migrations/00{01..18}_*.cql` against the `profile` keyspace,
+- **Migrations:** `crates/services/profile/migrations/00{01..19}_*.cql` against the `profile` keyspace,
   applied **before** first start.
 - **Cache version bump:** to invalidate cache fleet-wide during a schema change, bump the `v1:` key
   prefix — no flush, no downtime.

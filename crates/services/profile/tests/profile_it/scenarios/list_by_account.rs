@@ -74,7 +74,7 @@ async fn the_account_list_follows_profile_updates() {
 
     let renamed = harness::random_handle();
     h.command_bus
-        .dispatch(Envelope::new(Uuid::now_v7(), ChangeHandleCommand { profile_id: profile_id.clone(), new_handle: renamed.clone() }))
+        .dispatch(Envelope::new(Uuid::now_v7(), ChangeHandleCommand { profile_id: profile_id.clone(), new_handle: renamed.clone(), ..Default::default() }))
         .await
         .expect("change handle");
     assert_eq!(summary().await.handle, renamed);

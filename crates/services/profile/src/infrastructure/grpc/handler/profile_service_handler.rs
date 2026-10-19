@@ -48,6 +48,8 @@ where
     /// Profile slots (#916); `None`: GetProfileSlots / BuyProfileSlot are
     /// UNAVAILABLE.
     slots:       Option<Arc<crate::application::profile_slots::ProfileSlots>>,
+    /// Paid handle changes (#911); `None`: GetHandleChangePrice is UNAVAILABLE.
+    changes:     Option<Arc<crate::application::handle_changes::HandleChanges>>,
 }
 
 impl<CB, QB> ProfileServiceHandler<CB, QB>
@@ -56,7 +58,7 @@ where
     QB: QueryBus + Send + Sync + 'static,
 {
     pub fn new(command_bus: CB, query_bus: QB) -> Self {
-        Self { command_bus, query_bus, staff: edge::StaffGate::deny_all(), media: None, slots: None }
+        Self { command_bus, query_bus, staff: edge::StaffGate::deny_all(), media: None, slots: None, changes: None }
     }
 
     /// Avatars and banners carry their media asset's delivery (#907).
@@ -68,6 +70,43 @@ where
     pub fn with_slots(mut self, slots: Arc<crate::application::profile_slots::ProfileSlots>) -> Self {
         self.slots = Some(slots);
         self
+    }
+
+    pub fn with_changes(mut self, changes: Arc<crate::application::handle_changes::HandleChanges>) -> Self {
+        self.changes = Some(changes);
+        self
+    }
+
+    /// The end user behind a call, for a priced action (#911); `None` on the
+    /// mesh.
+    fn payer<T>(request: &Request<T>) -> Option<crate::application::handle_changes::HandlePayer> {
+        edge::principal(request).map(|p| crate::application::handle_changes::HandlePayer {
+            adult: p.is_adult(),
+            token: edge::bearer_token(request.metadata()),
+        })
+    }
+
+    /// What the profile's next handle change costs (#911). Edge: the
+    /// profile's owner.
+    pub async fn get_handle_change_price(
+        &self,
+        request: Request<proto::GetHandleChangePriceRequest>,
+    ) -> Result<Response<proto::HandleChangePrice>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let changes = self.changes.as_deref().ok_or_else(|| Status::unavailable("handle change prices are not configured"))?;
+        let profile = crate::domain::value_object::ProfileId::try_from(request.get_ref().profile_id.as_str())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        // A mesh reader is priced as an adult.
+        let payer = Self::payer(&request).unwrap_or(crate::application::handle_changes::HandlePayer { adult: true, token: None });
+        let quote = changes.quote_for_profile(&profile, &payer, chrono::Utc::now()).await.map_err(profile_error_to_status)?;
+        Ok(Response::new(proto::HandleChangePrice {
+            price_gems:              quote.price,
+            gem_spending_restricted: quote.restricted,
+            next_change_at:          quote.next_change_at.map(|at| prost_types::Timestamp {
+                seconds: at.timestamp(),
+                nanos:   i32::try_from(at.timestamp_subsec_nanos()).unwrap_or(0),
+            }),
+        }))
     }
 
     fn slots(&self) -> Result<&crate::application::profile_slots::ProfileSlots, Status> {
@@ -131,11 +170,7 @@ where
     }
 
     fn ok_cmd(profile_id: &str) -> Response<proto::CommandResponse> {
-        Response::new(proto::CommandResponse {
-            success:    true,
-            profile_id: profile_id.to_owned(),
-            no_free_slot: false,
-        })
+        Response::new(proto::CommandResponse { success: true, profile_id: profile_id.to_owned(), ..Default::default() })
     }
 }
 
@@ -177,11 +212,7 @@ where
                 e.error_code() == "PRF-6001"
             } =>
             {
-                Ok(Response::new(proto::CommandResponse {
-                    success:      false,
-                    profile_id:   String::new(),
-                    no_free_slot: true,
-                }))
+                Ok(Response::new(proto::CommandResponse { success: false, no_free_slot: true, ..Default::default() }))
             }
             Err(e) => Err(cqrs_error_to_status(e)),
         }
@@ -218,16 +249,36 @@ where
         request: Request<proto::ChangeHandleRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
         edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let payer = Self::payer(&request);
         let req = request.into_inner();
         let cmd = ChangeHandleCommand {
             profile_id: req.profile_id.clone(),
             new_handle: req.new_handle,
+            expected_price: req.expected_price,
+            payer,
         };
-        self.command_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
-            .await
-            .map(|_| Self::ok_cmd(&req.profile_id))
-            .map_err(cqrs_error_to_status)
+        // A refusal of the price (#911) is answered in-band: nothing changed,
+        // nothing charged.
+        let refused = |outcome: proto::HandleChangeOutcome| {
+            Ok(Response::new(proto::CommandResponse { success: false, handle_change: outcome as i32, ..Default::default() }))
+        };
+        match self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await {
+            Ok(_) => {
+                let mut ok = Self::ok_cmd(&req.profile_id);
+                ok.get_mut().handle_change = proto::HandleChangeOutcome::Changed as i32;
+                Ok(ok)
+            }
+            Err(cqrs::error::CqrsError::Handler(e)) => {
+                use error::AppError as _;
+                match e.error_code() {
+                    "PRF-6004" => refused(proto::HandleChangeOutcome::PriceChanged),
+                    "PRF-6005" => refused(proto::HandleChangeOutcome::Cooldown),
+                    "PRF-6006" => refused(proto::HandleChangeOutcome::InsufficientGems),
+                    _ => Err(cqrs_error_to_status(cqrs::error::CqrsError::Handler(e))),
+                }
+            }
+            Err(e) => Err(cqrs_error_to_status(e)),
+        }
     }
 
     pub async fn update_avatar(

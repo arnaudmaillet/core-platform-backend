@@ -140,25 +140,27 @@ pub struct TestHarness {
     pub scylla:      Arc<ScyllaClient>,
     /// Profile slots (#916), over the real store; the wallet is the fake one.
     pub slots:       Arc<profile::application::profile_slots::ProfileSlots>,
-    pub wallet:      Arc<FakeSlotWallet>,
+    pub wallet:      Arc<FakeGemWallet>,
+    /// Paid handle changes (#911), over the real store.
+    pub handle_changes: Arc<profile::application::handle_changes::HandleChanges>,
 }
 
 /// A wallet: 1 000 gems per account, spends keyed once.
 #[derive(Default)]
-pub struct FakeSlotWallet {
+pub struct FakeGemWallet {
     pub spent: std::sync::Mutex<Vec<(String, i64)>>,
 }
 
 #[async_trait::async_trait]
-impl profile::application::port::SlotWallet for FakeSlotWallet {
-    async fn spend_for_slot(
+impl profile::application::port::GemWallet for FakeGemWallet {
+    async fn spend(
         &self,
         account: &profile::domain::value_object::AccountId,
-        _: i32,
+        _: profile::application::port::GemPurchase,
         amount: i64,
         key: &str,
         _: Option<&str>,
-    ) -> Result<profile::application::port::SlotSpend, profile::error::ProfileError> {
+    ) -> Result<profile::application::port::GemSpend, profile::error::ProfileError> {
         let mut spent = self.spent.lock().unwrap();
         let mine = |s: &&(String, i64)| s.0.starts_with(&account.as_uuid().to_string());
         let key = format!("{}:{key}", account.as_uuid());
@@ -166,7 +168,7 @@ impl profile::application::port::SlotWallet for FakeSlotWallet {
             spent.push((key, amount));
         }
         let gems = 1_000 - spent.iter().filter(mine).map(|(_, a)| a).sum::<i64>();
-        Ok(profile::application::port::SlotSpend { spent: true, gems })
+        Ok(profile::application::port::GemSpend { spent: true, gems })
     }
 }
 
@@ -206,15 +208,17 @@ impl TestHarness {
 
         let publisher = Arc::new(CapturingEventPublisher::default());
         let documents = Arc::new(FakePrivateDocuments::default());
-        let wallet = Arc::new(FakeSlotWallet::default());
+        let wallet = Arc::new(FakeGemWallet::default());
         let app = App::build(
             backends,
             cache_registry,
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
             Some(Arc::clone(&documents) as Arc<dyn PrivateDocuments>),
             Some(Arc::clone(&documents) as Arc<dyn profile::application::port::MediaImages>),
-            Some(Arc::clone(&wallet) as Arc<dyn profile::application::port::SlotWallet>),
-            profile::application::profile_slots::SlotPolicy::default(),
+            profile::app::Economy {
+                wallet: Some(Arc::clone(&wallet) as Arc<dyn profile::application::port::GemWallet>),
+                ..Default::default()
+            },
         )
         .await
         .expect("integration: build profile app");
@@ -229,6 +233,7 @@ impl TestHarness {
             scylla,
             slots: app.slots,
             wallet,
+            handle_changes: app.handle_changes,
         }
     }
 

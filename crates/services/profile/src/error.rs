@@ -24,6 +24,9 @@ use thiserror::Error;
 /// | PRF-6001 | NoFreeProfileSlot        | 422  | Low      | No        |
 /// | PRF-6002 | GemSpendingRestricted    | 403  | Low      | No        |
 /// | PRF-6003 | WalletUnavailable        | 503  | Medium   | **Yes**   |
+/// | PRF-6004 | HandleChangePriceChanged | 422  | Low      | No        |
+/// | PRF-6005 | HandleChangeCooldown     | 422  | Low      | No        |
+/// | PRF-6006 | InsufficientGems         | 422  | Low      | No        |
 /// | PRF-9001 | DomainViolation          | 422  | Medium   | No        |
 /// | PRF-9002 | InvalidProfileId         | 422  | Low      | No        |
 /// | PRF-9003 | InvalidHandle            | 422  | Low      | No        |
@@ -120,6 +123,21 @@ pub enum ProfileError {
     #[error("wallet unavailable: {reason}")]
     WalletUnavailable { reason: String },
 
+    /// A handle change's price is not the one the app showed (#911):
+    /// `ChangeHandle` answers it in-band.
+    #[error("the handle change costs {price} gems")]
+    HandleChangePriceChanged { price: i64 },
+
+    /// A caller who may not spend gems changed their handle less than 30
+    /// days ago (#911): answered in-band.
+    #[error("the next free handle change opens later")]
+    HandleChangeCooldown,
+
+    /// The wallet holds fewer gems than a purchase's price (#911): answered
+    /// in-band.
+    #[error("not enough gems")]
+    InsufficientGems,
+
     // ── Domain invariants & parse errors (PRF-9xxx) ───────────────────────────
 
     #[error("domain invariant violated on '{field}': {message}")]
@@ -179,6 +197,9 @@ impl AppError for ProfileError {
             ProfileError::NoFreeProfileSlot => "PRF-6001",
             ProfileError::GemSpendingRestricted => "PRF-6002",
             ProfileError::WalletUnavailable { .. } => "PRF-6003",
+            ProfileError::HandleChangePriceChanged { .. } => "PRF-6004",
+            ProfileError::HandleChangeCooldown => "PRF-6005",
+            ProfileError::InsufficientGems => "PRF-6006",
 
             ProfileError::DomainViolation { .. }  => "PRF-9001",
             ProfileError::InvalidProfileId(_)     => "PRF-9002",
@@ -273,7 +294,10 @@ impl AppError for ProfileError {
             ProfileError::TooManyCustomLinks { .. }     => "You may have at most 5 custom links.",
             ProfileError::NoFreeProfileSlot             => "Every profile slot is in use.",
             ProfileError::GemSpendingRestricted         => "Gems can't be spent before 18.",
-            ProfileError::WalletUnavailable { .. }      => "Profile slots can't be bought right now. Please retry.",
+            ProfileError::WalletUnavailable { .. }      => "Gems can't be spent right now. Please retry.",
+            ProfileError::HandleChangePriceChanged { .. } => "The price of a handle change has changed.",
+            ProfileError::HandleChangeCooldown          => "You can change your handle again later.",
+            ProfileError::InsufficientGems              => "You don't have enough gems.",
             _                                           => "A domain constraint was violated.",
         }
     }

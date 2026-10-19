@@ -98,6 +98,10 @@ message CommandResponse {
     // nothing was created (`success` is false). GetProfileSlots says what the
     // next slot costs.
     bool   no_free_slot = 3;
+    // ChangeHandle only (#911): CHANGED, or why nothing changed (`success` is
+    // false); GetHandleChangePrice says the price or when the next free change
+    // opens.
+    HandleChangeOutcome handle_change = 4;
 }
 
 // ── Command request messages ──────────────────────────────────────────────────
@@ -125,6 +129,26 @@ message UpdateProfileRequest {
 message ChangeHandleRequest {
     string profile_id  = 1;
     string new_handle  = 2;
+    // The price the app showed (HandleChangePrice.price_gems; 0 for a free
+    // change, #911). Another one answers PRICE_CHANGED, nothing charged.
+    int64  expected_price = 3;
+}
+
+message GetHandleChangePriceRequest {
+    string profile_id = 1;
+}
+
+// The next handle change of a profile's account (#911).
+message HandleChangePrice {
+    // In gems; 0 = free (the account's first change, or a caller who may not
+    // spend gems).
+    int64                     price_gems              = 1;
+    // The caller may not spend gems (under 18, or age unknown): free changes,
+    // one per 30 days.
+    bool                      gem_spending_restricted = 2;
+    // gem_spending_restricted only: when the next free change opens; unset
+    // when it is open.
+    google.protobuf.Timestamp next_change_at          = 3;
 }
 
 message UpdateAvatarRequest {

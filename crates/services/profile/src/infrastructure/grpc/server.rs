@@ -243,4 +243,12 @@ where
         self.buy_profile_slot(request).await
     }
 
+
+    async fn get_handle_change_price(
+        &self,
+        request: Request<proto::GetHandleChangePriceRequest>,
+    ) -> Result<Response<proto::HandleChangePrice>, Status> {
+        self.get_handle_change_price(request).await
+    }
+
 }

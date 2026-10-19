@@ -80,6 +80,7 @@ service's own start with `sys:` (e.g. `sys:starter-gems`). No caller key holds a
 | Stake packs (`BuyStakePack`, edge; #941) | shots of 100 of the buyer's **own** points; on sale by default `shots_3` (3 shots, 50 gems — the default pack, for a request naming none), `shots_10` (10, 150) and `shots_25` (25, 325); all or nothing, one pack at a time (`PACK_STILL_ACTIVE` while shots are left, nothing charged); shots never expire; a pack not on sale is `WAL-9005`; the ledger row's `ref_id` is the pack id and `Wallet.stake_pack_id` the loaded pack |
 | Country unlock / 24 h visa (`SpendGems`, mesh; #910) | geo-discovery prices the country, checks the spender is an adult, and asks for the gems with a key of its own (`COUNTRY_UNLOCK` or `COUNTRY_VISA`); `ref_id` = the country code |
 | Profile slot (`SpendGems`, mesh; #916) | profile prices the slot, checks the buyer is an adult, and asks for the gems keyed `profile-slot-<n>` (`PROFILE_SLOT`); `ref_id` = the slot number |
+| Paid handle change (`SpendGems`, mesh; #911) | profile prices the change (the first is free), checks the payer is an adult, and asks for the gems keyed `handle-change-<n>` once the handle is claimed (`HANDLE_CHANGE`); `ref_id` = the profile |
 | Catalogue item (`PurchaseItem`, edge; #892) | see the catalogue below |
 
 **The gem catalogue (#892).** What gems buy, as server policy (`WALLET_CATALOG`), never influence,

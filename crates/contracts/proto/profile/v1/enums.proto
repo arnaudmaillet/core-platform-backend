@@ -117,3 +117,15 @@ enum ProfileSlotOutcome {
     // Nothing charged.
     PROFILE_SLOT_OUTCOME_PRICE_CHANGED     = 4;
 }
+
+// What became of a handle change (#911).
+enum HandleChangeOutcome {
+    HANDLE_CHANGE_OUTCOME_UNSPECIFIED       = 0;
+    HANDLE_CHANGE_OUTCOME_CHANGED           = 1;
+    // `expected_price` is not the change's price: nothing charged.
+    HANDLE_CHANGE_OUTCOME_PRICE_CHANGED     = 2;
+    // The wallet holds fewer gems than the price: nothing changed.
+    HANDLE_CHANGE_OUTCOME_INSUFFICIENT_GEMS = 3;
+    // A caller who may not spend gems changed less than 30 days ago.
+    HANDLE_CHANGE_OUTCOME_COOLDOWN          = 4;
+}

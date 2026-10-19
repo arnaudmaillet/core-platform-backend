@@ -50,6 +50,15 @@ use crate::infrastructure::cache::{
 };
 use crate::infrastructure::persistence::ScyllaProfileRepository;
 
+/// What gems buy from profile (#916, #911): the wallet that spends them
+/// (`None`: nothing can be bought) and the price policies.
+#[derive(Default)]
+pub struct Economy {
+    pub wallet:        Option<Arc<dyn crate::application::port::GemWallet>>,
+    pub slots:         crate::application::profile_slots::SlotPolicy,
+    pub handle_change: crate::application::handle_changes::HandleChangePolicy,
+}
+
 /// Storage endpoints the graph is wired against.
 pub struct Backends {
     pub scylla: ScyllaConfig,
@@ -71,6 +80,8 @@ pub struct App {
     /// Profile slots (#916): `GetProfileSlots` / `BuyProfileSlot`, and the
     /// check `CreateProfile` makes.
     pub slots:       Arc<crate::application::profile_slots::ProfileSlots>,
+    /// Paid handle changes (#911).
+    pub handle_changes: Arc<crate::application::handle_changes::HandleChanges>,
 }
 
 impl App {
@@ -84,16 +95,14 @@ impl App {
     /// `documents` checks a verification request's private documents with media
     /// (#777); `None`: requests carry links only. `images` checks an avatar's
     /// or banner's media asset (#907); `None`: they carry URLs only.
-    /// `slot_wallet` spends a profile slot's gems (#916); `None`: slots cannot
-    /// be bought.
+    /// `economy` prices profile slots (#916) and paid handle changes (#911).
     pub async fn build(
         backends: Backends,
         cache_registry: Arc<CacheRegistry>,
         publisher: Arc<dyn EventPublisher>,
         documents: Option<Arc<dyn PrivateDocuments>>,
         images: Option<Arc<dyn crate::application::port::MediaImages>>,
-        slot_wallet: Option<Arc<dyn crate::application::port::SlotWallet>>,
-        slot_policy: crate::application::profile_slots::SlotPolicy,
+        economy: Economy,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let Backends { scylla, redis } = backends;
 
@@ -123,11 +132,20 @@ impl App {
         let slot_store: Arc<dyn crate::application::port::ProfileSlotStore> = Arc::new(
             crate::infrastructure::persistence::ScyllaProfileSlotStore::new(Arc::clone(&scylla_client)),
         );
+        let handle_change_store: Arc<dyn crate::application::handle_changes::HandleChangeStore> = Arc::new(
+            crate::infrastructure::persistence::ScyllaHandleChangeStore::new(Arc::clone(&scylla_client)),
+        );
+        let handle_changes = Arc::new(crate::application::handle_changes::HandleChanges {
+            store:  Arc::clone(&handle_change_store),
+            repo:   Some(Arc::clone(&repository)),
+            wallet: economy.wallet.clone(),
+            policy: economy.handle_change,
+        });
         let slots = Arc::new(crate::application::profile_slots::ProfileSlots {
             store:    Arc::clone(&slot_store),
             profiles: Arc::new(crate::application::profile_slots::IndexedProfiles(Arc::clone(&repository))),
-            wallet:   slot_wallet,
-            policy:   slot_policy,
+            wallet:   economy.wallet,
+            policy:   economy.slots,
         });
         let share_token_handler = || {
             crate::application::query::ShareTokenHandler::new(
@@ -154,6 +172,7 @@ impl App {
                     repo:          Arc::clone(&repository),
                     verifications: Arc::clone(&verifications),
                     slots:         Some(Arc::clone(&slot_store)),
+                    handle_changes: Some(Arc::clone(&handle_change_store)),
                 })?
                 .register::<DecideVerificationCommand, _>(DecideVerificationHandler {
                     repo:          Arc::clone(&repository),
@@ -171,11 +190,10 @@ impl App {
                     Arc::clone(&cache),
                     Arc::clone(&publisher),
                 ))?
-                .register::<ChangeHandleCommand, _>(ChangeHandleHandler::new(
-                    Arc::clone(&repository),
-                    Arc::clone(&cache),
-                    Arc::clone(&publisher),
-                ))?
+                .register::<ChangeHandleCommand, _>(
+                    ChangeHandleHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))
+                        .with_changes(Arc::clone(&handle_changes)),
+                )?
                 .register::<UpdateAvatarCommand, _>(
                     UpdateAvatarHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))
                         .with_images(images.clone()),
@@ -304,6 +322,7 @@ impl App {
             scylla: scylla_client,
             redis: redis_client,
             slots,
+            handle_changes,
         })
     }
 }

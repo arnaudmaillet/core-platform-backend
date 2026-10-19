@@ -259,7 +259,7 @@ impl Wallets {
     }
 
     /// Another service spends gems (a country unlock or a 24 h visa, #910; a
-    /// profile slot, #916);
+    /// profile slot, #916, or a handle change, #911);
     /// it checked the spender may. Returns the outcome and the gems left.
     pub async fn spend_gems(
         &self,
@@ -275,7 +275,10 @@ impl Wallets {
         if amount <= 0 {
             return Err(WalletError::InvalidSpend { reason: "the amount must be positive".into() });
         }
-        if !matches!(kind, TransactionKind::CountryUnlock | TransactionKind::CountryVisa | TransactionKind::ProfileSlot) {
+        if !matches!(
+            kind,
+            TransactionKind::CountryUnlock | TransactionKind::CountryVisa | TransactionKind::ProfileSlot | TransactionKind::HandleChange
+        ) {
             return Err(WalletError::InvalidSpend { reason: format!("{} is not a gem spend", kind.as_str()) });
         }
         if ref_id.len() > MAX_REF_LEN {
