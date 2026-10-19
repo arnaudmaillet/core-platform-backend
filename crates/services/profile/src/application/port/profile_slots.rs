@@ -55,4 +55,8 @@ pub trait GemWallet: Send + Sync + 'static {
         key: &str,
         end_user: Option<&str>,
     ) -> Result<GemSpend, ProfileError>;
+
+    /// Whether `account` owns the catalogue item `item_id` (#913; wallet
+    /// `ListOwnedItems`, free items included).
+    async fn owns(&self, account: &AccountId, item_id: &str) -> Result<bool, ProfileError>;
 }

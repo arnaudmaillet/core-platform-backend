@@ -57,6 +57,8 @@ pub enum TransactionKind {
     ProfileSlot,
     /// A paid handle change (#911; `ref_id`: the profile).
     HandleChange,
+    /// An avatar frame bought with gems (#913; `ref_id`: the item id).
+    AvatarFrame,
     /// Written by a newer version of this service.
     Unknown,
 }
@@ -75,6 +77,7 @@ impl TransactionKind {
             Self::CountryVisa => "country_visa",
             Self::ProfileSlot => "profile_slot",
             Self::HandleChange => "handle_change",
+            Self::AvatarFrame => "avatar_frame",
             Self::Unknown => "unknown",
         }
     }
@@ -92,6 +95,7 @@ impl TransactionKind {
             "country_visa" => Self::CountryVisa,
             "profile_slot" => Self::ProfileSlot,
             "handle_change" => Self::HandleChange,
+            "avatar_frame" => Self::AvatarFrame,
             _ => Self::Unknown,
         }
     }
@@ -195,6 +199,7 @@ mod tests {
             TransactionKind::CountryVisa,
             TransactionKind::ProfileSlot,
             TransactionKind::HandleChange,
+            TransactionKind::AvatarFrame,
         ] {
             assert_eq!(TransactionKind::parse(k.as_str()), k);
         }

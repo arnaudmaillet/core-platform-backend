@@ -66,6 +66,10 @@ pub struct Profile {
     avatar_asset_id: Option<MediaAssetId>,
     #[serde(default)]
     banner_asset_id: Option<MediaAssetId>,
+    /// The avatar frame the profile wears (#913): a catalogue item id
+    /// (`frame.<name>`) its account owns.
+    #[serde(default)]
+    avatar_frame_id: Option<String>,
     website_url: Option<WebsiteUrl>,
     custom_links: Vec<ProfileLink>,
     profile_kind: ProfileKind,
@@ -137,6 +141,7 @@ impl Profile {
             banner_url: params.banner_url,
             avatar_asset_id: None,
             banner_asset_id: None,
+            avatar_frame_id: None,
             website_url: None,
             custom_links: Vec::new(),
             profile_kind: params.profile_kind,
@@ -249,6 +254,7 @@ impl Profile {
             banner_url,
             avatar_asset_id: None,
             banner_asset_id: None,
+            avatar_frame_id: None,
             website_url,
             custom_links,
             profile_kind,
@@ -427,6 +433,31 @@ impl Profile {
     /// Restores the stored location settings (a column added after
     /// [`Self::reconstitute`]'s set).
     /// Reconstitution: the avatar's and banner's media assets (#907).
+    /// Reconstitution: the avatar frame worn (#913).
+    pub fn with_avatar_frame(mut self, frame: Option<String>) -> Self {
+        self.avatar_frame_id = frame;
+        self
+    }
+
+    /// Wears `frame` (a `frame.<name>` item the account owns; checked by the
+    /// caller), or none (#913).
+    pub fn equip_avatar_frame(&mut self, frame: Option<String>, correlation_id: Uuid) -> Result<(), ProfileError> {
+        self.require_active()?;
+        if let Some(id) = &frame
+            && !is_frame_id(id)
+        {
+            return Err(ProfileError::DomainViolation { field: "frame_id".into(), message: format!("'{id}' is not an avatar frame") });
+        }
+        self.avatar_frame_id = frame;
+        let now = self.touch_now();
+        self.pending_events.push(DomainEvent::ProfileUpdated(ProfileUpdated {
+            profile_id: self.id,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(())
+    }
+
     pub fn with_media_assets(mut self, avatar: Option<MediaAssetId>, banner: Option<MediaAssetId>) -> Self {
         self.avatar_asset_id = avatar;
         self.banner_asset_id = banner;
@@ -773,6 +804,7 @@ impl Profile {
     pub fn banner_url(&self) -> Option<&BannerUrl> { self.banner_url.as_ref() }
     pub fn avatar_asset_id(&self) -> Option<MediaAssetId> { self.avatar_asset_id }
     pub fn banner_asset_id(&self) -> Option<MediaAssetId> { self.banner_asset_id }
+    pub fn avatar_frame_id(&self) -> Option<&str> { self.avatar_frame_id.as_deref() }
     pub fn website_url(&self) -> Option<&WebsiteUrl> { self.website_url.as_ref() }
     pub fn custom_links(&self) -> &[ProfileLink] { &self.custom_links }
     pub fn profile_kind(&self) -> ProfileKind { self.profile_kind }
@@ -821,6 +853,14 @@ impl Profile {
         self.touch(now);
         now
     }
+}
+
+/// An avatar frame's catalogue id (#913): `frame.<name>`, `name` 1–32 of
+/// `[a-z0-9_]` (the wallet's item ids).
+pub fn is_frame_id(id: &str) -> bool {
+    id.strip_prefix("frame.").is_some_and(|name| {
+        (1..=32).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    })
 }
 
 #[cfg(test)]
@@ -960,6 +1000,17 @@ mod tests {
     fn set_tier_rejects_unknown_tier() {
         let mut p = sample_profile();
         assert!(p.set_tier(5, Uuid::now_v7()).is_err());
+    }
+
+    /// #913: a profile wears one frame, or none; only frame ids.
+    #[test]
+    fn a_profile_wears_one_avatar_frame_or_none() {
+        let mut p = sample_profile();
+        p.equip_avatar_frame(Some("frame.gold".into()), Uuid::now_v7()).unwrap();
+        assert_eq!(p.avatar_frame_id(), Some("frame.gold"));
+        assert!(p.equip_avatar_frame(Some("theme.red".into()), Uuid::now_v7()).is_err());
+        p.equip_avatar_frame(None, Uuid::now_v7()).unwrap();
+        assert_eq!(p.avatar_frame_id(), None);
     }
 
     /// #907: an image's media asset goes with it — replaced by URL alone, or

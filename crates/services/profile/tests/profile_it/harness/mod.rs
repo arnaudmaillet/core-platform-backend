@@ -170,6 +170,15 @@ impl profile::application::port::GemWallet for FakeGemWallet {
         let gems = 1_000 - spent.iter().filter(mine).map(|(_, a)| a).sum::<i64>();
         Ok(profile::application::port::GemSpend { spent: true, gems })
     }
+
+    /// Every account owns `frame.gold` (#913).
+    async fn owns(
+        &self,
+        _: &profile::domain::value_object::AccountId,
+        item_id: &str,
+    ) -> Result<bool, profile::error::ProfileError> {
+        Ok(item_id == "frame.gold")
+    }
 }
 
 impl TestHarness {

@@ -63,6 +63,8 @@ pub struct ProfileRow {
     /// The avatar's / banner's media assets (#907); NULL when set by URL only.
     pub avatar_asset_id: Option<Uuid>,
     pub banner_asset_id: Option<Uuid>,
+    /// The avatar frame worn (#913); NULL: none.
+    pub avatar_frame_id: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -170,6 +172,7 @@ impl TryFrom<ProfileRow> for Profile {
         .with_media_assets(
             row.avatar_asset_id.map(MediaAssetId::from_uuid),
             row.banner_asset_id.map(MediaAssetId::from_uuid),
-        ))
+        )
+        .with_avatar_frame(row.avatar_frame_id))
     }
 }

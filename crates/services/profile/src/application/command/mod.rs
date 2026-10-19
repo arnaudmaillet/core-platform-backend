@@ -16,6 +16,7 @@ pub mod set_visibility;
 pub mod supervision_floor;
 pub mod update_avatar;
 pub mod update_banner;
+pub mod equip_avatar_frame;
 pub mod update_profile;
 pub mod verify_profile;
 
@@ -38,6 +39,7 @@ pub use supervision_floor::{ApplySupervisionFloorCommand, ApplySupervisionFloorH
 pub use set_visibility::{SetVisibilityCommand, SetVisibilityHandler};
 pub use update_avatar::{UpdateAvatarCommand, UpdateAvatarHandler};
 pub use update_banner::{UpdateBannerCommand, UpdateBannerHandler};
+pub use equip_avatar_frame::{EquipAvatarFrameCommand, EquipAvatarFrameHandler};
 pub use update_profile::{UpdateProfileCommand, UpdateProfileHandler};
 pub use verify_profile::{VerifyProfileCommand, VerifyProfileHandler};
 pub use account_type::{

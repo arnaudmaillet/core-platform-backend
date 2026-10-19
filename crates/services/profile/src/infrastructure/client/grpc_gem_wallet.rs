@@ -62,4 +62,16 @@ impl GemWallet for GrpcGemWallet {
             .into_inner();
         Ok(GemSpend { spent: answer.outcome == wallet_api::SpendGemsOutcome::Spent as i32, gems: answer.gems })
     }
+
+    async fn owns(&self, account: &AccountId, item_id: &str) -> Result<bool, ProfileError> {
+        let owned = self
+            .wallet
+            .clone()
+            .list_owned_items(wallet_api::ListOwnedItemsRequest { account_id: account.as_uuid().to_string() })
+            .await
+            .map_err(|status| ProfileError::WalletUnavailable { reason: status.to_string() })?
+            .into_inner();
+        Ok(owned.items.iter().any(|item| item.item_id == item_id))
+    }
+
 }

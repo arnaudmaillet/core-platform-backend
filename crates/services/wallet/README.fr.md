@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: cddbb1e8aece464b30e300449be4dc9fc18e1a824f8ddaaee1e2b983dc973792
+  source_sha256: d3bbbc4c9cc17155bf05d2d94e168ee4f875f2f17fa8eeb3913c72bce94ed534
   translated_at: 2026-10-20
   status: complete
 ---
@@ -101,15 +101,17 @@ seule fois.
 
 **Le catalogue de gems (#892).** Ce que les gems achètent, en politique serveur (`WALLET_CATALOG`),
 jamais d'influence, de classement ni de visibilité (charte V5.3 §35). L'id d'un article est
-`<famille>.<nom>` ; les familles sont `theme` (thèmes d'accent de l'app, #946) et `icon` (icônes
-alternatives de l'app). En vente par défaut : `theme.pink` (gratuit), `theme.violet` (50) et
-`theme.red` (50) ; aucune icône tant que l'app n'en embarque pas.
+`<famille>.<nom>` ; les familles sont `theme` (thèmes d'accent de l'app, #946), `icon` (icônes
+alternatives de l'app) et `frame` (cadres d'avatar, #913, portés par profil via `EquipAvatarFrame` de
+profile, qui lit `ListOwnedItems` sur le mesh). En vente par défaut : `theme.pink` (gratuit),
+`theme.violet` (50), `theme.red` (50), `frame.gold`, `frame.neon` et `frame.aurora` (60 chacun) ;
+aucune icône tant que l'app n'en embarque pas.
 - `ListCatalog` liste les articles et leurs prix ; l'app embarque le visuel de chaque article, indexé
   par son id, et masque un id qu'elle ne connaît pas.
 - `PurchaseItem` est idempotent par clé, au prix `expected_price` (sinon `PRICE_CHANGED`), et répond
   dans la réponse : `PURCHASED`, `ALREADY_OWNED` (ou gratuit ; rien n'est débité), `INSUFFICIENT_GEMS`,
   `PRICE_CHANGED`, `UNKNOWN_ITEM`. Un achat écrit une ligne de registre du type de sa famille (`THEME`,
-  `APP_ICON` ; `ref_id` = l'id de l'article) et une ligne `owned_items`, dans une seule transaction avec
+  `APP_ICON`, `AVATAR_FRAME` ; `ref_id` = l'id de l'article) et une ligne `owned_items`, dans une seule transaction avec
   la ligne du wallet verrouillée, si bien que des achats concurrents ne débitent qu'une fois.
 - C'est le **compte** qui possède un article ; un article gratuit appartient à tous les comptes et n'a
   pas de ligne. `ListOwnedItems` renvoie d'abord les gratuits, puis les achetés, du plus ancien au plus
@@ -389,7 +391,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points réclamables par jour UTC |
 | `WALLET_POINTS_CAP` | `2000` | le solde de points qu'un claim ne dépasse jamais (`BALANCE_FULL` à ce niveau) ; 0 garde la valeur par défaut |
 | `WALLET_STARTER_GEMS` | `100` | gems à l'ouverture d'un portefeuille |
-| `WALLET_CATALOG` | `theme.pink:0,theme.violet:50,theme.red:50` | le catalogue de gems (#892) : `id d'article:gems`, dans l'ordre d'affichage, des ids `<famille>.<nom>` d'une famille connue (`theme`, `icon`) et distincts ; 0 = gratuit, possédé par tous les comptes ; une liste invalide garde la valeur par défaut |
+| `WALLET_CATALOG` | `theme.pink:0,theme.violet:50,theme.red:50,frame.gold:60,frame.neon:60,frame.aurora:60` | le catalogue de gems (#892) : `id d'article:gems`, dans l'ordre d'affichage, des ids `<famille>.<nom>` d'une famille connue (`theme`, `icon`) et distincts ; 0 = gratuit, possédé par tous les comptes ; une liste invalide garde la valeur par défaut |
 | `WALLET_STAKE_PACKS` | `3:50,10:150,25:325` | les packs de mises en vente (#941) : `tirs:gems`, le pack par défaut en premier, des nombres de tirs distincts (l'id d'un pack est `shots_<tirs>`) ; une liste invalide garde la valeur par défaut |
 | `WALLET_POINTS_PER_SHOT` | `100` | points misés par tir |
 | `WALLET_STAKE_TARGET_CAP` | `250` | points qu'un compte peut mettre sur une cible, à vie |

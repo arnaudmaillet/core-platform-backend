@@ -41,6 +41,9 @@ message ProfileHit {
     // Object-store key for the avatar; the caller signs/resolves the URL.
     string  avatar_key   = 3;
     bool    verified     = 4;
+    // #913: the avatar frame the profile wears (profile.v1
+    // ProfileView.avatar_frame_id); empty: none.
+    string  avatar_frame_id = 5;
 }
 
 // Minimal indexed display fields for a post result. No engagement counts here —

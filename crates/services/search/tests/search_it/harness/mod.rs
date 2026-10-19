@@ -151,6 +151,7 @@ impl Harness {
             display_name: display_name.to_owned(),
             bio: bio.to_owned(),
             avatar_key: String::new(),
+            avatar_frame_id: "frame.gold".to_owned(),
             verified: false,
             created_at: created(),
             revision,

@@ -85,14 +85,16 @@ service's own start with `sys:` (e.g. `sys:starter-gems`). No caller key holds a
 
 **The gem catalogue (#892).** What gems buy, as server policy (`WALLET_CATALOG`), never influence,
 ranking or visibility (charter V5.3 §35). An item id is `<family>.<name>`; the families are
-`theme` (app accent themes, #946) and `icon` (alternate app icons). On sale by default:
-`theme.pink` (free), `theme.violet` (50) and `theme.red` (50); no icon until the app bundles one.
+`theme` (app accent themes, #946), `icon` (alternate app icons) and `frame` (avatar frames, #913,
+equipped per profile by profile's `EquipAvatarFrame`, which reads `ListOwnedItems` over the mesh). On
+sale by default: `theme.pink` (free), `theme.violet` (50), `theme.red` (50), `frame.gold`, `frame.neon`
+and `frame.aurora` (60 each); no icon until the app bundles one.
 - `ListCatalog` lists the items and prices; the app bundles each item's art keyed by its id and hides
   an id it does not know.
 - `PurchaseItem` is idempotent per key, at `expected_price` (`PRICE_CHANGED` otherwise), and answers
   in-band: `PURCHASED`, `ALREADY_OWNED` (or free; nothing charged), `INSUFFICIENT_GEMS`,
   `PRICE_CHANGED`, `UNKNOWN_ITEM`. A purchase writes one ledger row of its family's kind (`THEME`,
-  `APP_ICON`; `ref_id` = the item id) and an `owned_items` row, in one transaction with the wallet
+  `APP_ICON`, `AVATAR_FRAME`; `ref_id` = the item id) and an `owned_items` row, in one transaction with the wallet
   row locked, so raced purchases charge once.
 - The **account** owns an item; a free one is owned by every account and has no row.
   `ListOwnedItems` gives free ones first, then the bought ones, oldest first, kept when no longer on
@@ -356,7 +358,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points claimable per UTC day |
 | `WALLET_POINTS_CAP` | `2000` | the points balance a claim never takes past (`BALANCE_FULL` at it); 0 keeps the default |
 | `WALLET_STARTER_GEMS` | `100` | gems a wallet opens with |
-| `WALLET_CATALOG` | `theme.pink:0,theme.violet:50,theme.red:50` | the gem catalogue (#892): `item id:gems`, display order, ids `<family>.<name>` of a known family (`theme`, `icon`) and distinct; 0 = free, owned by every account; a bad list keeps the default |
+| `WALLET_CATALOG` | `theme.pink:0,theme.violet:50,theme.red:50,frame.gold:60,frame.neon:60,frame.aurora:60` | the gem catalogue (#892): `item id:gems`, display order, ids `<family>.<name>` of a known family (`theme`, `icon`) and distinct; 0 = free, owned by every account; a bad list keeps the default |
 | `WALLET_STAKE_PACKS` | `3:50,10:150,25:325` | the stake packs on sale (#941): `shots:gems`, the default pack first, distinct shots (a pack's id is `shots_<shots>`); a bad list keeps the default |
 | `WALLET_POINTS_PER_SHOT` | `100` | points one shot stakes |
 | `WALLET_STAKE_TARGET_CAP` | `250` | points one account may put on one target, ever |

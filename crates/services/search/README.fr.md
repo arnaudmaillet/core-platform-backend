@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 06256797825659106a03ffc4d1d0227d2540eec3f42f0867f3013f36622d64f5
-  translated_at: 2026-10-11
+  source_sha256: 3a95d04882c4adf9b0b14b0e4cf75aad78b27f2d5f8d60ce30033c7d43de556d
+  translated_at: 2026-10-20
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -131,7 +131,7 @@ Les quatre RPC sont exposés en périphérie, `authenticated` + `require_profile
 
 Le stockage tient en un document par profil dans `<prefix>-recent-searches` (non indexé, jamais cherché), tenu par un upsert scripté painless. Ce sont des données personnelles : l'export RGPD d'account les lit via `ListRecentSearches` sur le mesh (#816 ; `require_profile` accepte un appelant mesh), et elles sont effacées avec le profil. L'historique de visionnage reste sur l'appareil (aucun flux de vues n'existe).
 
-> **Contrat de fil :** les résultats sont des références — `(entity_type, id, score, highlight/snippet)` plus les champs d'affichage minimaux indexés (handle, nom affiché, clé de miniature, `author_id`, `created_at`). Les appelants DOIVENT hydrater les champs volatils/autoritatifs (compteurs vivants, URLs média signées, état de suivi, bio courante) depuis `post`/`profile`. Search ne renvoie aucune entité autoritative.
+> **Contrat de fil :** les résultats sont des références — `(entity_type, id, score, highlight/snippet)` plus les champs d'affichage minimaux indexés (handle, nom affiché, clé de miniature, `avatar_frame_id` d'un profil (#913), `author_id`, `created_at`). Les appelants DOIVENT hydrater les champs volatils/autoritatifs (compteurs vivants, URLs média signées, état de suivi, bio courante) depuis `post`/`profile`. Search ne renvoie aucune entité autoritative.
 
 ### Ports Rust (contrat hexagonal) *(Phase 3)*
 

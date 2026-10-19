@@ -139,6 +139,7 @@ mod tests {
                 handle: id.into(),
                 display_name: String::new(),
                 avatar_key: String::new(),
+                avatar_frame_id: String::new(),
                 verified: false,
             },
         }

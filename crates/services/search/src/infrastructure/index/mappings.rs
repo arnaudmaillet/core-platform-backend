@@ -82,6 +82,8 @@ pub(super) fn properties_for(kind: EntityKind) -> Value {
             "display_name": { "type": "text", "analyzer": "folding" },
             "bio":          { "type": "text", "analyzer": "folding" },
             "avatar_key":   { "type": "keyword", "index": false },
+            // #913: added in place (additive `_mapping` update).
+            "avatar_frame_id": { "type": "keyword", "index": false },
             "verified":     { "type": "boolean" }
         }),
         EntityKind::Post => json!({

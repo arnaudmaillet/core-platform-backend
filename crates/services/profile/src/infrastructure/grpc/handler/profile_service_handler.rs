@@ -281,6 +281,24 @@ where
         }
     }
 
+    /// Wears an avatar frame, or none (#913). Edge: the profile's owner.
+    pub async fn equip_avatar_frame(
+        &self,
+        request: Request<proto::EquipAvatarFrameRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let cmd = crate::application::command::EquipAvatarFrameCommand {
+            profile_id: req.profile_id.clone(),
+            frame_id:   Some(req.frame_id).filter(|f| !f.is_empty()),
+        };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_cmd(&req.profile_id))
+            .map_err(cqrs_error_to_status)
+    }
+
     pub async fn update_avatar(
         &self,
         request: Request<proto::UpdateAvatarRequest>,
@@ -961,6 +979,7 @@ fn profile_view_to_proto(v: ProfileView) -> proto::ProfileView {
         banner_url:        v.banner_url.unwrap_or_default(),
         avatar_asset_id:   v.avatar_asset_id.unwrap_or_default(),
         banner_asset_id:   v.banner_asset_id.unwrap_or_default(),
+        avatar_frame_id:   v.avatar_frame_id.unwrap_or_default(),
         avatar:            None,
         banner:            None,
         website_url:       v.website_url.unwrap_or_default(),
@@ -1087,6 +1106,7 @@ fn summary_to_proto(s: ProfileSummary) -> proto::ProfileSummaryView {
         display_name: s.display_name,
         avatar_url:   s.avatar_url.unwrap_or_default(),
         avatar_asset_id: s.avatar_asset_id.map(|a| a.as_str()).unwrap_or_default(),
+        avatar_frame_id: s.avatar_frame_id.unwrap_or_default(),
         avatar:       None,
         profile_kind: profile_kind_str_to_i32(&s.profile_kind),
         visibility:   profile_visibility_str_to_i32(&s.visibility),
@@ -1237,6 +1257,7 @@ pub fn cqrs_error_to_status(err: cqrs::error::CqrsError) -> Status {
             let msg = boxed.to_string();
             let retryable = boxed.is_retryable();
             match boxed.http_status().as_u16() {
+                403 => Status::permission_denied(msg),
                 404 => Status::not_found(msg),
                 409 if retryable => Status::aborted(msg),
                 409 => Status::already_exists(msg),

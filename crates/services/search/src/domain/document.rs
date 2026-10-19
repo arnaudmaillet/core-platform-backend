@@ -77,6 +77,8 @@ pub struct ProfileDoc {
     pub display_name: String,
     pub bio: String,
     pub avatar_key: String,
+    /// The avatar frame worn (#913); empty: none.
+    pub avatar_frame_id: String,
     pub verified: bool,
     pub searchable: Searchable,
     pub popularity: PopularityScore,

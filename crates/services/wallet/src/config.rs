@@ -64,7 +64,8 @@ impl WalletConfig {
     /// (1000 gems), `WALLET_CURATOR_DAILY_CAP` (40 gems per account),
     /// `WALLET_ENVELOPE_TARGET_CAP_BPS` (200 = 2 % of the pool per target),
     /// `WALLET_OUTCOME_TOP_PERCENT` (15), `WALLET_CATALOG`
-    /// (`theme.pink:0,theme.violet:50,theme.red:50`: each item's `id:gems`, a
+    /// (`theme.pink:0,theme.violet:50,theme.red:50,frame.gold:60,frame.neon:60,frame.aurora:60`:
+    /// each item's `id:gems`, a
     /// bad list keeps the default), `WALLET_CONVICTION_PROBABILITIES`
     /// (`0.25,0.40,0.60,0.80`: four ascending probabilities in (0, 1), C1
     /// first), `WALLET_WELCOME_GIFT` (50). An unparsable or negative value keeps
@@ -203,7 +204,7 @@ mod tests {
             ("theme.pink", ItemFamily::Theme, 0),
             ("icon.night", ItemFamily::AppIcon, 40)
         ]);
-        for bad in ["", "theme.red:5,theme.red:6", "frame.gold:10", "theme.red:-1", "theme.red"] {
+        for bad in ["", "theme.red:5,theme.red:6", "medal.gold:10", "theme.red:-1", "theme.red"] {
             assert_eq!(catalog(bad), Catalog::default(), "{bad:?} keeps the default");
         }
     }

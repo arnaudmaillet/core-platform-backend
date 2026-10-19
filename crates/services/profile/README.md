@@ -129,6 +129,7 @@ service ProfileService {
   rpc GetHandleChangePrice(GetHandleChangePriceRequest) returns (HandleChangePrice);   // #911 the next change's price / free-change cooldown
   rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);
   rpc UpdateBanner(UpdateBannerRequest) returns (CommandResponse);
+  rpc EquipAvatarFrame(EquipAvatarFrameRequest) returns (CommandResponse);   // #913 wear an owned frame, or none
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
   rpc SetInteractionLimit(SetInteractionLimitRequest) returns (CommandResponse); // #669 hold comments / messages from non-followers or recent followers until a time (≤ 4 weeks)
   rpc ClearInteractionLimit(ClearInteractionLimitRequest) returns (CommandResponse);
@@ -222,6 +223,14 @@ grows once the change is saved; a crash in between leaves that change uncounted,
 Mesh callers change for free, uncounted. The wallet unreachable ⇒ `PRF-6003`. Erasing the account
 erases the count.
 
+**Avatar frames (#913).** A frame is a wallet catalogue item (`frame.<name>`) the **account** buys once
+(wallet `PurchaseItem`) and each **profile** wears or not. `EquipAvatarFrame(frame_id)` (the profile's
+owner) checks the account owns it (wallet `ListOwnedItems` over the mesh; **`PRF-6007`**
+`PERMISSION_DENIED` otherwise, `PRF-6003` when the wallet cannot tell); an empty `frame_id` takes it
+off. It is stored on the profile and on the account's profile list (migration 0020), and every read
+carries `avatar_frame_id` (`ProfileView`, `ProfileSummaryView`, search's profile hits). The app draws
+it from bundled art keyed by id, and it changes no size, order or ranking (charter V5.3 §35).
+
 ### Rust ports (hexagonal contract)
 
 ```rust
@@ -254,6 +263,7 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 | PRF-6004 | `HandleChangePriceChanged` (not the shown price; `ChangeHandle` answers it in-band, #911) | 422 | No |
 | PRF-6005 | `HandleChangeCooldown` (a restricted caller changed less than 30 days ago; in-band, #911) | 422 | No |
 | PRF-6006 | `InsufficientGems` (in-band, #911) | 422 | No |
+| PRF-6007 | `ItemNotOwned` (a catalogue item the account does not own, #913) | 403 | No |
 | PRF-9001–9010 | domain / parse / validation | 422 | No |
 | SDB-* / RDB-* | storage (delegated) | varies | varies |
 
@@ -362,7 +372,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Deployment, Migrations & Rollback
 
-- **Migrations:** `crates/services/profile/migrations/00{01..19}_*.cql` against the `profile` keyspace,
+- **Migrations:** `crates/services/profile/migrations/00{01..20}_*.cql` against the `profile` keyspace,
   applied **before** first start.
 - **Cache version bump:** to invalidate cache fleet-wide during a schema change, bump the `v1:` key
   prefix — no flush, no downtime.

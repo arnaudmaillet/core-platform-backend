@@ -117,7 +117,7 @@ All four RPCs are on the edge, `authenticated` + `require_profile`, and each ans
 
 The storage is one document per profile in `<prefix>-recent-searches` (not indexed, never searched), kept by a painless scripted upsert. It is personal data: account's GDPR export reads it through `ListRecentSearches` over the mesh (#816; `require_profile` accepts a mesh caller), and it is erased with the profile. Watch history stays on the device (no view stream exists).
 
-> **Wire contract:** results are references — `(entity_type, id, score, highlight/snippet)` plus the minimal indexed display fields (handle, display name, thumbnail key, `author_id`, `created_at`). Callers MUST hydrate volatile/authoritative fields (live counts, signed media URLs, follow-state, current bio) from `post`/`profile`. Search returns no authoritative entity.
+> **Wire contract:** results are references — `(entity_type, id, score, highlight/snippet)` plus the minimal indexed display fields (handle, display name, thumbnail key, a profile's `avatar_frame_id` (#913), `author_id`, `created_at`). Callers MUST hydrate volatile/authoritative fields (live counts, signed media URLs, follow-state, current bio) from `post`/`profile`. Search returns no authoritative entity.
 
 ### Rust ports (hexagonal contract) *(Phase 3)*
 
