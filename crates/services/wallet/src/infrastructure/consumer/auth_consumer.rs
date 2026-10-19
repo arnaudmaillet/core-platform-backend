@@ -25,8 +25,6 @@ pub struct AuthEvent {
     #[serde(default)]
     device_key_hash: String,
     #[serde(default)]
-    guest_since:     Option<DateTime<Utc>>,
-    #[serde(default)]
     occurred_at:     Option<DateTime<Utc>>,
 }
 
@@ -34,7 +32,7 @@ pub struct AuthEvent {
 #[derive(Debug, PartialEq, Eq)]
 enum Outcome {
     Skip,
-    Welcome { account: AccountId, device: String, since: DateTime<Utc>, at: DateTime<Utc> },
+    Welcome { account: AccountId, device: String, at: DateTime<Utc> },
     Poison(String),
 }
 
@@ -45,9 +43,9 @@ fn outcome(event: &AuthEvent) -> Outcome {
     let Ok(account) = AccountId::parse(&event.account_id) else {
         return Outcome::Poison(format!("guest_upgraded with a bad account_id {:?}", event.account_id));
     };
-    match (event.device_key_hash.len() == 64, event.guest_since, event.occurred_at) {
-        (true, Some(since), Some(at)) => Outcome::Welcome { account, device: event.device_key_hash.clone(), since, at },
-        _ => Outcome::Poison("guest_upgraded without its device or times".into()),
+    match (event.device_key_hash.len() == 64, event.occurred_at) {
+        (true, Some(at)) => Outcome::Welcome { account, device: event.device_key_hash.clone(), at },
+        _ => Outcome::Poison("guest_upgraded without its device or time".into()),
     }
 }
 
@@ -62,8 +60,8 @@ pub async fn run_auth_consumer(consumer: KafkaConsumerHandle, wallets: Arc<Walle
             match outcome(event) {
                 Outcome::Skip => ProcessOutcome::Done,
                 Outcome::Poison(reason) => ProcessOutcome::Reject(reason),
-                Outcome::Welcome { account, device, since, at } => {
-                    ProcessOutcome::from_result(wallets.welcome_gift(&account, &device, since, at).await.map(|_| ()))
+                Outcome::Welcome { account, device, at } => {
+                    ProcessOutcome::from_result(wallets.welcome_gift(&account, &device, at).await.map(|_| ()))
                 }
             }
         })
@@ -100,7 +98,7 @@ mod tests {
         });
         assert_eq!(
             outcome(&wire(&event)),
-            Outcome::Welcome { account: AccountId::from_uuid(account), device: "a".repeat(64), since, at }
+            Outcome::Welcome { account: AccountId::from_uuid(account), device: "a".repeat(64), at }
         );
     }
 

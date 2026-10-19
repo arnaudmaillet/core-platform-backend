@@ -4,11 +4,15 @@
 use chrono::TimeDelta;
 
 use crate::domain::{
-    ClaimPolicy, EnvelopePolicy, SettlementPolicy, StakePackPolicy, StakePolicy, WelcomeGiftPolicy, DEFAULT_CONVICTION_BPS,
+    ClaimPolicy, EnvelopePolicy, SettlementPolicy, StakePackPolicy, StakePolicy, DEFAULT_CONVICTION_BPS,
 };
 
 /// Gems every wallet opens with.
 pub const DEFAULT_STARTER_GEMS: i64 = 100;
+
+/// Likes a guest's device gets when it becomes a member (#827, #943): a
+/// flat amount, however long it was a guest.
+pub const DEFAULT_WELCOME_GIFT: i64 = 50;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WalletConfig {
@@ -24,8 +28,8 @@ pub struct WalletConfig {
     /// The probability each conviction level C1–C4 stands for (#888), in
     /// basis points, ascending.
     pub conviction_bps: [i64; 4],
-    /// The welcome gift a guest's device gets when it becomes a member (#827).
-    pub welcome:      WelcomeGiftPolicy,
+    /// The likes a guest's device gets when it becomes a member (#827, #943).
+    pub welcome_gift: i64,
 }
 
 impl Default for WalletConfig {
@@ -38,7 +42,7 @@ impl Default for WalletConfig {
             settlement:   SettlementPolicy::default(),
             envelope:     EnvelopePolicy::default(),
             conviction_bps: DEFAULT_CONVICTION_BPS,
-            welcome:      WelcomeGiftPolicy::default(),
+            welcome_gift: DEFAULT_WELCOME_GIFT,
         }
     }
 }
@@ -56,8 +60,7 @@ impl WalletConfig {
     /// `WALLET_ENVELOPE_TARGET_CAP_BPS` (200 = 2 % of the pool per target),
     /// `WALLET_OUTCOME_TOP_PERCENT` (15), `WALLET_CONVICTION_PROBABILITIES`
     /// (`0.25,0.40,0.60,0.80`: four ascending probabilities in (0, 1), C1
-    /// first), `WALLET_WELCOME_GIFT_FIRST` (50), `WALLET_WELCOME_GIFT_DAILY` (25),
-    /// `WALLET_WELCOME_GIFT_DAYS` (3). An unparsable or negative value keeps
+    /// first), `WALLET_WELCOME_GIFT` (50). An unparsable or negative value keeps
     /// the default.
     pub fn from_env() -> Self {
         Self::from_lookup(|name| std::env::var(name).ok())
@@ -115,11 +118,7 @@ impl WalletConfig {
             conviction_bps: get("WALLET_CONVICTION_PROBABILITIES")
                 .and_then(|v| conviction_bps(&v))
                 .unwrap_or(defaults.conviction_bps),
-            welcome: WelcomeGiftPolicy {
-                first_launch: number("WALLET_WELCOME_GIFT_FIRST").unwrap_or(defaults.welcome.first_launch),
-                daily:        number("WALLET_WELCOME_GIFT_DAILY").unwrap_or(defaults.welcome.daily),
-                daily_days:   number("WALLET_WELCOME_GIFT_DAYS").unwrap_or(defaults.welcome.daily_days),
-            },
+            welcome_gift: number("WALLET_WELCOME_GIFT").unwrap_or(defaults.welcome_gift),
         }
     }
 }
@@ -144,9 +143,11 @@ mod tests {
         let config = WalletConfig::from_lookup(|name| match name {
             "WALLET_STARTER_GEMS" => Some("0".into()),
             "WALLET_DAILY_CLAIM_CAP" => Some("-5".into()),
+            "WALLET_WELCOME_GIFT" => Some("80".into()),
             _ => None,
         });
         assert_eq!(config.starter_gems, 0);
+        assert_eq!(config.welcome_gift, 80);
         assert_eq!(config.claim.daily_cap, 200, "a negative value keeps the default");
         assert_eq!(config.claim.points_cap, 2_000);
         let capped = |v: &str| WalletConfig::from_lookup(|name| (name == "WALLET_POINTS_CAP").then(|| v.into())).claim.points_cap;

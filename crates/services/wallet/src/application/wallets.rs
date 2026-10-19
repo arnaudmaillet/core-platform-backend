@@ -552,20 +552,17 @@ impl Wallets {
         self.store.erase(account).await
     }
 
-    /// A guest's device became `account` (#827): credits the likes the guest
-    /// collected (the pile at `upgraded_at` of a guest first seen at
-    /// `guest_since`), once per device.
+    /// A guest's device became `account` at `upgraded_at` (#827): credits the
+    /// welcome gift, a flat amount (#943), once per device.
     pub async fn welcome_gift(
         &self,
         account: &AccountId,
         device_key_hash: &str,
-        guest_since: DateTime<Utc>,
         upgraded_at: DateTime<Utc>,
     ) -> Result<WelcomeGiftOutcome, WalletError> {
-        let amount = self.config.welcome.amount(guest_since, upgraded_at);
         let outcome = self
             .store
-            .welcome_gift(account, device_key_hash, amount, self.config.claim.points_cap, self.config.starter_gems, ledger_time(upgraded_at))
+            .welcome_gift(account, device_key_hash, self.config.welcome_gift, self.config.claim.points_cap, self.config.starter_gems, ledger_time(upgraded_at))
             .await?;
         tracing::info!(account = %account, ?outcome, "welcome gift");
         Ok(outcome)
@@ -1444,8 +1441,8 @@ mod tests {
         assert!(!store.settlements.lock().unwrap().contains_key(&(me_id, "post:post-1".to_owned())));
     }
 
-    /// #827: a guest's device that becomes a member gets the pile it
-    /// collected, once per device: a redelivery answers the same credit,
+    /// #827, #943: a guest's device that becomes a member gets a flat 50,
+    /// however long it was a guest, once per device: a redelivery answers the same credit,
     /// another account signing in on that device gets nothing, and erasing
     /// the account leaves the device welcomed.
     #[tokio::test]
@@ -1455,21 +1452,20 @@ mod tests {
         let w = Wallets::new(Arc::clone(&store) as _, WalletConfig::default());
         let (me, you) = (AccountId::from_uuid(Uuid::now_v7()), AccountId::from_uuid(Uuid::now_v7()));
         let device = "d".repeat(64);
-        let since = Utc::now() - TimeDelta::hours(50);
         let at = Utc::now();
 
-        assert_eq!(w.welcome_gift(&me, &device, since, at).await.unwrap(), WelcomeGiftOutcome::Credited(100), "50 + 2 days");
-        assert_eq!(w.welcome_gift(&me, &device, since, at).await.unwrap(), WelcomeGiftOutcome::Credited(100), "a redelivery");
+        assert_eq!(w.welcome_gift(&me, &device, at).await.unwrap(), WelcomeGiftOutcome::Credited(50));
+        assert_eq!(w.welcome_gift(&me, &device, at).await.unwrap(), WelcomeGiftOutcome::Credited(50), "a redelivery");
         let wallet = w.get(&me.to_string(), at).await.unwrap().wallet;
-        assert_eq!((wallet.points, wallet.points_earned), (100, 100), "credited once");
-        assert_eq!(w.welcome_gift(&you, &device, since, at).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven);
+        assert_eq!((wallet.points, wallet.points_earned), (50, 50), "credited once");
+        assert_eq!(w.welcome_gift(&you, &device, at).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven);
 
         // Once per account too: another of its devices gets nothing more.
-        assert_eq!(w.welcome_gift(&me, &"f".repeat(64), since, at).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven);
+        assert_eq!(w.welcome_gift(&me, &"f".repeat(64), at).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven);
 
         w.erase(&me).await.unwrap();
-        assert_eq!(w.welcome_gift(&you, &device, since, at).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven, "still welcomed");
-        assert_eq!(w.welcome_gift(&you, &"e".repeat(64), since, at).await.unwrap(), WelcomeGiftOutcome::Credited(100));
+        assert_eq!(w.welcome_gift(&you, &device, at).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven, "still welcomed");
+        assert_eq!(w.welcome_gift(&you, &"e".repeat(64), at).await.unwrap(), WelcomeGiftOutcome::Credited(50));
     }
 
     /// #886: the caller's own stakes, newest first, filtered and paged; each
