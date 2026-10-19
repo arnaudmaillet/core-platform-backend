@@ -19,7 +19,7 @@ use crate::domain::event::{StakeCommitted, WalletEvent};
 use crate::domain::{
     AccountId, Allocation, CalibrationRow, ClaimDecision, ClaimPolicy, Conviction, Currency, DayPosition, DuePosition, EnvelopeDay,
     IdempotencyKey, PackDecision, Settlement, StakeAsk,
-    StakeDecision, StakePackPolicy, StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
+    StakeDecision, StakePackOffer, StakePackPolicy, StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
 
@@ -81,13 +81,17 @@ async fn replayed(conn: &mut PgConnection, account: &AccountId, key: &Idempotenc
     Ok(row.map(|(delta,)| delta))
 }
 
-/// Writes a wallet's gems side (and its stake shots).
+/// Writes a wallet's gems side (and its stake pack).
 async fn write_gems(conn: &mut PgConnection, wallet: &Wallet, now: DateTime<Utc>) -> Result<(), WalletError> {
-    sqlx::query("UPDATE wallets SET gems = $2, gems_spent = $3, stake_shots = $4, updated_at = $5 WHERE account_id = $1")
+    sqlx::query(
+        "UPDATE wallets SET gems = $2, gems_spent = $3, stake_shots = $4, stake_pack_id = $5, updated_at = $6 \
+         WHERE account_id = $1",
+    )
         .bind(wallet.account.as_uuid())
         .bind(wallet.gems)
         .bind(wallet.gems_spent)
         .bind(wallet.stake_shots)
+        .bind(wallet.stake_pack_id.as_deref())
         .bind(now)
         .execute(conn)
         .await
@@ -134,13 +138,14 @@ type WalletRow = (
     Option<NaiveDate>,
     i32,
     i32,
+    Option<String>,
 );
 
 const WALLET_COLUMNS: &str = "account_id, points, gems, points_earned, points_spent, gems_earned, gems_spent, \
-                              last_claim_at, claimed_today, claimed_day, streak_days, stake_shots";
+                              last_claim_at, claimed_today, claimed_day, streak_days, stake_shots, stake_pack_id";
 
 fn wallet_from(row: WalletRow) -> Wallet {
-    let (account, points, gems, points_earned, points_spent, gems_earned, gems_spent, last_claim_at, claimed_today, claimed_day, streak_days, stake_shots) = row;
+    let (account, points, gems, points_earned, points_spent, gems_earned, gems_spent, last_claim_at, claimed_today, claimed_day, streak_days, stake_shots, stake_pack_id) = row;
     Wallet {
         account: AccountId::from_uuid(account),
         points,
@@ -154,6 +159,7 @@ fn wallet_from(row: WalletRow) -> Wallet {
         claimed_day,
         streak_days,
         stake_shots,
+        stake_pack_id,
     }
 }
 
@@ -292,12 +298,12 @@ impl WalletStore for PgWalletStore {
         Ok(ClaimResult { outcome, awarded, wallet })
     }
 
-    #[instrument(name = "wallet.buy_stake_pack", skip(self, key, policy))]
+    #[instrument(name = "wallet.buy_stake_pack", skip(self, key))]
     async fn buy_stake_pack(
         &self,
         account: &AccountId,
         key: &IdempotencyKey,
-        policy: &StakePackPolicy,
+        offer: &StakePackOffer,
         starter_gems: i64,
         now: DateTime<Utc>,
     ) -> Result<(PackOutcome, Wallet), WalletError> {
@@ -305,16 +311,17 @@ impl WalletStore for PgWalletStore {
         let outcome = if replayed(&mut tx, account, key).await?.is_some() {
             PackOutcome::Bought
         } else {
-            match wallet.decide_stake_pack(policy) {
+            match wallet.decide_stake_pack(offer) {
                 PackDecision::Buy => {
-                    wallet.apply_stake_pack(policy);
+                    wallet.apply_stake_pack(offer);
                     write_gems(&mut tx, &wallet, now).await?;
+                    let pack_id = offer.id();
                     let movement = Movement {
                         currency:      Currency::Gems,
-                        delta:         -policy.price_gems,
+                        delta:         -offer.price_gems,
                         balance_after: wallet.gems,
                         kind:          TransactionKind::StakePack,
-                        ref_id:        None,
+                        ref_id:        Some(&pack_id),
                         conviction:    None,
                     };
                     record(&mut tx, account, movement, key, now).await?;

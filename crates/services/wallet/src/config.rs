@@ -4,7 +4,7 @@
 use chrono::TimeDelta;
 
 use crate::domain::{
-    ClaimPolicy, EnvelopePolicy, SettlementPolicy, StakePackPolicy, StakePolicy, DEFAULT_CONVICTION_BPS,
+    ClaimPolicy, EnvelopePolicy, SettlementPolicy, StakePackOffer, StakePackPolicy, StakePolicy, DEFAULT_CONVICTION_BPS,
 };
 
 /// Gems every wallet opens with.
@@ -14,7 +14,7 @@ pub const DEFAULT_STARTER_GEMS: i64 = 100;
 /// flat amount, however long it was a guest.
 pub const DEFAULT_WELCOME_GIFT: i64 = 50;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalletConfig {
     pub claim:        ClaimPolicy,
     pub starter_gems: i64,
@@ -51,7 +51,9 @@ impl WalletConfig {
     /// `WALLET_CLAIM_INTERVAL_SECS` (3600), `WALLET_CLAIM_BASE_POINTS` (25),
     /// `WALLET_DAILY_CLAIM_CAP` (200), `WALLET_STARTER_GEMS` (100),
     /// `WALLET_POINTS_CAP` (2000, the balance a claim never takes past; 0 keeps
-    /// the default), `WALLET_STAKE_PACK_SHOTS` (3), `WALLET_STAKE_PACK_PRICE` (50 gems),
+    /// the default), `WALLET_STAKE_PACKS` (`3:50,10:150,25:325`: each
+    /// pack's `shots:gems`, the default pack first, distinct shots; a bad
+    /// list keeps the default),
     /// `WALLET_POINTS_PER_SHOT` (100), `WALLET_STAKE_TARGET_CAP` (250),
     /// `WALLET_STAKE_HOURLY_CAP` (1000), `WALLET_STAKE_MAX_BATCH_AGE_SECS`
     /// (86400), `WALLET_SETTLEMENT_DELAY_SECS` (86400; a position's full
@@ -83,10 +85,9 @@ impl WalletConfig {
             },
             starter_gems: number("WALLET_STARTER_GEMS").unwrap_or(defaults.starter_gems),
             stake_pack: StakePackPolicy {
-                shots:           number("WALLET_STAKE_PACK_SHOTS")
-                    .and_then(|v| i32::try_from(v).ok())
-                    .unwrap_or(defaults.stake_pack.shots),
-                price_gems:      number("WALLET_STAKE_PACK_PRICE").unwrap_or(defaults.stake_pack.price_gems),
+                offers:          get("WALLET_STAKE_PACKS")
+                    .and_then(|v| stake_pack_offers(&v))
+                    .unwrap_or_else(|| defaults.stake_pack.offers.clone()),
                 points_per_shot: number("WALLET_POINTS_PER_SHOT")
                     .and_then(|v| i32::try_from(v).ok())
                     .unwrap_or(defaults.stake_pack.points_per_shot),
@@ -133,6 +134,22 @@ fn conviction_bps(value: &str) -> Option<[i64; 4]> {
     bps.windows(2).all(|w| w[0] < w[1]).then_some(bps)
 }
 
+/// `shots:gems,…`: at least one, shots > 0, gems ≥ 0, no two with the same
+/// shots (an offer's id is its shots).
+fn stake_pack_offers(value: &str) -> Option<Vec<StakePackOffer>> {
+    let offers: Vec<StakePackOffer> = value
+        .split(',')
+        .map(|offer| {
+            let (shots, price) = offer.split_once(':')?;
+            let shots = shots.trim().parse::<i32>().ok().filter(|s| *s > 0)?;
+            let price_gems = price.trim().parse::<i64>().ok().filter(|p| *p >= 0)?;
+            Some(StakePackOffer { shots, price_gems })
+        })
+        .collect::<Option<_>>()?;
+    let distinct = offers.iter().enumerate().all(|(i, a)| offers[..i].iter().all(|b| b.shots != a.shots));
+    (!offers.is_empty() && distinct).then_some(offers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +170,15 @@ mod tests {
         let capped = |v: &str| WalletConfig::from_lookup(|name| (name == "WALLET_POINTS_CAP").then(|| v.into())).claim.points_cap;
         assert_eq!(capped("500"), 500);
         assert_eq!(capped("0"), 2_000, "a zero cap keeps the default");
+    }
+
+    #[test]
+    fn stake_packs_are_shots_and_gems_with_distinct_shots() {
+        let offers = |v: &str| WalletConfig::from_lookup(|name| (name == "WALLET_STAKE_PACKS").then(|| v.into())).stake_pack.offers;
+        assert_eq!(offers(" 5:60 , 12:100"), [StakePackOffer { shots: 5, price_gems: 60 }, StakePackOffer { shots: 12, price_gems: 100 }]);
+        for bad in ["", "3:50,3:40", "0:10", "3:-1", "3", "x:1"] {
+            assert_eq!(offers(bad), StakePackPolicy::default().offers, "{bad:?} keeps the default");
+        }
     }
 
     #[test]

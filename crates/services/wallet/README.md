@@ -23,7 +23,7 @@ movement of them.
 | Currency | Shown as | Earned by | Spent on |
 |---|---|---|---|
 | **Points** | likes (the heart) | the hourly claim | likes on posts and comments (`Stake`) |
-| **Gems** | the diamond | the starter gift; settled stakes (later) | the ×100 stake pack; country unlocks (geo-discovery) |
+| **Gems** | the diamond | the starter gift; settled stakes (later) | stake packs; country unlocks (geo-discovery) |
 
 Nothing is sold for real money: no StoreKit, no receipts, no restore. Neither currency converts to
 the other, to money, or to another user. One wallet per **account** (all its profiles).
@@ -77,7 +77,7 @@ service's own start with `sys:` (e.g. `sys:starter-gems`). No caller key holds a
 
 | Spend | Rule |
 |---|---|
-| ×100 stake pack (`BuyStakePack`, edge) | 3 shots of 100 of the buyer's **own** points, 50 gems; one pack at a time (`PACK_STILL_ACTIVE` while shots are left, nothing charged); shots never expire |
+| Stake packs (`BuyStakePack`, edge; #941) | shots of 100 of the buyer's **own** points; on sale by default `shots_3` (3 shots, 50 gems — the default pack, for a request naming none), `shots_10` (10, 150) and `shots_25` (25, 325); all or nothing, one pack at a time (`PACK_STILL_ACTIVE` while shots are left, nothing charged); shots never expire; a pack not on sale is `WAL-9005`; the ledger row's `ref_id` is the pack id and `Wallet.stake_pack_id` the loaded pack |
 | Country unlock (`SpendGems`, mesh) | geo-discovery prices the country, checks the spender is an adult, and asks for the gems with a key of its own; `ref_id` = the country code |
 
 Gems never buy points, money, or anything for another user.
@@ -253,8 +253,9 @@ the end user's edge token it forwards (`authorization`) must name the account's 
 export reads (and `ListWalletTransactions` over the mesh) take **account** only — the caller's
 ServiceAccount token, `x-mesh-token`. `off` until the infra provides the tokens (core-platform-infra#62).
 
-- `Wallet.gem_spending_restricted` (edge only) tells the app to hide gem spends; the pack's terms
-  are echoed (`stake_pack_price`, `stake_pack_shots`, `points_per_shot`).
+- `Wallet.gem_spending_restricted` (edge only) tells the app to hide gem spends; the packs on sale
+  are echoed (`stake_packs`, the default first; `stake_pack_price` / `stake_pack_shots` are the
+  default pack's, for older clients; `points_per_shot`), with the loaded one (`stake_pack_id`).
 - `BuyStakePack` answers `BOUGHT`, `PACK_STILL_ACTIVE` or `INSUFFICIENT_GEMS` in-band;
   `SpendGems` answers `SPENT` or `INSUFFICIENT_GEMS`.
 
@@ -281,6 +282,7 @@ ServiceAccount token, `x-mesh-token`. `off` until the infra provides the tokens 
 | `WAL-9002` | invalid idempotency key | `INVALID_ARGUMENT` |
 | `WAL-9003` | invalid page token | `INVALID_ARGUMENT` |
 | `WAL-9004` | invalid gem spend (amount, kind, ref) | `INVALID_ARGUMENT` |
+| `WAL-9005` | stake pack not on sale | `INVALID_ARGUMENT` |
 | `DB-*` | storage (delegated) | per error |
 
 ---
@@ -330,8 +332,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points claimable per UTC day |
 | `WALLET_POINTS_CAP` | `2000` | the points balance a claim never takes past (`BALANCE_FULL` at it); 0 keeps the default |
 | `WALLET_STARTER_GEMS` | `100` | gems a wallet opens with |
-| `WALLET_STAKE_PACK_SHOTS` | `3` | shots in a ×100 pack |
-| `WALLET_STAKE_PACK_PRICE` | `50` | a pack's price in gems |
+| `WALLET_STAKE_PACKS` | `3:50,10:150,25:325` | the stake packs on sale (#941): `shots:gems`, the default pack first, distinct shots (a pack's id is `shots_<shots>`); a bad list keeps the default |
 | `WALLET_POINTS_PER_SHOT` | `100` | points one shot stakes |
 | `WALLET_STAKE_TARGET_CAP` | `250` | points one account may put on one target, ever |
 | `WALLET_STAKE_HOURLY_CAP` | `1000` | points one account may stake per rolling hour |
@@ -371,7 +372,8 @@ Migrations: `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.sq
 `0005_create_settlements.sql` (`settlements`; `stakes.settled_at` / `settle_claimed_until`),
 `0006_create_envelope_days.sql` (`envelope_days`; the settlements' shares), `0007_stakes_by_account_recent.sql`
 (`ListMyStakes`), `0008_stake_conviction.sql` (`wallet_transactions.conviction`, `stakes.first_conviction`, #888),
-`0009_welcome_gifts.sql` (`welcome_gifts`, the devices welcomed, #827),
+`0009_welcome_gifts.sql` (`welcome_gifts`, the devices welcomed, #827), `0010_stake_pack_id.sql`
+(`wallets.stake_pack_id`, the loaded pack, #941),
 applied by `migrator wallet` (init
 container) before the binary. Infra (ECR repo, manifests, `wallet-postgres`, ingress route,
 NetworkPolicy): core-platform-infra#41 — the binary joins `FLEET_BINS` once its ECR repo exists.
@@ -399,7 +401,7 @@ cargo test -p wallet --features integration-wallet     # Postgres: concurrency, 
 ## 🧭 Roadmap (#665)
 
 1. The ledger, the hourly claim, the starter gems, the history, erasure (#853).
-2. Gem spends: the ×100 stake pack and `SpendGems`, no gem spend under 18 (this part);
+2. Gem spends: the stake packs and `SpendGems`, no gem spend under 18 (this part);
    country unlocks, standings and the map filter in geo-discovery.
 3. Likes are points: `Stake` (this part); then the like counts, notifications, the country ladder and
    the interest tags move to `StakeCommitted`; the reactions are gone, and the GDPR export reads

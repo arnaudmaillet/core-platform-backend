@@ -86,7 +86,7 @@ impl WalletServiceHandler {
         Ok(Response::new(self.wallet_to_proto(&view, restricted)))
     }
 
-    /// Buys the ×100 stake pack. On the edge, a caller under 18 (or of
+    /// Buys a stake pack (#941). On the edge, a caller under 18 (or of
     /// unknown age, from the token) is refused: `WAL-3001`.
     pub async fn buy_stake_pack(
         &self,
@@ -97,7 +97,7 @@ impl WalletServiceHandler {
         let req = request.into_inner();
         let reply = self
             .wallets
-            .buy_stake_pack(&req.account_id, &req.idempotency_key, restricted, Utc::now())
+            .buy_stake_pack(&req.account_id, &req.idempotency_key, &req.pack_id, restricted, Utc::now())
             .await
             .map_err(to_status)?;
         Ok(Response::new(proto::BuyStakePackResponse {
@@ -315,9 +315,16 @@ fn wallet_to_proto(view: &WalletView, config: &WalletConfig, restricted: bool) -
         last_claim_at:   w.last_claim_at.map(timestamp),
         stake_shots:     w.stake_shots,
         gem_spending_restricted: restricted,
-        stake_pack_price: config.stake_pack.price_gems,
-        stake_pack_shots: config.stake_pack.shots,
+        stake_pack_price: config.stake_pack.default_offer().price_gems,
+        stake_pack_shots: config.stake_pack.default_offer().shots,
         points_per_shot: config.stake_pack.points_per_shot,
+        stake_packs:     config
+            .stake_pack
+            .offers
+            .iter()
+            .map(|offer| proto::StakePackOffer { pack_id: offer.id(), shots: offer.shots, price: offer.price_gems })
+            .collect(),
+        stake_pack_id:   w.active_stake_pack(&config.stake_pack).unwrap_or_default(),
         conviction_probabilities: config.conviction_bps.iter().map(|bps| *bps as f64 / 10_000.0).collect(),
     }
 }
@@ -515,6 +522,7 @@ mod tests {
             .buy_stake_pack(as_teen(proto::BuyStakePackRequest {
                 account_id:      teen.clone(),
                 idempotency_key: Uuid::now_v7().to_string(),
+                pack_id:         String::new(),
             }))
             .await
             .unwrap_err();
@@ -530,6 +538,7 @@ mod tests {
             .buy_stake_pack(as_caller(&adult, proto::BuyStakePackRequest {
                 account_id:      adult.clone(),
                 idempotency_key: Uuid::now_v7().to_string(),
+                pack_id:         String::new(),
             }))
             .await
             .unwrap()
@@ -537,6 +546,9 @@ mod tests {
         let wallet = bought.wallet.unwrap();
         assert_eq!(bought.outcome, proto::StakePackOutcome::Bought as i32);
         assert_eq!((wallet.gems, wallet.stake_shots, wallet.stake_pack_price, wallet.gem_spending_restricted), (50, 3, 50, false));
+        assert_eq!(wallet.stake_pack_id, "shots_3");
+        let packs: Vec<_> = wallet.stake_packs.iter().map(|p| (p.pack_id.as_str(), p.shots, p.price)).collect();
+        assert_eq!(packs, [("shots_3", 3, 50), ("shots_10", 10, 150), ("shots_25", 25, 325)]);
     }
 
     #[tokio::test]

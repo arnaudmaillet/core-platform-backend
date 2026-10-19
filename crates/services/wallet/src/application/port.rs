@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::domain::event::WalletEvent;
 use crate::domain::{
     AccountId, Allocation, CalibrationRow, ClaimPolicy, Conviction, Currency, DayPosition, DuePosition, EnvelopeDay,
-    IdempotencyKey, Observed, Settlement, StakeAsk, StakePackPolicy,
+    IdempotencyKey, Observed, Settlement, StakeAsk, StakePackOffer, StakePackPolicy,
     StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
@@ -165,14 +165,15 @@ pub trait WalletStore: Send + Sync + 'static {
         now: DateTime<Utc>,
     ) -> Result<ClaimResult, WalletError>;
 
-    /// Buys the stake pack (the wallet opened if needed, then locked): a key
-    /// already used answers `Bought`; otherwise the policy decides, and a
-    /// purchase is charged with its ledger row.
+    /// Buys the stake pack `offer` (the wallet opened if needed, then
+    /// locked): a key already used answers `Bought`; otherwise the wallet
+    /// decides, and a purchase is charged with its ledger row (`ref_id` = the
+    /// pack id).
     async fn buy_stake_pack(
         &self,
         account: &AccountId,
         key: &IdempotencyKey,
-        policy: &StakePackPolicy,
+        offer: &StakePackOffer,
         starter_gems: i64,
         now: DateTime<Utc>,
     ) -> Result<(PackOutcome, Wallet), WalletError>;

@@ -217,12 +217,14 @@ impl Wallets {
         Ok(ClaimReply { outcome: result.outcome, awarded: result.awarded, view: self.view(result.wallet, now) })
     }
 
-    /// Buys the ×100 stake pack with gems. `restricted`: the caller may not
-    /// spend gems (under 18, or age unknown) — `WAL-3001`.
+    /// Buys the stake pack `pack_id` names (empty = the default pack) with
+    /// gems. `restricted`: the caller may not spend gems (under 18, or age
+    /// unknown) — `WAL-3001`; a pack not on sale is `WAL-9005`.
     pub async fn buy_stake_pack(
         &self,
         account: &str,
         key: &str,
+        pack_id: &str,
         restricted: bool,
         now: DateTime<Utc>,
     ) -> Result<PackReply, WalletError> {
@@ -231,9 +233,13 @@ impl Wallets {
         if restricted {
             return Err(WalletError::GemSpendingRestricted);
         }
+        let offer = self
+            .config
+            .stake_pack
+            .offer(pack_id)
+            .ok_or_else(|| WalletError::UnknownStakePack { pack_id: pack_id.to_owned() })?;
         let now = ledger_time(now);
-        let (outcome, wallet) =
-            self.store.buy_stake_pack(&account, &key, &self.config.stake_pack, self.config.starter_gems, now).await?;
+        let (outcome, wallet) = self.store.buy_stake_pack(&account, &key, &offer, self.config.starter_gems, now).await?;
         Ok(PackReply { outcome, view: self.view(wallet, now) })
     }
 
@@ -603,7 +609,7 @@ pub(crate) mod fakes {
     use crate::application::port::{ClaimResult, TargetInfo};
     use crate::domain::event::{StakeCommitted, WalletEvent};
     use crate::domain::{
-        ClaimDecision, ClaimPolicy, PackDecision, StakeDecision, StakePackPolicy, StakePolicy, TransactionKind,
+        ClaimDecision, ClaimPolicy, PackDecision, StakeDecision, StakePackOffer, StakePackPolicy, StakePolicy, TransactionKind,
     };
 
     type Movement = (Currency, i64, i64, TransactionKind, Option<String>);
@@ -699,7 +705,7 @@ pub(crate) mod fakes {
             &self,
             account: &AccountId,
             key: &IdempotencyKey,
-            policy: &StakePackPolicy,
+            offer: &StakePackOffer,
             starter_gems: i64,
             now: DateTime<Utc>,
         ) -> Result<(PackOutcome, Wallet), WalletError> {
@@ -707,10 +713,10 @@ pub(crate) mod fakes {
             if self.replayed(account, key).is_some() {
                 return Ok((PackOutcome::Bought, wallet));
             }
-            let outcome = match wallet.decide_stake_pack(policy) {
+            let outcome = match wallet.decide_stake_pack(offer) {
                 PackDecision::Buy => {
-                    wallet.apply_stake_pack(policy);
-                    let movement = (Currency::Gems, -policy.price_gems, wallet.gems, TransactionKind::StakePack, None);
+                    wallet.apply_stake_pack(offer);
+                    let movement = (Currency::Gems, -offer.price_gems, wallet.gems, TransactionKind::StakePack, Some(offer.id()));
                     self.record(account, movement, key.as_str(), now);
                     self.wallets.lock().unwrap().insert(*account, wallet.clone());
                     PackOutcome::Bought
@@ -1257,16 +1263,39 @@ mod tests {
         let w = wallets();
         let account = Uuid::now_v7().to_string();
         assert!(matches!(
-            w.buy_stake_pack(&account, &key(), true, at(8, 10)).await,
+            w.buy_stake_pack(&account, &key(), "", true, at(8, 10)).await,
             Err(WalletError::GemSpendingRestricted)
         ));
         let k = key();
-        let bought = w.buy_stake_pack(&account, &k, false, at(8, 10)).await.unwrap();
+        let bought = w.buy_stake_pack(&account, &k, "", false, at(8, 10)).await.unwrap();
         assert_eq!((bought.outcome, bought.view.wallet.gems, bought.view.wallet.stake_shots), (PackOutcome::Bought, 50, 3));
-        let replay = w.buy_stake_pack(&account, &k, false, at(8, 10)).await.unwrap();
+        let replay = w.buy_stake_pack(&account, &k, "", false, at(8, 10)).await.unwrap();
         assert_eq!((replay.outcome, replay.view.wallet.gems), (PackOutcome::Bought, 50), "charged once");
-        let again = w.buy_stake_pack(&account, &key(), false, at(8, 10)).await.unwrap();
+        let again = w.buy_stake_pack(&account, &key(), "", false, at(8, 10)).await.unwrap();
         assert_eq!((again.outcome, again.view.wallet.gems), (PackOutcome::StillActive, 50));
+    }
+
+    /// #941: the pack named is the one charged and loaded; an unknown one is
+    /// refused before anything is charged.
+    #[tokio::test]
+    async fn a_named_pack_is_charged_and_loaded_and_an_unknown_one_is_refused() {
+        let w = Wallets::new(Arc::new(MemoryStore::default()), WalletConfig { starter_gems: 200, ..WalletConfig::default() });
+        let account = Uuid::now_v7().to_string();
+        assert!(matches!(
+            w.buy_stake_pack(&account, &key(), "shots_7", false, at(8, 10)).await,
+            Err(WalletError::UnknownStakePack { .. })
+        ));
+        let short = w.buy_stake_pack(&account, &key(), "shots_25", false, at(8, 10)).await.unwrap();
+        assert_eq!((short.outcome, short.view.wallet.gems), (PackOutcome::InsufficientGems, 200), "325 gems: all or nothing");
+
+        let bought = w.buy_stake_pack(&account, &key(), "shots_10", false, at(8, 10)).await.unwrap();
+        let wallet = &bought.view.wallet;
+        assert_eq!(
+            (bought.outcome, wallet.gems, wallet.stake_shots, wallet.stake_pack_id.as_deref()),
+            (PackOutcome::Bought, 50, 10, Some("shots_10"))
+        );
+        let history = w.history(&account, None, 10, "").await.unwrap();
+        assert_eq!(history.transactions[0].ref_id.as_deref(), Some("shots_10"), "the ledger names the pack");
     }
 
     /// A claim's key cannot pass as a paid pack: keys are scoped per operation.
@@ -1276,7 +1305,7 @@ mod tests {
         let account = Uuid::now_v7().to_string();
         let k = key();
         w.claim(&account, &k, at(8, 10)).await.unwrap();
-        let pack = w.buy_stake_pack(&account, &k, false, at(8, 10)).await.unwrap();
+        let pack = w.buy_stake_pack(&account, &k, "", false, at(8, 10)).await.unwrap();
         assert_eq!((pack.outcome, pack.view.wallet.gems), (PackOutcome::Bought, 50), "actually charged");
     }
 

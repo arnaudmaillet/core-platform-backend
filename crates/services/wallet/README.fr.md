@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 12953e07299c80ba2a4df5fa1ca53ded3adf0aad86c273c0e02d42365534eb00
+  source_sha256: a7d209358e0a7ec74898f3e0ff530701a9be812f694f5d5e9031fedcd8696528
   translated_at: 2026-10-20
   status: complete
 ---
@@ -34,7 +34,7 @@ compte et chacun de leurs mouvements.
 | Monnaie | Affichée comme | Gagnée par | Dépensée pour |
 |---|---|---|---|
 | **Points** | likes (le cœur) | la réclamation horaire | les likes sur posts et commentaires (`Stake`) |
-| **Gems** | le diamant | le don de départ ; les mises réglées (plus tard) | le pack de mises ×100 ; le déblocage de pays (geo-discovery) |
+| **Gems** | le diamant | le don de départ ; les mises réglées (plus tard) | les packs de mises ; le déblocage de pays (geo-discovery) |
 
 Rien n'est vendu contre de l'argent réel : ni StoreKit, ni reçus, ni restauration. Aucune monnaie
 ne se convertit en l'autre, en argent ou vers un autre utilisateur. Un portefeuille par **compte**
@@ -93,7 +93,7 @@ seule fois.
 
 | Dépense | Règle |
 |---|---|
-| Pack de mises ×100 (`BuyStakePack`, edge) | 3 tirs de 100 points **de l'acheteur**, 50 gems ; un pack à la fois (`PACK_STILL_ACTIVE` tant qu'il reste des tirs, rien n'est débité) ; les tirs n'expirent jamais |
+| Packs de mises (`BuyStakePack`, edge ; #941) | des tirs de 100 points **de l'acheteur** ; en vente par défaut `shots_3` (3 tirs, 50 gems — le pack par défaut, pour une requête qui n'en nomme aucun), `shots_10` (10, 150) et `shots_25` (25, 325) ; tout ou rien, un pack à la fois (`PACK_STILL_ACTIVE` tant qu'il reste des tirs, rien n'est débité) ; les tirs n'expirent jamais ; un pack qui n'est pas en vente renvoie `WAL-9005` ; le `ref_id` de la ligne du registre est l'id du pack et `Wallet.stake_pack_id` le pack chargé |
 | Déblocage de pays (`SpendGems`, mesh) | geo-discovery fixe le prix, vérifie que l'acheteur est adulte et demande les gems avec sa propre clé ; `ref_id` = le code du pays |
 
 Les gems n'achètent jamais de points, d'argent, ni rien pour un autre utilisateur.
@@ -281,7 +281,9 @@ n'acceptent qu'**account** — le jeton de ServiceAccount de l'appelant, `x-mesh
 l'infra ne fournit pas les jetons (core-platform-infra#62).
 
 - `Wallet.gem_spending_restricted` (edge seulement) dit à l'app de masquer les dépenses de gems ;
-  les conditions du pack sont renvoyées (`stake_pack_price`, `stake_pack_shots`, `points_per_shot`).
+  les packs en vente sont renvoyés (`stake_packs`, le pack par défaut en premier ; `stake_pack_price` /
+  `stake_pack_shots` sont ceux du pack par défaut, pour les anciens clients ; `points_per_shot`), avec le
+  pack chargé (`stake_pack_id`).
 - `BuyStakePack` répond `BOUGHT`, `PACK_STILL_ACTIVE` ou `INSUFFICIENT_GEMS` dans la réponse ;
   `SpendGems` répond `SPENT` ou `INSUFFICIENT_GEMS`.
 
@@ -310,6 +312,7 @@ l'infra ne fournit pas les jetons (core-platform-infra#62).
 | `WAL-9002` | clé d'idempotence invalide | `INVALID_ARGUMENT` |
 | `WAL-9003` | jeton de page invalide | `INVALID_ARGUMENT` |
 | `WAL-9004` | dépense de gems invalide (montant, type, référence) | `INVALID_ARGUMENT` |
+| `WAL-9005` | pack de mises qui n'est pas en vente | `INVALID_ARGUMENT` |
 | `DB-*` | stockage (délégué) | selon l'erreur |
 
 ---
@@ -359,8 +362,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points réclamables par jour UTC |
 | `WALLET_POINTS_CAP` | `2000` | le solde de points qu'un claim ne dépasse jamais (`BALANCE_FULL` à ce niveau) ; 0 garde la valeur par défaut |
 | `WALLET_STARTER_GEMS` | `100` | gems à l'ouverture d'un portefeuille |
-| `WALLET_STAKE_PACK_SHOTS` | `3` | tirs dans un pack ×100 |
-| `WALLET_STAKE_PACK_PRICE` | `50` | prix d'un pack en gems |
+| `WALLET_STAKE_PACKS` | `3:50,10:150,25:325` | les packs de mises en vente (#941) : `tirs:gems`, le pack par défaut en premier, des nombres de tirs distincts (l'id d'un pack est `shots_<tirs>`) ; une liste invalide garde la valeur par défaut |
 | `WALLET_POINTS_PER_SHOT` | `100` | points misés par tir |
 | `WALLET_STAKE_TARGET_CAP` | `250` | points qu'un compte peut mettre sur une cible, à vie |
 | `WALLET_STAKE_HOURLY_CAP` | `1000` | points qu'un compte peut miser par heure glissante |
@@ -400,7 +402,8 @@ Migrations : `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.s
 `0005_create_settlements.sql` (`settlements` ; `stakes.settled_at` / `settle_claimed_until`),
 `0006_create_envelope_days.sql` (`envelope_days` ; les parts des règlements), `0007_stakes_by_account_recent.sql`
 (`ListMyStakes`), `0008_stake_conviction.sql` (`wallet_transactions.conviction`, `stakes.first_conviction`, #888),
-`0009_welcome_gifts.sql` (`welcome_gifts`, les appareils accueillis, #827),
+`0009_welcome_gifts.sql` (`welcome_gifts`, les appareils accueillis, #827), `0010_stake_pack_id.sql`
+(`wallets.stake_pack_id`, le pack chargé, #941),
 appliquées par `migrator wallet` (init
 container) avant le binaire. Infra (dépôt ECR, manifests, `wallet-postgres`, route d'ingress,
 NetworkPolicy) : core-platform-infra#41 — le binaire rejoint `FLEET_BINS` dès que son dépôt ECR
@@ -428,7 +431,7 @@ cargo test -p wallet --features integration-wallet     # Postgres : concurrence,
 ## 🧭 Feuille de route (#665)
 
 1. Le registre, la réclamation horaire, les gems de départ, l'historique, l'effacement (#853).
-2. Dépenses de gems : le pack ×100 et `SpendGems`, aucune dépense de gems avant 18 ans (cette
+2. Dépenses de gems : les packs de mises et `SpendGems`, aucune dépense de gems avant 18 ans (cette
    partie) ; déblocage de pays, classement et filtre de la carte dans geo-discovery.
 3. Les likes sont des points : `Stake` (cette partie) ; puis les compteurs de likes, les
    notifications, le classement des pays et les centres d'intérêt passent à `StakeCommitted` ; les
