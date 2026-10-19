@@ -151,6 +151,8 @@ service ProfileService {
   rpc GetProfileByHandle(GetProfileByHandleRequest) returns (ProfileView);
   rpc CheckHandleAvailability(CheckHandleAvailabilityRequest) returns (CheckHandleAvailabilityResponse);
   rpc ListProfilesByAccount(ListProfilesByAccountRequest) returns (ListProfilesByAccountResponse);
+  rpc GetProfileSlots(GetProfileSlotsRequest) returns (ProfileSlots);                    // #916 the account's slots, in use, cap, next price
+  rpc BuyProfileSlot(BuyProfileSlotRequest) returns (BuyProfileSlotResponse);            // #916 the next slot with gems, in-band outcome
   rpc GetShareToken(GetShareTokenRequest) returns (ShareTokenResponse);        // #661 the owner's QR / share-link token (22 URL-safe chars), issued on first ask
   rpc RotateShareToken(RotateShareTokenRequest) returns (ShareTokenResponse);  // #661 revoke for a new one: the old one stops resolving at once
   rpc ResolveShareToken(ResolveShareTokenRequest) returns (ProfileView);       // #661 public_read: the profile as the reader may see it; NOT_FOUND if revoked, not active, or `by_qr` off (the owner still resolves)
@@ -187,6 +189,24 @@ and expiry. They are resolved in one `BatchResolveDelivery` per response, **fail
 slow or down they are absent and the URLs still deliver. Without `PROFILE_MEDIA_GRPC_ENDPOINT`, asset
 ids are dropped on write. `CreateProfile` still takes URLs only.
 
+**Profile slots (#916).** An account holds one profile per **slot**: one is free, more are bought with
+gems, at most `PROFILE_MAX_SLOTS` (5), the 2nd at `PROFILE_SLOT_BASE_PRICE` (100) and each later one
+at twice the previous (100 / 200 / 400 / 800). A slot is bought once and kept
+(`profile.profile_slots`, migration 0018): deleting a profile frees its slot, creating one later reuses
+it, and the price depends on the slots owned, never on the profiles alive. An account that held more
+profiles than that before slots existed keeps them: its profiles are recorded as its slots the first
+time they are counted. `CreateProfile` past the slots creates nothing and answers **in-band**
+(`success = false`, `no_free_slot = true`). `GetProfileSlots` gives the slots, those in use, the cap
+and the next price. `BuyProfileSlot(expected_price)` (adults only: **`PRF-6002`** otherwise, so a minor
+keeps one profile) answers `BOUGHT`, `MAX_REACHED`, `INSUFFICIENT_GEMS` or `PRICE_CHANGED`. It asks the
+wallet's mesh-only `SpendGems` (`PROFILE_SLOT`, `ref_id` = the slot number, keyed
+`profile-slot-<n>`: slot *n* is charged at most once, whatever the retries or races), forwarding the
+buyer's token, then grows the count `n − 1 → n` with an LWT. The wallet unreachable or unset
+(`PROFILE_WALLET_GRPC_ENDPOINT`) ⇒ **`PRF-6003`** (`UNAVAILABLE`, fail-closed); creating within the
+slots owned never calls it. Gems, claims and caps stay per **account** in the wallet, and staking on
+one's own profiles is refused there, so extra profiles add no curation power. Erasing the account
+erases its slots.
+
 ### Rust ports (hexagonal contract)
 
 ```rust
@@ -213,6 +233,9 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 | PRF-5005 | `MediaUnavailable` (media could not check a private document, or an avatar's / banner's asset) | 503 | **Yes** |
 | PRF-5006 | `SupervisionLocked` (a supervisor's floor holds this setting: only stricter is allowed, #670) | 422 | No |
 | PRF-5007 | `MediaAssetNotUsable` (an avatar's / banner's asset is not a usable image of the profile's account, #907) | 422 | No |
+| PRF-6001 | `NoFreeProfileSlot` (every slot in use; `CreateProfile` answers it in-band, #916) | 422 | No |
+| PRF-6002 | `GemSpendingRestricted` (a slot is bought by an adult only, #916) | 403 | No |
+| PRF-6003 | `WalletUnavailable` (the wallet could not answer a slot purchase, #916) | 503 | **Yes** |
 | PRF-9001–9010 | domain / parse / validation | 422 | No |
 | SDB-* / RDB-* | storage (delegated) | varies | varies |
 
@@ -251,6 +274,7 @@ pub trait ProfileCache:      Send + Sync + 'static { /* get_by_id, set_by_id, in
 | Handle LWT race | `PRF-1002` to the losing writer | correct serialization at storage layer | none — surface to user to pick another handle |
 | Account-event consumer lag | profiles not masked on suspend/delete | retries within budget; offset uncommitted | check consumer lag; re-dispatch masking if needed |
 | media unreachable (`PROFILE_MEDIA_GRPC_ENDPOINT`) | a verification request with private documents fails | `PRF-5005` (retryable); links-only requests unaffected; unset → private documents refused | check media / the profile → media NetworkPolicy |
+| wallet unreachable (`PROFILE_WALLET_GRPC_ENDPOINT`) | profile slots cannot be bought | `PRF-6003` (retryable); creating within the slots owned unaffected; unset → every purchase refused | check wallet / the profile → wallet NetworkPolicy and `SPEND_GEMS_CALLERS` |
 
 **Backpressure & limits.** Writes use the Scylla **Strict** profile (`LocalQuorum`); reads use **Fast**
 (`LocalOne` + speculative retry firing 1 extra request after 20 ms) to bound tail latency.
@@ -303,6 +327,9 @@ async fn main() -> anyhow::Result<()> {
 | `PROFILE_GRPC_ADDR` | No | `0.0.0.0:50052` | gRPC bind address. |
 | `PROFILE_MEDIA_GRPC_ENDPOINT` | No | — | media's mesh endpoint: checks a verification request's private documents (#777), and avatars' / banners' assets on write; delivers them on read (#907, fail-open). Unset: requests take links only, images their URLs only. |
 | `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS` | No | `500` / `1000` | deadlines of those calls. |
+| `PROFILE_WALLET_GRPC_ENDPOINT` | No | — | wallet's mesh endpoint (#916): profile slots' gems (`SpendGems`, this pod's mesh token). Unset: slots cannot be bought (`PRF-6003`). |
+| `PROFILE_WALLET_RPC_TIMEOUT_MS` / `PROFILE_WALLET_CONNECT_TIMEOUT_MS` | No | `1000` / `500` | deadlines of that call. |
+| `PROFILE_MAX_SLOTS` / `PROFILE_SLOT_BASE_PRICE` | No | `5` / `100` | profile slots (#916): the cap, and the 2nd slot's price in gems (each later one doubles). |
 | `PROFILE_BACKFILL_VISIBILITY` | No | unset | `1`/`true`/`yes`: at boot, re-announce every **private** profile's visibility once (`ProfileVisibilityChanged`, #927). Post makes a private author's images SIGNED from it (#919), and profiles private before post projected it never re-announced. Public is the default everywhere, so public profiles are skipped. Same run-once rules as the tab settings backfill below: set it for one rollout, together with or before post → media (core-platform-infra#88), then unset it. |
 | `PROFILE_BACKFILL_TAB_SETTINGS` | No | unset | `1`/`true`/`yes`: at boot, re-announce every profile's non-default tab settings once (`ProfileTabSettingsChanged`, #873), for consumers that started after those events left `profile.v1.events`' retention (engagement, post). Every replica runs it, at each start (repeats are harmless, last writer wins): set it for one rollout at the first deployment, then unset it; run while owners edit their settings, a re-announced old value may land after a newer one. |
 
@@ -316,7 +343,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Deployment, Migrations & Rollback
 
-- **Migrations:** `crates/services/profile/migrations/00{01..17}_*.cql` against the `profile` keyspace,
+- **Migrations:** `crates/services/profile/migrations/00{01..18}_*.cql` against the `profile` keyspace,
   applied **before** first start.
 - **Cache version bump:** to invalidate cache fleet-wide during a schema change, bump the `v1:` key
   prefix — no flush, no downtime.

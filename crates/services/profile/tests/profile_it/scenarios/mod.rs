@@ -12,3 +12,4 @@ mod viewer_and_account_masking;
 mod interaction_settings;
 mod share_tokens;
 mod supervision_floors;
+mod profile_slots;

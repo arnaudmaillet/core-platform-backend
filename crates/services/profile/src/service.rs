@@ -97,6 +97,9 @@ impl Service for ProfileService {
         // Sign-up's live handle check: guests (who are signing up) and members.
         public_read("/profile.v1.ProfileService/CheckHandleAvailability"),
         authenticated("/profile.v1.ProfileService/ListProfilesByAccount"),
+        // Profile slots (#916): the caller's account.
+        authenticated("/profile.v1.ProfileService/GetProfileSlots"),
+        authenticated("/profile.v1.ProfileService/BuyProfileSlot"),
     ];
 
     async fn build(infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -124,6 +127,8 @@ impl Service for ProfileService {
             publisher,
             media.clone().map(|m| m as Arc<dyn crate::application::port::PrivateDocuments>),
             media.clone().map(|m| m as Arc<dyn crate::application::port::MediaImages>),
+            slot_wallet_from_env()?,
+            slot_policy_from_env(),
         )
             .await
             .map_err(|e| anyhow::anyhow!("profile app build: {e}"))?;
@@ -174,7 +179,8 @@ impl Service for ProfileService {
         let handler = match self.media {
             Some(media) => handler.with_media(media),
             None => handler,
-        };
+        }
+        .with_slots(Arc::clone(&self.app.slots));
 
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
@@ -277,6 +283,38 @@ fn media_from_env() -> anyhow::Result<Option<Arc<crate::infrastructure::client::
     Ok(Some(Arc::new(crate::infrastructure::client::GrpcPrivateDocuments::new(channel))))
 }
 
+/// The wallet at `PROFILE_WALLET_GRPC_ENDPOINT` (#916: profile slots' gems,
+/// mesh `SpendGems` with this pod's mesh token; lazily connected, deadlines
+/// `PROFILE_WALLET_RPC_TIMEOUT_MS` / `PROFILE_WALLET_CONNECT_TIMEOUT_MS`,
+/// 1 s / 500 ms). Unset: slots cannot be bought (`PRF-6003`); creating within
+/// the slots owned still works.
+fn slot_wallet_from_env() -> anyhow::Result<Option<Arc<dyn crate::application::port::SlotWallet>>> {
+    let Some(endpoint) = std::env::var("PROFILE_WALLET_GRPC_ENDPOINT").ok().filter(|v| !v.trim().is_empty()) else {
+        tracing::warn!("PROFILE_WALLET_GRPC_ENDPOINT unset: profile slots cannot be bought");
+        return Ok(None);
+    };
+    let ms = |key: &str, default: u64| {
+        Duration::from_millis(std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default))
+    };
+    let channel = tonic::transport::Channel::from_shared(endpoint)
+        .map_err(|e| anyhow::anyhow!("invalid PROFILE_WALLET_GRPC_ENDPOINT: {e}"))?
+        .timeout(ms("PROFILE_WALLET_RPC_TIMEOUT_MS", 1_000))
+        .connect_timeout(ms("PROFILE_WALLET_CONNECT_TIMEOUT_MS", 500))
+        .connect_lazy();
+    Ok(Some(Arc::new(crate::infrastructure::client::GrpcSlotWallet::new(channel))))
+}
+
+/// `PROFILE_MAX_SLOTS` (5) and `PROFILE_SLOT_BASE_PRICE` (100 gems, the 2nd
+/// slot's; each later one doubles): an unparsable or non-positive value keeps
+/// the default.
+fn slot_policy_from_env() -> crate::application::profile_slots::SlotPolicy {
+    let defaults = crate::application::profile_slots::SlotPolicy::default();
+    let number = |key: &str| std::env::var(key).ok().and_then(|v| v.trim().parse::<i64>().ok()).filter(|v| *v > 0);
+    crate::application::profile_slots::SlotPolicy {
+        max_slots:  number("PROFILE_MAX_SLOTS").and_then(|v| i32::try_from(v).ok()).unwrap_or(defaults.max_slots),
+        base_price: number("PROFILE_SLOT_BASE_PRICE").unwrap_or(defaults.base_price),
+    }
+}
 
 #[cfg(test)]
 mod tests {

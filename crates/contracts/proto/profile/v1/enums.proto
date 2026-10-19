@@ -105,3 +105,15 @@ enum LimitAudience {
     // Non-followers and profiles that followed in the last week.
     LIMIT_AUDIENCE_RECENT_FOLLOWERS = 2;
 }
+
+// What became of a profile slot purchase (#916).
+enum ProfileSlotOutcome {
+    PROFILE_SLOT_OUTCOME_UNSPECIFIED       = 0;
+    PROFILE_SLOT_OUTCOME_BOUGHT            = 1;
+    // The account owns the most slots already: nothing charged.
+    PROFILE_SLOT_OUTCOME_MAX_REACHED       = 2;
+    PROFILE_SLOT_OUTCOME_INSUFFICIENT_GEMS = 3;
+    // The price moved since the app showed it: `price_gems` is the new one.
+    // Nothing charged.
+    PROFILE_SLOT_OUTCOME_PRICE_CHANGED     = 4;
+}

@@ -15,3 +15,5 @@ pub mod supervision_floors;
 pub use supervision_floors::SupervisionFloors;
 pub mod media_images;
 pub use media_images::{checked_image, MediaImages};
+pub mod profile_slots;
+pub use profile_slots::{ProfileSlotStore, SlotSpend, SlotWallet};

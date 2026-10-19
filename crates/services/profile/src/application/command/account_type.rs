@@ -223,6 +223,8 @@ impl Validate for EraseAccountVerificationsCommand {
 pub struct EraseAccountVerificationsHandler {
     pub repo:          Arc<dyn ProfileRepository>,
     pub verifications: Arc<dyn VerificationStore>,
+    /// The account's profile slots go with it (#916).
+    pub slots:         Option<Arc<dyn crate::application::port::ProfileSlotStore>>,
 }
 
 impl CommandHandler<EraseAccountVerificationsCommand> for EraseAccountVerificationsHandler {
@@ -238,8 +240,12 @@ impl CommandHandler<EraseAccountVerificationsCommand> for EraseAccountVerificati
             }
             match next {
                 Some(t) if !t.is_empty() => token = Some(t),
-                _ => return Ok(()),
+                _ => break,
             }
         }
+        if let Some(slots) = &self.slots {
+            slots.erase(&account).await?;
+        }
+        Ok(())
     }
 }

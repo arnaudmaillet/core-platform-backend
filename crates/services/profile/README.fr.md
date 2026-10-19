@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a6a214806cf533f5de9ed51a82286ec322de1f4eb13c7655f161b4fabff1ef8f
-  translated_at: 2026-10-12
+  source_sha256: a3b920cc790260b438377c099c9ee72c759d3f950103da977b6a4d112a4f3b66
+  translated_at: 2026-10-20
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -165,6 +165,8 @@ service ProfileService {
   rpc GetProfileByHandle(GetProfileByHandleRequest) returns (ProfileView);
   rpc CheckHandleAvailability(CheckHandleAvailabilityRequest) returns (CheckHandleAvailabilityResponse);
   rpc ListProfilesByAccount(ListProfilesByAccountRequest) returns (ListProfilesByAccountResponse);
+  rpc GetProfileSlots(GetProfileSlotsRequest) returns (ProfileSlots);                    // #916 les emplacements du compte, utilisés, plafond, prix suivant
+  rpc BuyProfileSlot(BuyProfileSlotRequest) returns (BuyProfileSlotResponse);            // #916 l'emplacement suivant en gems, issue dans la réponse
   rpc GetShareToken(GetShareTokenRequest) returns (ShareTokenResponse);        // #661 le jeton QR / lien de partage du propriétaire (22 caractères URL-safe), émis à la première demande
   rpc RotateShareToken(RotateShareTokenRequest) returns (ShareTokenResponse);  // #661 le révoque pour un nouveau : l'ancien ne se résout plus, immédiatement
   rpc ResolveShareToken(ResolveShareTokenRequest) returns (ProfileView);       // #661 public_read : le profil tel que le lecteur peut le voir ; NOT_FOUND si révoqué, inactif, ou `by_qr` désactivé (le propriétaire le résout toujours)
@@ -202,6 +204,25 @@ en **fail-open** : si media est lent ou indisponible, ils sont absents et les UR
 Sans `PROFILE_MEDIA_GRPC_ENDPOINT`, les ids d'assets sont ignorés à l'écriture. `CreateProfile` ne prend
 toujours que des URLs.
 
+**Emplacements de profil (#916).** Un compte détient un profil par **emplacement** : un est gratuit,
+les suivants s'achètent en gems, au plus `PROFILE_MAX_SLOTS` (5), le 2ᵉ à `PROFILE_SLOT_BASE_PRICE` (100)
+et chacun des suivants au double du précédent (100 / 200 / 400 / 800). Un emplacement s'achète une fois
+et se garde (`profile.profile_slots`, migration 0018) : supprimer un profil libère son emplacement, en
+créer un plus tard le réutilise, et le prix dépend des emplacements détenus, jamais des profils vivants.
+Un compte qui détenait plus de profils avant les emplacements les garde : ses profils sont enregistrés
+comme ses emplacements la première fois qu'ils sont comptés. `CreateProfile` au-delà des emplacements ne
+crée rien et répond **dans la réponse** (`success = false`, `no_free_slot = true`). `GetProfileSlots`
+donne les emplacements, ceux utilisés, le plafond et le prix suivant. `BuyProfileSlot(expected_price)`
+(adultes seulement : sinon **`PRF-6002`**, si bien qu'un mineur garde un profil) répond `BOUGHT`,
+`MAX_REACHED`, `INSUFFICIENT_GEMS` ou `PRICE_CHANGED`. Il demande les gems au `SpendGems` du wallet
+(réservé au mesh ; `PROFILE_SLOT`, `ref_id` = le numéro de l'emplacement, clé `profile-slot-<n>` :
+l'emplacement *n* n'est débité qu'une fois, quels que soient les nouveaux essais ou les courses), en
+transmettant le jeton de l'acheteur, puis fait passer le compte de `n − 1` à `n` par LWT. Wallet
+injoignable ou non configuré (`PROFILE_WALLET_GRPC_ENDPOINT`) ⇒ **`PRF-6003`** (`UNAVAILABLE`,
+fail-closed) ; créer dans la limite des emplacements détenus ne l'appelle jamais. Les gems, réclamations
+et plafonds restent par **compte** dans le wallet, qui refuse les mises sur ses propres profils : des
+profils en plus n'ajoutent aucun pouvoir de curation. Effacer le compte efface ses emplacements.
+
 ### Ports Rust (contrat hexagonal)
 
 ```rust
@@ -229,6 +250,9 @@ réactivement).
 | PRF-5005 | `MediaUnavailable` (media n'a pas pu vérifier un document privé, ni l'asset d'un avatar / d'une bannière) | 503 | **Yes** |
 | PRF-5006 | `SupervisionLocked` (un plancher posé par un superviseur tient ce réglage : seul plus strict est permis, #670) | 422 | No |
 | PRF-5007 | `MediaAssetNotUsable` (l'asset d'un avatar / d'une bannière n'est pas une image utilisable du compte du profil, #907) | 422 | No |
+| PRF-6001 | `NoFreeProfileSlot` (tous les emplacements sont utilisés ; `CreateProfile` le répond dans la réponse, #916) | 422 | No |
+| PRF-6002 | `GemSpendingRestricted` (un emplacement ne s'achète qu'adulte, #916) | 403 | No |
+| PRF-6003 | `WalletUnavailable` (le wallet n'a pas pu répondre à un achat d'emplacement, #916) | 503 | **Yes** |
 | PRF-9001–9010 | domain / parse / validation | 422 | No |
 | SDB-* / RDB-* | storage (delegated) | varies | varies |
 
@@ -267,6 +291,7 @@ réactivement).
 | Course LWT sur handle | `PRF-1002` à l'écrivain perdant | sérialisation correcte à la couche store | aucune — remonter à l'utilisateur pour choisir un autre handle |
 | Lag du consommateur d'événements compte | profils non masqués à la suspension/suppression | retries dans le budget ; offset non committé | vérifier le lag ; re-dispatcher le masquage au besoin |
 | media injoignable (`PROFILE_MEDIA_GRPC_ENDPOINT`) | une demande de vérification avec documents privés échoue | `PRF-5005` (retryable) ; les demandes avec liens seuls ne sont pas touchées ; non définie → documents privés refusés | vérifier media / la NetworkPolicy profile → media |
+| wallet injoignable (`PROFILE_WALLET_GRPC_ENDPOINT`) | les emplacements de profil ne s'achètent pas | `PRF-6003` (retryable) ; créer dans la limite des emplacements détenus n'est pas touché ; non définie → tout achat refusé | vérifier wallet / la NetworkPolicy profile → wallet et `SPEND_GEMS_CALLERS` |
 
 **Backpressure & limites.** Les écritures utilisent le profil Scylla **Strict** (`LocalQuorum`) ; les
 lectures utilisent **Fast** (`LocalOne` + retry spéculatif déclenchant 1 requête supplémentaire après
@@ -321,6 +346,9 @@ async fn main() -> anyhow::Result<()> {
 | `PROFILE_GRPC_ADDR` | No | `0.0.0.0:50052` | gRPC bind address. |
 | `PROFILE_MEDIA_GRPC_ENDPOINT` | No | — | endpoint mesh de media : vérifie les documents privés d'une demande de vérification (#777) et les assets des avatars / bannières à l'écriture ; les livre à la lecture (#907, fail-open). Non définie : les demandes ne prennent que des liens, les images que leurs URLs. |
 | `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS` | No | `500` / `1000` | délais de ces appels. |
+| `PROFILE_WALLET_GRPC_ENDPOINT` | No | — | endpoint mesh du wallet (#916) : les gems des emplacements de profil (`SpendGems`, jeton mesh du pod). Non définie : les emplacements ne s'achètent pas (`PRF-6003`). |
+| `PROFILE_WALLET_RPC_TIMEOUT_MS` / `PROFILE_WALLET_CONNECT_TIMEOUT_MS` | No | `1000` / `500` | délais de cet appel. |
+| `PROFILE_MAX_SLOTS` / `PROFILE_SLOT_BASE_PRICE` | No | `5` / `100` | emplacements de profil (#916) : le plafond, et le prix du 2ᵉ emplacement en gems (chacun des suivants double). |
 | `PROFILE_BACKFILL_VISIBILITY` | No | non défini | `1`/`true`/`yes` : au démarrage, ré-annonce une fois la visibilité de chaque profil **privé** (`ProfileVisibilityChanged`, #927). Post en déduit qu'il doit passer en SIGNED les images d'un auteur privé (#919), et les profils déjà privés avant que post ne projette cette visibilité ne l'ont jamais ré-annoncée. Public est la valeur par défaut partout, donc les profils publics sont ignorés. Mêmes règles d'exécution unique que le backfill des onglets ci-dessous : à définir le temps d'un déploiement, avec ou avant post → media (core-platform-infra#88), puis à retirer. |
 | `PROFILE_BACKFILL_TAB_SETTINGS` | No | non défini | `1`/`true`/`yes` : au démarrage, ré-annonce une fois les réglages d'onglets non par défaut de chaque profil (`ProfileTabSettingsChanged`, #873), pour les consommateurs démarrés après que ces événements ont quitté la rétention de `profile.v1.events` (engagement, post). Chaque réplica le lance, à chaque démarrage (les répétitions sont sans effet, le dernier écrit l'emporte) : à définir le temps d'un déploiement, au premier déploiement, puis à retirer ; lancé pendant que des propriétaires modifient leurs réglages, une ancienne valeur ré-annoncée peut arriver après une plus récente. |
 
@@ -334,7 +362,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Déploiement, migrations & rollback
 
-- **Migrations :** `crates/services/profile/migrations/00{01..17}_*.cql` sur le keyspace `profile`,
+- **Migrations :** `crates/services/profile/migrations/00{01..18}_*.cql` sur le keyspace `profile`,
   appliquées **avant** le premier démarrage.
 - **Bump de version de cache :** pour invalider le cache à l'échelle de la flotte lors d'un changement de
   schéma, incrémenter le préfixe de clé `v1:` — sans flush, sans interruption.

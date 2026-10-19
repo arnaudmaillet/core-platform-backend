@@ -10,6 +10,7 @@ description = "Profile microservice — public identity metadata layer for hyper
 [dependencies]
 profile-api = { workspace = true }
 media-api   = { workspace = true }   # GetAsset client: verification evidence (#777)
+wallet-api  = { workspace = true }   # SpendGems client: profile slots (#916)
 # ── Shared platform infrastructure ───────────────────────────────────────────
 error            = { workspace = true }
 validate-core    = { workspace = true }

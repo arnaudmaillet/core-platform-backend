@@ -33,8 +33,9 @@ pub struct WalletServiceHandler {
     users:   edge::StaffGate,
 }
 
-/// `SpendGems`'s only intended caller: geo-discovery (country unlocks).
-const SPEND_GEMS_CALLERS: &[&str] = &["geo-discovery-server"];
+/// `SpendGems`'s intended callers: geo-discovery (country unlocks and visas)
+/// and profile (profile slots, #916).
+const SPEND_GEMS_CALLERS: &[&str] = &["geo-discovery-server", "profile-server"];
 
 /// The wallet's export reads' only intended caller: account (the GDPR export).
 const EXPORT_CALLERS: &[&str] = &["account-server"];
@@ -166,7 +167,8 @@ impl WalletServiceHandler {
         let kind = match proto::TransactionKind::try_from(req.kind) {
             Ok(proto::TransactionKind::CountryUnlock) => TransactionKind::CountryUnlock,
             Ok(proto::TransactionKind::CountryVisa) => TransactionKind::CountryVisa,
-            _ => return Err(Status::invalid_argument("kind must be COUNTRY_UNLOCK or COUNTRY_VISA")),
+            Ok(proto::TransactionKind::ProfileSlot) => TransactionKind::ProfileSlot,
+            _ => return Err(Status::invalid_argument("kind must be COUNTRY_UNLOCK, COUNTRY_VISA or PROFILE_SLOT")),
         };
         let (outcome, gems) = self
             .wallets
@@ -423,6 +425,7 @@ fn transaction_to_proto(t: &Transaction) -> proto::WalletTransaction {
             TransactionKind::AppIcon => proto::TransactionKind::AppIcon,
             TransactionKind::Theme => proto::TransactionKind::Theme,
             TransactionKind::CountryVisa => proto::TransactionKind::CountryVisa,
+            TransactionKind::ProfileSlot => proto::TransactionKind::ProfileSlot,
             TransactionKind::Unknown => proto::TransactionKind::Unspecified,
         } as i32,
         created_at:     Some(timestamp(t.created_at)),

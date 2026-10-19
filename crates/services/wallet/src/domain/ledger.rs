@@ -53,6 +53,8 @@ pub enum TransactionKind {
     Theme,
     /// A 24 h country visa bought with gems (#910; `ref_id`: the country).
     CountryVisa,
+    /// A profile slot bought with gems (#916; `ref_id`: the slot number).
+    ProfileSlot,
     /// Written by a newer version of this service.
     Unknown,
 }
@@ -69,6 +71,7 @@ impl TransactionKind {
             Self::AppIcon => "app_icon",
             Self::Theme => "theme",
             Self::CountryVisa => "country_visa",
+            Self::ProfileSlot => "profile_slot",
             Self::Unknown => "unknown",
         }
     }
@@ -84,6 +87,7 @@ impl TransactionKind {
             "app_icon" => Self::AppIcon,
             "theme" => Self::Theme,
             "country_visa" => Self::CountryVisa,
+            "profile_slot" => Self::ProfileSlot,
             _ => Self::Unknown,
         }
     }
@@ -185,6 +189,7 @@ mod tests {
             TransactionKind::AppIcon,
             TransactionKind::Theme,
             TransactionKind::CountryVisa,
+            TransactionKind::ProfileSlot,
         ] {
             assert_eq!(TransactionKind::parse(k.as_str()), k);
         }

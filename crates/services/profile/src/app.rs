@@ -68,6 +68,9 @@ pub struct App {
     /// their liveness (see [`crate::service`]).
     pub scylla:      Arc<ScyllaClient>,
     pub redis:       Arc<RedisClient>,
+    /// Profile slots (#916): `GetProfileSlots` / `BuyProfileSlot`, and the
+    /// check `CreateProfile` makes.
+    pub slots:       Arc<crate::application::profile_slots::ProfileSlots>,
 }
 
 impl App {
@@ -81,12 +84,16 @@ impl App {
     /// `documents` checks a verification request's private documents with media
     /// (#777); `None`: requests carry links only. `images` checks an avatar's
     /// or banner's media asset (#907); `None`: they carry URLs only.
+    /// `slot_wallet` spends a profile slot's gems (#916); `None`: slots cannot
+    /// be bought.
     pub async fn build(
         backends: Backends,
         cache_registry: Arc<CacheRegistry>,
         publisher: Arc<dyn EventPublisher>,
         documents: Option<Arc<dyn PrivateDocuments>>,
         images: Option<Arc<dyn crate::application::port::MediaImages>>,
+        slot_wallet: Option<Arc<dyn crate::application::port::SlotWallet>>,
+        slot_policy: crate::application::profile_slots::SlotPolicy,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let Backends { scylla, redis } = backends;
 
@@ -113,6 +120,15 @@ impl App {
         let share_tokens: Arc<dyn crate::application::port::ShareTokenStore> = Arc::new(
             crate::infrastructure::persistence::ScyllaShareTokenStore::new(Arc::clone(&scylla_client)),
         );
+        let slot_store: Arc<dyn crate::application::port::ProfileSlotStore> = Arc::new(
+            crate::infrastructure::persistence::ScyllaProfileSlotStore::new(Arc::clone(&scylla_client)),
+        );
+        let slots = Arc::new(crate::application::profile_slots::ProfileSlots {
+            store:    Arc::clone(&slot_store),
+            profiles: Arc::new(crate::application::profile_slots::IndexedProfiles(Arc::clone(&repository))),
+            wallet:   slot_wallet,
+            policy:   slot_policy,
+        });
         let share_token_handler = || {
             crate::application::query::ShareTokenHandler::new(
                 Arc::clone(&repository),
@@ -137,6 +153,7 @@ impl App {
                 .register::<EraseAccountVerificationsCommand, _>(EraseAccountVerificationsHandler {
                     repo:          Arc::clone(&repository),
                     verifications: Arc::clone(&verifications),
+                    slots:         Some(Arc::clone(&slot_store)),
                 })?
                 .register::<DecideVerificationCommand, _>(DecideVerificationHandler {
                     repo:          Arc::clone(&repository),
@@ -146,7 +163,8 @@ impl App {
                 })?
                 .register::<CreateProfileCommand, _>(
                     CreateProfileHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))
-                        .with_floors(Arc::clone(&floors)),
+                        .with_floors(Arc::clone(&floors))
+                        .with_slots(Arc::clone(&slots)),
                 )?
                 .register::<UpdateProfileCommand, _>(UpdateProfileHandler::new(
                     Arc::clone(&repository),
@@ -285,6 +303,7 @@ impl App {
             cache,
             scylla: scylla_client,
             redis: redis_client,
+            slots,
         })
     }
 }
