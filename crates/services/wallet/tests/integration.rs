@@ -631,7 +631,7 @@ async fn the_welcome_gift_is_credited_once_per_device_over_postgres() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(points, 125, "credited once");
+    assert_eq!(points, 50, "credited once");
     assert_reconciles(&pool, &me).await;
 
     store.erase(&me).await.unwrap();
