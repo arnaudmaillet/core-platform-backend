@@ -62,8 +62,7 @@ async fn floors_tighten_lock_and_lift() {
 
     // A profile the teen creates now is born at the floors (a second slot
     // first, #916).
-    let account_id = profile::domain::value_object::AccountId::try_from(account.as_str()).unwrap();
-    h.slots.store.init(&account_id, 2).await.expect("a second slot");
+    h.grant_slots(&account, 2).await;
     let second = harness::random_handle();
     h.create(&account, &second, "Teen 2").await;
     let born = h.get_by_handle(&second).await.expect("created");

@@ -232,6 +232,13 @@ impl TestHarness {
         }
     }
 
+    /// Gives `account` `slots` profile slots (#916), for a scenario creating
+    /// several profiles on one account.
+    pub async fn grant_slots(&self, account_id: &str, slots: i32) {
+        let account = AccountId::try_from(account_id).expect("account id");
+        self.slots.store.init(&account, slots).await.expect("grant slots");
+    }
+
     /// Creates a profile, expecting success.
     pub async fn create(&self, account_id: &str, handle: &str, display_name: &str) {
         dispatch_create(Arc::clone(&self.command_bus), account_id, handle, display_name)
