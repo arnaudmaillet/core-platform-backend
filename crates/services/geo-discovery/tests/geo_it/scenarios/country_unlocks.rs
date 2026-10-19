@@ -2,7 +2,7 @@
 //! recorded once, an unlock charged once, and the member map showing only
 //! those countries (and the sea).
 
-use chrono::{TimeDelta, Utc};
+use chrono::{DurationRound, TimeDelta, Utc};
 use uuid::Uuid;
 
 use geo_discovery::application::country_unlocks::{Spender, UnlockOutcome, VisaOutcome, VISA_HOURS};
@@ -84,7 +84,8 @@ async fn a_visa_opens_a_country_until_its_end_and_an_unlock_ends_it() {
     let h = TestHarness::start().await;
     let me = Uuid::now_v7();
     let adult = Spender { adult: true, token: None };
-    let now = Utc::now();
+    // Milliseconds, what the store keeps.
+    let now = Utc::now().duration_trunc(TimeDelta::milliseconds(1)).unwrap();
     let day = TimeDelta::hours(VISA_HOURS);
     let evora = h.index_post(EVORA.0, EVORA.1, 5.0).await;
     let scope = || MapScope::Member(me);

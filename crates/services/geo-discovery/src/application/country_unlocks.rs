@@ -18,7 +18,7 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use uuid::Uuid;
 
 use crate::application::country_standings::CountryStandings;
@@ -206,7 +206,10 @@ impl CountryUnlocking {
                     return Ok(reply(VisaOutcome::PriceChanged, countries, gems, price, None));
                 }
                 let from = countries.visa_until(country, now).unwrap_or(now);
-                let purchase = VisaPurchase { country, price, until: from + TimeDelta::hours(VISA_HOURS), settled: false };
+                // Milliseconds, what the store keeps: the end read back is the end granted.
+                let until = from + TimeDelta::hours(VISA_HOURS);
+                let until = until.duration_trunc(TimeDelta::milliseconds(1)).unwrap_or(until);
+                let purchase = VisaPurchase { country, price, until, settled: false };
                 self.store.record_visa_purchase(account, key, purchase).await?;
                 purchase
             }
@@ -495,7 +498,7 @@ mod tests {
         let w = world();
         let me = Uuid::now_v7();
         w.residence.0.lock().unwrap().insert(me, cc("FR"));
-        let now = Utc::now();
+        let now = Utc::now().duration_trunc(TimeDelta::milliseconds(1)).unwrap();
         let day = TimeDelta::hours(VISA_HOURS);
 
         let moved = w.unlocking.buy_visa(me, "IS", 15, "visa-key-1", &adult(), now).await.unwrap();
@@ -539,7 +542,7 @@ mod tests {
     async fn a_failure_after_the_visas_spend_is_settled_by_the_retry() {
         let w = world();
         let me = Uuid::now_v7();
-        let now = Utc::now();
+        let now = Utc::now().duration_trunc(TimeDelta::milliseconds(1)).unwrap();
         *w.store.3.lock().unwrap() = true;
         assert!(w.unlocking.buy_visa(me, "JP", 3, "visa-key-1", &adult(), now).await.is_err());
         w.activity.add(cc("JP"), now.date_naive(), 99, 1, "jp").await.unwrap();
