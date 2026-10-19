@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: fde5f130ed7f8f36669b1a8144e4aec1b5b41184a5f788db841a2d5ac87f72b5
+  source_sha256: 8fa9ca2ac3d3bd8dcd7f434c2b334dba3f4febf38e1891422bda3de7812e1496
   translated_at: 2026-10-20
   status: complete
 ---
@@ -94,7 +94,7 @@ seule fois.
 | Dépense | Règle |
 |---|---|
 | Packs de mises (`BuyStakePack`, edge ; #941) | des tirs de 100 points **de l'acheteur** ; en vente par défaut `shots_3` (3 tirs, 50 gems — le pack par défaut, pour une requête qui n'en nomme aucun), `shots_10` (10, 150) et `shots_25` (25, 325) ; tout ou rien, un pack à la fois (`PACK_STILL_ACTIVE` tant qu'il reste des tirs, rien n'est débité) ; les tirs n'expirent jamais ; un pack qui n'est pas en vente renvoie `WAL-9005` ; le `ref_id` de la ligne du registre est l'id du pack et `Wallet.stake_pack_id` le pack chargé |
-| Déblocage de pays (`SpendGems`, mesh) | geo-discovery fixe le prix, vérifie que l'acheteur est adulte et demande les gems avec sa propre clé ; `ref_id` = le code du pays |
+| Déblocage de pays / visa de 24 h (`SpendGems`, mesh ; #910) | geo-discovery fixe le prix, vérifie que l'acheteur est adulte et demande les gems avec sa propre clé (`COUNTRY_UNLOCK` ou `COUNTRY_VISA`) ; `ref_id` = le code du pays |
 | Article du catalogue (`PurchaseItem`, edge ; #892) | voir le catalogue ci-dessous |
 
 **Le catalogue de gems (#892).** Ce que les gems achètent, en politique serveur (`WALLET_CATALOG`),

@@ -9,7 +9,7 @@ use scylla::DeserializeRow;
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
 use uuid::Uuid;
 
-use crate::application::port::{AccountCountries, CountryUnlockStore};
+use crate::application::port::{AccountCountries, CountryUnlockStore, VisaPurchase};
 use crate::domain::value_object::CountryCode;
 use crate::error::GeoDiscoveryError;
 
@@ -18,7 +18,9 @@ const PENDING_TTL_SECS: i32 = 24 * 3600;
 
 /// Scylla adapter for [`CountryUnlockStore`] (`geo_discovery.country_unlocks`,
 /// migration 0009): one partition per account, the home country a static
-/// column set once (LWT), one row per unlocked (or pending) country.
+/// column set once (LWT), one row per unlocked (or pending) country; a 24 h
+/// visa is the row's `visa_until` (#910, migration 0011), its purchases in
+/// `country_visa_purchases`.
 pub struct ScyllaCountryUnlockStore {
     client: Arc<ScyllaClient>,
 }
@@ -55,10 +57,12 @@ impl CountryUnlockStore for ScyllaCountryUnlockStore {
             country:      Option<String>,
             price:        Option<i64>,
             pending:      Option<bool>,
+            visa_until:   Option<CqlTimestamp>,
         }
         // Strict: an unlock just bought shows on the very next read.
         let stmt = self.stmt(
-            "SELECT home_country, country, price, pending FROM geo_discovery.country_unlocks WHERE account_id = ?",
+            "SELECT home_country, country, price, pending, visa_until FROM geo_discovery.country_unlocks \
+             WHERE account_id = ?",
             ScyllaProfileKind::Strict,
             "strict",
         );
@@ -78,10 +82,14 @@ impl CountryUnlockStore for ScyllaCountryUnlockStore {
                 countries.home = Some(home);
             }
             if let Some(country) = row.country.as_deref().and_then(|c| CountryCode::try_from(c).ok()) {
-                if row.pending == Some(true) {
-                    countries.pending.push((country, row.price.unwrap_or(0)));
-                } else {
-                    countries.unlocked.push(country);
+                // `add` writes `pending = false`; a row with neither is a visa only.
+                match row.pending {
+                    Some(true) => countries.pending.push((country, row.price.unwrap_or(0))),
+                    Some(false) => countries.unlocked.push(country),
+                    None => {}
+                }
+                if let Some(until) = row.visa_until.and_then(|t| DateTime::from_timestamp_millis(t.0)) {
+                    countries.visas.push((country, until));
                 }
             }
         }
@@ -115,9 +123,11 @@ impl CountryUnlockStore for ScyllaCountryUnlockStore {
     }
 
     async fn clear_pending(&self, account: Uuid, country: CountryCode) -> Result<(), GeoDiscoveryError> {
-        // Only a pending row: an unlock is never undone.
+        // Only a pending purchase: an unlock is never undone, and a running
+        // visa on the row stays (#910).
         let stmt = self.stmt(
-            "DELETE FROM geo_discovery.country_unlocks WHERE account_id = ? AND country = ? IF pending = true",
+            "DELETE price, pending FROM geo_discovery.country_unlocks WHERE account_id = ? AND country = ? \
+             IF pending = true",
             ScyllaProfileKind::Strict,
             "strict",
         );
@@ -126,16 +136,102 @@ impl CountryUnlockStore for ScyllaCountryUnlockStore {
     }
 
     async fn add(&self, account: Uuid, country: CountryCode, price: i64, at: DateTime<Utc>) -> Result<(), GeoDiscoveryError> {
-        // Every column rewritten without a TTL: a pending row becomes durable.
+        // Every column rewritten without a TTL: a pending row becomes durable;
+        // a running visa to it ends (#910).
         let stmt = self.stmt(
-            "INSERT INTO geo_discovery.country_unlocks (account_id, country, price, unlocked_at, pending) \
-             VALUES (?, ?, ?, ?, false)",
+            "INSERT INTO geo_discovery.country_unlocks (account_id, country, price, unlocked_at, pending, visa_until) \
+             VALUES (?, ?, ?, ?, false, null)",
             ScyllaProfileKind::Strict,
             "strict",
         );
         self.client
             .session
             .execute_unpaged(stmt, (account, country.as_str(), price, CqlTimestamp(at.timestamp_millis())))
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn visa_purchase(&self, account: Uuid, key: &str) -> Result<Option<VisaPurchase>, GeoDiscoveryError> {
+        #[derive(DeserializeRow)]
+        struct Row {
+            country: Option<String>,
+            price:   Option<i64>,
+            until:   Option<CqlTimestamp>,
+            settled: Option<bool>,
+        }
+        let stmt = self.stmt(
+            "SELECT country, price, until, settled FROM geo_discovery.country_visa_purchases \
+             WHERE account_id = ? AND purchase_key = ?",
+            ScyllaProfileKind::Strict,
+            "strict",
+        );
+        let rows = self
+            .client
+            .session
+            .execute_unpaged(stmt, (account, key))
+            .await
+            .map_err(scylla_err)?
+            .into_rows_result()
+            .map_err(|e| row_err("country_visa_purchases:rows", e))?;
+        let Some(row) = rows.maybe_first_row::<Row>().map_err(|e| row_err("country_visa_purchases:deser", e))? else {
+            return Ok(None);
+        };
+        // An unreadable row is no purchase: the retry agrees one anew.
+        let purchase = (|| {
+            Some(VisaPurchase {
+                country: CountryCode::try_from(row.country.as_deref()?).ok()?,
+                price:   row.price?,
+                until:   DateTime::from_timestamp_millis(row.until?.0)?,
+                settled: row.settled.unwrap_or(false),
+            })
+        })();
+        Ok(purchase)
+    }
+
+    async fn record_visa_purchase(&self, account: Uuid, key: &str, purchase: VisaPurchase) -> Result<(), GeoDiscoveryError> {
+        let stmt = self.stmt(
+            "INSERT INTO geo_discovery.country_visa_purchases (account_id, purchase_key, country, price, until, settled) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+            ScyllaProfileKind::Strict,
+            "strict",
+        );
+        let values = (
+            account,
+            key,
+            purchase.country.as_str(),
+            purchase.price,
+            CqlTimestamp(purchase.until.timestamp_millis()),
+            purchase.settled,
+        );
+        self.client.session.execute_unpaged(stmt, values).await.map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn clear_visa_purchase(&self, account: Uuid, key: &str) -> Result<(), GeoDiscoveryError> {
+        let stmt = self.stmt(
+            "DELETE FROM geo_discovery.country_visa_purchases WHERE account_id = ? AND purchase_key = ?",
+            ScyllaProfileKind::Strict,
+            "strict",
+        );
+        self.client.session.execute_unpaged(stmt, (account, key)).await.map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn grant_visa(&self, account: Uuid, country: CountryCode, until: DateTime<Utc>) -> Result<(), GeoDiscoveryError> {
+        // A later end already recorded (another purchase) stays.
+        if self.get(account).await?.visas.iter().any(|(c, end)| *c == country && *end >= until) {
+            return Ok(());
+        }
+        let ttl = i32::try_from((until - Utc::now()).num_seconds().max(1)).unwrap_or(i32::MAX);
+        let stmt = self.stmt(
+            "UPDATE geo_discovery.country_unlocks USING TTL ? SET visa_until = ? WHERE account_id = ? AND country = ?",
+            ScyllaProfileKind::Strict,
+            "strict",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt, (ttl, CqlTimestamp(until.timestamp_millis()), account, country.as_str()))
             .await
             .map_err(scylla_err)?;
         Ok(())

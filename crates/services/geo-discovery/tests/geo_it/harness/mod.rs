@@ -20,7 +20,7 @@ use geo_discovery::app::{App, Backends};
 use geo_discovery::application::command::{
     ApplyMapVisibilityCommand, IndexPostCommand, UpdateViralityWithTilesCommand,
 };
-use geo_discovery::application::port::{AudienceGate, GemSpend, GemWallet, ResidenceDirectory};
+use geo_discovery::application::port::{AudienceGate, CountrySpend, GemSpend, GemWallet, ResidenceDirectory};
 use geo_discovery::domain::value_object::CountryCode;
 use geo_discovery::application::query::get_geo_timeline::{GetGeoTimelineQuery, GetGeoTimelineResult};
 use geo_discovery::application::query::list_place_posts::{ListPlacePostsQuery, PlacePostsPage, PlaceSort};
@@ -59,7 +59,15 @@ impl GemWallet for ScriptedWallet {
     async fn gems(&self, account: Uuid) -> Result<i64, GeoDiscoveryError> {
         Ok(*self.gems.lock().unwrap().get(&account).unwrap_or(&100))
     }
-    async fn spend_for_country(&self, account: Uuid, _: CountryCode, amount: i64, key: &str, _: Option<&str>) -> Result<GemSpend, GeoDiscoveryError> {
+    async fn spend_for_country(
+        &self,
+        account: Uuid,
+        _: CountrySpend,
+        _: CountryCode,
+        amount: i64,
+        key: &str,
+        _: Option<&str>,
+    ) -> Result<GemSpend, GeoDiscoveryError> {
         let mut gems = self.gems.lock().unwrap();
         let balance = gems.entry(account).or_insert(100);
         let mut spent = self.spent.lock().unwrap();

@@ -136,7 +136,7 @@ message SpendGemsRequest {
     string          account_id      = 1;
     // Gems to spend, > 0.
     int64           amount          = 2;
-    // What for: COUNTRY_UNLOCK only for now.
+    // What for: COUNTRY_UNLOCK or COUNTRY_VISA (#910).
     TransactionKind kind            = 3;
     // What it names (the country code), at most 64 characters.
     string          ref_id          = 4;

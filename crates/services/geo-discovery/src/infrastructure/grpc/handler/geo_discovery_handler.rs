@@ -7,7 +7,7 @@ use uuid::Uuid;
 use cqrs::{Envelope, QueryBus};
 
 use crate::application::country_access::ResolveCountryAccess;
-use crate::application::country_unlocks::{CountryUnlocking, Spender, UnlockOutcome};
+use crate::application::country_unlocks::{CountryUnlocking, Spender, UnlockOutcome, VisaOutcome};
 use crate::application::query::get_geo_timeline::GetGeoTimelineQuery;
 use crate::application::query::list_place_posts::{ListPlacePostsQuery, PlaceSort};
 use crate::application::query::query_tile::QueryTileQuery;
@@ -232,12 +232,10 @@ where
                     likes:        s.likes,
                     posts:        s.posts,
                     price_gems:   standings.pricing.price(s.rank, Some(s.country) == home),
+                    visa_price_gems: standings.pricing.visa_price(s.rank),
                 })
                 .collect(),
-            computed_at: Some(prost_types::Timestamp {
-                seconds: ladder.computed_at.timestamp(),
-                nanos:   i32::try_from(ladder.computed_at.timestamp_subsec_nanos()).unwrap_or(0),
-            }),
+            computed_at: Some(timestamp(ladder.computed_at)),
         }))
     }
 }
@@ -259,6 +257,38 @@ where
             unlocked_countries: countries.all().iter().map(ToString::to_string).collect(),
             gems,
             filtering:          unlocking.filtering,
+            visas:              visas_to_proto(&countries),
+        }))
+    }
+
+    async fn buy_country_visa_inner(
+        &self,
+        request: Request<proto::BuyCountryVisaRequest>,
+    ) -> Result<Response<proto::BuyCountryVisaResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let unlocking = self.unlocking()?;
+        // As for an unlock: adults only, the token forwarded to the wallet.
+        let spender = Spender {
+            adult: edge::principal(&request).is_some_and(|p| p.is_adult()),
+            token: edge::bearer_token(request.metadata()),
+        };
+        let req = request.into_inner();
+        let account = account_uuid(&req.account_id)?;
+        let reply = unlocking
+            .buy_visa(account, &req.country_code, req.expected_price, &req.idempotency_key, &spender, chrono::Utc::now())
+            .await
+            .map_err(app_to_status)?;
+        Ok(Response::new(proto::BuyCountryVisaResponse {
+            outcome:    match reply.outcome {
+                VisaOutcome::Granted => proto::CountryVisaOutcome::Granted,
+                VisaOutcome::AlreadyUnlocked => proto::CountryVisaOutcome::AlreadyUnlocked,
+                VisaOutcome::InsufficientGems => proto::CountryVisaOutcome::InsufficientGems,
+                VisaOutcome::PriceChanged => proto::CountryVisaOutcome::PriceChanged,
+            } as i32,
+            visas:      visas_to_proto(&reply.countries),
+            gems:       reply.gems,
+            price_gems: reply.price,
+            expires_at: reply.until.map(timestamp),
         }))
     }
 
@@ -349,9 +379,29 @@ where
     ) -> Result<Response<proto::UnlockCountryResponse>, Status> {
         self.unlock_country_inner(request).await
     }
+
+    async fn buy_country_visa(
+        &self,
+        request: Request<proto::BuyCountryVisaRequest>,
+    ) -> Result<Response<proto::BuyCountryVisaResponse>, Status> {
+        self.buy_country_visa_inner(request).await
+    }
 }
 
 // ── Conversion helpers ────────────────────────────────────────────────────────
+
+fn timestamp(at: chrono::DateTime<chrono::Utc>) -> prost_types::Timestamp {
+    prost_types::Timestamp { seconds: at.timestamp(), nanos: i32::try_from(at.timestamp_subsec_nanos()).unwrap_or(0) }
+}
+
+/// The member's running visas now (#910).
+fn visas_to_proto(countries: &crate::application::port::AccountCountries) -> Vec<proto::CountryVisa> {
+    countries
+        .visas_at(chrono::Utc::now())
+        .into_iter()
+        .map(|(country, until)| proto::CountryVisa { country_code: country.to_string(), expires_at: Some(timestamp(until)) })
+        .collect()
+}
 
 
 /// The reader, from how the request arrived: the mesh is unfiltered; an

@@ -143,6 +143,7 @@ service GeoDiscoveryService {
   rpc GetCountryStandings (GetCountryStandingsRequest) returns (GetCountryStandingsResponse); // the country ladder (#665)
   rpc GetCountryUnlocks (GetCountryUnlocksRequest) returns (GetCountryUnlocksResponse); // a member's countries (#665)
   rpc UnlockCountry (UnlockCountryRequest) returns (UnlockCountryResponse);             // unlock one with gems (#665)
+  rpc BuyCountryVisa (BuyCountryVisaRequest) returns (BuyCountryVisaResponse);          // a 24 h visa with gems (#910)
 }
 message QueryTileRequest  { Viewport viewport = 1; int32 zoom_level = 2; string guest_principal = 3; } // zoom ∈ [0,15]; 3 = mesh only
 message QueryTileResponse { reserved 1; repeated RadarPin pins = 3; int32 tile_count = 2; } // field 1 was `cards`
@@ -193,7 +194,8 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > **The country ladder (#665).** `GetCountryStandings` (edge `public_read`: aggregates, the same for
 > every reader) returns every country the map draws, ranked by the **likes on posts published there
 > over the last 30 days** (`GEO_STANDINGS_WINDOW_DAYS`; ties by country code), with its posts and the
-> price of unlocking it — **50 gems** for ranks 1–10, **30** for 11–30, **15** beyond. Computed from the
+> price of unlocking it — **50 gems** for ranks 1–10, **30** for 11–30, **15** beyond — and of a 24 h
+> visa (`visa_price_gems`, #910: 20 % of it, rounded: **10 / 6 / 3**). Computed from the
 > per-day Redis counts at most once a minute (`GEO_STANDINGS_CACHE_SECS`). The home country is
 > free: a member's recorded home country costs **0** on the ladder they read.
 >
@@ -214,9 +216,23 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > record pays the **agreed** price (the wallet replays the key) and is never refused for a price
 > that moved meanwhile. The wallet or account unreachable ⇒ **`GEO-6002`** (`UNAVAILABLE`, fail-closed).
 >
+> **24 h visas (#910).** A recurring gem sink: a temporary unlock. `BuyCountryVisa(country_code,
+> expected_price, idempotency_key)` (edge `authenticated`, adults only like an unlock: `GEO-3001`): the
+> home country or an unlocked one answers `ALREADY_UNLOCKED`; a price other than the ladder's visa
+> price answers `PRICE_CHANGED`; else the price and the visa's **new end** — 24 h past the running
+> visa's end, or past now — are recorded under the client's key (`country_visa_purchases`, kept 7 days),
+> `SpendGems` is asked for them (`COUNTRY_VISA`, keyed `visa-<CC>-<key>`), and the visa is written:
+> `GRANTED` with `expires_at`, or `INSUFFICIENT_GEMS` (the record dropped). A retry under the same key
+> pays once and grants the **same** end, never a second extension; a key is 8–40 of `[A-Za-z0-9_-]`
+> (else **`GEO-9006`**). A visa is the country row's `visa_until` (migration 0011), written with a TTL
+> that ends with it, so the map's one partition read sees it; unlocking the country for good clears it
+> (no refund), and an unpaid unlock of it leaves it running. `GetCountryUnlocks` lists the running
+> visas (`visas`, with `expires_at`); visas never count toward an unlock elsewhere.
+>
 > **The member map filter** (`GEO_COUNTRY_UNLOCKS_ENABLED`, **off** by default until the app's shop is
-> live): a member's `QueryTile` and `GetGeoTimeline` then show only posts in their home and unlocked
-> countries, **and at sea** (a post outside every border); a guest's map is unchanged, the mesh is
+> live): a member's `QueryTile`, `GetGeoTimeline` and `ListPlacePosts` then show only posts in their
+> home and unlocked countries, their visas' **until each visa's end** (checked on every read, whatever
+> the client caches), **and at sea** (a post outside every border); a guest's map is unchanged, the mesh is
 > never filtered. One partition read per query (`Strict`: an unlock shows on the next read).
 >
 > **Wire contract:** `AuthorTier` is 0-based **with** an `UNSPECIFIED=0` safe default (= Standard);
@@ -246,6 +262,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 | GEO-9001..9003 | 422 | malformed UUIDs / domain violation |
 | GEO-6001 | 503 | audience check (social-graph `CheckAccess`) unavailable; client reads fail closed (`UNAVAILABLE`, retryable) |
 | GEO-9004/9005 | 422 | invalid ISO country code / country access without a client principal (mesh) |
+| GEO-9006 | 422 | invalid visa purchase key (#910) |
 
 ---
 
@@ -354,7 +371,8 @@ async fn main() -> anyhow::Result<()> {
 
 - **Migrations:** `0001_create_keyspace.cql` → `0002_create_posts_by_tile_table.cql` →
   `0003_create_map_post_cards_table.cql` → `0004_add_author_tier_column.cql` →
-  `0005_add_caption_column.cql` … → `0010_create_posts_by_country.cql` (#833) against `geo_discovery`,
+  `0005_add_caption_column.cql` … → `0010_create_posts_by_country.cql` (#833) →
+  `0011_country_visas.cql` (#910: `country_unlocks.visa_until`, `country_visa_purchases`) against `geo_discovery`,
   applied **before** first start. Posts indexed before `0010` are not filed by country (their country
   page lists them only once re-announced); nothing was live when it shipped.
 - **Stateful gotchas:** `GEO_DEFAULT_RETENTION_SECS` must equal the Scylla table TTL; the composite

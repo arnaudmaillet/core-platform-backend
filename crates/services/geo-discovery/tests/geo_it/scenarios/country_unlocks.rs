@@ -2,10 +2,11 @@
 //! recorded once, an unlock charged once, and the member map showing only
 //! those countries (and the sea).
 
-use chrono::Utc;
+use chrono::{TimeDelta, Utc};
 use uuid::Uuid;
 
-use geo_discovery::application::country_unlocks::{Spender, UnlockOutcome};
+use geo_discovery::application::country_unlocks::{Spender, UnlockOutcome, VisaOutcome, VISA_HOURS};
+use geo_discovery::application::port::VisaPurchase;
 use geo_discovery::domain::value_object::CountryCode;
 
 use crate::geo_it::harness::{MapScope, TestHarness};
@@ -73,4 +74,50 @@ async fn a_pending_purchase_is_kept_settled_or_dropped() {
     store.clear_pending(me, cc("PT")).await.unwrap();
     let countries = store.get(me).await.unwrap();
     assert_eq!((countries.unlocked, countries.pending), (vec![cc("PT")], vec![]));
+}
+
+/// #910: a visa over Scylla — on the member map while it runs, extended
+/// from its end, idempotent per key, kept by an unpaid permanent purchase of
+/// its country, ended by the unlock.
+#[tokio::test]
+async fn a_visa_opens_a_country_until_its_end_and_an_unlock_ends_it() {
+    let h = TestHarness::start().await;
+    let me = Uuid::now_v7();
+    let adult = Spender { adult: true, token: None };
+    let now = Utc::now();
+    let day = TimeDelta::hours(VISA_HOURS);
+    let evora = h.index_post(EVORA.0, EVORA.1, 5.0).await;
+    let scope = || MapScope::Member(me);
+    assert!(!h.pins_near_in(EVORA.0, EVORA.1, scope()).await.contains(&evora), "locked");
+
+    let first = h.unlocking.buy_visa(me, "PT", 3, "visa-key-1", &adult, now).await.unwrap();
+    assert_eq!((first.outcome, first.until), (VisaOutcome::Granted, Some(now + day)));
+    assert!(h.pins_near_in(EVORA.0, EVORA.1, scope()).await.contains(&evora), "a running visa");
+    let retry = h.unlocking.buy_visa(me, "PT", 3, "visa-key-1", &adult, now).await.unwrap();
+    assert_eq!(retry.until, Some(now + day), "the same end");
+    let second = h.unlocking.buy_visa(me, "PT", 3, "visa-key-2", &adult, now).await.unwrap();
+    assert_eq!(second.until, Some(now + day + day), "extended from its end");
+    assert_eq!(h.wallet.spent.lock().unwrap().iter().filter(|(a, _, _)| *a == me).count(), 2, "one charge per key");
+    let stored = h.unlocking.store.get(me).await.unwrap();
+    assert_eq!(stored.visas.len(), 1);
+    assert_eq!(stored.visas[0].1.timestamp_millis(), (now + day + day).timestamp_millis());
+    assert!(stored.unlocked.is_empty() && stored.pending.is_empty(), "a visa is no unlock");
+
+    // An unpaid permanent purchase of the country leaves the visa running.
+    h.unlocking.store.mark_pending(me, cc("PT"), 15).await.unwrap();
+    h.unlocking.store.clear_pending(me, cc("PT")).await.unwrap();
+    assert_eq!(h.unlocking.store.get(me).await.unwrap().visas.len(), 1);
+
+    let unlocked = h.unlocking.unlock(me, "PT", 15, &adult, Utc::now()).await.unwrap();
+    assert_eq!(unlocked.outcome, UnlockOutcome::Unlocked);
+    let stored = h.unlocking.store.get(me).await.unwrap();
+    assert_eq!((stored.unlocked, stored.visas), (vec![cc("PT")], vec![]), "the unlock ends the visa");
+
+    // A purchase record round-trips; an unknown key has none.
+    let purchase = VisaPurchase { country: cc("ES"), price: 6, until: now + day, settled: false };
+    h.unlocking.store.record_visa_purchase(me, "visa-key-9", purchase).await.unwrap();
+    let read = h.unlocking.store.visa_purchase(me, "visa-key-9").await.unwrap().unwrap();
+    assert_eq!((read.country, read.price, read.settled), (cc("ES"), 6, false));
+    h.unlocking.store.clear_visa_purchase(me, "visa-key-9").await.unwrap();
+    assert!(h.unlocking.store.visa_purchase(me, "visa-key-9").await.unwrap().is_none());
 }

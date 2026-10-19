@@ -37,6 +37,9 @@ enum TransactionKind {
     TRANSACTION_KIND_APP_ICON       = 7;
     // An accent theme bought (gems; #946); `ref_id` is the item id.
     TRANSACTION_KIND_THEME          = 8;
+    // A 24 h country visa on the map (gems; #910); `ref_id` is the country
+    // code.
+    TRANSACTION_KIND_COUNTRY_VISA   = 9;
 }
 
 // What kind of thing a catalogue item is (#892). An item id is

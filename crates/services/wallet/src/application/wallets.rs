@@ -258,8 +258,8 @@ impl Wallets {
         Ok(PackReply { outcome, view: self.view(wallet, now) })
     }
 
-    /// Another service spends gems (a country unlock); it checked the
-    /// spender may. Returns the outcome and the gems left.
+    /// Another service spends gems (a country unlock or a 24 h visa, #910);
+    /// it checked the spender may. Returns the outcome and the gems left.
     pub async fn spend_gems(
         &self,
         account: &str,
@@ -274,7 +274,7 @@ impl Wallets {
         if amount <= 0 {
             return Err(WalletError::InvalidSpend { reason: "the amount must be positive".into() });
         }
-        if kind != TransactionKind::CountryUnlock {
+        if !matches!(kind, TransactionKind::CountryUnlock | TransactionKind::CountryVisa) {
             return Err(WalletError::InvalidSpend { reason: format!("{} is not a gem spend", kind.as_str()) });
         }
         if ref_id.len() > MAX_REF_LEN {
@@ -1486,6 +1486,11 @@ mod tests {
         assert!(w.spend_gems(&account, "country-JP", 5, TransactionKind::Claim, "JP", at(8, 10)).await.is_err());
         let history = w.history(&account, Some(Currency::Gems), 0, "").await.unwrap();
         assert_eq!(history.transactions[0].ref_id.as_deref(), Some("FR"));
+        // #910: a 24 h visa is the other country spend.
+        let visa = w.spend_gems(&account, "visa-IS-k1", 3, TransactionKind::CountryVisa, "IS", at(8, 11)).await.unwrap();
+        assert_eq!(visa, (SpendOutcome::Spent, 67));
+        let history = w.history(&account, Some(Currency::Gems), 0, "").await.unwrap();
+        assert_eq!((history.transactions[0].kind, history.transactions[0].ref_id.as_deref()), (TransactionKind::CountryVisa, Some("IS")));
     }
 
     #[tokio::test]

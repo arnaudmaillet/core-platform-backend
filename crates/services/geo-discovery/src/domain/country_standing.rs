@@ -57,11 +57,15 @@ pub struct UnlockPricing {
     pub mid_price: i64,
     /// Every other rank.
     pub rest_price: i64,
+    /// A 24 h visa's price (#910), in percent of the country's unlock price,
+    /// rounded, at least 1 gem: a visa never beats unlocking a country one
+    /// visits often.
+    pub visa_percent: i64,
 }
 
 impl Default for UnlockPricing {
     fn default() -> Self {
-        Self { top_ranks: 10, top_price: 50, mid_ranks: 30, mid_price: 30, rest_price: 15 }
+        Self { top_ranks: 10, top_price: 50, mid_ranks: 30, mid_price: 30, rest_price: 15, visa_percent: 20 }
     }
 }
 
@@ -75,6 +79,11 @@ impl UnlockPricing {
             r if r <= self.mid_ranks => self.mid_price,
             _ => self.rest_price,
         }
+    }
+
+    /// The price of a 24 h visa (#910) to a country at `rank`.
+    pub fn visa_price(&self, rank: u32) -> i64 {
+        ((self.price(rank, false) * self.visa_percent + 50) / 100).max(1)
     }
 }
 
@@ -104,5 +113,6 @@ mod tests {
         let p = UnlockPricing::default();
         assert_eq!([p.price(1, false), p.price(10, false), p.price(11, false), p.price(30, false), p.price(31, false)], [50, 50, 30, 30, 15]);
         assert_eq!(p.price(1, true), 0);
+        assert_eq!([p.visa_price(1), p.visa_price(11), p.visa_price(31)], [10, 6, 3], "#910: 20 %");
     }
 }

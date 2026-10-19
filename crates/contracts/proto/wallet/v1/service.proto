@@ -46,7 +46,7 @@ service WalletService {
     rpc Stake(StakeRequest) returns (StakeResponse);
 
     // Mesh only: another service spends an account's gems (geo-discovery's
-    // country unlocks). The caller checks the spender may spend gems (an
+    // country unlocks and 24 h visas: kind COUNTRY_UNLOCK or COUNTRY_VISA). The caller checks the spender may spend gems (an
     // adult); the wallet records the movement. Idempotent per key.
     rpc SpendGems(SpendGemsRequest) returns (SpendGemsResponse);
 

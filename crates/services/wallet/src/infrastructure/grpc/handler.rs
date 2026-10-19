@@ -165,7 +165,8 @@ impl WalletServiceHandler {
         let req = request.into_inner();
         let kind = match proto::TransactionKind::try_from(req.kind) {
             Ok(proto::TransactionKind::CountryUnlock) => TransactionKind::CountryUnlock,
-            _ => return Err(Status::invalid_argument("kind must be COUNTRY_UNLOCK")),
+            Ok(proto::TransactionKind::CountryVisa) => TransactionKind::CountryVisa,
+            _ => return Err(Status::invalid_argument("kind must be COUNTRY_UNLOCK or COUNTRY_VISA")),
         };
         let (outcome, gems) = self
             .wallets
@@ -421,6 +422,7 @@ fn transaction_to_proto(t: &Transaction) -> proto::WalletTransaction {
             TransactionKind::WelcomeGift => proto::TransactionKind::WelcomeGift,
             TransactionKind::AppIcon => proto::TransactionKind::AppIcon,
             TransactionKind::Theme => proto::TransactionKind::Theme,
+            TransactionKind::CountryVisa => proto::TransactionKind::CountryVisa,
             TransactionKind::Unknown => proto::TransactionKind::Unspecified,
         } as i32,
         created_at:     Some(timestamp(t.created_at)),
