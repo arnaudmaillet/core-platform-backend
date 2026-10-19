@@ -10,13 +10,13 @@ use transport::grpc::edge;
 use transport::grpc::mesh::{MeshCallerGate, MeshGateMode};
 
 use crate::application::port::{
-    ClaimOutcome, PackOutcome, SettlementRecord, SpendOutcome, StakeOutcome, StakePositionRecord, StakeStatus,
+    ClaimOutcome, PackOutcome, PurchaseOutcome, SettlementRecord, SpendOutcome, StakeOutcome, StakePositionRecord, StakeStatus,
 };
 use crate::application::wallets::StakeBatch;
-use crate::application::{MyStake, StakeVerdict, Wallets, WalletView};
+use crate::application::{MyStake, OwnedItemView, StakeVerdict, Wallets, WalletView};
 use crate::domain::{Conviction, StakeAsk, StakeTarget};
 use crate::config::WalletConfig;
-use crate::domain::{Currency, Transaction, TransactionKind};
+use crate::domain::{Currency, ItemFamily, Transaction, TransactionKind};
 use crate::error::WalletError;
 
 pub use wallet_api as proto;
@@ -190,7 +190,66 @@ impl WalletServiceHandler {
         self.mesh.require(&request, "ExportWallet", EXPORT_CALLERS).await?;
         let req = request.into_inner();
         let view = self.wallets.export(&req.account_id, Utc::now()).await.map_err(to_status)?;
-        Ok(Response::new(proto::ExportWalletResponse { wallet: view.map(|v| self.wallet_to_proto(&v, false)) }))
+        let owned_items = self.wallets.bought_items(&req.account_id).await.map_err(to_status)?;
+        Ok(Response::new(proto::ExportWalletResponse {
+            wallet:      view.map(|v| self.wallet_to_proto(&v, false)),
+            owned_items: owned_items.into_iter().map(owned_to_proto).collect(),
+        }))
+    }
+
+    /// The gem catalogue (#892). Edge: any member.
+    pub async fn list_catalog(
+        &self,
+        _request: Request<proto::ListCatalogRequest>,
+    ) -> Result<Response<proto::ListCatalogResponse>, Status> {
+        let items = self
+            .wallets
+            .catalog()
+            .items
+            .iter()
+            .map(|item| proto::CatalogItem {
+                item_id: item.id.clone(),
+                family:  family_to_proto(item.family) as i32,
+                price:   item.price_gems,
+            })
+            .collect();
+        Ok(Response::new(proto::ListCatalogResponse { items }))
+    }
+
+    /// Buys a catalogue item (#892). On the edge, a caller under 18 (or of
+    /// unknown age, from the token) is refused: `WAL-3001`.
+    pub async fn purchase_item(
+        &self,
+        request: Request<proto::PurchaseItemRequest>,
+    ) -> Result<Response<proto::PurchaseItemResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let restricted = spending_restricted(&request);
+        let req = request.into_inner();
+        let reply = self
+            .wallets
+            .purchase_item(&req.account_id, &req.idempotency_key, &req.item_id, req.expected_price, restricted, Utc::now())
+            .await
+            .map_err(to_status)?;
+        Ok(Response::new(proto::PurchaseItemResponse {
+            outcome: match reply.outcome {
+                PurchaseOutcome::Purchased => proto::PurchaseOutcome::Purchased,
+                PurchaseOutcome::AlreadyOwned => proto::PurchaseOutcome::AlreadyOwned,
+                PurchaseOutcome::InsufficientGems => proto::PurchaseOutcome::InsufficientGems,
+                PurchaseOutcome::PriceChanged => proto::PurchaseOutcome::PriceChanged,
+                PurchaseOutcome::UnknownItem => proto::PurchaseOutcome::UnknownItem,
+            } as i32,
+            wallet:  Some(self.wallet_to_proto(&reply.view, restricted)),
+        }))
+    }
+
+    /// The items the caller's account owns (#892). Edge: the caller's account.
+    pub async fn list_owned_items(
+        &self,
+        request: Request<proto::ListOwnedItemsRequest>,
+    ) -> Result<Response<proto::ListOwnedItemsResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let items = self.wallets.owned_items(&request.get_ref().account_id).await.map_err(to_status)?;
+        Ok(Response::new(proto::ListOwnedItemsResponse { items: items.into_iter().map(owned_to_proto).collect() }))
     }
 
     /// Mesh only (#653, #665): the account's stake positions and their
@@ -295,6 +354,21 @@ fn spending_restricted<T>(request: &Request<T>) -> bool {
     edge::principal(request).is_some_and(|p| !p.is_adult())
 }
 
+fn family_to_proto(family: ItemFamily) -> proto::ItemFamily {
+    match family {
+        ItemFamily::AppIcon => proto::ItemFamily::AppIcon,
+        ItemFamily::Theme => proto::ItemFamily::Theme,
+    }
+}
+
+fn owned_to_proto(item: OwnedItemView) -> proto::OwnedItem {
+    proto::OwnedItem {
+        item_id:     item.item_id,
+        family:      family_to_proto(item.family) as i32,
+        acquired_at: item.acquired_at.map(timestamp),
+    }
+}
+
 fn wallet_to_proto(view: &WalletView, config: &WalletConfig, restricted: bool) -> proto::Wallet {
     let (w, c) = (&view.wallet, &view.claim);
     proto::Wallet {
@@ -345,6 +419,8 @@ fn transaction_to_proto(t: &Transaction) -> proto::WalletTransaction {
             TransactionKind::CountryUnlock => proto::TransactionKind::CountryUnlock,
             TransactionKind::Stake => proto::TransactionKind::Stake,
             TransactionKind::WelcomeGift => proto::TransactionKind::WelcomeGift,
+            TransactionKind::AppIcon => proto::TransactionKind::AppIcon,
+            TransactionKind::Theme => proto::TransactionKind::Theme,
             TransactionKind::Unknown => proto::TransactionKind::Unspecified,
         } as i32,
         created_at:     Some(timestamp(t.created_at)),
@@ -506,6 +582,42 @@ mod tests {
         let other = Uuid::now_v7().to_string();
         let denied = h.get_wallet(as_caller(&me, proto::GetWalletRequest { account_id: other })).await.unwrap_err();
         assert_eq!(denied.code(), Code::PermissionDenied);
+    }
+
+    /// #892, #946: the catalogue lists the themes; a member buys one for its
+    /// own account only, a minor not at all; owned items start with the free
+    /// pink, and the export carries what was bought.
+    #[tokio::test]
+    async fn the_catalogue_sells_themes_to_the_callers_own_account() {
+        let h = handler();
+        let me = Uuid::now_v7().to_string();
+        let catalog = h.list_catalog(as_caller(&me, proto::ListCatalogRequest {})).await.unwrap().into_inner();
+        let items: Vec<_> = catalog.items.iter().map(|i| (i.item_id.as_str(), i.family, i.price)).collect();
+        let theme = proto::ItemFamily::Theme as i32;
+        assert_eq!(items, [("theme.pink", theme, 0), ("theme.violet", theme, 50), ("theme.red", theme, 50)]);
+
+        let purchase = |account: &str| proto::PurchaseItemRequest {
+            account_id:      account.to_owned(),
+            idempotency_key: Uuid::now_v7().to_string(),
+            item_id:         "theme.violet".into(),
+            expected_price:  50,
+        };
+        let other = Uuid::now_v7().to_string();
+        assert_eq!(h.purchase_item(as_caller(&me, purchase(&other))).await.unwrap_err().code(), Code::PermissionDenied);
+        let mut teen = Request::new(purchase(&me));
+        teen.extensions_mut().insert(principal_aged(&me, Some("13-15")));
+        let refused = h.purchase_item(teen).await.unwrap_err();
+        assert_eq!(refused.metadata().get(ERROR_CODE_METADATA).unwrap(), "WAL-3001");
+
+        let bought = h.purchase_item(as_caller(&me, purchase(&me))).await.unwrap().into_inner();
+        assert_eq!((bought.outcome, bought.wallet.unwrap().gems), (proto::PurchaseOutcome::Purchased as i32, 50));
+        let owned = h.list_owned_items(as_caller(&me, proto::ListOwnedItemsRequest { account_id: me.clone() })).await.unwrap().into_inner();
+        let owned: Vec<_> = owned.items.iter().map(|o| (o.item_id.as_str(), o.acquired_at.is_some())).collect();
+        assert_eq!(owned, [("theme.pink", false), ("theme.violet", true)]);
+        assert!(h.list_owned_items(as_caller(&me, proto::ListOwnedItemsRequest { account_id: other })).await.is_err());
+
+        let export = h.export_wallet(Request::new(proto::ExportWalletRequest { account_id: me.clone() })).await.unwrap().into_inner();
+        assert_eq!(export.owned_items.iter().map(|o| o.item_id.as_str()).collect::<Vec<_>>(), ["theme.violet"], "bought ones only");
     }
 
     /// #665: gems are not spent under 18 or with an unknown age.

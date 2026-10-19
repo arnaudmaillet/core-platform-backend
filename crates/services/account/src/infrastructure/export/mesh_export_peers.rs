@@ -475,14 +475,15 @@ impl ExportPeers for MeshExportPeers {
     async fn wallet(&self, account_id: &AccountId) -> Result<Option<serde_json::Value>, AccountError> {
         let Some(client) = &self.wallet else { return Ok(None) };
         let account = account_id.as_uuid().to_string();
-        let wallet = client
+        let export = client
             .clone()
             .export_wallet(wallet_api::ExportWalletRequest { account_id: account.clone() })
             .await
             .map_err(rpc("wallet"))?
-            .into_inner()
-            .wallet
-            .map(|w| self.wallet_d.json("wallet.v1.Wallet", &w));
+            .into_inner();
+        let wallet = export.wallet.map(|w| self.wallet_d.json("wallet.v1.Wallet", &w));
+        // The catalogue items it bought (#892).
+        let owned_items: Vec<_> = export.owned_items.iter().map(|o| self.wallet_d.json("wallet.v1.OwnedItem", o)).collect();
         let (mut transactions, mut token) = (Vec::new(), String::new());
         loop {
             let page = client
@@ -520,7 +521,12 @@ impl ExportPeers for MeshExportPeers {
                 None => break,
             }
         }
-        Ok(Some(json!({ "wallet": wallet, "transactions": transactions, "stake_positions": positions })))
+        Ok(Some(json!({
+            "wallet": wallet,
+            "owned_items": owned_items,
+            "transactions": transactions,
+            "stake_positions": positions,
+        })))
     }
 
     async fn media(&self, account_id: &AccountId, ttl: Duration) -> Result<Vec<serde_json::Value>, AccountError> {

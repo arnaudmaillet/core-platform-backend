@@ -263,7 +263,8 @@ channel through chat's mesh-only `GetFormerMemberHistory`, the holder's own mess
 groups the holder left (#656, `left_at_ms`) are included, up to the departure, without their roster); for the account its
 likes (engagement's `ListLikesByAccount`, #665: a like is a point, the account's), its saved posts
 (`saves.json`: engagement's mesh-only `ListSavedPostsByAccount`, #872), its wallet
-(`wallet.json`: wallet's mesh-only `ExportWallet` — read without opening one — every page of
+(`wallet.json`: wallet's mesh-only `ExportWallet` — read without opening one, with the catalogue items
+the account bought (`owned_items`, #892) — every page of
 `ListWalletTransactions`, and `ListStakePositions`, each stake with its settlement; without
 `ACCOUNT_WALLET_GRPC_ENDPOINT` the archive goes without it, logged) and its media
 (`ListAssetsByOwner`, links valid 7 days). The server runs the pass every

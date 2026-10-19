@@ -4,7 +4,7 @@
 use chrono::TimeDelta;
 
 use crate::domain::{
-    ClaimPolicy, EnvelopePolicy, SettlementPolicy, StakePackOffer, StakePackPolicy, StakePolicy, DEFAULT_CONVICTION_BPS,
+    Catalog, CatalogItem, ClaimPolicy, ItemFamily, EnvelopePolicy, SettlementPolicy, StakePackOffer, StakePackPolicy, StakePolicy, DEFAULT_CONVICTION_BPS,
 };
 
 /// Gems every wallet opens with.
@@ -30,6 +30,8 @@ pub struct WalletConfig {
     pub conviction_bps: [i64; 4],
     /// The likes a guest's device gets when it becomes a member (#827, #943).
     pub welcome_gift: i64,
+    /// The gem catalogue (#892): what gems buy, and at what price.
+    pub catalog:      Catalog,
 }
 
 impl Default for WalletConfig {
@@ -43,6 +45,7 @@ impl Default for WalletConfig {
             envelope:     EnvelopePolicy::default(),
             conviction_bps: DEFAULT_CONVICTION_BPS,
             welcome_gift: DEFAULT_WELCOME_GIFT,
+            catalog:      Catalog::default(),
         }
     }
 }
@@ -60,7 +63,9 @@ impl WalletConfig {
     /// commitment is the per-target cap), `WALLET_CURATOR_ENVELOPE_DAILY`
     /// (1000 gems), `WALLET_CURATOR_DAILY_CAP` (40 gems per account),
     /// `WALLET_ENVELOPE_TARGET_CAP_BPS` (200 = 2 % of the pool per target),
-    /// `WALLET_OUTCOME_TOP_PERCENT` (15), `WALLET_CONVICTION_PROBABILITIES`
+    /// `WALLET_OUTCOME_TOP_PERCENT` (15), `WALLET_CATALOG`
+    /// (`theme.pink:0,theme.violet:50,theme.red:50`: each item's `id:gems`, a
+    /// bad list keeps the default), `WALLET_CONVICTION_PROBABILITIES`
     /// (`0.25,0.40,0.60,0.80`: four ascending probabilities in (0, 1), C1
     /// first), `WALLET_WELCOME_GIFT` (50). An unparsable or negative value keeps
     /// the default.
@@ -120,6 +125,7 @@ impl WalletConfig {
                 .and_then(|v| conviction_bps(&v))
                 .unwrap_or(defaults.conviction_bps),
             welcome_gift: number("WALLET_WELCOME_GIFT").unwrap_or(defaults.welcome_gift),
+            catalog: get("WALLET_CATALOG").and_then(|v| catalog(&v)).unwrap_or_else(|| defaults.catalog.clone()),
         }
     }
 }
@@ -132,6 +138,23 @@ fn conviction_bps(value: &str) -> Option<[i64; 4]> {
         .collect::<Option<_>>()?;
     let bps: [i64; 4] = bps.try_into().ok()?;
     bps.windows(2).all(|w| w[0] < w[1]).then_some(bps)
+}
+
+/// `<item id>:<gems>,…` (#892): at least one, each id `<family>.<name>` of a
+/// known family, distinct, gems ≥ 0 (0 = free, owned by every account).
+fn catalog(value: &str) -> Option<Catalog> {
+    let items: Vec<CatalogItem> = value
+        .split(',')
+        .map(|item| {
+            let (id, price) = item.split_once(':')?;
+            let id = id.trim();
+            let family = ItemFamily::of(id)?;
+            let price_gems = price.trim().parse::<i64>().ok().filter(|p| *p >= 0)?;
+            Some(CatalogItem { id: id.to_owned(), family, price_gems })
+        })
+        .collect::<Option<_>>()?;
+    let distinct = items.iter().enumerate().all(|(i, a)| items[..i].iter().all(|b| b.id != a.id));
+    (!items.is_empty() && distinct).then_some(Catalog { items })
 }
 
 /// `shots:gems,…`: at least one, shots > 0, gems ≥ 0, no two with the same
@@ -170,6 +193,19 @@ mod tests {
         let capped = |v: &str| WalletConfig::from_lookup(|name| (name == "WALLET_POINTS_CAP").then(|| v.into())).claim.points_cap;
         assert_eq!(capped("500"), 500);
         assert_eq!(capped("0"), 2_000, "a zero cap keeps the default");
+    }
+
+    #[test]
+    fn the_catalogue_is_item_ids_and_gems() {
+        let catalog = |v: &str| WalletConfig::from_lookup(|name| (name == "WALLET_CATALOG").then(|| v.into())).catalog;
+        let custom = catalog("theme.pink:0, icon.night:40");
+        assert_eq!(custom.items.iter().map(|i| (i.id.as_str(), i.family, i.price_gems)).collect::<Vec<_>>(), [
+            ("theme.pink", ItemFamily::Theme, 0),
+            ("icon.night", ItemFamily::AppIcon, 40)
+        ]);
+        for bad in ["", "theme.red:5,theme.red:6", "frame.gold:10", "theme.red:-1", "theme.red"] {
+            assert_eq!(catalog(bad), Catalog::default(), "{bad:?} keeps the default");
+        }
     }
 
     #[test]

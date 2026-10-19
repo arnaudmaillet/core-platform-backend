@@ -65,4 +65,23 @@ service WalletService {
     // settlement is shadow mode no gems are shown — the app never displays gems
     // the balance does not hold.
     rpc ListMyStakes(ListMyStakesRequest) returns (ListMyStakesResponse);
+
+    // The gem catalogue (#892): every item on sale and its price (server
+    // policy), in display order. A free item (price 0) is owned by every
+    // account. The app bundles each item's art keyed by its id and hides an
+    // id it does not know. Edge: any member.
+    rpc ListCatalog(ListCatalogRequest) returns (ListCatalogResponse);
+
+    // Buys a catalogue item with gems (#892): idempotent per key, at
+    // `expected_price` (PRICE_CHANGED otherwise), one ledger row of the item
+    // family's kind (`ref_id` = the item id); the account then owns it.
+    // Answered in-band (PurchaseOutcome). WAL-3001 (PERMISSION_DENIED) for a
+    // caller under 18 or of unknown age. Edge: the caller's account.
+    rpc PurchaseItem(PurchaseItemRequest) returns (PurchaseItemResponse);
+
+    // The items the caller's account owns (#892), free ones included: the
+    // app gates its pickers on it. Which item is applied (an icon, a theme)
+    // is a device setting the server neither stores nor serves. Edge: the
+    // caller's account.
+    rpc ListOwnedItems(ListOwnedItemsRequest) returns (ListOwnedItemsResponse);
 }

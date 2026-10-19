@@ -23,7 +23,7 @@ movement of them.
 | Currency | Shown as | Earned by | Spent on |
 |---|---|---|---|
 | **Points** | likes (the heart) | the hourly claim | likes on posts and comments (`Stake`) |
-| **Gems** | the diamond | the starter gift; settled stakes (later) | stake packs; country unlocks (geo-discovery) |
+| **Gems** | the diamond | the starter gift; settled stakes (later) | stake packs; catalogue items (themes, icons); country unlocks (geo-discovery) |
 
 Nothing is sold for real money: no StoreKit, no receipts, no restore. Neither currency converts to
 the other, to money, or to another user. One wallet per **account** (all its profiles).
@@ -79,6 +79,23 @@ service's own start with `sys:` (e.g. `sys:starter-gems`). No caller key holds a
 |---|---|
 | Stake packs (`BuyStakePack`, edge; #941) | shots of 100 of the buyer's **own** points; on sale by default `shots_3` (3 shots, 50 gems — the default pack, for a request naming none), `shots_10` (10, 150) and `shots_25` (25, 325); all or nothing, one pack at a time (`PACK_STILL_ACTIVE` while shots are left, nothing charged); shots never expire; a pack not on sale is `WAL-9005`; the ledger row's `ref_id` is the pack id and `Wallet.stake_pack_id` the loaded pack |
 | Country unlock (`SpendGems`, mesh) | geo-discovery prices the country, checks the spender is an adult, and asks for the gems with a key of its own; `ref_id` = the country code |
+| Catalogue item (`PurchaseItem`, edge; #892) | see the catalogue below |
+
+**The gem catalogue (#892).** What gems buy, as server policy (`WALLET_CATALOG`), never influence,
+ranking or visibility (charter V5.3 §35). An item id is `<family>.<name>`; the families are
+`theme` (app accent themes, #946) and `icon` (alternate app icons). On sale by default:
+`theme.pink` (free), `theme.violet` (50) and `theme.red` (50); no icon until the app bundles one.
+- `ListCatalog` lists the items and prices; the app bundles each item's art keyed by its id and hides
+  an id it does not know.
+- `PurchaseItem` is idempotent per key, at `expected_price` (`PRICE_CHANGED` otherwise), and answers
+  in-band: `PURCHASED`, `ALREADY_OWNED` (or free; nothing charged), `INSUFFICIENT_GEMS`,
+  `PRICE_CHANGED`, `UNKNOWN_ITEM`. A purchase writes one ledger row of its family's kind (`THEME`,
+  `APP_ICON`; `ref_id` = the item id) and an `owned_items` row, in one transaction with the wallet
+  row locked, so raced purchases charge once.
+- The **account** owns an item; a free one is owned by every account and has no row.
+  `ListOwnedItems` gives free ones first, then the bought ones, oldest first, kept when no longer on
+  sale. Which theme or icon is applied is a device setting: the server neither stores nor serves it.
+- The GDPR export carries the bought items (`ExportWalletResponse.owned_items`); erasure deletes them.
 
 Gems never buy points, money, or anything for another user.
 
@@ -184,7 +201,7 @@ the UX criteria of §41.
 
 | Caller | Uses | Impact if `wallet` is down |
 |---|---|---|
-| the app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack`, `Stake`, `ListMyStakes` | balance, claim, pack, likes and the stakes list unavailable; the rest of the app works |
+| the app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack`, `Stake`, `ListMyStakes`, `ListCatalog`, `PurchaseItem`, `ListOwnedItems` | balance, claim, pack, likes, the stakes list and the Shop unavailable (the app keeps the default theme); the rest of the app works |
 | geo-discovery | `SpendGems` | country unlocks refused (fail-closed); the map works |
 | account | `ExportWallet`, `ListStakePositions`, `ListWalletTransactions` | GDPR exports retried next pass |
 | post, comment, social-graph (downstream) | `GetPost`, `GetComment`, `CheckAccess` | likes refused (`WAL-6001`, retried by the app) |
@@ -209,6 +226,9 @@ service WalletService {
   rpc ExportWallet (ExportWalletRequest) returns (ExportWalletResponse);                 // mesh only
   rpc ListStakePositions (ListStakePositionsRequest) returns (ListStakePositionsResponse); // mesh only
   rpc ListMyStakes      (ListMyStakesRequest)      returns (ListMyStakesResponse);      // edge: the caller's account
+  rpc ListCatalog       (ListCatalogRequest)       returns (ListCatalogResponse);       // edge: any member
+  rpc PurchaseItem      (PurchaseItemRequest)      returns (PurchaseItemResponse);      // edge: the caller's account
+  rpc ListOwnedItems    (ListOwnedItemsRequest)    returns (ListOwnedItemsResponse);    // edge: the caller's account
 }
 ```
 
@@ -257,7 +277,8 @@ ServiceAccount token, `x-mesh-token`. `off` until the infra provides the tokens 
   are echoed (`stake_packs`, the default first; `stake_pack_price` / `stake_pack_shots` are the
   default pack's, for older clients; `points_per_shot`), with the loaded one (`stake_pack_id`).
 - `BuyStakePack` answers `BOUGHT`, `PACK_STILL_ACTIVE` or `INSUFFICIENT_GEMS` in-band;
-  `SpendGems` answers `SPENT` or `INSUFFICIENT_GEMS`.
+  `SpendGems` answers `SPENT` or `INSUFFICIENT_GEMS`; `PurchaseItem` answers a `PurchaseOutcome`
+  (the catalogue above).
 
 - `ClaimReward` answers `CLAIMED`, `TOO_EARLY`, `DAILY_CAP_REACHED` or `BALANCE_FULL` **in-band**
   (not errors), with the wallet after the call; `next_claim_at` says when the next claim opens.
@@ -332,6 +353,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points claimable per UTC day |
 | `WALLET_POINTS_CAP` | `2000` | the points balance a claim never takes past (`BALANCE_FULL` at it); 0 keeps the default |
 | `WALLET_STARTER_GEMS` | `100` | gems a wallet opens with |
+| `WALLET_CATALOG` | `theme.pink:0,theme.violet:50,theme.red:50` | the gem catalogue (#892): `item id:gems`, display order, ids `<family>.<name>` of a known family (`theme`, `icon`) and distinct; 0 = free, owned by every account; a bad list keeps the default |
 | `WALLET_STAKE_PACKS` | `3:50,10:150,25:325` | the stake packs on sale (#941): `shots:gems`, the default pack first, distinct shots (a pack's id is `shots_<shots>`); a bad list keeps the default |
 | `WALLET_POINTS_PER_SHOT` | `100` | points one shot stakes |
 | `WALLET_STAKE_TARGET_CAP` | `250` | points one account may put on one target, ever |
@@ -373,7 +395,8 @@ Migrations: `migrations/0001_create_wallet_tables.sql`, `0002_transaction_ref.sq
 `0006_create_envelope_days.sql` (`envelope_days`; the settlements' shares), `0007_stakes_by_account_recent.sql`
 (`ListMyStakes`), `0008_stake_conviction.sql` (`wallet_transactions.conviction`, `stakes.first_conviction`, #888),
 `0009_welcome_gifts.sql` (`welcome_gifts`, the devices welcomed, #827), `0010_stake_pack_id.sql`
-(`wallets.stake_pack_id`, the loaded pack, #941),
+(`wallets.stake_pack_id`, the loaded pack, #941), `0011_owned_items.sql` (`owned_items`, the catalogue items
+bought, #892),
 applied by `migrator wallet` (init
 container) before the binary. Infra (ECR repo, manifests, `wallet-postgres`, ingress route,
 NetworkPolicy): core-platform-infra#41 — the binary joins `FLEET_BINS` once its ECR repo exists.
@@ -383,7 +406,7 @@ Rollback: the binary is stateless; the schema is additive.
 
 ## 📈 Telemetry, Performance & Metrics &nbsp;·&nbsp; CORE
 
-Spans `wallet.open`, `wallet.claim`, `wallet.buy_stake_pack`, `wallet.spend_gems`, `wallet.stake`,
+Spans `wallet.open`, `wallet.claim`, `wallet.buy_stake_pack`, `wallet.purchase_item`, `wallet.spend_gems`, `wallet.stake`,
 `wallet.staked_on`, `wallet.history`, `wallet.erase` (with the shard). One row
 lock per write; the history reads `(account_id, created_at DESC, id DESC)`.
 

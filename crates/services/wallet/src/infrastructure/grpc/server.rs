@@ -48,6 +48,27 @@ impl WalletService for WalletServiceHandler {
         self.export_wallet(request).await
     }
 
+    async fn list_catalog(
+        &self,
+        request: Request<proto::ListCatalogRequest>,
+    ) -> Result<Response<proto::ListCatalogResponse>, Status> {
+        self.list_catalog(request).await
+    }
+
+    async fn purchase_item(
+        &self,
+        request: Request<proto::PurchaseItemRequest>,
+    ) -> Result<Response<proto::PurchaseItemResponse>, Status> {
+        self.purchase_item(request).await
+    }
+
+    async fn list_owned_items(
+        &self,
+        request: Request<proto::ListOwnedItemsRequest>,
+    ) -> Result<Response<proto::ListOwnedItemsResponse>, Status> {
+        self.list_owned_items(request).await
+    }
+
     async fn list_stake_positions(
         &self,
         request: Request<proto::ListStakePositionsRequest>,

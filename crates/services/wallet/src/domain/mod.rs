@@ -1,6 +1,7 @@
 //! Pure rules: the wallet and its hourly claim, the ledger's vocabulary.
 
 pub mod calibration;
+pub mod catalog;
 pub mod envelope;
 pub mod event;
 pub mod ledger;
@@ -9,6 +10,7 @@ pub mod stake;
 pub mod wallet;
 
 pub use calibration::{CalibrationReport, CalibrationRow, EnvelopeDay};
+pub use catalog::{Catalog, CatalogItem, ItemFamily, PurchaseDecision};
 pub use envelope::{Allocation, DayPosition, EnvelopePolicy};
 pub use settlement::{DuePosition, Observed, Settlement, SettlementPolicy};
 pub use stake::{Conviction, StakeAsk, StakeDecision, StakePolicy, StakeTarget, DEFAULT_CONVICTION_BPS};

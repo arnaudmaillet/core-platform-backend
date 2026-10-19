@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::domain::event::WalletEvent;
 use crate::domain::{
-    AccountId, Allocation, CalibrationRow, ClaimPolicy, Conviction, Currency, DayPosition, DuePosition, EnvelopeDay,
+    AccountId, Allocation, CalibrationRow, CatalogItem, ClaimPolicy, Conviction, Currency, DayPosition, DuePosition, EnvelopeDay,
     IdempotencyKey, Observed, Settlement, StakeAsk, StakePackOffer, StakePackPolicy,
     StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
@@ -47,6 +47,26 @@ pub enum PackOutcome {
     Bought,
     StillActive,
     InsufficientGems,
+}
+
+/// How a catalogue purchase ended (#892).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PurchaseOutcome {
+    Purchased,
+    /// Owned already, or free: nothing charged.
+    AlreadyOwned,
+    InsufficientGems,
+    /// Not at the price the app showed: nothing charged.
+    PriceChanged,
+    /// Not on sale: nothing charged.
+    UnknownItem,
+}
+
+/// A catalogue item an account bought.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedItem {
+    pub item_id:     String,
+    pub acquired_at: DateTime<Utc>,
 }
 
 /// How a gem spend ended.
@@ -177,6 +197,23 @@ pub trait WalletStore: Send + Sync + 'static {
         starter_gems: i64,
         now: DateTime<Utc>,
     ) -> Result<(PackOutcome, Wallet), WalletError>;
+
+    /// Buys `item` at `expected_price` (the wallet opened if needed, then
+    /// locked; #892): a key already used answers `Purchased`; otherwise the
+    /// wallet decides, and a purchase is charged with its ledger row (the
+    /// family's kind, `ref_id` = the item id) and recorded as owned.
+    async fn purchase_item(
+        &self,
+        account: &AccountId,
+        key: &IdempotencyKey,
+        item: &CatalogItem,
+        expected_price: i64,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<(PurchaseOutcome, Wallet), WalletError>;
+
+    /// The items `account` bought, oldest first.
+    async fn owned_items(&self, account: &AccountId) -> Result<Vec<OwnedItem>, WalletError>;
 
     /// Spends gems (the wallet opened if needed, then locked): a key already
     /// used answers `Spent`; otherwise charged with its ledger row when the
