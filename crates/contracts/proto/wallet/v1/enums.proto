@@ -46,10 +46,13 @@ enum TransactionKind {
     TRANSACTION_KIND_HANDLE_CHANGE  = 11;
     // An avatar frame bought (gems; #913); `ref_id` is the item id.
     TRANSACTION_KIND_AVATAR_FRAME   = 12;
+    // The animated profile banner bought (gems; #915); `ref_id` is the item id.
+    TRANSACTION_KIND_ANIMATED_BANNER = 13;
 }
 
 // What kind of thing a catalogue item is (#892). An item id is
-// `<family>.<name>`: `icon.<name>`, `theme.<name>`, `frame.<name>`.
+// `<family>.<name>`: `icon.<name>`, `theme.<name>`, `frame.<name>`,
+// `banner.<name>`.
 enum ItemFamily {
     ITEM_FAMILY_UNSPECIFIED = 0;
     // An alternate app icon; applied on the device, nothing stored server-side.
@@ -59,6 +62,9 @@ enum ItemFamily {
     // An avatar frame (#913): equipped per profile (profile.v1
     // EquipAvatarFrame), seen by everyone on the profile's reads.
     ITEM_FAMILY_AVATAR_FRAME = 3;
+    // The animated profile banner (#915): lets the account's profiles set a
+    // video of their own as their banner (profile.v1 UpdateBanner).
+    ITEM_FAMILY_ANIMATED_BANNER = 4;
 }
 
 // The outcome of a catalogue purchase: ordinary states the app renders.

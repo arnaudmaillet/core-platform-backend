@@ -365,6 +365,7 @@ fn family_to_proto(family: ItemFamily) -> proto::ItemFamily {
         ItemFamily::AppIcon => proto::ItemFamily::AppIcon,
         ItemFamily::Theme => proto::ItemFamily::Theme,
         ItemFamily::AvatarFrame => proto::ItemFamily::AvatarFrame,
+        ItemFamily::AnimatedBanner => proto::ItemFamily::AnimatedBanner,
     }
 }
 
@@ -432,6 +433,7 @@ fn transaction_to_proto(t: &Transaction) -> proto::WalletTransaction {
             TransactionKind::ProfileSlot => proto::TransactionKind::ProfileSlot,
             TransactionKind::HandleChange => proto::TransactionKind::HandleChange,
             TransactionKind::AvatarFrame => proto::TransactionKind::AvatarFrame,
+            TransactionKind::AnimatedBanner => proto::TransactionKind::AnimatedBanner,
             TransactionKind::Unknown => proto::TransactionKind::Unspecified,
         } as i32,
         created_at:     Some(timestamp(t.created_at)),
@@ -612,6 +614,7 @@ mod tests {
             ("frame.gold", frame, 60),
             ("frame.neon", frame, 60),
             ("frame.aurora", frame, 60),
+            ("banner.animated", proto::ItemFamily::AnimatedBanner as i32, 500),
         ]);
 
         let purchase = |account: &str| proto::PurchaseItemRequest {

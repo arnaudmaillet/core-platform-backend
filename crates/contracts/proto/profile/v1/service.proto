@@ -50,6 +50,15 @@ service ProfileService {
     rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);
 
     // Replace the banner CDN URL.
+    // An animated banner (#915, #947): `banner_asset_id` alone names a READY
+    // VIDEO asset of the profile's account (one of its posts' videos), for an
+    // account owning the `banner.animated` catalogue item (wallet). Reads then
+    // carry `ProfileView.banner` with the video's MANIFEST (the loop) and
+    // POSTER renditions, and `banner_url` is the poster. The server neither
+    // trims nor caps the video: it is the post's own; the app plays it muted,
+    // looping, and shows the poster under Reduce Motion, Low Power Mode and
+    // when idle. PRF-5007 (FAILED_PRECONDITION) for an asset that is not the
+    // account's READY video; PRF-6007 (PERMISSION_DENIED) without the item.
     rpc UpdateBanner(UpdateBannerRequest) returns (CommandResponse);
 
     // Wears an avatar frame, or none (#913): a catalogue item the profile's

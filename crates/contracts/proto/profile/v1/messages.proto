@@ -171,8 +171,12 @@ message UpdateAvatarRequest {
 
 message UpdateBannerRequest {
     string profile_id = 1;
+    // A still banner's URL. Empty with `banner_asset_id` set: an animated
+    // banner (#915, #947). Both empty: no banner.
     string banner_url = 2;
-    // #907: as UpdateAvatarRequest.avatar_asset_id.
+    // #907: as UpdateAvatarRequest.avatar_asset_id. Without `banner_url`
+    // (#947): a READY VIDEO asset of the account's own (one of its posts'
+    // videos), for an account owning the `banner.animated` catalogue item.
     string banner_asset_id = 3;
 }
 

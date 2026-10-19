@@ -231,6 +231,15 @@ off. It is stored on the profile and on the account's profile list (migration 00
 carries `avatar_frame_id` (`ProfileView`, `ProfileSummaryView`, search's profile hits). The app draws
 it from bundled art keyed by id, and it changes no size, order or ranking (charter V5.3 §35).
 
+**Animated banners (#915, #947).** `UpdateBanner` with `banner_asset_id` alone (no `banner_url`) names a
+**video of the account's own** (one of its posts' videos): media's `GetAsset` must say it is a READY
+`VIDEO` owned by the account (**`PRF-5007`**, `FAILED_PRECONDITION`, otherwise), and the account must own
+the wallet catalogue item `banner.animated` (500 gems; **`PRF-6007`**, `PERMISSION_DENIED`, otherwise).
+The banner is then that asset with no still URL; client reads carry `ProfileView.banner` with the
+video's `MANIFEST` (the loop) and `POSTER`, and `banner_url` is the poster. The server neither trims nor
+caps the video; the app plays it muted and shows the poster under Reduce Motion, Low Power Mode and
+when idle. Both fields empty clear the banner; a still banner by URL works as before.
+
 ### Rust ports (hexagonal contract)
 
 ```rust

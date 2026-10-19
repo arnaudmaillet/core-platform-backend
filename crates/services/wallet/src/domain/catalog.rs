@@ -15,16 +15,20 @@ pub enum ItemFamily {
     Theme,
     /// An avatar frame (`frame.<name>`, #913), equipped per profile.
     AvatarFrame,
+    /// An animated profile banner (`banner.<name>`, #915): unlocks setting a
+    /// video banner.
+    AnimatedBanner,
 }
 
 impl ItemFamily {
-    pub const ALL: [Self; 3] = [Self::AppIcon, Self::Theme, Self::AvatarFrame];
+    pub const ALL: [Self; 4] = [Self::AppIcon, Self::Theme, Self::AvatarFrame, Self::AnimatedBanner];
 
     fn prefix(self) -> &'static str {
         match self {
             Self::AppIcon => "icon",
             Self::Theme => "theme",
             Self::AvatarFrame => "frame",
+            Self::AnimatedBanner => "banner",
         }
     }
 
@@ -42,6 +46,7 @@ impl ItemFamily {
             Self::AppIcon => TransactionKind::AppIcon,
             Self::Theme => TransactionKind::Theme,
             Self::AvatarFrame => TransactionKind::AvatarFrame,
+            Self::AnimatedBanner => TransactionKind::AnimatedBanner,
         }
     }
 }
@@ -69,7 +74,7 @@ pub struct Catalog {
 
 impl Default for Catalog {
     /// The accent themes (#946): pink free, violet and red bought; three
-    /// avatar frames (#913). No alternate icon until the app bundles one
+    /// avatar frames (#913); the animated banner (#915, 500 gems). No alternate icon until the app bundles one
     /// (`WALLET_CATALOG` adds them).
     fn default() -> Self {
         let item = |family, id: &str, price_gems| CatalogItem { id: id.to_owned(), family, price_gems };
@@ -81,6 +86,7 @@ impl Default for Catalog {
                 item(ItemFamily::AvatarFrame, "frame.gold", 60),
                 item(ItemFamily::AvatarFrame, "frame.neon", 60),
                 item(ItemFamily::AvatarFrame, "frame.aurora", 60),
+                item(ItemFamily::AnimatedBanner, "banner.animated", 500),
             ],
         }
     }

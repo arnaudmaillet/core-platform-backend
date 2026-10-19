@@ -379,6 +379,22 @@ impl Profile {
         Ok(())
     }
 
+    /// Sets the banner to a video asset (#915, #947): an animated banner, its
+    /// still banner URL cleared (reads serve the video's poster as
+    /// `banner_url`). The caller checked the asset and the account's item.
+    pub fn update_banner_video(&mut self, asset: MediaAssetId, correlation_id: Uuid) -> Result<(), ProfileError> {
+        self.require_active()?;
+        self.banner_url = None;
+        self.banner_asset_id = Some(asset);
+        let now = self.touch_now();
+        self.pending_events.push(DomainEvent::ProfileUpdated(ProfileUpdated {
+            profile_id: self.id,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(())
+    }
+
     /// Changes who may comment / mention / message, downloads and like counts.
     /// An unchanged value is a no-op (no write, no event).
     pub fn set_interaction_settings(
@@ -1000,6 +1016,19 @@ mod tests {
     fn set_tier_rejects_unknown_tier() {
         let mut p = sample_profile();
         assert!(p.set_tier(5, Uuid::now_v7()).is_err());
+    }
+
+    /// #915: an animated banner is its video asset, with no still URL; a
+    /// still banner replaces it.
+    #[test]
+    fn an_animated_banner_is_its_video_alone() {
+        let mut p = sample_profile();
+        let video = MediaAssetId::from_uuid(Uuid::now_v7());
+        p.update_banner(Some(BannerUrl::new("https://cdn.example/b.jpg").unwrap()), None, Uuid::now_v7()).unwrap();
+        p.update_banner_video(video, Uuid::now_v7()).unwrap();
+        assert_eq!((p.banner_url(), p.banner_asset_id()), (None, Some(video)));
+        p.update_banner(Some(BannerUrl::new("https://cdn.example/c.jpg").unwrap()), None, Uuid::now_v7()).unwrap();
+        assert_eq!(p.banner_asset_id(), None, "a still banner set by URL");
     }
 
     /// #913: a profile wears one frame, or none; only frame ids.
