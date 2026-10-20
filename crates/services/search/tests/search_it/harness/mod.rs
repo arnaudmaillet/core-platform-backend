@@ -132,7 +132,30 @@ impl Harness {
             thumbnail_key: String::new(),
             created_at: created(),
             visible_until: None,
+            post_kind: None,
             revision,
+        })))
+        .await;
+    }
+
+    /// A post with its kind (#949): `None` as if indexed before it was kept.
+    pub async fn index_post_kind(
+        &self,
+        post_id: &str,
+        caption: &str,
+        kind: Option<search::domain::value_object::PostFormat>,
+    ) {
+        self.apply(SourceEvent::Post(PostEvent::Published(PostSnapshot {
+            post_id: post_id.to_owned(),
+            author_id: "acct-kind".to_owned(),
+            author_handle: "acct-kind".to_owned(),
+            caption: caption.to_owned(),
+            hashtags: vec![],
+            thumbnail_key: String::new(),
+            created_at: created(),
+            visible_until: None,
+            post_kind: kind,
+            revision: 1,
         })))
         .await;
     }
@@ -240,6 +263,7 @@ impl Harness {
             thumbnail_key: String::new(),
             created_at,
             visible_until,
+            post_kind: None,
             revision: 1,
         })))
         .await;
@@ -289,6 +313,7 @@ impl Harness {
             thumbnail_key: String::new(),
             created_at,
             visible_until: None,
+            post_kind: None,
             revision: 1,
         })))
         .await;
@@ -355,6 +380,17 @@ impl Harness {
         entity_types: Vec<i32>,
         exclude: Vec<&str>,
     ) -> proto::SearchResponse {
+        self.search_kind(query, entity_types, exclude, proto::PostKindFilter::Unspecified).await
+    }
+
+    /// As [`Self::search_opts`], keeping post hits of `post_kind` only (#949).
+    pub async fn search_kind(
+        &self,
+        query: &str,
+        entity_types: Vec<i32>,
+        exclude: Vec<&str>,
+        post_kind: proto::PostKindFilter,
+    ) -> proto::SearchResponse {
         let request = Request::new(proto::SearchRequest {
             query: query.to_owned(),
             entity_types,
@@ -362,6 +398,7 @@ impl Harness {
             page_size: 20,
             page_token: String::new(),
             exclude_author_ids: exclude.into_iter().map(str::to_owned).collect(),
+            post_kind: post_kind as i32,
         });
         self.handler
             .search(request)

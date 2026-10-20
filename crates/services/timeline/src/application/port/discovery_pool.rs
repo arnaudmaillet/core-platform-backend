@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 
 use crate::domain::value_object::{
-    AuthorId, DiscoveryMeta, DiscoveryStream, PostId, Restriction, StreamPosition,
+    AuthorId, DiscoveryMeta, DiscoveryStream, PostFormat, PostId, Restriction, StreamPosition,
 };
 use crate::error::TimelineError;
 
@@ -26,7 +26,7 @@ pub struct PoolEntry {
 /// Every write is idempotent.
 #[async_trait]
 pub trait DiscoveryPool: Send + Sync + 'static {
-    /// A post was published (with its caption's hashtags). Indexed unless a
+    /// A post was published (with its caption's hashtags and its kind, #949). Indexed unless a
     /// recorded deletion or a hiding restriction says otherwise; ignored once
     /// older than the window.
     async fn record_published(
@@ -35,6 +35,7 @@ pub trait DiscoveryPool: Send + Sync + 'static {
         author_id:       &AuthorId,
         published_at_ms: i64,
         tags:            &[String],
+        format:          PostFormat,
     ) -> Result<(), TimelineError>;
 
     /// A post's (all-time) popularity changed: its hot score follows, and a

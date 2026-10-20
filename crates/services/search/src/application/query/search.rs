@@ -104,4 +104,34 @@ mod tests {
 
         assert!(results.hits.is_empty());
     }
+
+    /// #949: a kind filter keeps its kind's posts, the posts indexed before
+    /// their kind was kept, and every other entity kind.
+    #[tokio::test]
+    async fn a_kind_filter_keeps_its_posts_and_the_unknown() {
+        use crate::domain::value_object::{PostFormat, PostKindFilter};
+        use crate::domain::PostEvent;
+
+        let fx = Fixture::new();
+        let ph = fx.projection_handler();
+        let of_kind = |id: &str, kind: Option<PostFormat>| {
+            let SourceEvent::Post(PostEvent::Published(mut s)) = post_event(id, "acct-1", "rust", 1) else { unreachable!() };
+            s.post_kind = kind;
+            SourceEvent::Post(PostEvent::Published(s))
+        };
+        index(&ph, &fx, of_kind("media", Some(PostFormat::Media))).await;
+        index(&ph, &fx, of_kind("text", Some(PostFormat::TextOnly))).await;
+        index(&ph, &fx, of_kind("unknown", None)).await;
+
+        for (filter, expected) in [
+            (PostKindFilter::Any, vec!["media", "text", "unknown"]),
+            (PostKindFilter::Media, vec!["media", "unknown"]),
+            (PostKindFilter::TextOnly, vec!["text", "unknown"]),
+        ] {
+            let q = SearchQuery::new("rust", vec![], SortStrategy::Relevance, 10, None, vec![]).unwrap().with_post_kind(filter);
+            let mut ids: Vec<_> = fx.search_handler().handle(run(q)).await.unwrap().hits.into_iter().map(|h| h.id).collect();
+            ids.sort();
+            assert_eq!(ids, expected, "{filter:?}");
+        }
+    }
 }

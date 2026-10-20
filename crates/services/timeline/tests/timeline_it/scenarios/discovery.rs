@@ -34,6 +34,7 @@ async fn publish(h: &TestHarness, author: &harness::AuthorId, published_at_ms: i
         author_id: author.as_uuid().to_string(),
         published_at_ms,
         tags: Vec::new(),
+        format: Default::default(),
     })
     .await;
     post_id
@@ -68,6 +69,7 @@ async fn tagged_page(
         page_token,
         personalize_for: None,
         hashtag: hashtag.map(str::to_owned),
+        post_kind: Default::default(),
     };
     h.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.expect("discovery page")
 }
@@ -108,6 +110,7 @@ async fn the_discovery_pool_ranks_filters_and_pages() {
     signal(&h, DiscoverySignal::Restricted { post_id: early.clone(), restriction: Restriction::Removed, version: 1 }).await;
     signal(&h, DiscoverySignal::Published {
         post_id: early.clone(), author_id: author.as_uuid().to_string(), published_at_ms: t + 7_000, tags: Vec::new(),
+        format: Default::default(),
     })
     .await;
     let mine: HashSet<String> =
@@ -168,6 +171,7 @@ async fn a_hashtag_narrows_trending_and_recent() {
                 author_id: author.as_uuid().to_string(),
                 published_at_ms: at,
                 tags,
+                format: Default::default(),
             })
             .await;
             post_id
@@ -207,4 +211,67 @@ async fn a_hashtag_narrows_trending_and_recent() {
     assert_eq!(all_tagged(DiscoveryRanking::Trending).await, vec![newer.clone(), older.clone()]);
     // Recent: every visible post of the tag, newest first.
     assert_eq!(all_tagged(DiscoveryRanking::Recent).await, vec![quiet, newer, older]);
+}
+
+/// #949 over the live pool: the kind is kept in the post's meta and a kind
+/// filter keeps that kind and the posts of unknown kind.
+#[tokio::test]
+async fn a_kind_filter_keeps_its_kind_and_the_unknown() {
+    use timeline::domain::value_object::{PostFormat, PostKindFilter};
+
+    let h = TestHarness::start(HarnessOptions::default()).await;
+    let author = harness::random_author();
+    let t = now_ms() - 30_000;
+    let publish_kind = |at: i64, format: PostFormat| {
+        let (h, author) = (&h, &author);
+        async move {
+            let post_id = Uuid::now_v7().to_string();
+            signal(h, DiscoverySignal::Published {
+                post_id: post_id.clone(),
+                author_id: author.as_uuid().to_string(),
+                published_at_ms: at,
+                tags: Vec::new(),
+                format,
+            })
+            .await;
+            post_id
+        }
+    };
+    let media = publish_kind(t, PostFormat::Media).await;
+    let text = publish_kind(t + 1, PostFormat::TextOnly).await;
+    let unknown = publish_kind(t + 2, PostFormat::Unknown).await;
+    let mine: HashSet<String> = [&media, &text, &unknown].into_iter().cloned().collect();
+
+    let seen = |post_kind: PostKindFilter| {
+        let (h, mine) = (&h, &mine);
+        async move {
+            let mut seen = HashSet::new();
+            let mut token = None;
+            loop {
+                let query = GetDiscoveryFeedQuery {
+                    ranking: DiscoveryRanking::Recent,
+                    viewer: Viewer::Profiles(vec![]),
+                    guest: None,
+                    content_level: ContentLevel::Restricted,
+                    lat: None,
+                    lng: None,
+                    limit: 50,
+                    page_token: token,
+                    personalize_for: None,
+                    hashtag: None,
+                    post_kind,
+                };
+                let page: DiscoveryPage = h.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.expect("page");
+                seen.extend(page.items.iter().map(|e| e.post_id.to_string()).filter(|id| mine.contains(id)));
+                match page.next_page_token {
+                    Some(next) if seen.len() < mine.len() => token = Some(next),
+                    _ => return seen,
+                }
+            }
+        }
+    };
+    let set = |ids: &[&String]| ids.iter().map(|id| (*id).clone()).collect::<HashSet<_>>();
+    assert_eq!(seen(PostKindFilter::Any).await, mine);
+    assert_eq!(seen(PostKindFilter::Media).await, set(&[&media, &unknown]));
+    assert_eq!(seen(PostKindFilter::TextOnly).await, set(&[&text, &unknown]));
 }

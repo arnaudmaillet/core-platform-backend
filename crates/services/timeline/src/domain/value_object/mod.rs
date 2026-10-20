@@ -13,7 +13,7 @@ pub use author_tier::{AuthorTier, FanOutMode};
 pub use cursor::FeedCursor;
 pub use discovery::{
     hot_score, ContentAccess, ContentLevel, DiscoveryCursor, DiscoveryMeta, DiscoveryRanking,
-    DiscoveryStream, Restriction, StreamPosition, Viewer, TRENDING_PER_FRESH,
+    DiscoveryStream, PostFormat, PostKindFilter, Restriction, StreamPosition, Viewer, TRENDING_PER_FRESH,
 };
 pub use interest::Interest;
 pub use post_id::PostId;

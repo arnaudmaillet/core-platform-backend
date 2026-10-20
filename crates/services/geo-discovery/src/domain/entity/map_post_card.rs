@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::value_object::{AuthorId, H3Index, PostId, ViralityScore};
+use crate::domain::value_object::{AuthorId, H3Index, PostFormat, PostId, ViralityScore};
 
 /// Fully hydrated map card projection.
 ///
@@ -42,6 +42,9 @@ pub struct MapPostCard {
     pub lat:               Option<f64>,
     #[serde(default)]
     pub lng:               Option<f64>,
+    /// Media or text-only (#949); `Unknown` on cards indexed before it was kept.
+    #[serde(default)]
+    pub format:            PostFormat,
 }
 
 impl MapPostCard {
@@ -59,5 +62,51 @@ impl MapPostCard {
 
     pub fn h3_index_r7_vo(&self) -> Option<H3Index> {
         H3Index::from_i64(self.h3_index_r7).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A card cached before #949 (no `format`) decodes as `Unknown`.
+    #[test]
+    fn a_card_cached_before_its_kind_decodes() {
+        #[derive(Serialize)]
+        struct Before {
+            post_id:           Uuid,
+            author_id:         Uuid,
+            author_handle:     String,
+            author_avatar_url: String,
+            thumbnail_url:     String,
+            caption:           String,
+            h3_index_r7:       i64,
+            virality_score:    f32,
+            published_at_ms:   i64,
+            author_tier:       u8,
+            lat:               Option<f64>,
+            lng:               Option<f64>,
+        }
+        let before = Before {
+            post_id:           Uuid::now_v7(),
+            author_id:         Uuid::now_v7(),
+            author_handle:     "a".into(),
+            author_avatar_url: String::new(),
+            thumbnail_url:     String::new(),
+            caption:           "hi".into(),
+            h3_index_r7:       1,
+            virality_score:    2.0,
+            published_at_ms:   3,
+            author_tier:       0,
+            lat:               Some(1.0),
+            lng:               Some(2.0),
+        };
+        let card: MapPostCard = rmp_serde::from_slice(&rmp_serde::to_vec(&before).unwrap()).unwrap();
+        assert_eq!(card.format, PostFormat::Unknown);
+        assert_eq!(card.caption, "hi");
+
+        let now = MapPostCard { format: PostFormat::TextOnly, ..card };
+        let back: MapPostCard = rmp_serde::from_slice(&rmp_serde::to_vec(&now).unwrap()).unwrap();
+        assert_eq!(back.format, PostFormat::TextOnly);
     }
 }

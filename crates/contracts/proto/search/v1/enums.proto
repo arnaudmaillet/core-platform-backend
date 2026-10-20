@@ -27,3 +27,15 @@ enum SearchSort {
     SEARCH_SORT_RECENCY     = 2;
     SEARCH_SORT_POPULARITY  = 3;
 }
+
+// Which posts a list keeps by kind (#949): the full-screen feed keeps the
+// opening post's kind. A post whose kind the service has not recorded (one
+// published before it did) passes every filter.
+enum PostKindFilter {
+    // Every post.
+    POST_KIND_FILTER_UNSPECIFIED = 0;
+    // Photo, carousel and video posts.
+    POST_KIND_FILTER_MEDIA       = 1;
+    // Text-only posts.
+    POST_KIND_FILTER_TEXT_ONLY   = 2;
+}

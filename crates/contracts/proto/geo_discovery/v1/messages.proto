@@ -134,6 +134,8 @@ message ListPlacePostsRequest {
     int32     limit      = 5;
     // The previous response's `next_page_token`, with the same place and sort.
     string    page_token = 6;
+    // Only posts of this kind (#949); UNSPECIFIED keeps all.
+    PostKindFilter post_kind = 7;
 }
 
 message ListPlacePostsResponse {

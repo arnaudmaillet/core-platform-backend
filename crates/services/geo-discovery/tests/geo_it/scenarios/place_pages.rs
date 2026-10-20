@@ -103,3 +103,29 @@ async fn a_countrys_posts_and_its_rules() {
     assert!(page.cards.is_empty());
     assert_eq!(page.next_page_token, None, "and nothing to page through");
 }
+
+/// #949: a kind filter keeps its kind, and the cards indexed before their kind
+/// was kept; the kind survives the durable card (Scylla) and the cache.
+#[tokio::test]
+async fn a_place_page_keeps_one_kind_and_the_unknown() {
+    use geo_discovery::application::port::TileRepository;
+    use geo_discovery::domain::value_object::{PostFormat, PostKindFilter};
+
+    let h = TestHarness::start().await;
+    let (lat, lng) = own_spot();
+    let media = h.index_post_of_kind(lat, lng, PostFormat::Media).await;
+    let text = h.index_post_of_kind(lat, lng, PostFormat::TextOnly).await;
+    let legacy = h.index_post_of_kind(lat, lng, PostFormat::Unknown).await;
+    let place = Place::around(lat, lng, H3Resolution::R9).unwrap();
+
+    let sorted = |mut ids: Vec<Uuid>| {
+        ids.sort();
+        ids
+    };
+    assert_eq!(sorted(h.place_posts_of_kind(place, PostKindFilter::Any).await), sorted(vec![media, text, legacy]));
+    assert_eq!(sorted(h.place_posts_of_kind(place, PostKindFilter::Media).await), sorted(vec![media, legacy]));
+    assert_eq!(sorted(h.place_posts_of_kind(place, PostKindFilter::TextOnly).await), sorted(vec![text, legacy]));
+
+    let (stored, _, _) = h.tiles.get_card_with_visibility(&media.into()).await.unwrap().unwrap();
+    assert_eq!(stored.unwrap().format, PostFormat::Media, "kept on the durable card");
+}

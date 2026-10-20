@@ -41,6 +41,9 @@ pub struct PostPublishedEvent {
     /// Focus-mode read path.
     #[serde(default)]
     pub caption:         String,
+    /// post's `PostKind` (#949).
+    #[serde(default)]
+    pub kind:            String,
     /// Cover thumbnail for the map pin. Absent for text-only posts.
     #[serde(default)]
     pub thumbnail_url:   Option<String>,
@@ -216,6 +219,7 @@ where
             published_at_ms:   event.published_at_ms,
             retention_secs:    event.retention_secs,
             author_tier:       event.author_tier,
+            format:            crate::domain::value_object::PostFormat::from_event_kind(&event.kind),
         };
 
         handler.handle(Envelope::new(Uuid::now_v7(), cmd)).await?;
@@ -249,7 +253,8 @@ mod tests {
         let published = wire(DomainEvent::PostPublished(Published {
             post_id:         "p1".to_owned(),
             profile_id:      "a1".to_owned(),
-            kind:            "text".to_owned(),
+            // The producer's own spelling (#949).
+            kind:            post::domain::value_object::PostKind::TextOnly.to_string(),
             published_at_ms: 1_700_000_000_000,
             author_tier:     2,
             audio_id:        None,
@@ -264,6 +269,10 @@ mod tests {
         assert_eq!((published.lat, published.lng), (Some(48.85), Some(2.35)));
         assert_eq!((published.author_tier, published.published_at_ms), (2, 1_700_000_000_000));
         assert_eq!((published.caption.as_str(), published.thumbnail_url.as_deref()), ("hi", Some("https://cdn/t.jpg")));
+        assert_eq!(
+            crate::domain::value_object::PostFormat::from_event_kind(&published.kind),
+            crate::domain::value_object::PostFormat::TextOnly
+        );
 
         let updated = wire(DomainEvent::PostUpdated(PostUpdatedEvent {
             post_id: "p1".to_owned(), profile_id: "a1".to_owned(), updated_at_ms: 1,

@@ -4,14 +4,14 @@ use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
 use crate::application::port::{DiscoveryPool, InterestStore};
-use crate::domain::value_object::{AuthorId, ContentLevel, PostId, ProfileId, Restriction};
+use crate::domain::value_object::{AuthorId, ContentLevel, PostFormat, PostId, ProfileId, Restriction};
 use crate::error::TimelineError;
 
 /// What happened to a post, as far as the discovery pool is concerned.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DiscoverySignal {
-    /// `tags`: the caption's hashtags, normalized.
-    Published { post_id: String, author_id: String, published_at_ms: i64, tags: Vec<String> },
+    /// `tags`: the caption's hashtags, normalized; `format`: its kind (#949).
+    Published { post_id: String, author_id: String, published_at_ms: i64, tags: Vec<String>, format: PostFormat },
     Deleted { post_id: String },
     Restricted { post_id: String, restriction: Restriction, version: i64 },
     Popularity { post_id: String, score: f64 },
@@ -67,10 +67,10 @@ impl CommandHandler<ApplyDiscoverySignalCommand> for ApplyDiscoverySignalHandler
 
     async fn handle(&self, envelope: Envelope<ApplyDiscoverySignalCommand>) -> Result<(), TimelineError> {
         match &envelope.payload.signal {
-            DiscoverySignal::Published { post_id, author_id, published_at_ms, tags } => {
+            DiscoverySignal::Published { post_id, author_id, published_at_ms, tags, format } => {
                 let post_id = PostId::try_from(post_id.as_str())?;
                 let author_id = AuthorId::try_from(author_id.as_str())?;
-                self.pool.record_published(&post_id, &author_id, *published_at_ms, tags).await
+                self.pool.record_published(&post_id, &author_id, *published_at_ms, tags, *format).await
             }
             DiscoverySignal::Deleted { post_id } => {
                 self.pool.record_deleted(&PostId::try_from(post_id.as_str())?).await

@@ -91,6 +91,9 @@ message SearchRequest {
     // ids here — search never indexes nor stores per-viewer exclusions. This is
     // the boundary that keeps personal block/mute OUT of the shared index.
     repeated string             exclude_author_ids = 6;
+    // Post hits of this kind only (#949); UNSPECIFIED keeps all. Other
+    // entity kinds are not filtered.
+    PostKindFilter              post_kind    = 7;
 }
 
 message SearchResponse {

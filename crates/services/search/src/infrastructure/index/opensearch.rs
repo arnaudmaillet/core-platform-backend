@@ -25,6 +25,7 @@ use crate::domain::{
     AuthorId, DocVersion, EntityKind, HitDisplay, IndexDocument, Searchable, SearchHit, SearchQuery,
     SearchResults, SuggestQuery, Suggestion, Suggestions, VisibilityAuthority,
 };
+use crate::domain::value_object::PostFormat;
 use crate::error::SearchError;
 
 /// Painless: apply content fields only if strictly newer; preserve BOTH visibility
@@ -651,6 +652,7 @@ fn content_source(doc: &IndexDocument) -> Value {
             "indexed_at": d.indexed_at,
             "popularity": d.popularity.value(),
             "visible_until": d.visible_until,
+            "post_kind": d.post_kind.map(PostFormat::as_str),
         }),
         IndexDocument::Hashtag(d) => json!({
             "entity_type": "hashtag",
@@ -674,6 +676,11 @@ fn search_body(query: &SearchQuery) -> Value {
             .map(|a| a.as_str())
             .collect();
         must_not.push(json!({ "terms": { "author_id": ids } }));
+    }
+    // #949: a missing `post_kind` (another entity kind, or a post indexed
+    // before it was kept) never excludes.
+    if let Some(excluded) = query.post_kind.excluded() {
+        must_not.push(json!({ "term": { "post_kind": excluded.as_str() } }));
     }
     let bool_query = json!({
         "must": [{ "multi_match": {
@@ -967,5 +974,26 @@ impl crate::application::port::RecentSearches for OpenSearchIndex {
             return Err(write_status_error(status, &value));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::value_object::PostKindFilter;
+    use crate::domain::SortStrategy;
+
+    /// #949: the filter excludes the other kind only, so a document without
+    /// `post_kind` (a profile, a post indexed before it was kept) still matches.
+    #[test]
+    fn a_post_kind_filter_excludes_the_other_kind_only() {
+        let query = |filter| {
+            SearchQuery::new("rust", vec![], SortStrategy::Relevance, 10, None, vec![]).unwrap().with_post_kind(filter)
+        };
+        let must_not = |filter| search_body(&query(filter))["query"]["bool"]["must_not"].as_array().unwrap().clone();
+        let kind_clause = |filter| must_not(filter).into_iter().find(|c| c["term"].get("post_kind").is_some());
+        assert_eq!(kind_clause(PostKindFilter::Any), None);
+        assert_eq!(kind_clause(PostKindFilter::Media), Some(json!({ "term": { "post_kind": "text_only" } })));
+        assert_eq!(kind_clause(PostKindFilter::TextOnly), Some(json!({ "term": { "post_kind": "media" } })));
     }
 }

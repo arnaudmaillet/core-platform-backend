@@ -146,6 +146,11 @@ where
             page_token: Some(req.page_token).filter(|t| !t.is_empty()),
             viewer,
             scope,
+            post_kind: match proto::PostKindFilter::try_from(req.post_kind) {
+                Ok(proto::PostKindFilter::Media) => crate::domain::value_object::PostKindFilter::Media,
+                Ok(proto::PostKindFilter::TextOnly) => crate::domain::value_object::PostKindFilter::TextOnly,
+                _ => crate::domain::value_object::PostKindFilter::Any,
+            },
         };
         let page = self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.map_err(cqrs_to_status)?;
         Ok(Response::new(proto::ListPlacePostsResponse {

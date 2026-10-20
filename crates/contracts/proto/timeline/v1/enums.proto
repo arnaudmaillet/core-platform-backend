@@ -41,3 +41,15 @@ enum ContentLevel {
     // Age-gated posts included.
     CONTENT_LEVEL_STANDARD    = 2;
 }
+
+// Which posts a list keeps by kind (#949): the full-screen feed keeps the
+// opening post's kind. A post whose kind the service has not recorded (one
+// published before it did) passes every filter.
+enum PostKindFilter {
+    // Every post.
+    POST_KIND_FILTER_UNSPECIFIED = 0;
+    // Photo, carousel and video posts.
+    POST_KIND_FILTER_MEDIA       = 1;
+    // Text-only posts.
+    POST_KIND_FILTER_TEXT_ONLY   = 2;
+}

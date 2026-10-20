@@ -80,3 +80,26 @@ async fn gdpr_purge_removes_all_of_an_authors_documents() {
         "every document authored by the purged actor is gone; others remain"
     );
 }
+
+/// #949 against the live engine: the kind filter excludes the other kind only;
+/// a post indexed before its kind was kept, and a profile, still match.
+#[tokio::test]
+async fn a_post_kind_filter_keeps_its_kind_the_unknown_and_other_entities() {
+    use search::domain::value_object::PostFormat;
+    use search::infrastructure::grpc::proto::PostKindFilter;
+
+    let h = Harness::start().await;
+    h.index_post_kind("kind-media", "lighthouse at dawn", Some(PostFormat::Media)).await;
+    h.index_post_kind("kind-text", "lighthouse thoughts", Some(PostFormat::TextOnly)).await;
+    h.index_post_kind("kind-legacy", "lighthouse legacy", None).await;
+    h.index_profile("prof-lighthouse", "lighthouse", "Lighthouse Keeper", "keeps the lighthouse", 1).await;
+    h.refresh().await;
+
+    let mut media = ids(&h.search_kind("lighthouse", vec![], vec![], PostKindFilter::Media).await);
+    media.sort();
+    assert_eq!(media, vec!["kind-legacy", "kind-media", "prof-lighthouse"]);
+    let mut text = ids(&h.search_kind("lighthouse", vec![POST], vec![], PostKindFilter::TextOnly).await);
+    text.sort();
+    assert_eq!(text, vec!["kind-legacy", "kind-text"]);
+    assert_eq!(ids(&h.search_kind("lighthouse", vec![POST], vec![], PostKindFilter::Unspecified).await).len(), 3);
+}

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3ff0a9f924247b67a06080578c4dc31bdcd4c8ed63d35a9726cf6677fb122a4d
-  translated_at: 2026-10-10
+  source_sha256: 3e759dc83d024196be081bbdc0c23f7efe26556d4449a4db5238db945855fb62
+  translated_at: 2026-10-20
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -169,6 +169,10 @@ pour un membre selon ses centres d'intérêt, sauf s'il l'a désactivé (#662).
   sur le slot du pool, écrits par les mêmes scripts (publication, popularité, restriction, suppression),
   taillés à la fenêtre et expirant une fenêtre après le dernier post du tag. Mêmes filtres et même
   pagination que le reste du fil ; un tag inutilisé depuis 3 jours renvoie des pages vides.
+- **Un seul type de post (#949).** `post_kind` (`MEDIA` : photo, carrousel, vidéo ; `TEXT_ONLY`) garde un
+  type, sur tous les classements. Le pool garde le type d'un post dans sa meta (`k`, depuis
+  `PostPublished.kind`). Un post publié avant n'a pas de type et passe tous les filtres : le client filtre
+  aussi. Une page peut revenir incomplète avec un jeton.
 - **Pool** (Redis, `timeline:{disc}:recent|fresh|hot` + un hash `timeline:disc:post:<id>` par post) : les posts
   publiés depuis moins de `TIMELINE_DISCOVERY_WINDOW_SECS` (72 h), plafonnés à `TIMELINE_DISCOVERY_POOL_CAP`.
   Alimenté par un seul consumer (`timeline-discovery`) sur `post.v1.events` (publié avec les hashtags de

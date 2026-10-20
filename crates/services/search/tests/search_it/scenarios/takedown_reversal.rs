@@ -45,6 +45,7 @@ impl SourceHydrator for Post {
             thumbnail_key: String::new(),
             created_at: Utc.timestamp_opt(1_699_000_000, 0).unwrap(),
             visible_until: None,
+            post_kind: None,
             revision: self.updated_at_ms,
         })))
     }
