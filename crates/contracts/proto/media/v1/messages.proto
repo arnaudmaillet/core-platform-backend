@@ -257,6 +257,21 @@ message DeliveredRendition {
     google.protobuf.Timestamp   url_expires_at = 4;
     uint32                      width          = 5;
     uint32                      height         = 6;
+    // SHEET_SMALL / SHEET_LARGE only (#945): how the sheet is laid out.
+    SheetGeometry               sheet          = 7;
+}
+
+// A sprite sheet's layout (#945): `frame_count` square cells of `cell_px`,
+// row by row over `columns`, each frame drawn inside a `gutter_px`
+// transparent margin. It plays at `frame_duration_ms` a frame and loops
+// seamlessly (the last frame flows into the first); at rest it shows its last
+// frame.
+message SheetGeometry {
+    uint32 frame_count       = 1;
+    uint32 columns           = 2;
+    uint32 frame_duration_ms = 3;
+    uint32 gutter_px         = 4;
+    uint32 cell_px           = 5;
 }
 
 message BatchResolveDeliveryRequest {

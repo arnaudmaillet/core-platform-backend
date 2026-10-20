@@ -385,6 +385,23 @@ impl Profile {
         Ok(())
     }
 
+    /// Sets the avatar to an animated avatar's clip asset (#945, #948): its
+    /// sprite sheets are the avatar, with no still URL (reads serve the
+    /// sheet's last-frame still as `avatar_url`). The caller checked the asset
+    /// and the account's item.
+    pub fn update_avatar_clip(&mut self, asset: MediaAssetId, correlation_id: Uuid) -> Result<(), ProfileError> {
+        self.require_active()?;
+        self.avatar_url = None;
+        self.avatar_asset_id = Some(asset);
+        let now = self.touch_now();
+        self.pending_events.push(DomainEvent::ProfileUpdated(ProfileUpdated {
+            profile_id: self.id,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(())
+    }
+
     /// Sets the banner to a video asset (#915, #947): an animated banner, its
     /// still banner URL cleared (reads serve the video's poster as
     /// `banner_url`). The caller checked the asset and the account's item.
@@ -1062,6 +1079,18 @@ mod tests {
     fn set_tier_rejects_unknown_tier() {
         let mut p = sample_profile();
         assert!(p.set_tier(5, Uuid::now_v7()).is_err());
+    }
+
+    /// #945: an animated avatar is its clip asset, with no still URL; a photo
+    /// replaces it.
+    #[test]
+    fn an_animated_avatar_is_its_clip_alone() {
+        let mut p = sample_profile();
+        let clip = MediaAssetId::from_uuid(Uuid::now_v7());
+        p.update_avatar_clip(clip, Uuid::now_v7()).unwrap();
+        assert_eq!((p.avatar_url(), p.avatar_asset_id()), (None, Some(clip)));
+        p.update_avatar(Some(AvatarUrl::new("https://cdn.example/a.jpg").unwrap()), None, Uuid::now_v7()).unwrap();
+        assert_eq!(p.avatar_asset_id(), None, "a photo by URL");
     }
 
     /// #915: an animated banner is its video asset, with no still URL; a

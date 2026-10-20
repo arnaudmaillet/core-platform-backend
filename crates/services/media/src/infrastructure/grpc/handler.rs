@@ -375,6 +375,8 @@ fn kind_from_proto(value: i32) -> Result<MediaKind, Status> {
         // still land in later phases.
         3 => Ok(MediaKind::Video),
         4 => Ok(MediaKind::PrivateDocument),
+        // An animated avatar's clip (#945): baked into sprite sheets.
+        5 => Ok(MediaKind::AvatarClip),
         other => Err(Status::invalid_argument(format!("unsupported media kind: {other}"))),
     }
 }
@@ -389,6 +391,8 @@ fn rendition_from_proto(value: i32) -> Option<RenditionKind> {
         5 => Some(RenditionKind::Large),
         6 => Some(RenditionKind::Manifest),
         7 => Some(RenditionKind::Poster),
+        8 => Some(RenditionKind::SheetSmall),
+        9 => Some(RenditionKind::SheetLarge),
         _ => None,
     }
 }
@@ -410,6 +414,7 @@ fn kind_to_proto(kind: MediaKind) -> i32 {
         MediaKind::PostImage => 2,
         MediaKind::Video => 3,
         MediaKind::PrivateDocument => 4,
+        MediaKind::AvatarClip => 5,
     }
 }
 
@@ -434,6 +439,8 @@ fn rendition_kind_to_proto(kind: RenditionKind) -> i32 {
         RenditionKind::Large => 5,
         RenditionKind::Manifest => 6,
         RenditionKind::Poster => 7,
+        RenditionKind::SheetSmall => 8,
+        RenditionKind::SheetLarge => 9,
     }
 }
 
@@ -521,6 +528,13 @@ fn delivered_to_proto(view: DeliveredMediaView) -> proto::DeliveredMedia {
                 url_expires_at: r.expires_at.map(to_timestamp),
                 width: r.width,
                 height: r.height,
+                sheet: crate::domain::value_object::SheetGeometry::of(r.kind).map(|g| proto::SheetGeometry {
+                    frame_count:       g.frame_count,
+                    columns:           g.columns,
+                    frame_duration_ms: g.frame_duration_ms,
+                    gutter_px:         g.gutter_px,
+                    cell_px:           g.cell_px,
+                }),
             })
             .collect(),
         degraded: view.degraded,
@@ -575,6 +589,37 @@ mod tests {
         assert_eq!(kind_from_proto(2).unwrap(), MediaKind::PostImage);
         // VIDEO ingest is now accepted (the probe validates the bytes at finalize).
         assert_eq!(kind_from_proto(3).unwrap(), MediaKind::Video);
+        assert_eq!(kind_from_proto(5).unwrap(), MediaKind::AvatarClip);
+        assert_eq!(kind_to_proto(MediaKind::AvatarClip), 5);
+    }
+
+    /// #945: a sheet rendition carries its layout; any other none.
+    #[test]
+    fn a_sheet_is_delivered_with_its_geometry() {
+        let rendition = |kind| crate::application::query::resolve_delivery::DeliveredRenditionView {
+            kind,
+            url: "https://cdn/x".into(),
+            visibility: DeliveryVisibility::Public,
+            expires_at: None,
+            width: 1024,
+            height: 1536,
+        };
+        let view = DeliveredMediaView {
+            asset_id: crate::domain::value_object::AssetId::new(),
+            state: AssetState::Ready,
+            blurhash: None,
+            renditions: vec![rendition(RenditionKind::SheetLarge), rendition(RenditionKind::Poster)],
+            degraded: false,
+            cookies: None,
+        };
+        let delivered = delivered_to_proto(view);
+        let sheet = delivered.renditions[0].sheet.unwrap();
+        assert_eq!(
+            (sheet.frame_count, sheet.columns, sheet.frame_duration_ms, sheet.gutter_px, sheet.cell_px),
+            (24, 4, 83, 2, 256)
+        );
+        assert_eq!(delivered.renditions[0].kind, 9);
+        assert!(delivered.renditions[1].sheet.is_none());
     }
 
     #[test]

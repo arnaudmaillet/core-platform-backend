@@ -231,6 +231,15 @@ off. It is stored on the profile and on the account's profile list (migration 00
 carries `avatar_frame_id` (`ProfileView`, `ProfileSummaryView`, search's profile hits). The app draws
 it from bundled art keyed by id, and it changes no size, order or ranking (charter V5.3 §35).
 
+**Animated avatars (#945, #948).** `UpdateAvatar` with `avatar_asset_id` alone (no `avatar_url`) names an
+animated avatar's **clip** (media `AVATAR_CLIP`) of the account's own: media's `GetAsset` must say so,
+not failed nor quarantined (**`PRF-5007`** otherwise; a clip still baking is fine), and the account must
+own the wallet item `avatar.animated` (500 gems; **`PRF-6007`** otherwise). The avatar is then that asset
+with **no photo**: client reads carry `ProfileView.avatar` / `ProfileSummaryView.avatar` with the two
+sprite sheets and their layout (`SHEET_SMALL` / `SHEET_LARGE`, `DeliveredRendition.sheet`) and the
+`POSTER` still, its last frame; `avatar_url` is that still, for readers that cannot play a sheet (push
+images, link previews, web). A photo by URL replaces it; reads then carry no sheet.
+
 **Badge showcases (#912).** A profile shows up to three badges its **account** earned (wallet badges, e.g.
 `badge.continent_eu`), in order: `SetBadgeShowcase(badge_ids)` (the owner) checks each against the
 wallet's `ListOwnedItems` (family `BADGE`; **`PRF-6007`** for one not earned, `PRF-9001` for more than

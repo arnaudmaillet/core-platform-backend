@@ -39,7 +39,8 @@ async fn process(handler: &TranscodeAssetHandler, event: &DomainEvent) -> Proces
     match event {
         // Only video finalizations trigger a transcode; everything else (including
         // image uploads) is a committed no-op on this consumer.
-        DomainEvent::AssetUploaded(e) if e.kind == MediaKind::Video => {
+        // … and animated avatars' clips, baked into sheets (#945).
+        DomainEvent::AssetUploaded(e) if matches!(e.kind, MediaKind::Video | MediaKind::AvatarClip) => {
             let cmd = TranscodeAssetCommand { asset_id: e.asset_id };
             let result = handler
                 .handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now())

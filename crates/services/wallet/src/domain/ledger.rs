@@ -63,6 +63,8 @@ pub enum TransactionKind {
     AnimatedBanner,
     /// A post card style bought with gems (#914; `ref_id`: the item id).
     CardStyle,
+    /// The animated avatar bought with gems (#945; `ref_id`: the item id).
+    AnimatedAvatar,
     /// Written by a newer version of this service.
     Unknown,
 }
@@ -84,6 +86,7 @@ impl TransactionKind {
             Self::AvatarFrame => "avatar_frame",
             Self::AnimatedBanner => "animated_banner",
             Self::CardStyle => "card_style",
+            Self::AnimatedAvatar => "animated_avatar",
             Self::Unknown => "unknown",
         }
     }
@@ -104,6 +107,7 @@ impl TransactionKind {
             "avatar_frame" => Self::AvatarFrame,
             "animated_banner" => Self::AnimatedBanner,
             "card_style" => Self::CardStyle,
+            "animated_avatar" => Self::AnimatedAvatar,
             _ => Self::Unknown,
         }
     }
@@ -210,6 +214,7 @@ mod tests {
             TransactionKind::AvatarFrame,
             TransactionKind::AnimatedBanner,
             TransactionKind::CardStyle,
+            TransactionKind::AnimatedAvatar,
         ] {
             assert_eq!(TransactionKind::parse(k.as_str()), k);
         }

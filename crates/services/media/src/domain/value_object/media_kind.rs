@@ -26,6 +26,10 @@ pub enum MediaKind {
     /// only its owner sees its metadata and only staff (over the mesh) get a
     /// short-lived signed link. Purged after the request's decision.
     PrivateDocument,
+    /// A short clip an animated avatar is baked from (#945): muted, its first
+    /// 3 s, baked into sprite sheets (128 / 256 px cells) and a last-frame
+    /// still — never served as a video.
+    AvatarClip,
 }
 
 impl MediaKind {
@@ -35,6 +39,7 @@ impl MediaKind {
             Self::PostImage => "post_image",
             Self::Video => "video",
             Self::PrivateDocument => "private_document",
+            Self::AvatarClip => "avatar_clip",
         }
     }
 
@@ -59,6 +64,7 @@ impl MediaKind {
             // Never content-addressed: a private document lives at
             // `private/documents/{asset_id}` (see `StorageKey::private_document`).
             Self::PrivateDocument => "private-documents",
+            Self::AvatarClip => "avatar-clips",
         }
     }
 
@@ -71,7 +77,7 @@ impl MediaKind {
             Self::Avatar | Self::PostImage => {
                 &["image/jpeg", "image/png", "image/webp", "image/avif"]
             }
-            Self::Video => &["video/mp4", "video/quicktime"],
+            Self::Video | Self::AvatarClip => &["video/mp4", "video/quicktime"],
             Self::PrivateDocument => &["image/jpeg", "image/png", "image/heic", "application/pdf"],
         }
     }
@@ -85,6 +91,7 @@ impl MediaKind {
             Self::PostImage => 25 * 1024 * 1024,   // 25 MiB
             Self::Video => 200 * 1024 * 1024,      // 200 MiB (short-form cap)
             Self::PrivateDocument => 10 * 1024 * 1024, // 10 MiB
+            Self::AvatarClip => 20 * 1024 * 1024,  // 20 MiB (a few seconds)
         }
     }
 }
@@ -104,6 +111,7 @@ impl TryFrom<&str> for MediaKind {
             "post_image" => Ok(Self::PostImage),
             "video" => Ok(Self::Video),
             "private_document" => Ok(Self::PrivateDocument),
+            "avatar_clip" => Ok(Self::AvatarClip),
             other => Err(MediaError::InvalidMediaKind {
                 kind: other.to_owned(),
             }),
@@ -117,7 +125,7 @@ mod tests {
 
     #[test]
     fn string_round_trip() {
-        for k in [MediaKind::Avatar, MediaKind::PostImage, MediaKind::Video, MediaKind::PrivateDocument] {
+        for k in [MediaKind::Avatar, MediaKind::PostImage, MediaKind::Video, MediaKind::PrivateDocument, MediaKind::AvatarClip] {
             assert_eq!(MediaKind::try_from(k.as_str()).unwrap(), k);
         }
     }

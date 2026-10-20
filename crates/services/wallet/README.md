@@ -91,13 +91,14 @@ equipped per profile by profile's `EquipAvatarFrame`, which reads `ListOwnedItem
 and `card` (post card styles, #914: post's `SetPostCardStyle` applies one to the author's own posts).
 On sale by default: `theme.pink` (free), `theme.violet` (50), `theme.red` (50), `frame.gold`,
 `frame.neon` and `frame.aurora` (60 each), `banner.animated` (500), `card.paper`, `card.night` and
-`card.mint` (80 each); no icon until the app bundles one.
+`card.mint` (80 each), `avatar.animated` (500; family `avatar`, #945: profile's `UpdateAvatar` takes a clip only
+for its owner); no icon until the app bundles one.
 - `ListCatalog` lists the items and prices; the app bundles each item's art keyed by its id and hides
   an id it does not know.
 - `PurchaseItem` is idempotent per key, at `expected_price` (`PRICE_CHANGED` otherwise), and answers
   in-band: `PURCHASED`, `ALREADY_OWNED` (or free; nothing charged), `INSUFFICIENT_GEMS`,
   `PRICE_CHANGED`, `UNKNOWN_ITEM`. A purchase writes one ledger row of its family's kind (`THEME`,
-  `APP_ICON`, `AVATAR_FRAME`, `ANIMATED_BANNER`, `CARD_STYLE`; `ref_id` = the item id) and an `owned_items` row, in one transaction with the wallet
+  `APP_ICON`, `AVATAR_FRAME`, `ANIMATED_BANNER`, `CARD_STYLE`, `ANIMATED_AVATAR`; `ref_id` = the item id) and an `owned_items` row, in one transaction with the wallet
   row locked, so raced purchases charge once.
 - The **account** owns an item; a free one is owned by every account and has no row.
   `ListOwnedItems` gives free ones first, then the bought ones, oldest first, kept when no longer on
@@ -369,7 +370,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points claimable per UTC day |
 | `WALLET_POINTS_CAP` | `2000` | the points balance a claim never takes past (`BALANCE_FULL` at it); 0 keeps the default |
 | `WALLET_STARTER_GEMS` | `100` | gems a wallet opens with |
-| `WALLET_CATALOG` | `theme.pink:0,theme.violet:50,theme.red:50,frame.gold:60,frame.neon:60,frame.aurora:60,banner.animated:500,card.paper:80,card.night:80,card.mint:80` | the gem catalogue (#892): `item id:gems`, display order, ids `<family>.<name>` of a known family (`theme`, `icon`) and distinct; 0 = free, owned by every account; a bad list keeps the default |
+| `WALLET_CATALOG` | `theme.pink:0,theme.violet:50,theme.red:50,frame.gold:60,frame.neon:60,frame.aurora:60,banner.animated:500,card.paper:80,card.night:80,card.mint:80,avatar.animated:500` | the gem catalogue (#892): `item id:gems`, display order, ids `<family>.<name>` of a known family (`theme`, `icon`) and distinct; 0 = free, owned by every account; a bad list keeps the default |
 | `WALLET_STAKE_PACKS` | `3:50,10:150,25:325` | the stake packs on sale (#941): `shots:gems`, the default pack first, distinct shots (a pack's id is `shots_<shots>`); a bad list keeps the default |
 | `WALLET_POINTS_PER_SHOT` | `100` | points one shot stakes |
 | `WALLET_STAKE_TARGET_CAP` | `250` | points one account may put on one target, ever |

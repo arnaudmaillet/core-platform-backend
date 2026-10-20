@@ -196,7 +196,8 @@ impl App {
                 )?
                 .register::<UpdateAvatarCommand, _>(
                     UpdateAvatarHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))
-                        .with_images(images.clone()),
+                        .with_images(images.clone())
+                        .with_wallet(economy.wallet.clone()),
                 )?
                 .register::<UpdateBannerCommand, _>(
                     UpdateBannerHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))

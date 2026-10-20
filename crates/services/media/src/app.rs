@@ -53,6 +53,8 @@ pub struct AppDeps {
     pub probe: Arc<dyn MediaProbe>,
     pub processor: Arc<dyn ImageProcessor>,
     pub transcoder: Arc<dyn VideoTranscoder>,
+    /// Animated avatars' sheets (#945).
+    pub baker: Arc<dyn crate::application::port::SheetBaker>,
     pub scanner: Arc<dyn MalwareScanner>,
     pub screen: Arc<dyn ModerationScreen>,
     pub publisher: Arc<dyn EventPublisher>,
@@ -157,7 +159,8 @@ impl App {
             Arc::clone(&deps.cache),
             Arc::clone(&deps.publisher),
             deps.policy.clone(),
-        ));
+        )
+        .with_baker(Arc::clone(&deps.baker)));
         let apply_moderation = Arc::new(ApplyModerationHandler::new(
             Arc::clone(&deps.assets),
             Arc::clone(&deps.store),
@@ -236,6 +239,7 @@ impl App {
             .with_documents(Arc::new(DocumentMediaProbe::new(Arc::clone(&store))))),
             processor: Arc::new(ImageRenditionProcessor::new(Arc::clone(&store))),
             transcoder: Arc::new(FfmpegVideoTranscoder::new(Arc::clone(&store))),
+            baker: Arc::new(crate::infrastructure::processor::FfmpegSheetBaker::new(Arc::clone(&store))),
             scanner: Arc::new(LogMalwareScanner),
             screen: Arc::new(GrpcModerationScreen::new(screen_channel)),
             publisher,
@@ -286,6 +290,7 @@ mod tests {
             cdn: fx.cdn.clone(),
             probe: fx.probe.clone(),
             transcoder: fx.transcoder.clone(),
+            baker: fx.transcoder.clone(),
             processor: fx.processor.clone(),
             scanner: fx.scanner.clone(),
             screen: fx.screen.clone(),

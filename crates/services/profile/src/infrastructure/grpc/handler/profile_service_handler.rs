@@ -921,6 +921,14 @@ where
             profiles.iter_mut().map(|p| (p.avatar_asset_id.as_str(), &mut p.avatar)).collect(),
         )
         .await;
+        // An animated avatar's still (#948).
+        for p in &mut profiles {
+            if p.avatar_url.is_empty()
+                && let Some(poster) = poster_of(p.avatar.as_ref())
+            {
+                p.avatar_url = poster;
+            }
+        }
         Ok(Response::new(proto::ListProfilesByAccountResponse {
             profiles,
             next_page_token: next_page_token.unwrap_or_default(),
@@ -936,16 +944,30 @@ where
             vec![(avatar_asset_id.as_str(), avatar), (banner_asset_id.as_str(), banner)],
         )
         .await;
-        // An animated banner (#947) has no still URL: its poster is it.
+        // An animated banner (#947) or avatar (#948) has no still URL: its
+        // poster (an avatar's: its sheet's last frame) is it, for readers that
+        // cannot play it.
         if view.banner_url.is_empty()
-            && let Some(poster) = view.banner.as_ref().and_then(|b| {
-                b.renditions.iter().find(|r| r.kind == media_api::RenditionKind::MediaRenditionKindPoster as i32)
-            })
+            && let Some(poster) = poster_of(view.banner.as_ref())
         {
-            view.banner_url = poster.url.clone();
+            view.banner_url = poster;
+        }
+        if view.avatar_url.is_empty()
+            && let Some(poster) = poster_of(view.avatar.as_ref())
+        {
+            view.avatar_url = poster;
         }
         Ok(Response::new(view))
     }
+}
+
+/// A delivered media's POSTER rendition URL (#947, #948).
+fn poster_of(media: Option<&media_api::DeliveredMedia>) -> Option<String> {
+    media?
+        .renditions
+        .iter()
+        .find(|r| r.kind == media_api::RenditionKind::MediaRenditionKindPoster as i32)
+        .map(|r| r.url.clone())
 }
 
 /// Fills each `(asset id, slot)` with the asset's delivery (#907): one media

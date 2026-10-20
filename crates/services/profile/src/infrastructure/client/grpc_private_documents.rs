@@ -76,6 +76,25 @@ impl MediaImages for GrpcPrivateDocuments {
         let ready = matches!(AssetState::try_from(asset.state), Ok(AssetState::MediaAssetStateReady));
         if video && ready && asset.owner_id == account.to_string() { Ok(()) } else { Err(not_usable()) }
     }
+
+    async fn check_avatar_clip(&self, asset: &MediaAssetId, account: &AccountId) -> Result<(), ProfileError> {
+        let not_usable = || ProfileError::MediaAssetNotUsable { id: asset.as_str() };
+        let request = GetAssetRequest { asset_id: asset.as_str() };
+        let asset = match self.client.clone().get_asset(request).await {
+            Ok(response) => response.into_inner().asset.ok_or_else(not_usable)?,
+            Err(status) if matches!(status.code(), Code::NotFound | Code::InvalidArgument) => return Err(not_usable()),
+            Err(status) => return Err(ProfileError::MediaUnavailable { reason: status.message().to_owned() }),
+        };
+        let clip = matches!(MediaKind::try_from(asset.kind), Ok(MediaKind::AvatarClip));
+        let usable = matches!(
+            AssetState::try_from(asset.state),
+            Ok(AssetState::MediaAssetStatePending
+                | AssetState::MediaAssetStateUploaded
+                | AssetState::MediaAssetStateProcessing
+                | AssetState::MediaAssetStateReady)
+        );
+        if clip && usable && asset.owner_id == account.to_string() { Ok(()) } else { Err(not_usable()) }
+    }
 }
 
 /// Delivers avatars and banners on read (#907); fail-open, so a read never

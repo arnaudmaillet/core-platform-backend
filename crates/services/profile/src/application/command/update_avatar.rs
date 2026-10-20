@@ -12,9 +12,14 @@ pub struct UpdateAvatarCommand {
     pub profile_id: String,
     /// Empty string or None clears the avatar.
     pub avatar_url: Option<String>,
-    /// The media asset it shows (#907); checked against media.
+    /// The media asset it shows (#907); checked against media. Without a URL
+    /// it is an animated avatar (#945): a clip of the account's own, for an
+    /// account owning [`ANIMATED_AVATAR_ITEM`].
     pub avatar_asset_id: Option<String>,
 }
+
+/// The catalogue item an animated avatar needs (#945).
+pub const ANIMATED_AVATAR_ITEM: &str = "avatar.animated";
 
 impl Command for UpdateAvatarCommand {}
 
@@ -34,16 +39,25 @@ pub struct UpdateAvatarHandler {
     publisher: Arc<dyn EventPublisher>,
     /// media's images (#907); `None` when not configured.
     images: Option<Arc<dyn MediaImages>>,
+    /// Says whether the account owns the animated avatar (#945); `None`: an
+    /// animated avatar cannot be set.
+    wallet: Option<Arc<dyn crate::application::port::GemWallet>>,
 }
 
 impl UpdateAvatarHandler {
     pub fn new(repo: Arc<dyn ProfileRepository>, cache: Arc<dyn ProfileCache>, publisher: Arc<dyn EventPublisher>) -> Self {
-        Self { repo, cache, publisher, images: None }
+        Self { repo, cache, publisher, images: None, wallet: None }
     }
 
     /// Checks the avatar's media asset (#907).
     pub fn with_images(mut self, images: Option<Arc<dyn MediaImages>>) -> Self {
         self.images = images;
+        self
+    }
+
+    /// Animated avatars (#945): the wallet says who owns the item.
+    pub fn with_wallet(mut self, wallet: Option<Arc<dyn crate::application::port::GemWallet>>) -> Self {
+        self.wallet = wallet;
         self
     }
 }
@@ -66,11 +80,24 @@ impl CommandHandler<UpdateAvatarCommand> for UpdateAvatarHandler {
             _ => None,
         };
 
-        let asset = match &url {
-            Some(_) => checked_image(self.images.as_deref(), cmd.avatar_asset_id.as_deref(), &profile.account_id()).await?,
-            None => None,
-        };
-        profile.update_avatar(url, asset, envelope.correlation_id)?;
+        // An asset without a URL: an animated avatar's clip (#945, #948).
+        if let (None, Some(asset)) = (&url, cmd.avatar_asset_id.as_deref().filter(|a| !a.is_empty())) {
+            let asset = crate::domain::value_object::MediaAssetId::try_from(asset)?;
+            let account = profile.account_id();
+            let wallet = self.wallet.as_ref().ok_or_else(|| ProfileError::WalletUnavailable { reason: "not configured".into() })?;
+            if !wallet.owns(&account, ANIMATED_AVATAR_ITEM).await? {
+                return Err(ProfileError::ItemNotOwned { item: ANIMATED_AVATAR_ITEM.to_owned() });
+            }
+            let images = self.images.as_ref().ok_or_else(|| ProfileError::MediaUnavailable { reason: "not configured".into() })?;
+            images.check_avatar_clip(&asset, &account).await?;
+            profile.update_avatar_clip(asset, envelope.correlation_id)?;
+        } else {
+            let asset = match &url {
+                Some(_) => checked_image(self.images.as_deref(), cmd.avatar_asset_id.as_deref(), &profile.account_id()).await?,
+                None => None,
+            };
+            profile.update_avatar(url, asset, envelope.correlation_id)?;
+        }
         self.repo.save(&profile).await?;
         // The account's profile list shows the avatar from its own index.
         self.repo.save_account_index(&profile).await?;

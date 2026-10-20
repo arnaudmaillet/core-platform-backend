@@ -50,11 +50,13 @@ enum TransactionKind {
     TRANSACTION_KIND_ANIMATED_BANNER = 13;
     // A post card style bought (gems; #914); `ref_id` is the item id.
     TRANSACTION_KIND_CARD_STYLE      = 14;
+    // The animated avatar bought (gems; #945); `ref_id` is the item id.
+    TRANSACTION_KIND_ANIMATED_AVATAR = 15;
 }
 
 // What kind of thing a catalogue item is (#892). An item id is
 // `<family>.<name>`: `icon.<name>`, `theme.<name>`, `frame.<name>`,
-// `banner.<name>`, `card.<name>`, `badge.<name>`.
+// `banner.<name>`, `card.<name>`, `badge.<name>`, `avatar.<name>`.
 enum ItemFamily {
     ITEM_FAMILY_UNSPECIFIED = 0;
     // An alternate app icon; applied on the device, nothing stored server-side.
@@ -73,6 +75,9 @@ enum ItemFamily {
     // A badge (#912): earned, never sold (AwardBadge, from the service whose
     // rule it is), owned by the account, shown in profiles' showcases.
     ITEM_FAMILY_BADGE           = 6;
+    // The animated avatar (#945): lets the account's profiles set a clip as
+    // their avatar (profile.v1 UpdateAvatar), baked into sprite sheets.
+    ITEM_FAMILY_ANIMATED_AVATAR = 7;
 }
 
 // The outcome of a catalogue purchase: ordinary states the app renders.

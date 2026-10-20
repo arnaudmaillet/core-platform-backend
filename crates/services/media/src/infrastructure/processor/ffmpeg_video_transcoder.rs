@@ -273,7 +273,7 @@ fn content_type_for(name: &str) -> &'static str {
     }
 }
 
-fn run_ffmpeg(args: &[&str]) -> Result<(), MediaError> {
+pub(crate) fn run_ffmpeg(args: &[&str]) -> Result<(), MediaError> {
     let output = Command::new("ffmpeg")
         .args(args)
         .output()

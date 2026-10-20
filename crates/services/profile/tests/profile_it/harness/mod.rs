@@ -118,6 +118,15 @@ impl profile::application::port::MediaImages for FakePrivateDocuments {
         if owned { Ok(()) } else { Err(ProfileError::MediaAssetNotUsable { id: asset.as_str() }) }
     }
 
+    /// A clip (#945): any asset the account uploaded.
+    async fn check_avatar_clip(
+        &self,
+        asset: &profile::domain::value_object::MediaAssetId,
+        account: &AccountId,
+    ) -> Result<(), ProfileError> {
+        self.check_image(asset, account).await
+    }
+
     /// A video (#947): any asset the account uploaded.
     async fn check_video(
         &self,

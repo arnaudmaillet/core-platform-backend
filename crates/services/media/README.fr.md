@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 9b4f89be0428ba051e7750ae458f68c7c9d5cf8342de821c255b3e4fe0abc54a
-  translated_at: 2026-10-13
+  source_sha256: 57888fbf5726137e5970f1a88da40eefe391f493e2fd5e01e829bdfea13c300e
+  translated_at: 2026-10-20
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -290,6 +290,24 @@ RGPD le liste avec un téléchargement signé. **Conservation :** READY fixe une
 `MEDIA_DOCUMENT_RETENTION_DAYS` (30), uniquement pour les documents du demandeur ; un balayage (toutes les
 `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS`) supprime ce qui est échu, comme une suppression par le propriétaire ;
 un gel légal le conserve. Supprimer le document retire toujours son objet privé (jamais partagé).
+
+**Avatars animés (#945, #948).** `MEDIA_KIND_AVATAR_CLIP` (MP4 / QuickTime, ≤ 20 Mio) est un clip que le
+`media-worker` **cuit** au lieu de le transcoder (`SheetBaker`, `FfmpegSheetBaker`) :
+1. ffmpeg en prend les 3 premières secondes, sans le son, à 12 i/s, recadrées au carré au centre (un clip
+   de moins de 2 s échoue) ;
+2. la fenêtre de 24 images dont le début ressemble le plus à l'image qui suit sa fin est choisie, et les
+   images suivantes sont fondues dans son début, si bien que la dernière cellule enchaîne sur la première ;
+3. le raccord (dernière cellule → première, différence moyenne de luminance sur des vignettes 32 × 32)
+   doit rester sous 0,18, sinon l'asset **échoue** (`CorruptMedia`, sans nouvel essai) et l'app demande un
+   autre clip ;
+4. deux planches **AVIF** sont écrites — `SHEET_SMALL` (cellules de 128 px, 512 × 768) et `SHEET_LARGE`
+   (cellules de 256 px, 1024 × 1536), 4 colonnes, chaque image dans une gouttière transparente de 2 px — et
+   un **`POSTER`** JPEG, la dernière image des planches (256 px), pour les lecteurs qui ne savent pas jouer
+   une planche.
+L'asset est READY avec sa grande planche ; il n'est jamais servi comme une vidéo. La livraison ajoute la
+disposition de chaque planche à sa rendition (`DeliveredRendition.sheet` : nombre d'images, colonnes,
+durée d'une image, gouttière, taille de cellule), déduite du type. Un clip de test de 3 s donne des
+planches d'environ 28 Ko / 37 Ko et une image fixe d'environ 8 Ko.
 
 ### Contrat d'erreur
 

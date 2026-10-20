@@ -7,7 +7,7 @@ use crate::application::command::ProcessOutcome;
 use crate::application::policy::MediaPolicy;
 use crate::application::command::asset_objects;
 use crate::application::port::{
-    AssetRepository, DeliveryCache, EventPublisher, MalwareScanner, ModerationScreen, ScanVerdict,
+    AssetRepository, DeliveryCache, EventPublisher, MalwareScanner, ModerationScreen, ScanVerdict, SheetBaker,
     VideoTranscoder,
 };
 use crate::domain::value_object::{AssetId, AssetState, MediaKind, StorageKey};
@@ -34,9 +34,17 @@ pub struct TranscodeAssetHandler {
     cache: Arc<dyn DeliveryCache>,
     publisher: Arc<dyn EventPublisher>,
     policy: MediaPolicy,
+    /// Bakes animated avatars' clips (#945); `None`: a clip is not processed.
+    baker: Option<Arc<dyn SheetBaker>>,
 }
 
 impl TranscodeAssetHandler {
+    /// Animated avatars' clips are baked into sprite sheets (#945).
+    pub fn with_baker(mut self, baker: Arc<dyn SheetBaker>) -> Self {
+        self.baker = Some(baker);
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         assets: Arc<dyn AssetRepository>,
@@ -47,7 +55,7 @@ impl TranscodeAssetHandler {
         publisher: Arc<dyn EventPublisher>,
         policy: MediaPolicy,
     ) -> Self {
-        Self { assets, scanner, screen, transcoder, cache, publisher, policy }
+        Self { assets, scanner, screen, transcoder, cache, publisher, policy, baker: None }
     }
 
     pub async fn handle(
@@ -64,7 +72,7 @@ impl TranscodeAssetHandler {
 
         // Defense in depth: the consumer already routes only video here, but a
         // non-video asset (or an already-processed one) is a committed no-op.
-        if asset.kind() != MediaKind::Video || asset.state() != AssetState::Uploaded {
+        if !matches!(asset.kind(), MediaKind::Video | MediaKind::AvatarClip) || asset.state() != AssetState::Uploaded {
             return Ok(ProcessOutcome::Skipped);
         }
 
@@ -113,7 +121,20 @@ impl TranscodeAssetHandler {
             field: "content_hash".into(),
             message: "a finalized asset must carry a content hash".into(),
         })?;
-        let output = self.transcoder.transcode(&staging, &hash, &root).await?;
+        let output = if asset.kind() == MediaKind::AvatarClip {
+            let baker = self.baker.as_ref().ok_or_else(|| MediaError::ProcessingFailed { reason: "no sheet baker".into() })?;
+            match baker.bake(&staging, &hash, &root).await {
+                // A clip that cannot make a sheet fails for good (#945).
+                Err(MediaError::CorruptMedia { reason }) => {
+                    asset.mark_failed(reason.clone(), now)?;
+                    self.persist_and_publish(&mut asset).await?;
+                    return Ok(ProcessOutcome::Failed(reason));
+                }
+                output => output?,
+            }
+        } else {
+            self.transcoder.transcode(&staging, &hash, &root).await?
+        };
         asset.set_blurhash(output.blurhash, now)?;
         for rendition in output.renditions {
             asset.attach_rendition(rendition, now)?;
@@ -185,5 +206,32 @@ mod tests {
         assert_eq!(outcome, ProcessOutcome::Quarantined);
         let asset = fx.assets.find_by_id(&asset_id).await.unwrap().unwrap();
         assert_eq!(asset.state(), AssetState::Quarantined);
+    }
+
+    /// #945: an animated avatar's clip is baked into its two sheets and the
+    /// still, then READY (its master is the large sheet).
+    #[tokio::test]
+    async fn an_avatar_clip_is_baked_into_sheets_and_a_still() {
+        let fx = Fixture::new();
+        let asset_id = fx.uploaded_asset(MediaKind::AvatarClip).await;
+        let outcome = fx.transcode_handler().handle(env(asset_id), t0()).await.unwrap();
+        assert_eq!(outcome, ProcessOutcome::Ready);
+        let asset = fx.assets.find_by_id(&asset_id).await.unwrap().unwrap();
+        assert_eq!(asset.state(), AssetState::Ready);
+        for kind in [RenditionKind::SheetSmall, RenditionKind::SheetLarge, RenditionKind::Poster] {
+            assert!(asset.rendition(kind).is_some(), "{kind}");
+        }
+        assert!(asset.rendition(RenditionKind::Manifest).is_none(), "never served as a video");
+    }
+
+    /// A clip that cannot make a sheet fails for good, not retried.
+    #[tokio::test]
+    async fn a_clip_that_does_not_loop_fails() {
+        let fx = Fixture::new();
+        fx.transcoder.refuse_bake.store(true, std::sync::atomic::Ordering::SeqCst);
+        let asset_id = fx.uploaded_asset(MediaKind::AvatarClip).await;
+        let outcome = fx.transcode_handler().handle(env(asset_id), t0()).await.unwrap();
+        assert!(matches!(outcome, ProcessOutcome::Failed(ref reason) if reason.contains("loop")));
+        assert_eq!(fx.assets.find_by_id(&asset_id).await.unwrap().unwrap().state(), AssetState::Failed);
     }
 }

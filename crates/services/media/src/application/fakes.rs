@@ -55,7 +55,7 @@ fn jpeg() -> MimeType {
 /// A declared MIME accepted by the kind's allowlist (video kinds reject images).
 fn mime_for_kind(kind: MediaKind) -> MimeType {
     match kind {
-        MediaKind::Video => MimeType::new("video/mp4").unwrap(),
+        MediaKind::Video | MediaKind::AvatarClip => MimeType::new("video/mp4").unwrap(),
         _ => jpeg(),
     }
 }
@@ -447,11 +447,37 @@ impl ImageProcessor for StubImageProcessor {
 
 // ─── VideoTranscoder ─────────────────────────────────────────────────────────────
 
-pub struct StubVideoTranscoder;
+#[derive(Default)]
+pub struct StubVideoTranscoder {
+    /// The next bakes refuse the clip (it does not loop).
+    pub refuse_bake: std::sync::atomic::AtomicBool,
+}
 
 impl StubVideoTranscoder {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+}
+
+/// Bakes any clip into the two sheets and the still (#945); `refuse_bake`:
+/// the clip does not loop.
+#[async_trait]
+impl crate::application::port::SheetBaker for StubVideoTranscoder {
+    async fn bake(&self, _source: &StorageKey, _hash: &ContentHash, root: &ObjectRoot) -> Result<TranscodeOutput, MediaError> {
+        if self.refuse_bake.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(MediaError::CorruptMedia { reason: "the clip does not loop".into() });
+        }
+        let sheet = |kind, px: u32, file: &str| {
+            Rendition::new(kind, MimeType::new("image/avif").unwrap(), root.object(file), Dimensions::new(px * 4, px * 6).unwrap(), 30_000)
+        };
+        Ok(TranscodeOutput {
+            renditions: vec![
+                sheet(RenditionKind::SheetSmall, 128, "sheet_128.avif"),
+                sheet(RenditionKind::SheetLarge, 256, "sheet_256.avif"),
+                Rendition::new(RenditionKind::Poster, jpeg(), root.object("still.jpg"), Dimensions::new(256, 256).unwrap(), 8_000),
+            ],
+            blurhash: Blurhash::new("LEHV6nWB2yk8pyo0adR*").unwrap(),
+        })
     }
 }
 
@@ -695,6 +721,7 @@ impl Fixture {
             Arc::clone(&self.publisher) as _,
             self.policy.clone(),
         )
+        .with_baker(Arc::clone(&self.transcoder) as _)
     }
 
     pub fn change_visibility_handler(&self) -> super::command::ChangeVisibilityHandler {
