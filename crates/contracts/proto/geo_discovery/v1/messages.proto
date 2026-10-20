@@ -182,6 +182,24 @@ message CountryStanding {
     int64  price_gems   = 5;
     // What a 24 h visa to it costs, in gems (#910).
     int64  visa_price_gems = 6;
+    // Its Shop card's background (#942): the country's most liked post over
+    // the window that anyone may see on the map. Unset when it has none: draw
+    // the flag.
+    CountryCover cover     = 7;
+}
+
+// A country's Shop cover (#942). Advertising, shown for locked countries
+// too: no author, nothing to open.
+message CountryCover {
+    string    post_id     = 1;
+    CoverKind kind        = 2;
+    // A still to paint: the photo, or the video's poster. Empty for TEXT.
+    string    poster_url  = 3;
+    // VIDEO only: a short muted preview loop. Empty until media makes one;
+    // paint the poster meanwhile.
+    string    preview_url = 4;
+    // TEXT only: the caption, at most 200 characters.
+    string    caption     = 5;
 }
 
 message GetCountryStandingsResponse {

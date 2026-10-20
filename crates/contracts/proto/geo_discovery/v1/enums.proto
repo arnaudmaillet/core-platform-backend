@@ -113,3 +113,14 @@ enum PostKindFilter {
     // Text-only posts.
     POST_KIND_FILTER_TEXT_ONLY   = 2;
 }
+
+// What a country's Shop cover shows (#942).
+enum CoverKind {
+    COVER_KIND_UNSPECIFIED = 0;
+    // A photo post: paint `poster_url`.
+    COVER_KIND_MEDIA_IMAGE = 1;
+    // A video post: paint `poster_url`, play `preview_url` when set.
+    COVER_KIND_MEDIA_VIDEO = 2;
+    // A text-only post: a quote card of `caption`.
+    COVER_KIND_TEXT        = 3;
+}

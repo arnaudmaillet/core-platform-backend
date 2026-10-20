@@ -153,6 +153,8 @@ pub struct TestHarness {
     pub standings:   Arc<geo_discovery::application::country_standings::CountryStandings>,
     /// A member's countries and unlocks (#665), over the real Scylla store.
     pub unlocking:   Arc<geo_discovery::application::country_unlocks::CountryUnlocking>,
+    /// The Shop covers' cards (#942), with the Focus path's rules.
+    pub cover_cards: Arc<dyn geo_discovery::application::country_standings::CoverCards>,
     pub wallet:      Arc<ScriptedWallet>,
     pub residence:   Arc<ScriptedResidence>,
 }
@@ -199,6 +201,7 @@ impl TestHarness {
             country_access: app.country_access,
             standings: app.standings,
             unlocking: app.unlocking,
+            cover_cards: app.cover_cards,
             wallet,
             residence,
             tiles,

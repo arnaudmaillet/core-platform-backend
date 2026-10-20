@@ -227,6 +227,7 @@ where
             _ => None,
         };
         let ladder = standings.ladder(chrono::Utc::now()).await.map_err(app_to_status)?;
+        let covers = standings.covers(&ladder).await;
         Ok(Response::new(proto::GetCountryStandingsResponse {
             standings:   ladder
                 .standings
@@ -238,6 +239,7 @@ where
                     posts:        s.posts,
                     price_gems:   standings.pricing.price(s.rank, Some(s.country) == home),
                     visa_price_gems: standings.pricing.visa_price(s.rank),
+                    cover:        covers.get(&s.country).map(cover_to_proto),
                 })
                 .collect(),
             computed_at: Some(timestamp(ladder.computed_at)),
@@ -494,6 +496,22 @@ fn pin_to_proto(pin: crate::domain::entity::RadarPin) -> proto::RadarPin {
         lat:           pin.lat,
         lng:           pin.lng,
         thumbnail_url: pin.thumbnail_url,
+    }
+}
+
+/// A Shop cover (#942): no author, nothing openable but its post id.
+fn cover_to_proto(cover: &crate::domain::country_standing::CountryCover) -> proto::CountryCover {
+    use crate::domain::country_standing::CoverKind;
+    proto::CountryCover {
+        post_id:     cover.post_id.to_string(),
+        kind:        match cover.kind {
+            CoverKind::Image => proto::CoverKind::MediaImage,
+            CoverKind::Video => proto::CoverKind::MediaVideo,
+            CoverKind::Text => proto::CoverKind::Text,
+        } as i32,
+        poster_url:  cover.poster_url.clone(),
+        preview_url: String::new(),
+        caption:     cover.caption.clone(),
     }
 }
 

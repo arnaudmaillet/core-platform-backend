@@ -155,3 +155,20 @@ where
         Ok(GetGeoTimelineResult { cards })
     }
 }
+
+/// The Shop covers' cards (#942): what an anonymous reader sees, anywhere,
+/// minus the city-level authors (a cover would name their country's place
+/// beside their post).
+#[async_trait::async_trait]
+impl<CS, TR> crate::application::country_standings::CoverCards for GetGeoTimelineHandler<CS, TR>
+where
+    CS: CardStore + 'static,
+    TR: TileRepository + 'static,
+{
+    async fn cover_cards(&self, post_ids: Vec<Uuid>) -> Result<Vec<MapPostCard>, GeoDiscoveryError> {
+        let query = GetGeoTimelineQuery { post_ids, viewer: Viewer::Profiles(Vec::new()), scope: MapScope::All };
+        let cards = self.handle(Envelope::new(Uuid::now_v7(), query)).await?.cards;
+        let sharing = sharing_for_reader(self.location.as_ref(), &[], cards.iter().map(|c| c.author_id)).await?;
+        Ok(cards.into_iter().filter(|c| sharing.get(&c.author_id).is_none_or(|s| !s.ghost && !s.city)).collect())
+    }
+}

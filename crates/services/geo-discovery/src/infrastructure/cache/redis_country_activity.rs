@@ -54,6 +54,36 @@ redis.call('EXPIRE', KEYS[1], ARGV[5])
 return 1
 "#;
 
+/// A country's posts kept per day for its cover (#942): the most liked.
+const TOP_POSTS_PER_DAY: i64 = 100;
+
+/// `sg:geo:{ctop:CC}:YYYYMMDD` — a ZSET per country and UTC day: post id →
+/// likes. A country's days share a slot (the hash tag), so one script sums
+/// them.
+fn top_key(country: CountryCode, day: NaiveDate) -> String {
+    format!("sg:geo:{{ctop:{country}}}:{}", day.format("%Y%m%d"))
+}
+
+/// KEYS[1] the day's ZSET; ARGV post, likes, ttl, kept.
+const ADD_POST_LIKES_SCRIPT: &str = r#"
+redis.call('ZINCRBY', KEYS[1], ARGV[2], ARGV[1])
+redis.call('ZREMRANGEBYRANK', KEYS[1], 0, -(tonumber(ARGV[4]) + 1))
+redis.call('EXPIRE', KEYS[1], ARGV[3])
+return 1
+"#;
+
+/// KEYS the days' ZSETs, then a scratch key on their slot; ARGV limit.
+/// Returns `[post, likes, …]`, most liked first.
+const TOP_POSTS_SCRIPT: &str = r#"
+local scratch = KEYS[#KEYS]
+local days = {}
+for i = 1, #KEYS - 1 do days[i] = KEYS[i] end
+redis.call('ZUNIONSTORE', scratch, #days, unpack(days))
+local top = redis.call('ZREVRANGE', scratch, 0, tonumber(ARGV[1]) - 1, 'WITHSCORES')
+redis.call('DEL', scratch)
+return top
+"#;
+
 fn fred_err(e: fred::error::Error) -> GeoDiscoveryError {
     GeoDiscoveryError::Redis(redis_storage::RedisStorageError::from(e))
 }
@@ -77,8 +107,8 @@ impl CountryActivityStore for RedisCountryActivity {
         likes: i64,
         posts: i64,
         event: &str,
-    ) -> Result<(), GeoDiscoveryError> {
-        let _: i64 = self
+    ) -> Result<bool, GeoDiscoveryError> {
+        let counted: i64 = self
             .client
             .inner
             .eval(
@@ -95,7 +125,7 @@ impl CountryActivityStore for RedisCountryActivity {
             )
             .await
             .map_err(fred_err)?;
-        Ok(())
+        Ok(counted == 1)
     }
 
     async fn totals(&self, days: &[NaiveDate]) -> Result<HashMap<CountryCode, CountryActivity>, GeoDiscoveryError> {
@@ -119,6 +149,49 @@ impl CountryActivityStore for RedisCountryActivity {
         }
         Ok(totals)
     }
+
+    async fn add_post_likes(
+        &self,
+        country: CountryCode,
+        day: NaiveDate,
+        post: uuid::Uuid,
+        likes: i64,
+    ) -> Result<(), GeoDiscoveryError> {
+        let _: i64 = self
+            .client
+            .inner
+            .eval(
+                ADD_POST_LIKES_SCRIPT,
+                vec![top_key(country, day)],
+                vec![post.to_string(), likes.to_string(), DAY_TTL_SECS.to_string(), TOP_POSTS_PER_DAY.to_string()],
+            )
+            .await
+            .map_err(fred_err)?;
+        Ok(())
+    }
+
+    async fn top_posts(
+        &self,
+        country: CountryCode,
+        days: &[NaiveDate],
+        limit: usize,
+    ) -> Result<Vec<(uuid::Uuid, i64)>, GeoDiscoveryError> {
+        if days.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut keys: Vec<String> = days.iter().map(|day| top_key(country, *day)).collect();
+        keys.push(format!("sg:geo:{{ctop:{country}}}:scratch:{}", uuid::Uuid::now_v7()));
+        let flat: Vec<String> =
+            self.client.inner.eval(TOP_POSTS_SCRIPT, keys, vec![limit.to_string()]).await.map_err(fred_err)?;
+        Ok(flat
+            .chunks_exact(2)
+            .filter_map(|pair| {
+                let post = uuid::Uuid::parse_str(&pair[0]).ok()?;
+                let likes = pair[1].parse::<f64>().ok()? as i64;
+                Some((post, likes))
+            })
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -131,6 +204,8 @@ mod tests {
         let b = bucket_of("l:post:reactor:1:1");
         assert!(seen_key(day, b, "x").starts_with(&day_key(day, b)), "same hash tag");
         assert_eq!(day_key(day, 3), "sg:geo:cact:{20261008:3}");
+        let fr = CountryCode::try_from("FR").unwrap();
+        assert_eq!(top_key(fr, day), "sg:geo:{ctop:FR}:20261008", "a country's days share a slot");
         let buckets: std::collections::HashSet<_> = (0..200).map(|i| bucket_of(&format!("p:{i}"))).collect();
         assert!(buckets.len() > 8, "events spread over the buckets");
     }

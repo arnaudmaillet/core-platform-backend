@@ -45,6 +45,37 @@ async fn likes_and_posts_add_up_once_per_event_per_country_over_the_window() {
     assert_eq!(ladder.standings.len(), CountryAtlas::embedded().codes().count());
 }
 
+/// #942 over the real stores: a country's cover is its most liked post the
+/// radar would show anyone; a hidden author's post is skipped.
+#[tokio::test]
+async fn a_countrys_cover_is_its_most_liked_post_anyone_may_see() {
+    use geo_discovery::domain::value_object::ContentAccess;
+
+    let h = TestHarness::start().await;
+    let activity = Arc::clone(&h.standings.activity);
+    let now = Utc::now() - TimeDelta::days(1_500 + i64::from(rand_day()));
+    let today = now.date_naive();
+    // Central Iceland (the atlas's coarse coast leaves Reykjavík at sea).
+    let (lat, lng) = (64.9, -18.6);
+    let (hidden_author, shown_author) = (uuid::Uuid::now_v7(), uuid::Uuid::now_v7());
+    let hidden = h.index_post_by(hidden_author, lat, lng, 1.0, "hidden", "https://cdn/hidden.jpg").await;
+    let shown = h.index_post_by(shown_author, lat, lng, 1.0, "shown", "https://cdn/shown.jpg").await;
+    h.gate.set(hidden_author, ContentAccess::Hidden);
+    for (post, likes) in [(hidden, 40), (shown, 9)] {
+        let event = format!("cover-{post}");
+        assert!(activity.add(cc("IS"), today, likes, 0, &event).await.unwrap());
+        activity.add_post_likes(cc("IS"), today, post, likes).await.unwrap();
+    }
+
+    let standings = CountryStandings::new(activity, CountryAtlas::embedded(), UnlockPricing::default(), 30, Duration::ZERO)
+        .with_covers(Arc::clone(&h.cover_cards));
+    let ladder = standings.ladder(now).await.unwrap();
+    let covers = standings.covers(&ladder).await;
+    let cover = covers.get(&cc("IS")).expect("Iceland's cover");
+    assert_eq!(cover.post_id, shown, "the hidden author's more liked post is skipped");
+    assert_eq!(cover.poster_url, "https://cdn/shown.jpg");
+}
+
 /// A day offset per run (0–999), so reruns against a kept container start clean.
 fn rand_day() -> u32 {
     (uuid::Uuid::now_v7().as_u128() % 1000) as u32
