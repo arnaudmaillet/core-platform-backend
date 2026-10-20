@@ -20,11 +20,13 @@ fn own_spot() -> (f64, f64) {
     (62.0 + 8.0 * unit(random & 0xffff_ffff), 100.0 + 40.0 * unit(random >> 32))
 }
 
-/// #966: the scenarios' spots never share an R9 cell (the old diagonal did
-/// in about 4 % of runs).
+/// #966: spots drawn together (as the scenarios draw a few) fall in distinct
+/// R9 cells; the old diagonal shared one in about 4 % of runs. 50 spots over
+/// the box's ~15 M cells collide with p ≈ 50² / (2 × 15 M) ≈ 0.008 %.
 #[test]
 fn spots_fall_in_distinct_r9_cells() {
-    let cells: std::collections::HashSet<_> = (0..1_000)
+    const SPOTS: usize = 50;
+    let cells: std::collections::HashSet<_> = (0..SPOTS)
         .map(|_| {
             let (lat, lng) = own_spot();
             match Place::around(lat, lng, H3Resolution::R9).unwrap() {
@@ -33,7 +35,7 @@ fn spots_fall_in_distinct_r9_cells() {
             }
         })
         .collect();
-    assert_eq!(cells.len(), 1_000);
+    assert_eq!(cells.len(), SPOTS);
 }
 
 fn now_ms() -> i64 {
