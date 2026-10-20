@@ -88,6 +88,7 @@ mod tests {
         async fn insert(&self, _: &Post) -> Result<(), PostError> { unreachable!() }
         async fn update_content(&self, _: &Post) -> Result<(), PostError> { unreachable!() }
         async fn update_lifecycle(&self, _: &Post) -> Result<(), PostError> { unreachable!() }
+        async fn update_card_style(&self, _: &Post) -> Result<(), PostError> { unreachable!() }
         async fn update_moderation(&self, post: &Post) -> Result<(), PostError> {
             *self.updates.lock().unwrap() += 1;
             let mut stored = self.post.lock().unwrap();

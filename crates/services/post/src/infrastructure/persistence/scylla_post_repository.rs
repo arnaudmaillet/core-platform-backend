@@ -200,7 +200,9 @@ fn row_to_post(row: PostRow) -> Result<Post, PostError> {
         published_at,
         deleted_at,
         moderation,
-    ).with_reuse(ReuseOverrides { allow_remix: row.allow_remix, allow_sound_reuse: row.allow_sound_reuse }))
+    )
+    .with_reuse(ReuseOverrides { allow_remix: row.allow_remix, allow_sound_reuse: row.allow_sound_reuse })
+    .with_card_style(row.card_style_id))
 }
 
 fn profile_row_to_summary(row: PostProfileRow) -> Result<PostSummary, PostError> {
@@ -216,6 +218,7 @@ fn profile_row_to_summary(row: PostProfileRow) -> Result<PostSummary, PostError>
         created_at,
         is_repost: row.is_repost.unwrap_or(false),
         has_place: row.has_place.unwrap_or(false),
+        card_style_id: row.card_style_id,
     })
 }
 
@@ -407,6 +410,21 @@ impl PostRepository for ScyllaPostRepository {
         Ok(())
     }
 
+    async fn update_card_style(&self, post: &Post) -> Result<(), PostError> {
+        let style = post.card_style_id().map(str::to_owned);
+        let stmt = self.strict_stmt("UPDATE post.posts SET card_style_id = ? WHERE post_id = ?");
+        self.client.session.execute_unpaged(stmt, (style.clone(), post.id().as_uuid())).await.map_err(scylla_err)?;
+        let stmt = self.strict_stmt(
+            "UPDATE post.posts_by_profile SET card_style_id = ? WHERE profile_id = ? AND created_at = ? AND post_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt, (style, post.profile_id().as_uuid(), Self::dt_ms(post.created_at()), post.id().as_uuid()))
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
+    }
+
     // ── find_by_id ────────────────────────────────────────────────────────────
 
     async fn find_by_id(&self, id: &PostId) -> Result<Option<Post>, PostError> {
@@ -414,7 +432,7 @@ impl PostRepository for ScyllaPostRepository {
             "SELECT post_id, profile_id, kind, status, caption, attachments, \
              parent_id, root_id, created_at, updated_at, published_at, deleted_at, \
              audio_id, audio_kind, lat, lng, moderation_restriction, moderation_version, \
-             allow_remix, allow_sound_reuse \
+             allow_remix, allow_sound_reuse, card_style_id \
              FROM post.posts WHERE post_id = ?",
         );
         let result = self
@@ -450,7 +468,7 @@ impl PostRepository for ScyllaPostRepository {
 
         let rows: Vec<PostProfileRow> = if let Some(ref tok) = token {
             let stmt = self.fast_stmt(
-                "SELECT created_at, post_id, kind, status, moderation_restriction, is_repost, has_place \
+                "SELECT created_at, post_id, kind, status, moderation_restriction, is_repost, has_place, card_style_id \
                  FROM post.posts_by_profile \
                  WHERE profile_id = ? AND created_at < ? LIMIT ?",
             );
@@ -470,7 +488,7 @@ impl PostRepository for ScyllaPostRepository {
                 .map_err(|e| row_err("list_by_profile:deser", e))?
         } else {
             let stmt = self.fast_stmt(
-                "SELECT created_at, post_id, kind, status, moderation_restriction, is_repost, has_place \
+                "SELECT created_at, post_id, kind, status, moderation_restriction, is_repost, has_place, card_style_id \
                  FROM post.posts_by_profile \
                  WHERE profile_id = ? LIMIT ?",
             );

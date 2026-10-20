@@ -8,6 +8,12 @@ service PostService {
     rpc CreatePost  (CreatePostRequest)  returns (CreatePostResponse);
     rpc PublishPost (PublishPostRequest) returns (CommandResponse);
     rpc UpdatePost  (UpdatePostRequest)  returns (CommandResponse);
+    // Applies a card style to one of the caller's own posts, or the default
+    // card (#914): free, one per post, changeable; the style is a catalogue
+    // item the author's account owns. PST-1011 (PERMISSION_DENIED) for one it
+    // does not own; PST-5003 (UNAVAILABLE) when the wallet cannot tell. Edge:
+    // the post's author.
+    rpc SetPostCardStyle (SetPostCardStyleRequest) returns (CommandResponse);
     rpc DeletePost  (DeletePostRequest)  returns (CommandResponse);
     // "Recently deleted" (#663): restore within 30 days, and the list.
     rpc RestorePost (RestorePostRequest) returns (CommandResponse);

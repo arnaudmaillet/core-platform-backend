@@ -231,7 +231,7 @@ impl ExportPeers for MeshExportPeers {
         for post_id in ids {
             // On the holder's behalf: their own locations, whatever their
             // sharing (#657).
-            let request = post_api::GetPostRequest { post_id, as_author_id: profile_id.to_owned() };
+            let request = post_api::GetPostRequest { post_id, as_author_id: profile_id.to_owned(), ..Default::default() };
             match self.post.clone().get_post(request).await {
                 Ok(view) => posts.push(self.post_d.json("post.v1.PostView", &view.into_inner())),
                 Err(status) if status.code() == Code::NotFound => {}

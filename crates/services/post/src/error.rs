@@ -103,6 +103,14 @@ pub enum PostError {
     /// fail closed rather than risk showing a private or blocked author's post.
     #[error("audience check unavailable: {reason}")]
     AccessCheckUnavailable { reason: String },
+
+    /// A catalogue item (a card style, #914) the author's account does not own.
+    #[error("'{item}' is not owned by this account")]
+    ItemNotOwned { item: String },
+
+    /// The wallet could not say what the account owns (#914; fail closed).
+    #[error("wallet unavailable: {reason}")]
+    WalletUnavailable { reason: String },
 }
 
 impl AppError for PostError {
@@ -120,6 +128,7 @@ impl AppError for PostError {
             Self::SoundReuseNotAllowed { .. } => "PST-1008",
             Self::MentionNotAllowed { .. }    => "PST-1009",
             Self::CreateInFlight              => "PST-1010",
+            Self::ItemNotOwned { .. }         => "PST-1011",
             Self::CarouselTooFewItems         => "PST-2001",
             Self::CarouselTooManyItems { .. } => "PST-2002",
             Self::CarouselVideoTooLong { .. } => "PST-2003",
@@ -138,6 +147,7 @@ impl AppError for PostError {
             Self::InvalidMediaAssetId(_)      => "PST-9007",
             Self::AccessCheckUnavailable { .. } => "PST-5001",
             Self::MediaUnavailable { .. }       => "PST-5002",
+            Self::WalletUnavailable { .. }      => "PST-5003",
         }
     }
 
@@ -153,7 +163,8 @@ impl AppError for PostError {
             Self::RestoreWindowExpired { .. }  => StatusCode::GONE,
             Self::AuthorMismatch { .. }
             | Self::SoundReuseNotAllowed { .. }
-            | Self::MentionNotAllowed { .. } => StatusCode::FORBIDDEN,
+            | Self::MentionNotAllowed { .. }
+            | Self::ItemNotOwned { .. } => StatusCode::FORBIDDEN,
             Self::NotDraft { .. }
             | Self::CarouselTooFewItems
             | Self::CarouselTooManyItems { .. }
@@ -172,7 +183,8 @@ impl AppError for PostError {
             | Self::DomainViolation { .. }    => StatusCode::UNPROCESSABLE_ENTITY,
             Self::AttachmentsCorrupted { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::AccessCheckUnavailable { .. }
-            | Self::MediaUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            | Self::MediaUnavailable { .. }
+            | Self::WalletUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -194,6 +206,7 @@ impl AppError for PostError {
             Self::Storage(e) => e.is_retryable(),
             Self::AccessCheckUnavailable { .. }
             | Self::MediaUnavailable { .. }
+            | Self::WalletUnavailable { .. }
             | Self::CreateInFlight => true,
             _                => false,
         }
@@ -254,6 +267,8 @@ impl AppError for PostError {
             Self::MediaAssetNotUsable { .. }    => "This media can't be attached to a post.",
             Self::MediaNotSigned { .. }         => "Media for a private profile must be uploaded as private.",
             Self::MediaUnavailable { .. }       => "Media is temporarily unavailable. Please try again later.",
+            Self::ItemNotOwned { .. }           => "Buy this style in the Shop first.",
+            Self::WalletUnavailable { .. }      => "Styles can't be applied right now. Please try again later.",
             Self::InvalidIdempotencyKey         => "This request key is not valid.",
             Self::DomainViolation { .. }        => "A domain constraint was violated.",
             Self::Validation(e)                 => e.user_facing_message(),

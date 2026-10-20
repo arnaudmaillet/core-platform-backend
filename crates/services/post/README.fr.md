@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 43c02badb34d4cea781e8b39c83aa387ef82ec19beeb9494f5e42b3adb117fcd
-  translated_at: 2026-10-13
+  source_sha256: 40cb23857fc3f9cb2925c97fb720285a31f113a566c6a787d07fa72918fb3729
+  translated_at: 2026-10-20
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -95,6 +95,7 @@ validé (une colonne `text`) pour éviter la complexité de migration des UDT Sc
 | ScyllaDB (`post`) | store durable | lectures + écritures échouent | **Dur** — `UNAVAILABLE` |
 | Kafka | émission d'événements | les projections aval stagnent | **Souple** — les écritures committent ; voir note |
 | media (`GetAsset`, `BatchResolveDelivery`, #907) | assets média des pièces jointes | les écritures qui nomment un asset échouent ; les lectures perdent les renditions | **Écriture :** `UNAVAILABLE` (`PST-5002`, rejouable). **Lecture :** fail-open — les pièces jointes gardent leurs URLs |
+| wallet (`ListOwnedItems`, #914) | possession des styles de carte | un style ne peut pas être appliqué | `UNAVAILABLE` (`PST-5003`, rejouable) ; la carte par défaut marche toujours ; lectures non touchées |
 
 **Amont (rayon d'impact — les événements `post.*` alimentent une grande partie de la flotte de lecture) :**
 
@@ -118,6 +119,7 @@ service PostService {
   rpc CreatePost (CreatePostRequest) returns (CreatePostResponse);          // draft; PostId pre-generated at boundary
   rpc PublishPost (PublishPostRequest) returns (CommandResponse);           // Draft→Published; emits PostPublished
   rpc UpdatePost (UpdatePostRequest) returns (CommandResponse);             // emits PostUpdated
+  rpc SetPostCardStyle (SetPostCardStyleRequest) returns (CommandResponse); // #914 le style de carte possédé de l'auteur, ou celui par défaut
   rpc DeletePost (DeletePostRequest) returns (CommandResponse);             // soft-delete; emits post.deleted
   rpc RestorePost (RestorePostRequest) returns (CommandResponse);           // #663 within 30 days: published again (re-emits PostPublished at its original time) or a draft
   rpc ListRecentlyDeleted (ListRecentlyDeletedRequest) returns (ListRecentlyDeletedResponse); // #663 the author's restorable posts, newest deletion first
@@ -211,6 +213,20 @@ localisation. L'export RGPD lit les posts du titulaire via le mesh avec `GetPost
 égal au titulaire : son propre point, quel que soit son partage — pris en compte depuis le mesh
 seulement et pour l'auteur du post seulement (le champ d'un appelant edge est écarté avant la requête).
 
+**Styles de carte (#914).** Un style de carte est un article du catalogue du wallet (`card.<nom>`) que le
+**compte** de l'auteur achète une fois ; `SetPostCardStyle(post_id, profile_id, card_style_id)` (l'auteur
+du post) l'applique **gratuitement** à l'un de ses propres posts, ou la carte par défaut (vide). Il
+vérifie que le compte le possède (`ListOwnedItems` du wallet sur le mesh, `POST_WALLET_GRPC_ENDPOINT` ;
+sinon **`PST-1011`** `PERMISSION_DENIED`, **`PST-5003`** `UNAVAILABLE` quand le wallet ne peut pas
+répondre) et l'écrit dans les deux tables (migration 0017). Supprimer le post ne consomme rien.
+**Neutre pendant l'expérience :** `PostView.card_style_id` est retenu pour tout lecteur sauf l'auteur (et
+l'export RGPD) tant que le post est dans sa fenêtre d'expérience (`POST_CARD_STYLE_NEUTRAL_SECS`, 24 h
+après la publication tant que #889 ne la définit pas), afin que les cohortes témoin et test voient toutes
+deux la carte par défaut (charte V5.3 §8–9). L'exception convenue avec le propriétaire : un `GetPost`
+avec `detail` (l'écran de détail du post) et la liste du profil de l'auteur (`PostSummary.card_style_id`)
+le montrent toujours. L'app le dessine depuis des visuels embarqués, au poids visuel de la carte par
+défaut.
+
 ### Contrat d'erreur (`PST-xxxx`)
 
 | Code | Variant | HTTP |
@@ -235,6 +251,8 @@ seulement et pour l'auteur du post seulement (le champ d'un appelant edge est é
 | PST-9007 | `InvalidMediaAssetId` (pas un UUID) | 422 |
 | PST-5001 | `AccessCheckUnavailable` (social-graph `CheckAccess` did not answer; retryable) | 503 → `UNAVAILABLE` |
 | PST-5002 | `MediaUnavailable` (media `GetAsset` n'a pas répondu à une écriture qui nomme un asset ; rejouable) | 503 → `UNAVAILABLE` |
+| PST-5003 | `WalletUnavailable` (le wallet n'a pas pu dire si l'auteur possède un style de carte, #914 ; rejouable) | 503 → `UNAVAILABLE` |
+| PST-1011 | `ItemNotOwned` (un style de carte que le compte de l'auteur ne possède pas, #914) | 403 → `PERMISSION_DENIED` |
 
 **Assets média (#907).** Une pièce jointe peut nommer son asset média (`MediaAttachmentInput.asset_id`,
 l'id renvoyé par `media.IssueUploadTicket`). À l'écriture, post interroge media (`GetAsset`) et le refuse
@@ -364,6 +382,8 @@ async fn main() -> anyhow::Result<()> {
 | `POST_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Oui** (prod) | `http://localhost:50053` | Endpoint mesh de social-graph pour le contrôle d'audience (`CheckAccess`). Les lectures par tout autre que l'auteur échouent fermé (`PST-5001`, `UNAVAILABLE`) s'il ne répond pas. |
 | `POST_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | Non | `1000` / `1000` | Délais de cet appel. |
 | `POST_MEDIA_GRPC_ENDPOINT` | Non | non défini | endpoint mesh de media (#907) : vérifie les assets des pièces jointes à l'écriture, les livre à la lecture. Non défini : les ids d'assets sont ignorés, les pièces jointes gardent leurs URLs. |
+| `POST_WALLET_GRPC_ENDPOINT` | Non | non défini | endpoint mesh du wallet (#914) : si un auteur possède un style de carte (`ListOwnedItems`, jeton mesh de post). Non défini : un style ne peut pas être appliqué (`PST-5003`). Délais `POST_WALLET_RPC_TIMEOUT_MS` / `POST_WALLET_CONNECT_TIMEOUT_MS` (500 / 1000). |
+| `POST_CARD_STYLE_NEUTRAL_SECS` | Non | `86400` | combien de temps après la publication les autres lecteurs voient la carte par défaut d'un post stylé (#914). |
 | `POST_MEDIA_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | Non | `300` / `1000` | Délais de ces appels (courts : les lectures sont fail-open). |
 | `POST_SIGNED_VIDEOS_ENABLED` | Non | `false` | les vidéos d'un auteur privé passent aussi en SIGNED (#921) ; à activer seulement une fois que media lit les vidéos SIGNED (`MEDIA_CDN_COOKIE_*`) |
 
@@ -378,7 +398,8 @@ async fn main() -> anyhow::Result<()> {
 
 - **Migrations :** `migrations/0001_create_keyspace.cql` → `0002_create_posts_table.cql` →
   `0003_create_posts_by_profile_table.cql` → `0004`–`0007` (audio, paliers auteur, géo, colonnes de
-  modération ; `ALTER` en ligne) sur `post`, appliquées **avant** le premier démarrage.
+  modération ; `ALTER` en ligne) … → `0017_add_card_style.cql` (#914) sur `post`, appliquées **avant** le
+  premier démarrage.
 - **Déploiement/Rollback :** `<TODO>` ; service sans état, sûr à déployer.
 - **Piège de schéma :** l'ordre de clustering de l'index créateur (`created_at DESC, post_id ASC`) est un
   contrat de lecture — ne pas le changer une fois que des données existent.

@@ -11,6 +11,7 @@ description = "Post microservice — multi-format media content production pilla
 futures = { workspace = true }
 post-api = { workspace = true }
 media-api = { workspace = true }          # GetAsset + BatchResolveDelivery (#907)
+wallet-api = { workspace = true }         # ListOwnedItems: card styles (#914)
 social-graph-api = { workspace = true }   # CheckAccess client (audience check)
 error            = { workspace = true }
 validate-core    = { workspace = true }

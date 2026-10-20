@@ -44,6 +44,10 @@ where
     /// Delivers attachments' media assets on read (#907); `None` when media
     /// is not configured.
     media:       Option<Arc<dyn MediaDelivery>>,
+    /// Card styles (#914): applied by authors, withheld during the experiment
+    /// window; `None`: SetPostCardStyle is UNAVAILABLE and styles show as
+    /// stored.
+    card_styles: Option<Arc<crate::application::card_styles::CardStyles>>,
 }
 
 impl<CB, QB> PostServiceHandler<CB, QB>
@@ -52,7 +56,30 @@ where
     QB: QueryBus + Send + Sync + 'static,
 {
     pub fn new(command_bus: CB, query_bus: QB, creator: Arc<dyn CreatePosts>) -> Self {
-        Self { command_bus, query_bus, creator, media: None }
+        Self { command_bus, query_bus, creator, media: None, card_styles: None }
+    }
+
+    /// Card styles (#914).
+    pub fn with_card_styles(mut self, card_styles: Arc<crate::application::card_styles::CardStyles>) -> Self {
+        self.card_styles = Some(card_styles);
+        self
+    }
+
+    /// Applies a card style to one of the caller's own posts (#914). Edge:
+    /// the post's author.
+    pub async fn set_post_card_style(
+        &self,
+        request: Request<proto::SetPostCardStyleRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let account = account_of(&request);
+        let req = request.into_inner();
+        let styles = self.card_styles.as_ref().ok_or_else(|| Status::unavailable("card styles are not configured"))?;
+        let post_id = PostId::try_from(req.post_id.as_str()).map_err(|e| app_err_to_status(&e))?;
+        let author = ProfileId::try_from(req.profile_id.as_str()).map_err(|e| app_err_to_status(&e))?;
+        let style = Some(req.card_style_id).filter(|s| !s.is_empty());
+        styles.apply(&post_id, &author, account.as_deref(), style).await.map_err(|e| app_err_to_status(&e))?;
+        Ok(Response::new(proto::CommandResponse { success: true, message: String::new() }))
     }
 
     /// Attachments carry their media asset's delivery (#907).
@@ -251,12 +278,24 @@ where
         // On the author's behalf: the mesh only; an edge caller's field is
         // dropped here, before the query.
         let as_author = (viewer == Viewer::Internal).then_some(req.as_author_id).filter(|a| !a.is_empty());
+        let read_as_author = as_author.is_some();
         let query  = GetPostQuery { post_id: req.post_id, viewer: viewer.clone(), mature, as_author };
-        let post: Post = self
+        let mut post: Post = self
             .query_bus
             .dispatch(Envelope::new(Uuid::now_v7(), query))
             .await
             .map_err(cqrs_to_status)?;
+        // #914: other readers see the default card during the experiment
+        // window, but on the post detail.
+        let author = read_as_author
+            || matches!(&viewer, Viewer::Profiles(own) if own.iter().any(|p| p.as_uuid() == post.profile_id().as_uuid()));
+        if let Some(styles) = &self.card_styles
+            && !author
+            && !req.detail
+            && !styles.shown_to_others(&post, chrono::Utc::now())
+        {
+            post.withhold_card_style();
+        }
 
         let mut view = [post_to_proto(post)];
         self.deliver_media(&viewer, &mut view).await;
@@ -395,6 +434,7 @@ fn post_to_proto(post: Post) -> proto::PostView {
         visible_until_ms:  post.visible_until().map(|t| t.timestamp_millis()).unwrap_or_default(),
         downloads_disabled: post.downloads_disabled(),
         like_counts_hidden: post.like_counts_hidden(),
+        card_style_id:      post.card_style_id().map(str::to_owned).unwrap_or_default(),
     }
 }
 
@@ -407,6 +447,7 @@ fn summary_to_proto(s: PostSummary) -> proto::PostSummary {
         created_at_ms: s.created_at.timestamp_millis(),
         is_repost:    s.is_repost,
         has_place:    s.has_place,
+        card_style_id: s.card_style_id.unwrap_or_default(),
     }
 }
 

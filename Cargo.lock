@@ -4235,6 +4235,7 @@ dependencies = [
  "uuid",
  "validate-core",
  "validation",
+ "wallet-api",
 ]
 
 [[package]]

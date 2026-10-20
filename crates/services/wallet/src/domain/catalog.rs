@@ -18,10 +18,13 @@ pub enum ItemFamily {
     /// An animated profile banner (`banner.<name>`, #915): unlocks setting a
     /// video banner.
     AnimatedBanner,
+    /// A post card style (`card.<name>`, #914): applied by an author to their
+    /// own posts.
+    CardStyle,
 }
 
 impl ItemFamily {
-    pub const ALL: [Self; 4] = [Self::AppIcon, Self::Theme, Self::AvatarFrame, Self::AnimatedBanner];
+    pub const ALL: [Self; 5] = [Self::AppIcon, Self::Theme, Self::AvatarFrame, Self::AnimatedBanner, Self::CardStyle];
 
     fn prefix(self) -> &'static str {
         match self {
@@ -29,6 +32,7 @@ impl ItemFamily {
             Self::Theme => "theme",
             Self::AvatarFrame => "frame",
             Self::AnimatedBanner => "banner",
+            Self::CardStyle => "card",
         }
     }
 
@@ -47,6 +51,7 @@ impl ItemFamily {
             Self::Theme => TransactionKind::Theme,
             Self::AvatarFrame => TransactionKind::AvatarFrame,
             Self::AnimatedBanner => TransactionKind::AnimatedBanner,
+            Self::CardStyle => TransactionKind::CardStyle,
         }
     }
 }
@@ -74,7 +79,8 @@ pub struct Catalog {
 
 impl Default for Catalog {
     /// The accent themes (#946): pink free, violet and red bought; three
-    /// avatar frames (#913); the animated banner (#915, 500 gems). No alternate icon until the app bundles one
+    /// avatar frames (#913); the animated banner (#915, 500 gems); three post
+    /// card styles (#914). No alternate icon until the app bundles one
     /// (`WALLET_CATALOG` adds them).
     fn default() -> Self {
         let item = |family, id: &str, price_gems| CatalogItem { id: id.to_owned(), family, price_gems };
@@ -87,6 +93,9 @@ impl Default for Catalog {
                 item(ItemFamily::AvatarFrame, "frame.neon", 60),
                 item(ItemFamily::AvatarFrame, "frame.aurora", 60),
                 item(ItemFamily::AnimatedBanner, "banner.animated", 500),
+                item(ItemFamily::CardStyle, "card.paper", 80),
+                item(ItemFamily::CardStyle, "card.night", 80),
+                item(ItemFamily::CardStyle, "card.mint", 80),
             ],
         }
     }

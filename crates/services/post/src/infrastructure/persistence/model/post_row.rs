@@ -35,4 +35,6 @@ pub struct PostRow {
     /// NULL ⇒ the author's default (migration 0011).
     pub allow_remix:            Option<bool>,
     pub allow_sound_reuse:      Option<bool>,
+    /// NULL: the default card (migration 0017, #914).
+    pub card_style_id:          Option<String>,
 }

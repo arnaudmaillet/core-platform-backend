@@ -66,6 +66,8 @@ impl Service for PostService {
         authenticated("/post.v1.PostService/CreatePost"),
         authenticated("/post.v1.PostService/PublishPost"),
         authenticated("/post.v1.PostService/UpdatePost"),
+        // #914: the post's author applies an owned card style.
+        authenticated("/post.v1.PostService/SetPostCardStyle"),
         authenticated("/post.v1.PostService/DeletePost"),
         // "Recently deleted" (#663): the author's own, bound to profile_id.
         authenticated("/post.v1.PostService/RestorePost"),
@@ -154,6 +156,11 @@ impl Service for PostService {
         if let Some(media) = self.media {
             handler = handler.with_media(media);
         }
+        handler = handler.with_card_styles(Arc::new(crate::application::card_styles::CardStyles {
+            posts:          Arc::clone(&self.app.posts) as _,
+            wallet:         wallet_from_env()?,
+            neutral_window: neutral_window_from_env(),
+        }));
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
             .build_v1()?;
@@ -260,4 +267,33 @@ fn build_consumer(
 /// A millisecond duration from `key`, or `default_ms`.
 fn env_ms(key: &str, default_ms: u64) -> Duration {
     Duration::from_millis(std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default_ms))
+}
+
+/// The wallet at `POST_WALLET_GRPC_ENDPOINT` (#914: card style ownership,
+/// `ListOwnedItems` with post's mesh token; deadlines
+/// `POST_WALLET_RPC_TIMEOUT_MS` / `POST_WALLET_CONNECT_TIMEOUT_MS`, 500 ms /
+/// 1 s). Unset: a style cannot be applied (`PST-5003`), only removed.
+fn wallet_from_env() -> anyhow::Result<Option<Arc<dyn crate::application::port::ItemOwnership>>> {
+    let Some(endpoint) = std::env::var("POST_WALLET_GRPC_ENDPOINT").ok().filter(|e| !e.is_empty()) else {
+        tracing::warn!("POST_WALLET_GRPC_ENDPOINT unset: card styles cannot be applied (#914)");
+        return Ok(None);
+    };
+    let channel = Channel::from_shared(endpoint)
+        .map_err(|e| anyhow::anyhow!("invalid POST_WALLET_GRPC_ENDPOINT: {e}"))?
+        .timeout(env_ms("POST_WALLET_RPC_TIMEOUT_MS", 500))
+        .connect_timeout(env_ms("POST_WALLET_CONNECT_TIMEOUT_MS", 1_000))
+        .connect_lazy();
+    Ok(Some(Arc::new(crate::infrastructure::client::GrpcWallet::new(channel))))
+}
+
+/// `POST_CARD_STYLE_NEUTRAL_SECS` (86400, #914): how long after publication
+/// other viewers see a styled post's default card; an unparsable value keeps
+/// the default.
+fn neutral_window_from_env() -> chrono::TimeDelta {
+    std::env::var("POST_CARD_STYLE_NEUTRAL_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|v| *v >= 0)
+        .map(chrono::TimeDelta::seconds)
+        .unwrap_or(crate::application::card_styles::DEFAULT_NEUTRAL_WINDOW)
 }

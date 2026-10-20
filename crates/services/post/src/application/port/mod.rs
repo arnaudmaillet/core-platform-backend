@@ -21,3 +21,5 @@ pub use media_catalog::{author_private_for, check_media, MediaAssetFacts, MediaC
 pub use recently_deleted::RecentlyDeleted;
 pub use reuse_registry::{ReuseDefaults, ReuseRegistry};
 pub use post_repository::{PostRepository, PostSummary};
+pub mod item_ownership;
+pub use item_ownership::ItemOwnership;

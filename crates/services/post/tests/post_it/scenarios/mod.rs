@@ -9,6 +9,7 @@ mod post_window;
 mod profile_tabs;
 mod recently_deleted;
 mod viewer_visibility;
+mod card_styles;
 mod sound_reuse;
 mod mentions;
 mod author_display;

@@ -18,4 +18,6 @@ pub struct PostProfileRow {
     /// NULL for posts written before migration 0014: read as false.
     pub is_repost: Option<bool>,
     pub has_place: Option<bool>,
+    /// NULL: the default card (migration 0017, #914).
+    pub card_style_id: Option<String>,
 }
