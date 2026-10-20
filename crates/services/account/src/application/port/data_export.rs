@@ -90,6 +90,9 @@ pub trait ExportPeers: Send + Sync + 'static {
     /// What the account saved (#872): each post, the profile that saved it
     /// and when.
     async fn saves(&self, account_id: &AccountId) -> Result<Vec<serde_json::Value>, AccountError>;
+    /// What the account viewed (#944): each post, the profile that viewed it
+    /// and when it last did, over the 90-day window.
+    async fn view_history(&self, account_id: &AccountId) -> Result<Vec<serde_json::Value>, AccountError>;
     /// The account's wallet (#665): its balances, every movement, its stake
     /// positions and their settlements. `None` when this instance has no
     /// route to the wallet (the archive goes without `wallet.json`).

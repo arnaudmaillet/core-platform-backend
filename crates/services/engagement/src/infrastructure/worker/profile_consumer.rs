@@ -14,7 +14,7 @@ use transport::kafka::consumer::builder::KafkaConsumerBuilder;
 use transport::kafka::consumer::{run_consumer, ProcessOutcome, RetryPolicy};
 use transport::kafka::producer::KafkaProducerHandle;
 
-use crate::application::port::{ProfileTabs, SavedPosts, TabFlags};
+use crate::application::port::{ProfileTabs, SavedPosts, TabFlags, ViewHistory};
 use crate::infrastructure::worker::build_dlq_producer;
 
 const TOPIC: &str = "profile.v1.events";
@@ -70,6 +70,7 @@ pub struct ProfileConsumer {
     kafka_config: KafkaClientConfig,
     tabs:         Arc<dyn ProfileTabs>,
     saves:        Arc<dyn SavedPosts>,
+    history:      Arc<dyn ViewHistory>,
     group_id:     String,
 }
 
@@ -78,9 +79,10 @@ impl ProfileConsumer {
         kafka_config: KafkaClientConfig,
         tabs: Arc<dyn ProfileTabs>,
         saves: Arc<dyn SavedPosts>,
+        history: Arc<dyn ViewHistory>,
         group_id: impl Into<String>,
     ) -> Self {
-        Self { kafka_config, tabs, saves, group_id: group_id.into() }
+        Self { kafka_config, tabs, saves, history, group_id: group_id.into() }
     }
 
     pub async fn run(self) {
@@ -119,7 +121,11 @@ impl ProfileConsumer {
                     Outcome::Tabs(profile, flags) => ProcessOutcome::from_result(worker.tabs.set_tabs(&profile, flags).await),
                     Outcome::Deleted(profile, at_micros) => {
                         let forgotten = match worker.tabs.forget(&profile, at_micros).await {
-                            Ok(()) => worker.saves.forget_profile(&profile, at_micros).await,
+                            Ok(()) => match worker.saves.forget_profile(&profile, at_micros).await {
+                                // Its viewing history too (#944).
+                                Ok(()) => worker.history.forget_profile(&profile, at_micros).await,
+                                Err(e) => Err(e),
+                            },
                             Err(e) => Err(e),
                         };
                         ProcessOutcome::from_result(forgotten)

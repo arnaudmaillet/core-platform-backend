@@ -262,7 +262,8 @@ channel through chat's mesh-only `GetFormerMemberHistory`, the holder's own mess
 `{"from": "another member"}` placeholders — direct is the conversation's kind, never its roster size;
 groups the holder left (#656, `left_at_ms`) are included, up to the departure, without their roster); for the account its
 likes (engagement's `ListLikesByAccount`, #665: a like is a point, the account's), its saved posts
-(`saves.json`: engagement's mesh-only `ListSavedPostsByAccount`, #872), its wallet
+(`saves.json`: engagement's mesh-only `ListSavedPostsByAccount`, #872), its viewing history
+(`view_history.json`: engagement's mesh-only `ListViewHistoryByAccount`, #944, the last 90 days), its wallet
 (`wallet.json`: wallet's mesh-only `ExportWallet` — read without opening one, with the catalogue items
 the account bought (`owned_items`, #892) — every page of
 `ListWalletTransactions`, and `ListStakePositions`, each stake with its settlement; without

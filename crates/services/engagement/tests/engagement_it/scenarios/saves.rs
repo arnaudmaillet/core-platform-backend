@@ -84,6 +84,9 @@ async fn a_tab_row_the_authority_does_not_confirm_is_not_listed() {
     // row stays unlisted, and the account's erasure still takes it.
     saves.unsave(&account, &profile, &post, at(6)).await.unwrap();
     assert!(saves.list(&profile, 100, None).await.unwrap().0.is_empty());
+    // Every save unsaved: the export reads an empty account (#944: the
+    // partition keeps its static column only).
+    assert!(saves.list_by_account(&account, 100, None).await.unwrap().is_empty());
     saves.forget_account(&account, at(10)).await.unwrap();
     let left = scylla::statement::unprepared::Statement::new(
         "SELECT post_id FROM engagement.saved_posts_by_profile WHERE profile_id = ? AND saved_at > ? ALLOW FILTERING",

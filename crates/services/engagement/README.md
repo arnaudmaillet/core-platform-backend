@@ -100,6 +100,26 @@ confirm at the same time (two saves racing, an unsave racing a save) is never li
 (`account_deleted`) drops every profile's, both as of the deletion. Saves need the Kafka path (Scylla);
 without it the RPCs answer `ENG-5003`.
 
+**Viewing history (#944).** The iOS **History tab**: the posts a profile viewed, owner only.
+- **Recording.** `RecordView(post_id, account_id, profile_id)` records a member's view: the client calls
+  it once a post has been on screen for about 2 s. With both member fields set (bound to the token's
+  `sub` and `pids`), the view also enters the profile's history. That write is best effort and never
+  fails the count; a guest only counts. A re-view moves the post to the top, once. A re-view within
+  60 s of the last one changes nothing.
+- **Reading.** `ListViewHistory(profile_id, limit, page_token)` (edge `authenticated`, the profile bound
+  to the token: anyone else gets `PERMISSION_DENIED`) lists it most recently viewed first. The token is
+  `<viewed_at_ms>:<post_id>`. Hydrate through post, which leaves out what the reader may no longer see.
+  No supervision (family) access.
+- **Removing.** `RemoveViewHistoryEntry(account_id, profile_id, post_id)` takes one post out, and
+  `ClearViewHistory(account_id, profile_id)` clears it all. Both are `authenticated` and idempotent.
+- **Storage.** Two tables (migration 0011), both expiring rows **90 days** after their write, and
+  written in one logged batch with the view's time: `view_history_by_profile` (the tab; `account_id`
+  static) and `views_by_account` (the authority: each post's last view). A row the authority doesn't
+  confirm (two re-views racing) is never listed.
+- **Export and erasure.** `ListViewHistoryByAccount` is **mesh only**: the GDPR export's
+  `view_history.json`. A profile's deletion drops its history; an account's drops every profile's.
+- **Without Scylla** (no Kafka path), the history RPCs answer `ENG-5003`.
+
 **Expired likers.** A likers hash that holds every liker carries `_complete` (set on the target's first
 like, or when a rehydration finished). Once it expired, an account missing from a new one is
 **unknown**, not zero: the stake consumer then rehydrates the whole hash from `likes_by_target`
@@ -188,6 +208,10 @@ service EngagementService {
   rpc UnsavePost        (UnsavePostRequest)        returns (UnsavePostResponse);
   rpc ListSavedPosts    (ListSavedPostsRequest)    returns (ListSavedPostsResponse);    // a profile's Saved tab
   rpc ListSavedPostsByAccount (ListSavedPostsByAccountRequest) returns (ListSavedPostsByAccountResponse); // mesh only
+  rpc ListViewHistory   (ListViewHistoryRequest)   returns (ListViewHistoryResponse);   // #944, the owner's
+  rpc RemoveViewHistoryEntry (RemoveViewHistoryEntryRequest) returns (RemoveViewHistoryEntryResponse);
+  rpc ClearViewHistory  (ClearViewHistoryRequest)  returns (ClearViewHistoryResponse);
+  rpc ListViewHistoryByAccount (ListViewHistoryByAccountRequest) returns (ListViewHistoryByAccountResponse); // mesh only
 }
 ```
 
@@ -225,6 +249,9 @@ pub trait LikeLedger: Send + Sync + 'static {      // Scylla: the durable copy
 pub trait SavedPosts: Send + Sync + 'static {      // Scylla: the saves (#872)
     /* save, unsave, list (a profile's tab), list_by_account (export), forget_profile, forget_account */
 }
+pub trait ViewHistory: Send + Sync + 'static {     // Scylla: the viewing history (#944)
+    /* record, list, remove, clear, list_by_account (export), forget_profile, forget_account */
+}
 pub trait ScoreStore: Send + Sync + 'static { /* incr_view/share/comment, decr_comment, get_snapshot */ }
 pub trait CounterLedger: Send + Sync + 'static { /* apply_interaction_delta (flush + comment consumer) */ }
 ```
@@ -253,8 +280,8 @@ reads the wallet's `wallet.v1.events` directly.
 |---|---|---|---|
 | `comment.created` / `comment.deleted` | `engagement-comment-consumer` | INCR/DECR comment counter (Redis + Scylla) | DLQ `{topic}.dlq` |
 | `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665): the account's total on a post or comment, idempotent and order-proof (Redis Lua + Scylla); a deleted account's stakes are dropped | DLQ `{topic}.dlq` |
-| `account.v1.events` | `engagement-account-erasure` | `account_deleted` → forget who liked (the counts stay) and the account's saves (#872); other events skipped | DLQ `{topic}.dlq` |
-| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → whether the profile shows its Likes (#829) and Saved (#872) tabs; `ProfileDeleted` → its Likes tab, saves and flags go, as of the deletion (#873); other events skipped | DLQ `{topic}.dlq` |
+| `account.v1.events` | `engagement-account-erasure` | `account_deleted` → forget who liked (the counts stay), the account's saves (#872) and viewing history (#944); other events skipped | DLQ `{topic}.dlq` |
+| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → whether the profile shows its Likes (#829) and Saved (#872) tabs; `ProfileDeleted` → its Likes tab, saves, viewing history (#944) and flags go, as of the deletion (#873); other events skipped | DLQ `{topic}.dlq` |
 
 > **Runtime contract (mandatory):** the stake, account and comment consumers run under `run_consumer` — manual
 > commit after success, bounded retry with backoff + jitter, DLQ on exhaustion/poison. Totals are

@@ -4,6 +4,7 @@ pub mod profile_tabs;
 pub mod saved_posts;
 pub mod like_visibility;
 pub mod score_store;
+pub mod view_history;
 
 pub use counter_ledger::CounterLedger;
 pub use like_store::{AccountLike, Applied, ForgottenLike, LikeLedger, LikeStore, Position};
@@ -11,3 +12,4 @@ pub use like_visibility::{LikeVisibility, PostLikeVisibility};
 pub use score_store::{PostEngagementSnapshot, ScoreStore};
 pub use profile_tabs::{ProfileAccess, ProfileTabs, Tab, TabFlags};
 pub use saved_posts::{SavedCursor, SavedPost, SavedPosts};
+pub use view_history::{ViewCursor, ViewHistory, ViewedPost, HISTORY_RETENTION_DAYS, REVIEW_DEBOUNCE_MICROS};

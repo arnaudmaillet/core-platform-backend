@@ -25,8 +25,14 @@ use transport::kafka::config::client::KafkaClientConfig;
 use crate::application::command::record_share::{RecordShareCommand, RecordShareHandler};
 use crate::application::command::record_view::{RecordViewCommand, RecordViewHandler};
 use crate::application::command::save_post::{SavePostCommand, SavePostHandler};
+use crate::application::command::view_history::{ChangeViewHistoryCommand, ChangeViewHistoryHandler};
+use crate::application::query::list_view_history::{
+    ListViewHistoryByAccountQuery, ListViewHistoryHandler, ListViewHistoryQuery,
+};
 use crate::application::erasure::LikeEraser;
-use crate::application::port::{LikeLedger, LikeStore, LikeVisibility, ProfileAccess, ProfileTabs, SavedPosts, ScoreStore};
+use crate::application::port::{
+    LikeLedger, LikeStore, LikeVisibility, ProfileAccess, ProfileTabs, SavedPosts, ScoreStore, ViewHistory,
+};
 use crate::application::query::batch_get_likes::{BatchGetLikesHandler, BatchGetLikesQuery};
 use crate::application::query::get_like_positions::{GetLikePositionsHandler, GetLikePositionsQuery};
 use crate::application::query::get_post_engagement::{GetPostEngagementHandler, GetPostEngagementQuery};
@@ -36,7 +42,9 @@ use crate::application::query::list_saved_posts::{
     ListSavedPostsByAccountHandler, ListSavedPostsByAccountQuery, ListSavedPostsHandler, ListSavedPostsQuery,
 };
 use crate::application::query::profile_tab::TabReaders;
-use crate::infrastructure::persistence::{ScyllaCounterLedger, ScyllaLikeLedger, ScyllaProfileTabs, ScyllaSavedPosts};
+use crate::infrastructure::persistence::{
+    ScyllaCounterLedger, ScyllaLikeLedger, ScyllaProfileTabs, ScyllaSavedPosts, ScyllaViewHistory,
+};
 use crate::infrastructure::scoring::redis_like_store::RedisLikeStore;
 use crate::infrastructure::scoring::redis_score_store::{DirtyPostTracker, RedisScoreStore};
 use crate::infrastructure::worker::{
@@ -49,6 +57,7 @@ struct Ledgers {
     likes:    Arc<dyn LikeLedger>,
     tabs:     Arc<dyn ProfileTabs>,
     saves:    Arc<dyn SavedPosts>,
+    history:  Arc<dyn ViewHistory>,
     counters: Arc<ScyllaCounterLedger>,
 }
 
@@ -103,6 +112,7 @@ impl App {
                     likes:    Arc::new(ScyllaLikeLedger::new(Arc::clone(&scylla_client))),
                     tabs:     Arc::new(ScyllaProfileTabs::new(Arc::clone(&scylla_client))),
                     saves:    Arc::new(ScyllaSavedPosts::new(Arc::clone(&scylla_client))),
+                    history:  Arc::new(ScyllaViewHistory::new(Arc::clone(&scylla_client))),
                     counters: Arc::new(ScyllaCounterLedger::new(scylla_client)),
                 })
             }
@@ -110,6 +120,7 @@ impl App {
         };
         let like_ledger = ledgers.as_ref().map(|l| Arc::clone(&l.likes));
         let saves = ledgers.as_ref().map(|l| Arc::clone(&l.saves));
+        let history = ledgers.as_ref().map(|l| Arc::clone(&l.history));
         // Who reads a profile's tabs (#829, #872).
         let readers = TabReaders { tabs: ledgers.as_ref().map(|l| Arc::clone(&l.tabs)), access, posts: likes.clone() };
 
@@ -119,6 +130,7 @@ impl App {
                 .register::<RecordViewCommand, _>(RecordViewHandler { score_store: Arc::clone(&score_store) })?
                 .register::<RecordShareCommand, _>(RecordShareHandler { score_store: Arc::clone(&score_store) })?
                 .register::<SavePostCommand, _>(SavePostHandler { saves: saves.clone() })?
+                .register::<ChangeViewHistoryCommand, _>(ChangeViewHistoryHandler { history: history.clone() })?
                 .build(),
         );
 
@@ -131,6 +143,8 @@ impl App {
                 })?
                 .register::<ListSavedPostsQuery, _>(ListSavedPostsHandler { saves: saves.clone(), readers })?
                 .register::<ListSavedPostsByAccountQuery, _>(ListSavedPostsByAccountHandler { saves })?
+                .register::<ListViewHistoryQuery, _>(ListViewHistoryHandler { history: history.clone() })?
+                .register::<ListViewHistoryByAccountQuery, _>(ListViewHistoryHandler { history })?
                 .register::<GetLikePositionsQuery, _>(GetLikePositionsHandler {
                     like_store:  Arc::clone(&like_store),
                     like_ledger: like_ledger.clone(),
@@ -150,10 +164,17 @@ impl App {
         );
 
         // ── Workers (Kafka path) ─────────────────────────────────────────────
-        if let (Some(kafka_client), Some(Ledgers { likes: like_ledger, tabs, saves, counters })) = (kafka, ledgers) {
+        if let (Some(kafka_client), Some(Ledgers { likes: like_ledger, tabs, saves, history, counters })) = (kafka, ledgers) {
             // Which tabs profiles show (#829, #872); a deleted profile's.
             tokio::spawn(
-                ProfileConsumer::new(kafka_client.clone(), tabs, Arc::clone(&saves), "engagement-profile-tabs").run(),
+                ProfileConsumer::new(
+                    kafka_client.clone(),
+                    tabs,
+                    Arc::clone(&saves),
+                    Arc::clone(&history),
+                    "engagement-profile-tabs",
+                )
+                .run(),
             );
             // Likes are points (#665): the wallet's stakes become the likes.
             tokio::spawn(
@@ -163,7 +184,9 @@ impl App {
             // A deleted account's likes (who liked goes, the counts stay) and
             // saves (#872).
             let eraser = LikeEraser { store: Arc::clone(&like_store), ledger: like_ledger };
-            tokio::spawn(AccountConsumer::new(kafka_client.clone(), eraser, saves, "engagement-account-erasure").run());
+            tokio::spawn(
+                AccountConsumer::new(kafka_client.clone(), eraser, saves, history, "engagement-account-erasure").run(),
+            );
             tokio::spawn(
                 CounterFlushWorker::new(Arc::clone(&score_store), Arc::clone(&counters), dirty_tracker, Duration::from_secs(5))
                     .run(),

@@ -57,6 +57,12 @@ impl Service for EngagementService {
         authenticated("/engagement.v1.EngagementService/SavePost"),
         authenticated("/engagement.v1.EngagementService/UnsavePost"),
         public_read("/engagement.v1.EngagementService/ListSavedPosts"),
+        // The viewing history (#944): the owner's alone (the profile bound
+        // to the token; guests refused). RecordView binds its optional
+        // member fields itself.
+        authenticated("/engagement.v1.EngagementService/ListViewHistory"),
+        authenticated("/engagement.v1.EngagementService/RemoveViewHistoryEntry"),
+        authenticated("/engagement.v1.EngagementService/ClearViewHistory"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -140,6 +146,7 @@ mod tests {
             "/engagement.v1.EngagementService/ListLikesByAccount",
             "/engagement.v1.EngagementService/GetLikePositions",
             "/engagement.v1.EngagementService/ListSavedPostsByAccount",
+            "/engagement.v1.EngagementService/ListViewHistoryByAccount",
         ] {
             assert!(EngagementService::EDGE_POLICY.iter().all(|rule| rule.method != method), "{method}");
         }
@@ -149,7 +156,13 @@ mod tests {
     /// it on the edge.
     #[test]
     fn saving_needs_a_member() {
-        for method in ["/engagement.v1.EngagementService/SavePost", "/engagement.v1.EngagementService/UnsavePost"] {
+        for method in [
+            "/engagement.v1.EngagementService/SavePost",
+            "/engagement.v1.EngagementService/UnsavePost",
+            "/engagement.v1.EngagementService/ListViewHistory",
+            "/engagement.v1.EngagementService/RemoveViewHistoryEntry",
+            "/engagement.v1.EngagementService/ClearViewHistory",
+        ] {
             let rule = EngagementService::EDGE_POLICY.iter().find(|rule| rule.method == method).expect(method);
             assert!(matches!(rule.access, service_runtime::edge::EdgeAccess::Authenticated), "{method}");
         }

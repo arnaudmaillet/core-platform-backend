@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 0d14d0664f4c71421b690f55c2abfa7a84b745e9ce0dd068f05a4b1cff91493f
-  translated_at: 2026-10-10
+  source_sha256: eb896f29feea624e7d0c2c70c87a87005112a6263e823c412714ff346587079a
+  translated_at: 2026-10-20
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -120,6 +120,30 @@ suppression d'un profil retire ses enregistrements ; celle d'un compte (`account
 profil, toutes deux à la date de la suppression. Les enregistrements demandent le chemin Kafka (Scylla) ;
 sans lui les RPC répondent `ENG-5003`.
 
+**Historique de vues (#944).** L'**onglet Historique** d'iOS : les posts qu'un profil a vus, pour son
+propriétaire seulement.
+- **Enregistrement.** `RecordView(post_id, account_id, profile_id)` enregistre la vue d'un membre :
+  le client l'appelle quand un post est resté environ 2 s à l'écran. Avec les deux champs membre
+  renseignés (liés au `sub` et aux `pids` du jeton), la vue entre aussi dans l'historique du profil.
+  Cette écriture est au mieux et ne fait jamais échouer le comptage ; un invité ne fait que compter.
+  Revoir un post le remonte en tête, une seule fois. Le revoir moins de 60 s après la dernière vue ne
+  change rien.
+- **Lecture.** `ListViewHistory(profile_id, limit, page_token)` (edge `authenticated`, le profil lié au
+  jeton : tout autre appelant reçoit `PERMISSION_DENIED`) le liste du plus récemment vu au plus ancien.
+  Le jeton est `<viewed_at_ms>:<post_id>`. Hydrater via post, qui écarte ce que le lecteur ne peut plus
+  voir. Aucun accès de supervision (famille).
+- **Retrait.** `RemoveViewHistoryEntry(account_id, profile_id, post_id)` retire un post, et
+  `ClearViewHistory(account_id, profile_id)` vide tout l'historique. Les deux sont `authenticated` et
+  idempotents.
+- **Stockage.** Deux tables (migration 0011), qui expirent toutes deux leurs lignes **90 jours** après
+  leur écriture, et écrites en un batch logged à l'heure de la vue : `view_history_by_profile` (l'onglet ;
+  `account_id` statique) et `views_by_account` (l'autorité : la dernière vue de chaque post). Une ligne
+  que l'autorité ne confirme pas (deux nouvelles vues en course) n'est jamais listée.
+- **Export et effacement.** `ListViewHistoryByAccount` est **mesh uniquement** : le `view_history.json`
+  de l'export RGPD. La suppression d'un profil retire son historique ; celle d'un compte, celui de chaque
+  profil.
+- **Sans Scylla** (pas de chemin Kafka), les RPC d'historique répondent `ENG-5003`.
+
 **Likers expirés.** Un hash de likers qui contient tous les likers porte `_complete` (posé au premier
 like de la cible, ou à la fin d'une réhydratation). Une fois expiré, un compte absent d'un nouveau hash
 est **inconnu**, pas zéro : le consommateur des mises réhydrate alors tout le hash depuis
@@ -212,6 +236,10 @@ service EngagementService {
   rpc UnsavePost        (UnsavePostRequest)        returns (UnsavePostResponse);
   rpc ListSavedPosts    (ListSavedPostsRequest)    returns (ListSavedPostsResponse);    // a profile's Saved tab
   rpc ListSavedPostsByAccount (ListSavedPostsByAccountRequest) returns (ListSavedPostsByAccountResponse); // mesh only
+  rpc ListViewHistory   (ListViewHistoryRequest)   returns (ListViewHistoryResponse);   // #944, the owner's
+  rpc RemoveViewHistoryEntry (RemoveViewHistoryEntryRequest) returns (RemoveViewHistoryEntryResponse);
+  rpc ClearViewHistory  (ClearViewHistoryRequest)  returns (ClearViewHistoryResponse);
+  rpc ListViewHistoryByAccount (ListViewHistoryByAccountRequest) returns (ListViewHistoryByAccountResponse); // mesh only
 }
 ```
 
@@ -250,6 +278,9 @@ pub trait LikeLedger: Send + Sync + 'static {      // Scylla: the durable copy
 pub trait SavedPosts: Send + Sync + 'static {      // Scylla: the saves (#872)
     /* save, unsave, list (a profile's tab), list_by_account (export), forget_profile, forget_account */
 }
+pub trait ViewHistory: Send + Sync + 'static {     // Scylla: the viewing history (#944)
+    /* record, list, remove, clear, list_by_account (export), forget_profile, forget_account */
+}
 pub trait ScoreStore: Send + Sync + 'static { /* incr_view/share/comment, decr_comment, get_snapshot */ }
 pub trait CounterLedger: Send + Sync + 'static { /* apply_interaction_delta (flush + comment consumer) */ }
 ```
@@ -278,8 +309,8 @@ pays) lit directement `wallet.v1.events` du wallet.
 |---|---|---|---|
 | `comment.created` / `comment.deleted` | `engagement-comment-consumer` | INCR/DECR du compteur de commentaires (Redis + Scylla) | DLQ `{topic}.dlq` |
 | `wallet.v1.events` | `engagement-stakes` | `stake_committed` → likes (#665) : le total du compte sur un post ou un commentaire, idempotent et insensible à l'ordre (Lua Redis + Scylla) ; les mises d'un compte supprimé sont ignorées | DLQ `{topic}.dlq` |
-| `account.v1.events` | `engagement-account-erasure` | `account_deleted` → oublier qui a liké (les compteurs restent) et les enregistrements du compte (#872) ; autres événements ignorés | DLQ `{topic}.dlq` |
-| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → si le profil montre ses onglets J'aime (#829) et Enregistrés (#872) ; `ProfileDeleted` → son onglet J'aime, ses enregistrements et ses réglages partent, à la date de la suppression (#873) ; autres événements ignorés | DLQ `{topic}.dlq` |
+| `account.v1.events` | `engagement-account-erasure` | `account_deleted` → oublier qui a liké (les compteurs restent) les enregistrements du compte (#872) et son historique de vues (#944) ; autres événements ignorés | DLQ `{topic}.dlq` |
+| `profile.v1.events` | `engagement-profile-tabs` | `ProfileTabSettingsChanged` → si le profil montre ses onglets J'aime (#829) et Enregistrés (#872) ; `ProfileDeleted` → son onglet J'aime, ses enregistrements, son historique de vues (#944) et ses réglages partent, à la date de la suppression (#873) ; autres événements ignorés | DLQ `{topic}.dlq` |
 
 > **Contrat d'exécution (obligatoire) :** les consommateurs des mises, des comptes et des commentaires tournent sous
 > `run_consumer` — commit manuel après succès, retry borné avec backoff + jitter, DLQ à l'épuisement /

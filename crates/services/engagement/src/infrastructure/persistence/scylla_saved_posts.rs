@@ -220,15 +220,16 @@ impl SavedPosts for ScyllaSavedPosts {
             }
         }
         .map_err(scylla)?;
-        result
-            .into_rows_result()
-            .map_err(rows_err)?
-            .rows::<(String, String, CqlTimestamp)>()
-            .map_err(rows_err)?
-            .map(|row| {
-                row.map(|(profile_id, post_id, at)| SavedPost { profile_id, post_id, saved_at_ms: at.0 }).map_err(rows_err)
-            })
-            .collect()
+        let rows = result.into_rows_result().map_err(rows_err)?;
+        let mut saves = Vec::new();
+        for row in rows.rows::<(Option<String>, Option<String>, Option<CqlTimestamp>)>().map_err(rows_err)? {
+            // A partition left with its static column only (every save
+            // unsaved) has no save.
+            if let (Some(profile_id), Some(post_id), Some(at)) = row.map_err(rows_err)? {
+                saves.push(SavedPost { profile_id, post_id, saved_at_ms: at.0 });
+            }
+        }
+        Ok(saves)
     }
 
     async fn forget_profile(&self, profile_id: &str, at_micros: i64) -> Result<(), EngagementError> {
