@@ -10,6 +10,7 @@ use crate::application::port::{
     ConversationRepository, Folder, InboxEntry, InboxStore, InteractionGate, MemberRepository, MessageFilterStore,
     MessageRepository, MessageVerdict,
 };
+use crate::application::sync::{SyncKind, Watermark};
 use crate::domain::value_object::{ConversationId, ProfileId};
 use crate::error::ChatError;
 
@@ -40,6 +41,31 @@ pub struct InboxItem {
 pub struct InboxPage {
     pub items:           Vec<InboxItem>,
     pub next_page_token: Option<String>,
+    /// First page only (#930): the watermark to sync from once every page
+    /// is read (taken before reading, so nothing in between is missed).
+    pub sync_watermark:  Option<String>,
+}
+
+/// What changed in a member's inbox since a watermark (#930).
+pub struct SyncInboxQuery {
+    pub profile_id: String,
+    /// From `ListInbox`'s first page, or a previous sync.
+    pub watermark:  String,
+    pub limit:      i32,
+}
+
+/// The entries that changed, each as the member sees it now, in its folder;
+/// the conversations to drop; where to sync from next.
+pub struct InboxSync {
+    pub changed:   Vec<(Folder, InboxItem)>,
+    pub removed:   Vec<ConversationId>,
+    pub watermark: String,
+    /// More changes wait: sync again at once from `watermark`.
+    pub has_more:  bool,
+}
+
+impl Query for SyncInboxQuery {
+    type Response = InboxSync;
 }
 
 impl Query for ListInboxQuery {
@@ -133,6 +159,7 @@ impl QueryHandler<ListInboxQuery> for ListInboxHandler {
         let me = ProfileId::try_from(q.profile_id.as_str())?;
         let limit = q.limit.clamp(1, self.max_page_size.max(1));
         let after = q.page_token.as_deref().map(decode_cursor).transpose()?;
+        let sync_watermark = after.is_none().then(|| Watermark::upper(chrono::Utc::now()).encode(SyncKind::Inbox));
 
         let entries = self.inbox.list(&me, q.folder.stored(), limit, after).await?;
         // The member's filter, once per page (fail closed: unreadable, the
@@ -156,7 +183,75 @@ impl QueryHandler<ListInboxQuery> for ListInboxHandler {
             .buffered(RESOLVES)
             .try_collect()
             .await?;
-        Ok(InboxPage { items: items.into_iter().flatten().collect(), next_page_token })
+        Ok(InboxPage { items: items.into_iter().flatten().collect(), next_page_token, sync_watermark })
+    }
+}
+
+impl QueryHandler<SyncInboxQuery> for ListInboxHandler {
+    type Error = ChatError;
+
+    async fn handle(&self, envelope: Envelope<SyncInboxQuery>) -> Result<InboxSync, ChatError> {
+        let q = &envelope.payload;
+        let me = ProfileId::try_from(q.profile_id.as_str())?;
+        let now = chrono::Utc::now();
+        let after = Watermark::decode(&q.watermark, SyncKind::Inbox, now)?;
+        let upper = Watermark::upper(now).max_with(after);
+        let limit = q.limit.clamp(1, self.max_page_size.max(1));
+        let (changes, has_more) = self.inbox.changes(&me, (after.ms, after.id), (upper.ms, upper.id), limit).await?;
+        let next = match changes.last() {
+            Some((ms, id)) if has_more => Watermark { ms: *ms, id: id.as_uuid() },
+            _ => upper,
+        };
+        // Each conversation once, as it is now.
+        let mut ids: Vec<ConversationId> = Vec::new();
+        for (_, id) in changes {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        let entries: Vec<(ConversationId, Option<InboxEntry>)> = futures::stream::iter(ids)
+            .map(|id| async move { Ok::<_, ChatError>((id, self.inbox.find(&me, &id).await?)) })
+            .buffered(RESOLVES)
+            .try_collect()
+            .await?;
+        // The member's filter, once, if a request changed (as ListInbox).
+        let filter = if entries.iter().any(|(_, e)| e.as_ref().is_some_and(|e| e.folder == Folder::Requests)) {
+            Some(self.filters.get(&me).await?)
+                .filter(|f| !f.hidden_words.is_empty() || (f.filter_offensive && !self.offensive.is_empty()))
+        } else {
+            None
+        };
+        let shown: Vec<(ConversationId, Option<(Folder, InboxItem)>)> = futures::stream::iter(entries)
+            .map(|(id, entry)| {
+                let filter = filter.as_ref();
+                async move {
+                    let shown = match entry {
+                        None => None,
+                        Some(entry) if entry.folder == Folder::Requests => {
+                            match self.resolve(me, Folder::Requests, filter, entry.clone()).await? {
+                                Some(item) => Some((Folder::Requests, item)),
+                                None => self
+                                    .resolve(me, Folder::HiddenRequests, filter, entry)
+                                    .await?
+                                    .map(|item| (Folder::HiddenRequests, item)),
+                            }
+                        }
+                        Some(entry) => self.resolve(me, Folder::Inbox, None, entry).await?.map(|item| (Folder::Inbox, item)),
+                    };
+                    Ok::<_, ChatError>((id, shown))
+                }
+            })
+            .buffered(RESOLVES)
+            .try_collect()
+            .await?;
+        let (mut changed, mut removed) = (Vec::new(), Vec::new());
+        for (id, item) in shown {
+            match item {
+                Some(item) => changed.push(item),
+                None => removed.push(id),
+            }
+        }
+        Ok(InboxSync { changed, removed, watermark: next.encode(SyncKind::Inbox), has_more })
     }
 }
 
@@ -201,6 +296,16 @@ mod tests {
         ) -> Result<(Vec<MessageSummary>, Option<(i64, uuid::Uuid)>), ChatError> {
             Ok((self.0.lock().unwrap().get(id).cloned().unwrap_or_default(), None))
         }
+        async fn list_since(
+            &self,
+            _: &ConversationId,
+            _: (i64, uuid::Uuid),
+            _: (i64, uuid::Uuid),
+            _: Option<i64>,
+            _: i32,
+        ) -> Result<(Vec<MessageSummary>, bool), ChatError> {
+            Ok((Vec::new(), false))
+        }
     }
 
     /// One member's filter; `down` fails every read.
@@ -229,6 +334,7 @@ mod tests {
     }
 
     struct World {
+        inbox:         Arc<FakeInbox>,
         conversations: Arc<FakeConversations>,
         members:       Arc<FakeMembers>,
         gate:          Arc<ScriptedGate>,
@@ -261,7 +367,7 @@ mod tests {
             messages:          Arc::clone(&logs) as Arc<dyn MessageRepository>,
             offensive:         Arc::new(TermList::new(["badword".to_owned()])),
         };
-        World { conversations, members, gate, logs, filters, projector, handler }
+        World { inbox, conversations, members, gate, logs, filters, projector, handler }
     }
 
     impl World {
@@ -302,6 +408,21 @@ mod tests {
                 withheld:     false,
             }]);
             c.id()
+        }
+
+        /// Moves the journaled changes a minute back, out of the sync's grace
+        /// window, one millisecond apart in order (the fake journals on the
+        /// wall clock).
+        fn settle(&self) {
+            let base = Utc::now().timestamp_millis() - 60_000;
+            for (i, change) in self.inbox.1.lock().unwrap().iter_mut().enumerate() {
+                change.1 = base + i as i64;
+            }
+        }
+
+        async fn sync(&self, me: ProfileId, watermark: String, limit: i32) -> Result<InboxSync, ChatError> {
+            let query = SyncInboxQuery { profile_id: me.as_str(), watermark, limit };
+            self.handler.handle(Envelope::new(uuid::Uuid::now_v7(), query)).await
         }
 
         async fn list(&self, me: ProfileId, folder: Folder) -> InboxPage {
@@ -387,5 +508,104 @@ mod tests {
         *w.filters.down.lock().unwrap() = true;
         let query = ListInboxQuery { profile_id: me.as_str(), folder: Folder::Requests, limit: 10, page_token: None };
         assert!(w.handler.handle(Envelope::new(uuid::Uuid::now_v7(), query)).await.is_err());
+    }
+
+    /// A watermark `minutes` ago.
+    fn since(minutes: i64) -> String {
+        let ms = (Utc::now() - chrono::TimeDelta::minutes(minutes)).timestamp_millis();
+        Watermark { ms, id: uuid::Uuid::nil() }.encode(SyncKind::Inbox)
+    }
+
+    /// #930: each changed conversation once, as the member sees it now and in
+    /// its folder; a conversation gone, or no longer shown, is removed.
+    #[tokio::test]
+    async fn sync_returns_what_changed_in_its_folder_and_what_left() {
+        let w = world();
+        let (me, a, b, c, d) = (pid(), pid(), pid(), pid(), pid());
+        let plain = w.request(a, me, 1_000).await;
+        let rude = w.request_saying(b, me, 2_000, "you badword").await;
+        let gone = w.request(c, me, 3_000).await;
+        let blocked = w.request(d, me, 4_000).await;
+        w.inbox.remove(&me, &gone).await.unwrap();
+        w.inbox.touch(&me, &plain).await.unwrap();
+        w.gate.set(d, me, MessageVerdict::Silenced);
+        w.settle();
+
+        let sync = w.sync(me, since(10), 10).await.unwrap();
+        let mut changed: Vec<_> = sync.changed.iter().map(|(f, i)| (*f, i.entry.conversation_id)).collect();
+        changed.sort_by_key(|(_, id)| id.as_uuid());
+        assert_eq!(changed, vec![(Folder::Requests, plain), (Folder::HiddenRequests, rude)]);
+        let mut removed = sync.removed.clone();
+        removed.sort_by_key(ConversationId::as_uuid);
+        assert_eq!(removed, vec![gone, blocked]);
+        assert!(!sync.has_more);
+
+        // Nothing since: its watermark syncs to nothing.
+        let again = w.sync(me, sync.watermark, 10).await.unwrap();
+        assert!(again.changed.is_empty() && again.removed.is_empty() && !again.has_more);
+    }
+
+    #[tokio::test]
+    async fn a_full_sync_page_says_more_wait_and_resumes_after_its_last_change() {
+        let w = world();
+        let me = pid();
+        for at in 1..=3 {
+            w.request(pid(), me, at * 1_000).await;
+        }
+        w.settle();
+        let first = w.sync(me, since(10), 2).await.unwrap();
+        assert_eq!(first.changed.len(), 2);
+        assert!(first.has_more);
+        let second = w.sync(me, first.watermark, 2).await.unwrap();
+        assert_eq!(second.changed.len(), 1);
+        assert!(!second.has_more);
+        let seen: Vec<_> = first.changed.iter().chain(&second.changed).map(|(_, i)| i.entry.conversation_id).collect();
+        assert_eq!(seen.iter().collect::<std::collections::HashSet<_>>().len(), 3);
+    }
+
+    /// A change inside the grace window waits for a later sync.
+    #[tokio::test]
+    async fn a_change_within_the_grace_window_waits_for_the_next_sync() {
+        let w = world();
+        let me = pid();
+        w.request(pid(), me, 1_000).await;
+        let sync = w.sync(me, since(10), 10).await.unwrap();
+        assert!(sync.changed.is_empty());
+        w.settle();
+        assert_eq!(w.sync(me, since(10), 10).await.unwrap().changed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_old_watermark_expires_and_a_foreign_one_is_invalid() {
+        let w = world();
+        let me = pid();
+        let err = w.sync(me, since(36 * 24 * 60), 10).await.err().unwrap();
+        assert!(matches!(err, ChatError::SyncWatermarkExpired), "{err:?}");
+        let thread = Watermark { ms: Utc::now().timestamp_millis(), id: uuid::Uuid::nil() }.encode(SyncKind::Thread);
+        let err = w.sync(me, thread, 10).await.err().unwrap();
+        assert!(matches!(err, ChatError::InvalidPageToken { .. }), "{err:?}");
+        // ListInbox's first page hands out the watermark to sync from.
+        let first = w.list(me, Folder::Inbox).await;
+        assert!(w.sync(me, first.sync_watermark.unwrap(), 10).await.is_ok());
+    }
+
+    /// A page never ends inside a millisecond: resuming after its last
+    /// change cannot skip one sharing it.
+    #[tokio::test]
+    async fn a_sync_page_keeps_a_millisecond_whole() {
+        let w = world();
+        let me = pid();
+        for at in 1..=3 {
+            w.request(pid(), me, at * 1_000).await;
+        }
+        let ms = Utc::now().timestamp_millis() - 60_000;
+        for change in w.inbox.1.lock().unwrap().iter_mut() {
+            change.1 = ms;
+        }
+        let page = w.sync(me, since(10), 2).await.unwrap();
+        assert_eq!(page.changed.len(), 3, "the whole millisecond");
+        assert!(page.has_more);
+        let next = w.sync(me, page.watermark, 2).await.unwrap();
+        assert!(next.changed.is_empty() && !next.has_more);
     }
 }

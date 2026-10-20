@@ -68,4 +68,18 @@ pub trait MessageRepository: Send + Sync + 'static {
         cursor:               Option<(i64, Uuid)>,
         floor_created_at_ms:  Option<i64>,
     ) -> Result<(Vec<MessageSummary>, Option<(i64, Uuid)>), ChatError>;
+
+    /// The messages strictly after `after` and up to `upper` included
+    /// (`(created_at_ms, message_id)`), **oldest first** (#930: a thread's
+    /// incremental sync); and whether more remain. About `limit` of them: a
+    /// page never splits a millisecond, so resuming after its last message
+    /// skips nothing. `floor_created_at_ms` as for [`Self::list_history`].
+    async fn list_since(
+        &self,
+        conversation_id:     &ConversationId,
+        after:               (i64, Uuid),
+        upper:               (i64, Uuid),
+        floor_created_at_ms: Option<i64>,
+        limit:               i32,
+    ) -> Result<(Vec<MessageSummary>, bool), ChatError>;
 }

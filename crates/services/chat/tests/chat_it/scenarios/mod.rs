@@ -14,3 +14,4 @@ mod direct_messages;
 mod inbox;
 mod leave;
 mod send_idempotency;
+mod sync;

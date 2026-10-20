@@ -163,6 +163,8 @@ service ChatService {
   rpc ListMembers       (ListMembersRequest)       returns (ListMembersResponse);
   rpc ListSubscriptions (ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
   rpc ListInbox         (ListInboxRequest)         returns (ListInboxResponse);       // #656
+  rpc SyncInbox         (SyncInboxRequest)         returns (SyncInboxResponse);       // #930
+  rpc SyncConversation  (SyncConversationRequest)  returns (SyncConversationResponse); // #930
   rpc ListConversationsByMember (ListConversationsByMemberRequest) returns (ListConversationsByMemberResponse); // mesh only
   rpc GetFormerMemberHistory    (GetFormerMemberHistoryRequest)    returns (GetHistoryResponse);                // mesh only
   // Real-time streams
@@ -291,6 +293,26 @@ How the entries are kept:
 - **Answers.** Accepting moves the entry to INBOX. Declining removes it for the decliner only.
 - **Replays.** An entry never moves back on a replay.
 
+**Incremental sync (#930).** A client lists its inbox, or a thread, once, then asks only for what
+changed. `ListInbox` and `GetHistory` hand out a `sync_watermark` on their first page; it is opaque
+(`i1_…` for an inbox, `t1_…` for a thread).
+- **`SyncInbox(profile_id, watermark, limit)`** answers each conversation whose entry changed since the
+  watermark, once, as the caller sees it now and in its folder. It also answers the conversations to
+  drop: removed, declined, or no longer shown, such as a blocked requester's.
+- **`SyncConversation(conversation_id, requester_id, watermark, limit)`** answers the new messages,
+  oldest first, under `GetHistory`'s audience rules. To a member of a direct conversation or a group, it
+  also answers every member's read position, filtered as in `ListMembers`.
+- **Both** answer the next `watermark`, and `has_more` when a full page leaves more to read: sync again
+  at once.
+- **Grace.** A sync reads up to 5 s before the server's now, so a write that commits late is still seen
+  next time. Clients dedup by id.
+- **Expiry.** A watermark older than 35 days answers `CHT-2013` (`OUT_OF_RANGE`): list again in full.
+- **Storage.** Every inbox write, and each read or mute, also appends `(changed_at, conversation_id)` to
+  the member's change journal `chat.inbox_changes` (migration 0016, 35-day TTL). Messages are
+  append-only, so a thread syncs from the message log itself.
+- **Limits.** A filter change or a block re-sorts or hides requests on read without touching the
+  journal. Such a change shows at the next full listing, or with the conversation's next change.
+
 **Pushes (#654).** Once a message's inbox entries are written, the `InboxWorker` asks the notification
 service for its push on `chat.message.push`: one event per message, with the sender, a 100-character
 text preview (empty for media) and the `recipients`. A recipient is a member the message reaches in
@@ -365,7 +387,7 @@ shared `error` crate:
 | Range | Class |
 |---|---|
 | `CHT-1xxx` | lifecycle |
-| `CHT-2xxx` | validation (`CHT-2011` a message's media asset is not the sender's usable image / video; `CHT-2012` its image was uploaded public and is still processing — #919) |
+| `CHT-2xxx` | validation (`CHT-2011` a message's media asset is not the sender's usable image / video; `CHT-2012` its image was uploaded public and is still processing — #919; `CHT-2013` a sync watermark past its 35 days — #930) |
 | `CHT-3xxx` | events |
 | `CHT-4xxx` | streaming |
 | `CHT-5xxx` | peer services (`CHT-5001`: social-graph's interaction check unavailable; `CHT-5002`: media did not answer a send naming an asset, #919 — both retryable) |

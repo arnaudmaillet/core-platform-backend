@@ -197,6 +197,29 @@ message GetHistoryRequest {
 message GetHistoryResponse {
     repeated MessageView messages        = 1;
     string               next_page_token = 2;
+    // First page only (#930): the watermark SyncConversation takes once the
+    // client holds the history it wants (taken before reading).
+    string               sync_watermark  = 3;
+}
+
+message SyncConversationRequest {
+    string conversation_id = 1;
+    string requester_id    = 2;
+    // GetHistory's first-page `sync_watermark`, or a previous sync's.
+    string watermark       = 3;
+    int32  limit           = 4;
+}
+message SyncConversationResponse {
+    // The messages after the watermark, oldest first (messages are
+    // append-only: nothing is edited or deleted).
+    repeated MessageView messages      = 1;
+    // Each member's read position now (a direct or group conversation, to a
+    // member; a member shares it only if they share read receipts, #661).
+    repeated MemberView  read_receipts = 2;
+    // Where to sync from next.
+    string               watermark     = 3;
+    // More messages wait: sync again at once from `watermark`.
+    bool                 has_more      = 4;
 }
 
 message ListMembersRequest {
@@ -256,6 +279,31 @@ message ListInboxResponse {
     repeated InboxEntryView entries         = 1;
     // Empty on the last page. A page may come back short, never skipping.
     string                  next_page_token = 2;
+    // First page only (#930): the watermark SyncInbox takes once every page
+    // of every folder is read (taken before reading).
+    string                  sync_watermark  = 3;
+}
+
+message SyncInboxRequest {
+    string profile_id = 1;
+    // ListInbox's first-page `sync_watermark`, or a previous sync's.
+    string watermark  = 2;
+    int32  limit      = 3;
+}
+// A conversation whose entry changed (#930), as the caller sees it now, in its
+// folder.
+message InboxChange {
+    InboxFolder    folder = 1;
+    InboxEntryView entry  = 2;
+}
+message SyncInboxResponse {
+    repeated InboxChange changed   = 1;
+    // Conversations to drop from the inbox (left, declined, hidden by a
+    // block or no longer shown).
+    repeated string      removed   = 2;
+    string               watermark = 3;
+    // More changes wait: sync again at once from `watermark`.
+    bool                 has_more  = 4;
 }
 
 message ListConversationsByMemberRequest {

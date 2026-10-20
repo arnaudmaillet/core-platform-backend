@@ -24,7 +24,7 @@ use crate::application::port::{
     ReceiptStore, RoutingRegistry,
 };
 use crate::application::query::{
-    FormerMemberHistoryQuery, GetHistoryQuery, InboxPage, ListConversationsByMemberQuery, ListInboxQuery, ListMembersQuery,
+    FormerMemberHistoryQuery, GetHistoryQuery, InboxItem, InboxPage, ListConversationsByMemberQuery, ListInboxQuery, ListMembersQuery,
     ListSubscriptionsQuery, MemberConversation, MemberView as QueryMemberView,
 };
 use crate::application::port::Folder;
@@ -266,6 +266,7 @@ where
                 })
                 .collect(),
             next_page_token: page.next_page_token.unwrap_or_default(),
+            sync_watermark:  String::new(),
         }))
     }
 
@@ -516,6 +517,7 @@ where
         Ok(Response::new(proto::GetHistoryResponse {
             messages,
             next_page_token: page.next_page_token.unwrap_or_default(),
+            sync_watermark: page.sync_watermark.unwrap_or_default(),
         }))
     }
 
@@ -607,31 +609,85 @@ where
             .await
             .map_err(cqrs_to_status)?;
         Ok(Response::new(proto::ListInboxResponse {
-            entries: page
-                .items
+            entries: page.items.into_iter().map(inbox_item_to_proto).collect(),
+            next_page_token: page.next_page_token.unwrap_or_default(),
+            sync_watermark: page.sync_watermark.unwrap_or_default(),
+        }))
+    }
+
+    /// What changed in the caller's inbox since a watermark (#930).
+    async fn sync_inbox(
+        &self,
+        request: Request<proto::SyncInboxRequest>,
+    ) -> Result<Response<proto::SyncInboxResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let query = crate::application::query::list_inbox::SyncInboxQuery {
+            profile_id: req.profile_id,
+            watermark:  req.watermark,
+            limit:      if req.limit > 0 { req.limit } else { 100 },
+        };
+        let sync = self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::SyncInboxResponse {
+            changed:   sync
+                .changed
                 .into_iter()
-                .map(|item| proto::InboxEntryView {
-                    conversation_id:  item.entry.conversation_id.as_str(),
-                    kind:             item.entry.kind.as_tinyint() as i32,
-                    peer_id:          item.entry.peer.map(|p| p.as_str()).unwrap_or_default(),
-                    last_activity_ms: item.entry.activity.timestamp_millis(),
-                    last_message:     item.entry.last.map(|l| proto::MessagePreview {
-                        message_id:   l.message_id.as_str(),
-                        sender_id:    l.sender_id.as_str(),
-                        content_type: l.content_type.as_tinyint() as i32,
-                        preview:      l.preview,
-                    }),
-                    unread:           item.unread,
-                    request:          item.request,
-                    muted:            item.muted_until.is_some(),
-                    muted_until_ms:   item
-                        .muted_until
-                        .filter(|until| *until < muted_forever())
-                        .map(|until| until.timestamp_millis())
-                        .unwrap_or_default(),
+                .map(|(folder, item)| proto::InboxChange {
+                    folder: match folder {
+                        Folder::Inbox => proto::InboxFolder::Inbox,
+                        Folder::Requests => proto::InboxFolder::Requests,
+                        Folder::HiddenRequests => proto::InboxFolder::HiddenRequests,
+                    } as i32,
+                    entry:  Some(inbox_item_to_proto(item)),
                 })
                 .collect(),
-            next_page_token: page.next_page_token.unwrap_or_default(),
+            removed:   sync.removed.iter().map(ConversationId::as_str).collect(),
+            watermark: sync.watermark,
+            has_more:  sync.has_more,
+        }))
+    }
+
+    /// What is new in a conversation since a watermark (#930).
+    async fn sync_conversation(
+        &self,
+        request: Request<proto::SyncConversationRequest>,
+    ) -> Result<Response<proto::SyncConversationResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().requester_id)?;
+        let req = request.into_inner();
+        let requester_id = req.requester_id.clone();
+        let query = crate::application::query::get_history::SyncConversationQuery {
+            conversation_id: req.conversation_id,
+            requester_id:    req.requester_id,
+            watermark:       req.watermark,
+            limit:           if req.limit > 0 { req.limit } else { 100 },
+        };
+        let sync = self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.map_err(cqrs_to_status)?;
+        let mut messages: Vec<proto::MessageView> = sync.messages.into_iter().map(summary_to_view).collect();
+        deliver_media(self.media.as_deref(), &mut messages).await;
+        // As ListMembers: a member's position only if it shares read receipts.
+        let ids: Vec<ProfileId> = sync.read_receipts.iter().map(|(p, _)| *p).collect();
+        let shared = self.presence_settings.get_many(&ids).await;
+        let read_receipts = sync
+            .read_receipts
+            .into_iter()
+            .map(|(profile, last_read)| {
+                let own = profile.as_str() == requester_id;
+                let shares = match &shared {
+                    Ok(map) => map.get(&profile).is_none_or(|s| s.read_receipts),
+                    Err(_) => false,
+                };
+                proto::MemberView {
+                    profile_id: profile.as_str(),
+                    last_read:  last_read.filter(|_| own || shares).map(|m| m.as_str()).unwrap_or_default(),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        Ok(Response::new(proto::SyncConversationResponse {
+            messages,
+            read_receipts,
+            watermark: sync.watermark,
+            has_more:  sync.has_more,
         }))
     }
 
@@ -1105,6 +1161,20 @@ where
         self.list_inbox(request).await
     }
 
+    async fn sync_inbox(
+        &self,
+        request: Request<proto::SyncInboxRequest>,
+    ) -> Result<Response<proto::SyncInboxResponse>, Status> {
+        self.sync_inbox(request).await
+    }
+
+    async fn sync_conversation(
+        &self,
+        request: Request<proto::SyncConversationRequest>,
+    ) -> Result<Response<proto::SyncConversationResponse>, Status> {
+        self.sync_conversation(request).await
+    }
+
     async fn stream_conversation(
         &self,
         request: Request<proto::StreamConversationRequest>,
@@ -1219,6 +1289,30 @@ fn plane_to_chat_event(event: &PlaneEvent) -> proto::ChatEvent {
     proto::ChatEvent { event: Some(inner) }
 }
 
+/// An inbox entry as its member sees it, on the wire (ListInbox, SyncInbox).
+fn inbox_item_to_proto(item: InboxItem) -> proto::InboxEntryView {
+    proto::InboxEntryView {
+        conversation_id:  item.entry.conversation_id.as_str(),
+        kind:             item.entry.kind.as_tinyint() as i32,
+        peer_id:          item.entry.peer.map(|p| p.as_str()).unwrap_or_default(),
+        last_activity_ms: item.entry.activity.timestamp_millis(),
+        last_message:     item.entry.last.map(|l| proto::MessagePreview {
+            message_id:   l.message_id.as_str(),
+            sender_id:    l.sender_id.as_str(),
+            content_type: l.content_type.as_tinyint() as i32,
+            preview:      l.preview,
+        }),
+        unread:           item.unread,
+        request:          item.request,
+        muted:            item.muted_until.is_some(),
+        muted_until_ms:   item
+            .muted_until
+            .filter(|until| *until < muted_forever())
+            .map(|until| until.timestamp_millis())
+            .unwrap_or_default(),
+    }
+}
+
 // ── Error mapping ───────────────────────────────────────────────────────────
 
 fn status_from_app(http_status: u16, retryable: bool, msg: String) -> Status {
@@ -1228,6 +1322,8 @@ fn status_from_app(http_status: u16, retryable: bool, msg: String) -> Status {
         409 if retryable => Status::aborted(msg),
         409 => Status::already_exists(msg),
         400 | 422 => Status::failed_precondition(msg),
+        // A sync watermark too old (#930): its own code, resync in full.
+        410 => Status::out_of_range(msg),
         503 | 502 => Status::unavailable(msg),
         _ => Status::internal(msg),
     }

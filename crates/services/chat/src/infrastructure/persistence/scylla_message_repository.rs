@@ -202,6 +202,78 @@ impl MessageRepository for ScyllaMessageRepository {
 
         Ok((out, next))
     }
+
+    async fn list_since(
+        &self,
+        conversation_id:     &ConversationId,
+        after:               (i64, Uuid),
+        upper:               (i64, Uuid),
+        floor_created_at_ms: Option<i64>,
+        limit:               i32,
+    ) -> Result<(Vec<MessageSummary>, bool), ChatError> {
+        // Below the floor nothing shows: start just before it.
+        let after = match floor_created_at_ms {
+            Some(floor) if (floor - 1, Uuid::max()) > after => (floor - 1, Uuid::max()),
+            _ => after,
+        };
+        if after.0 > upper.0 {
+            return Ok((Vec::new(), false));
+        }
+        let limit = limit.max(1);
+        let conv = conversation_id.as_uuid();
+        // Oldest first, never ending a page inside a millisecond (CQL orders a
+        // `uuid` its own way): the watermark's own one is read whole and
+        // filtered here, then the buckets up to the upper bound's for the
+        // later ones, the last of which is read whole again.
+        let mut out: Vec<MessageSummary> = Vec::new();
+        if after.1 != Uuid::max() {
+            for summary in self.messages_at(conv, after.0).await? {
+                let at = (summary.created_at.timestamp_millis(), summary.message_id);
+                if at > after && at <= upper {
+                    out.push(summary);
+                }
+            }
+        }
+        let stmt = fast(&self.client, &format!(
+            "SELECT {HISTORY_COLS} FROM chat.messages_by_conversation \
+             WHERE conversation_id = ? AND bucket = ? AND created_at > ? AND created_at <= ? \
+             ORDER BY created_at ASC LIMIT ?"
+        ));
+        let (first, last) = (message_bucket(after.0, self.bucket_hours), message_bucket(upper.0, self.bucket_hours));
+        let (mut later, mut more) = (0, false);
+        for bucket in (after.0 < upper.0).then_some(first..=last).into_iter().flatten() {
+            let wanted = limit - later;
+            let rows = self
+                .run_rows(stmt.clone(), (conv, bucket, CqlTimestamp(after.0), CqlTimestamp(upper.0), wanted))
+                .await?;
+            let full = rows.len() == wanted as usize;
+            let mut page = rows.into_iter().map(message_summary).collect::<Result<Vec<_>, _>>()?;
+            if full {
+                let edge = page.last().map(|m| m.created_at.timestamp_millis()).unwrap_or(after.0);
+                page.retain(|m| m.created_at.timestamp_millis() < edge);
+                page.extend(self.messages_at(conv, edge).await?);
+                out.extend(page);
+                more = true;
+                break;
+            }
+            later += page.len() as i32;
+            out.extend(page);
+        }
+        out.sort_by_key(|m| (m.created_at.timestamp_millis(), m.message_id));
+        Ok((out, more))
+    }
+}
+
+impl ScyllaMessageRepository {
+    /// Every message of a conversation sent at exactly `ms`.
+    async fn messages_at(&self, conv: Uuid, ms: i64) -> Result<Vec<MessageSummary>, ChatError> {
+        let stmt = fast(&self.client, &format!(
+            "SELECT {HISTORY_COLS} FROM chat.messages_by_conversation \
+             WHERE conversation_id = ? AND bucket = ? AND created_at = ?"
+        ));
+        let rows = self.run_rows(stmt, (conv, message_bucket(ms, self.bucket_hours), CqlTimestamp(ms))).await?;
+        rows.into_iter().map(message_summary).collect()
+    }
 }
 
 fn message_summary(r: MessageRow) -> Result<MessageSummary, ChatError> {

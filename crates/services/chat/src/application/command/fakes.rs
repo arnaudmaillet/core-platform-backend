@@ -131,9 +131,14 @@ impl ConversationRepository for FakeConversations {
 
 /// Inboxes in memory, with the store's "never move back" rule.
 #[derive(Default)]
-pub struct FakeInbox(Mutex<HashMap<(ProfileId, ConversationId), InboxEntry>>);
+pub struct FakeInbox(Mutex<HashMap<(ProfileId, ConversationId), InboxEntry>>, pub Mutex<Vec<(ProfileId, i64, ConversationId)>>);
 
 impl FakeInbox {
+    /// Journals a change now (#930); the test clock is the wall clock.
+    fn journal(&self, member: &ProfileId, c: &ConversationId) {
+        self.1.lock().unwrap().push((*member, chrono::Utc::now().timestamp_millis(), *c));
+    }
+
     pub fn entry(&self, member: &ProfileId, c: &ConversationId) -> Option<InboxEntry> {
         self.0.lock().unwrap().get(&(*member, *c)).cloned()
     }
@@ -163,6 +168,8 @@ impl InboxStore for FakeInbox {
             return Ok(());
         }
         entries.insert(key, entry.clone());
+        drop(entries);
+        self.journal(member, &entry.conversation_id);
         Ok(())
     }
 
@@ -170,7 +177,34 @@ impl InboxStore for FakeInbox {
         Ok(self.entry(member, c))
     }
 
+    async fn touch(&self, member: &ProfileId, c: &ConversationId) -> Result<(), ChatError> {
+        self.journal(member, c);
+        Ok(())
+    }
+
+    async fn changes(
+        &self,
+        member: &ProfileId,
+        after:  (i64, uuid::Uuid),
+        upper:  (i64, uuid::Uuid),
+        limit:  i32,
+    ) -> Result<(Vec<(i64, ConversationId)>, bool), ChatError> {
+        let mut changes: Vec<(i64, uuid::Uuid)> = self
+            .1
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(m, _, _)| m == member)
+            .map(|(_, ms, c)| (*ms, c.as_uuid()))
+            .filter(|c| *c > after && *c <= upper)
+            .collect();
+        changes.sort();
+        let more = whole_millis(&mut changes, limit, |c| c.0);
+        Ok((changes.into_iter().map(|(ms, id)| (ms, ConversationId::from_uuid(id))).collect(), more))
+    }
+
     async fn remove(&self, member: &ProfileId, c: &ConversationId) -> Result<(), ChatError> {
+        self.journal(member, c);
         self.0.lock().unwrap().remove(&(*member, *c));
         Ok(())
     }
@@ -478,6 +512,42 @@ impl MessageRepository for FakeMessages {
         page.sort_by_key(|m| std::cmp::Reverse(m.created_at));
         Ok((page, None))
     }
+
+    async fn list_since(
+        &self,
+        _: &ConversationId,
+        after: (i64, Uuid),
+        upper: (i64, Uuid),
+        floor: Option<i64>,
+        limit: i32,
+    ) -> Result<(Vec<MessageSummary>, bool), ChatError> {
+        let mut page: Vec<_> = self
+            .seeded
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| {
+                let at = (m.created_at.timestamp_millis(), m.message_id);
+                at > after && at <= upper && floor.is_none_or(|f| at.0 >= f)
+            })
+            .cloned()
+            .collect();
+        page.sort_by_key(|m| (m.created_at.timestamp_millis(), m.message_id));
+        let more = whole_millis(&mut page, limit, |m| m.created_at.timestamp_millis());
+        Ok((page, more))
+    }
+}
+
+/// The stores' paging (#930): past `limit` sorted rows, keep the rest of the
+/// last kept row's millisecond and say more remain.
+fn whole_millis<T>(rows: &mut Vec<T>, limit: i32, ms: impl Fn(&T) -> i64) -> bool {
+    let limit = limit.max(1) as usize;
+    if rows.len() <= limit {
+        return false;
+    }
+    let edge = ms(&rows[limit - 1]);
+    rows.retain(|r| ms(r) <= edge);
+    true
 }
 
 #[derive(Default)]

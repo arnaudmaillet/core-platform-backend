@@ -41,6 +41,17 @@ service ChatService {
     rpc ListSubscriptions (ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
     // The caller's inbox (#656): INBOX or REQUESTS, newest activity first.
     rpc ListInbox         (ListInboxRequest)         returns (ListInboxResponse);
+    // What changed in the caller's inbox since a watermark (#930): the
+    // entries now (unread, muted, moved between folders, a new last message),
+    // the conversations to drop, and the next watermark. A watermark lives 35
+    // days (past the app's 30-day retention); an older one answers
+    // OUT_OF_RANGE (CHT-2013): resync in full with ListInbox. Edge: the
+    // caller's profile.
+    rpc SyncInbox         (SyncInboxRequest)         returns (SyncInboxResponse);
+    // What is new in a conversation since a watermark (#930): its messages
+    // after it, oldest first, and the members' read positions. Same audience
+    // rules and watermark lifetime as SyncInbox. Edge: the caller's profile.
+    rpc SyncConversation  (SyncConversationRequest)  returns (SyncConversationResponse);
     // The conversations a profile is a member of (member plane), paged by
     // conversation id. Mesh only (never on the edge): the GDPR data export
     // (#653) then reads each one's history as that member (GetHistory).
