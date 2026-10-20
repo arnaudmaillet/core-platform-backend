@@ -1,23 +1,50 @@
 //! The country ladder for the shop and the map's badges (#665): every country
 //! the atlas draws, ranked by likes over the last days, with the price of
 //! unlocking it. Computed at most once per cache period (the same for every
-//! reader); the home country's price is the caller's to zero.
+//! reader); the home country's price is the caller's to zero. With covers
+//! (#942), each country's Shop card background, cached on its own so the
+//! purchases that read prices never wait on it.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, TimeDelta, Utc};
+use async_trait::async_trait;
+use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
+use futures::{StreamExt, TryStreamExt};
+use uuid::Uuid;
 
 use crate::application::port::CountryActivityStore;
 use crate::domain::country_atlas::CountryAtlas;
-use crate::domain::country_standing::{rank, CountryStanding, UnlockPricing};
+use crate::domain::country_standing::{rank, CountryCover, CountryStanding, UnlockPricing};
+use crate::domain::entity::MapPostCard;
+use crate::domain::value_object::CountryCode;
 use crate::error::GeoDiscoveryError;
+
+/// A country's most liked posts tried for its cover, most liked first.
+pub const COVER_CANDIDATES: usize = 3;
+/// Countries whose candidates are read at once.
+const COVER_READS: usize = 16;
+/// Candidates checked per call.
+const COVER_CHECK_BATCH: usize = 100;
 
 /// The ladder at a moment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ladder {
     pub standings:   Vec<CountryStanding>,
     pub computed_at: DateTime<Utc>,
+}
+
+/// Each country's Shop cover (#942); a country without one is absent.
+pub type Covers = HashMap<CountryCode, CountryCover>;
+
+/// The cards a cover may come from (#942).
+#[async_trait]
+pub trait CoverCards: Send + Sync + 'static {
+    /// Of `post_ids`, the cards anyone may see on the map (the radar's rules
+    /// for an anonymous reader, everywhere), from authors who share their
+    /// precise location: a cover never names a city-level author's place.
+    async fn cover_cards(&self, post_ids: Vec<Uuid>) -> Result<Vec<MapPostCard>, GeoDiscoveryError>;
 }
 
 pub struct CountryStandings {
@@ -28,7 +55,11 @@ pub struct CountryStandings {
     pub window_days: u32,
     /// How long a computed ladder is served (60 s).
     pub cache_for:   Duration,
+    /// Where covers come from (#942); none without.
+    covers:          Option<Arc<dyn CoverCards>>,
     cached:          Mutex<Option<(Instant, Arc<Ladder>)>>,
+    /// The covers, per ladder they were picked for (its `computed_at`).
+    cached_covers:   Mutex<Option<(DateTime<Utc>, Arc<Covers>)>>,
 }
 
 impl CountryStandings {
@@ -39,7 +70,22 @@ impl CountryStandings {
         window_days: u32,
         cache_for: Duration,
     ) -> Self {
-        Self { activity, atlas, pricing, window_days: window_days.max(1), cache_for, cached: Mutex::new(None) }
+        Self {
+            activity,
+            atlas,
+            pricing,
+            window_days: window_days.max(1),
+            cache_for,
+            covers: None,
+            cached: Mutex::new(None),
+            cached_covers: Mutex::new(None),
+        }
+    }
+
+    /// With each country's Shop cover (#942).
+    pub fn with_covers(mut self, covers: Arc<dyn CoverCards>) -> Self {
+        self.covers = Some(covers);
+        self
     }
 
     /// The ladder: the cached one while fresh, else recomputed.
@@ -58,6 +104,70 @@ impl CountryStandings {
     }
 }
 
+impl CountryStandings {
+    /// The covers for `ladder` (#942), picked once per ladder. Fails open: a
+    /// cover only decorates, so an outage serves none until the next ladder
+    /// (never a retry per read).
+    pub async fn covers(&self, ladder: &Ladder) -> Arc<Covers> {
+        let Some(cards) = &self.covers else { return Arc::default() };
+        if let Some((at, covers)) = self.cached_covers.lock().expect("covers cache").as_ref()
+            && *at == ladder.computed_at
+        {
+            return Arc::clone(covers);
+        }
+        let today = ladder.computed_at.date_naive();
+        let days: Vec<_> = (0..self.window_days).map(|d| today - TimeDelta::days(i64::from(d))).collect();
+        let covers = Arc::new(self.pick_covers(cards.as_ref(), &ladder.standings, &days).await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "country covers unavailable");
+            Covers::new()
+        }));
+        *self.cached_covers.lock().expect("covers cache") = Some((ladder.computed_at, Arc::clone(&covers)));
+        covers
+    }
+
+    /// Each liked country's cover: its first candidate, most liked first,
+    /// that anyone may see and that was published there.
+    async fn pick_covers(
+        &self,
+        cards: &dyn CoverCards,
+        standings: &[CountryStanding],
+        days: &[NaiveDate],
+    ) -> Result<Covers, GeoDiscoveryError> {
+        // Collected first: a borrowing iterator held across the reads would
+        // keep the future from being `Send` for every lifetime.
+        let mut liked: Vec<CountryCode> = Vec::new();
+        for standing in standings {
+            if standing.likes > 0 {
+                liked.push(standing.country);
+            }
+        }
+        let candidates: Vec<(CountryCode, Vec<(Uuid, i64)>)> = futures::stream::iter(liked)
+            .map(|country| async move {
+                Ok::<_, GeoDiscoveryError>((country, self.activity.top_posts(country, days, COVER_CANDIDATES).await?))
+            })
+            .buffered(COVER_READS)
+            .try_collect()
+            .await?;
+        let ids: Vec<Uuid> = candidates.iter().flat_map(|(_, posts)| posts.iter().map(|(post, _)| *post)).collect();
+        let mut shown: HashMap<Uuid, MapPostCard> = HashMap::new();
+        for batch in ids.chunks(COVER_CHECK_BATCH) {
+            shown.extend(cards.cover_cards(batch.to_vec()).await?.into_iter().map(|card| (card.post_id, card)));
+        }
+        let mut covers = HashMap::new();
+        for (country, posts) in candidates {
+            let cover = posts.iter().find_map(|(post, _)| {
+                let card = shown.get(post)?;
+                let there = matches!((card.lat, card.lng), (Some(lat), Some(lng)) if self.atlas.country_at(lat, lng) == Some(country));
+                there.then(|| CountryCover::of(card)).flatten()
+            });
+            if let Some(cover) = cover {
+                covers.insert(country, cover);
+            }
+        }
+        Ok(covers)
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::collections::HashMap;
@@ -70,7 +180,12 @@ pub(crate) mod tests {
     use crate::domain::value_object::CountryCode;
 
     #[derive(Default)]
-    pub struct MemActivity(pub Mutex<HashMap<(CountryCode, NaiveDate), CountryActivity>>, Mutex<std::collections::HashSet<(NaiveDate, String)>>);
+    pub struct MemActivity(
+        pub Mutex<HashMap<(CountryCode, NaiveDate), CountryActivity>>,
+        Mutex<std::collections::HashSet<(NaiveDate, String)>>,
+        /// Each post's likes per country and day (#942).
+        pub Mutex<HashMap<(CountryCode, NaiveDate, Uuid), i64>>,
+    );
 
     #[async_trait]
     impl CountryActivityStore for MemActivity {
@@ -81,15 +196,31 @@ pub(crate) mod tests {
             likes: i64,
             posts: i64,
             event: &str,
-        ) -> Result<(), GeoDiscoveryError> {
+        ) -> Result<bool, GeoDiscoveryError> {
             if !self.1.lock().unwrap().insert((day, event.to_owned())) {
-                return Ok(());
+                return Ok(false);
             }
             let mut map = self.0.lock().unwrap();
             let entry = map.entry((country, day)).or_default();
             entry.likes += likes;
             entry.posts += posts;
+            Ok(true)
+        }
+        async fn add_post_likes(&self, country: CountryCode, day: NaiveDate, post: Uuid, likes: i64) -> Result<(), GeoDiscoveryError> {
+            *self.2.lock().unwrap().entry((country, day, post)).or_default() += likes;
             Ok(())
+        }
+        async fn top_posts(&self, country: CountryCode, days: &[NaiveDate], limit: usize) -> Result<Vec<(Uuid, i64)>, GeoDiscoveryError> {
+            let mut sums: HashMap<Uuid, i64> = HashMap::new();
+            for ((c, day, post), likes) in self.2.lock().unwrap().iter() {
+                if *c == country && days.contains(day) {
+                    *sums.entry(*post).or_default() += likes;
+                }
+            }
+            let mut top: Vec<(Uuid, i64)> = sums.into_iter().collect();
+            top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            top.truncate(limit);
+            Ok(top)
         }
         async fn totals(&self, days: &[NaiveDate]) -> Result<HashMap<CountryCode, CountryActivity>, GeoDiscoveryError> {
             let mut totals: HashMap<CountryCode, CountryActivity> = HashMap::new();
@@ -135,5 +266,80 @@ pub(crate) mod tests {
         let first = standings.ladder(Utc::now()).await.unwrap();
         activity.add(cc("JP"), Utc::now().date_naive(), 5, 1, "a").await.unwrap();
         assert!(Arc::ptr_eq(&first, &standings.ladder(Utc::now()).await.unwrap()));
+    }
+
+    /// Cards a fake map shows: those it holds; `down` fails every check.
+    #[derive(Default)]
+    struct Shown(Mutex<HashMap<Uuid, MapPostCard>>, Mutex<bool>);
+
+    #[async_trait]
+    impl CoverCards for Shown {
+        async fn cover_cards(&self, post_ids: Vec<Uuid>) -> Result<Vec<MapPostCard>, GeoDiscoveryError> {
+            if *self.1.lock().unwrap() {
+                return Err(GeoDiscoveryError::SpatialLuaReturnInvalid);
+            }
+            let shown = self.0.lock().unwrap();
+            Ok(post_ids.iter().filter_map(|id| shown.get(id).cloned()).collect())
+        }
+    }
+
+    fn card_at(lat: f64, lng: f64, thumbnail: &str) -> MapPostCard {
+        MapPostCard {
+            post_id:           Uuid::now_v7(),
+            author_id:         Uuid::now_v7(),
+            author_handle:     String::new(),
+            author_avatar_url: String::new(),
+            thumbnail_url:     thumbnail.into(),
+            caption:           "words".into(),
+            h3_index_r7:       0,
+            virality_score:    0.0,
+            published_at_ms:   0,
+            author_tier:       0,
+            lat:               Some(lat),
+            lng:               Some(lng),
+            format:            crate::domain::value_object::PostFormat::Photo,
+        }
+    }
+
+    /// #942: a country's cover is its most liked post anyone may see that
+    /// was published there; none otherwise, and an outage serves no covers.
+    #[tokio::test]
+    async fn a_cover_is_the_most_liked_post_anyone_may_see_there() {
+        let activity = Arc::new(MemActivity::default());
+        let shown = Arc::new(Shown::default());
+        let today = Utc::now().date_naive();
+        let tokyo = (35.68, 139.69);
+        let (hidden, liked, less) = (card_at(tokyo.0, tokyo.1, "h.jpg"), card_at(tokyo.0, tokyo.1, "l.jpg"), card_at(tokyo.0, tokyo.1, "s.jpg"));
+        // Liked in France, but its card is in Japan: not France's cover.
+        let elsewhere = card_at(tokyo.0, tokyo.1, "e.jpg");
+        for (card, likes) in [(&liked, 10), (&less, 5)] {
+            shown.0.lock().unwrap().insert(card.post_id, card.clone());
+            activity.add_post_likes(cc("JP"), today, card.post_id, likes).await.unwrap();
+        }
+        activity.add_post_likes(cc("JP"), today, hidden.post_id, 50).await.unwrap();
+        shown.0.lock().unwrap().insert(elsewhere.post_id, elsewhere.clone());
+        activity.add_post_likes(cc("FR"), today, elsewhere.post_id, 7).await.unwrap();
+        activity.add(cc("JP"), today, 65, 3, "jp").await.unwrap();
+        activity.add(cc("FR"), today, 7, 1, "fr").await.unwrap();
+
+        let standings = |shown: Arc<Shown>| {
+            CountryStandings::new(Arc::clone(&activity) as _, CountryAtlas::embedded(), UnlockPricing::default(), 30, Duration::ZERO)
+                .with_covers(shown)
+        };
+        let with_covers = standings(Arc::clone(&shown));
+        let ladder = with_covers.ladder(Utc::now()).await.unwrap();
+        let covers = with_covers.covers(&ladder).await;
+        let jp = covers.get(&cc("JP")).expect("a cover for Japan");
+        assert_eq!(jp.post_id, liked.post_id, "the hidden one is skipped, the most liked shown one wins");
+        assert_eq!(jp.poster_url, "l.jpg");
+        assert!(!covers.contains_key(&cc("FR")), "never a post published elsewhere");
+        assert!(!covers.contains_key(&cc("US")), "no likes, no cover");
+        assert!(Arc::ptr_eq(&covers, &with_covers.covers(&ladder).await), "picked once per ladder");
+
+        *shown.1.lock().unwrap() = true;
+        let failing = standings(shown);
+        let ladder = failing.ladder(Utc::now()).await.unwrap();
+        assert!(failing.covers(&ladder).await.is_empty());
+        assert_eq!(ladder.standings[0].country, cc("JP"), "the ladder still serves");
     }
 }

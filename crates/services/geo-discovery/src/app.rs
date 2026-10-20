@@ -82,6 +82,8 @@ pub struct App {
     pub standings: Arc<CountryStandings>,
     /// A member's countries and unlocks (#665).
     pub unlocking: Arc<CountryUnlocking>,
+    /// The cards a Shop cover may come from (#942).
+    pub cover_cards: Arc<dyn crate::application::country_standings::CoverCards>,
     pub trusted_proxy_hops: usize,
 }
 
@@ -110,13 +112,26 @@ impl App {
         let country_access = Arc::new(ResolveCountryAccess { geo_ip, grants: Arc::clone(&grants), atlas });
         let unlocks: Arc<dyn CountryUnlockStore> = Arc::new(ScyllaCountryUnlockStore::new(Arc::clone(&scylla_client)));
         let activity: Arc<dyn CountryActivityStore> = Arc::new(RedisCountryActivity::new(redis_client.clone()));
-        let standings = Arc::new(CountryStandings::new(
-            Arc::clone(&activity),
+        // The Shop covers (#942) go through the Focus path's rules.
+        let cover_cards = Arc::new(GetGeoTimelineHandler {
+            card_store:      Arc::clone(&card_store),
+            tile_repository: Arc::clone(&tile_repository),
+            audience:        Arc::clone(&audience),
+            grants:          Arc::clone(&grants),
+            unlocks:         Arc::clone(&unlocks),
             atlas,
-            UnlockPricing::default(),
-            cfg.standings_window_days,
-            std::time::Duration::from_secs(cfg.standings_cache_secs),
-        ));
+            location:        Arc::clone(&location),
+        });
+        let standings = Arc::new(
+            CountryStandings::new(
+                Arc::clone(&activity),
+                atlas,
+                UnlockPricing::default(),
+                cfg.standings_window_days,
+                std::time::Duration::from_secs(cfg.standings_cache_secs),
+            )
+            .with_covers(Arc::clone(&cover_cards) as _),
+        );
         let unlocking = Arc::new(CountryUnlocking {
             store: Arc::clone(&unlocks),
             standings: Arc::clone(&standings),
@@ -252,6 +267,7 @@ impl App {
             country_access,
             standings,
             unlocking,
+            cover_cards,
             trusted_proxy_hops: cfg.trusted_proxy_hops,
         })
     }

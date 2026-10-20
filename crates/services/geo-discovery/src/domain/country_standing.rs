@@ -3,7 +3,8 @@
 
 use std::collections::HashMap;
 
-use crate::domain::value_object::CountryCode;
+use crate::domain::entity::MapPostCard;
+use crate::domain::value_object::{CountryCode, PostFormat};
 
 /// A country's activity over the window.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -22,6 +23,52 @@ pub struct CountryStanding {
     pub rank:    u32,
     pub likes:   i64,
     pub posts:   i64,
+}
+
+/// The most a text cover's caption shows, in characters (#942).
+pub const COVER_CAPTION_CHARS: usize = 200;
+
+/// What a country's Shop cover shows (#942).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoverKind {
+    Image,
+    Video,
+    Text,
+}
+
+/// A country's Shop card background (#942): one of its posts, with no author.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CountryCover {
+    pub post_id:    uuid::Uuid,
+    pub kind:       CoverKind,
+    /// The photo, or the video's poster; empty for a text cover.
+    pub poster_url: String,
+    /// A text cover's caption, at most [`COVER_CAPTION_CHARS`].
+    pub caption:    String,
+}
+
+impl CountryCover {
+    /// The cover a card makes: `None` when it has nothing to paint (a media
+    /// post without a still, a text post without a caption). A card of
+    /// unknown kind is a photo when it has a still, else text.
+    pub fn of(card: &MapPostCard) -> Option<Self> {
+        let still = !card.thumbnail_url.is_empty();
+        let kind = match card.format {
+            PostFormat::Photo => CoverKind::Image,
+            PostFormat::Video => CoverKind::Video,
+            PostFormat::TextOnly => CoverKind::Text,
+            PostFormat::Unknown if still => CoverKind::Image,
+            PostFormat::Unknown => CoverKind::Text,
+        };
+        let (poster_url, caption) = match kind {
+            CoverKind::Image | CoverKind::Video if still => (card.thumbnail_url.clone(), String::new()),
+            CoverKind::Text if !card.caption.trim().is_empty() => {
+                (String::new(), card.caption.chars().take(COVER_CAPTION_CHARS).collect())
+            }
+            _ => return None,
+        };
+        Some(Self { post_id: card.post_id, kind, poster_url, caption })
+    }
 }
 
 /// Ranks every country of `countries` by likes (most first), ties broken by
@@ -114,5 +161,42 @@ mod tests {
         assert_eq!([p.price(1, false), p.price(10, false), p.price(11, false), p.price(30, false), p.price(31, false)], [50, 50, 30, 30, 15]);
         assert_eq!(p.price(1, true), 0);
         assert_eq!([p.visa_price(1), p.visa_price(11), p.visa_price(31)], [10, 6, 3], "#910: 20 %");
+    }
+
+    fn card(format: PostFormat, thumbnail: &str, caption: &str) -> MapPostCard {
+        MapPostCard {
+            post_id:           uuid::Uuid::now_v7(),
+            author_id:         uuid::Uuid::now_v7(),
+            author_handle:     "someone".into(),
+            author_avatar_url: "https://cdn/a.jpg".into(),
+            thumbnail_url:     thumbnail.into(),
+            caption:           caption.into(),
+            h3_index_r7:       0,
+            virality_score:    0.0,
+            published_at_ms:   0,
+            author_tier:       0,
+            lat:               None,
+            lng:               None,
+            format,
+        }
+    }
+
+    /// #942: a cover paints a still or quotes a caption, and names no author.
+    #[test]
+    fn a_cover_paints_a_still_or_quotes_a_caption() {
+        let photo = CountryCover::of(&card(PostFormat::Photo, "https://cdn/p.jpg", "a caption")).unwrap();
+        assert_eq!((photo.kind, photo.poster_url.as_str(), photo.caption.as_str()), (CoverKind::Image, "https://cdn/p.jpg", ""));
+        assert_eq!(CountryCover::of(&card(PostFormat::Video, "https://cdn/v.jpg", "")).unwrap().kind, CoverKind::Video);
+        assert_eq!(CountryCover::of(&card(PostFormat::Video, "", "")), None, "a video without a poster");
+
+        let long = "é".repeat(250);
+        let text = CountryCover::of(&card(PostFormat::TextOnly, "", &long)).unwrap();
+        assert_eq!((text.kind, text.poster_url.as_str()), (CoverKind::Text, ""));
+        assert_eq!(text.caption.chars().count(), COVER_CAPTION_CHARS);
+        assert_eq!(CountryCover::of(&card(PostFormat::TextOnly, "", "  ")), None);
+
+        // Unknown kind (indexed before it was kept): a still makes a photo.
+        assert_eq!(CountryCover::of(&card(PostFormat::Unknown, "https://cdn/x.jpg", "")).unwrap().kind, CoverKind::Image);
+        assert_eq!(CountryCover::of(&card(PostFormat::Unknown, "", "words")).unwrap().kind, CoverKind::Text);
     }
 }

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 6c189d8300dd5f75f788b715eadc740b5876edde8756b57cacde778da30aa1c6
+  source_sha256: a070f34e0e7c2ba471a9b06e4fe4a1f3cd039df07f5410ff019a699d6fe37741
   translated_at: 2026-10-20
   status: complete
 ---
@@ -218,6 +218,23 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > **10 / 6 / 3**). Calculé depuis les compteurs Redis par jour au plus une fois par minute
 > (`GEO_STANDINGS_CACHE_SECS`). Le pays d'origine est gratuit : celui qu'un membre a enregistré coûte
 > **0** dans le classement qu'il lit.
+>
+> **Couvertures du Shop (#942).** Chaque place du classement porte aussi une `cover` : le fond de la
+> carte du Shop. C'est le **post le plus aimé du pays sur la fenêtre** que le radar montrerait à
+> n'importe qui, n'importe où : ni supprimé ni modéré, l'auteur ni privé ni masqué pour un lecteur
+> anonyme, pas fantôme, et avec une audience de localisation publique. Le post d'un auteur au niveau
+> ville n'est jamais une couverture, et le post doit avoir été publié dans ce pays. Les pays verrouillés
+> ont la leur aussi : c'est de la publicité, donc elle ne porte aucun auteur.
+> - **Champs.** `kind` vaut `MEDIA_IMAGE`, `MEDIA_VIDEO` ou `TEXT`. `poster_url` porte la photo ou
+>   l'affiche de la vidéo. Une couverture texte porte sa `caption`, coupée à 200 caractères.
+>   `preview_url` reste vide tant que media ne produit pas de courte boucle d'aperçu.
+> - **Stockage.** Chaque like compté ajoute aussi au score du post dans le jour de son pays
+>   (`sg:geo:{ctop:CC}:YYYYMMDD`, un ZSET des 100 posts les plus aimés du jour, gardé 40 jours). Cette
+>   écriture est au mieux : un échec ne fait que baisser la chance d'un post.
+> - **Lectures.** Seul `GetCountryStandings` lit les couvertures, pour que les achats qui tirent leur prix
+>   du classement ne les attendent jamais. Elles sont choisies une fois par classement : la fenêtre
+>   additionnée pour chaque pays aimé (un script), les 3 plus aimés essayés. Une vérification en échec
+>   ne sert aucune couverture, et un pays sans couverture n'en a pas : le client dessine le drapeau.
 >
 > **Déblocage de pays (#665).** Les pays d'un membre sont dans `geo_discovery.country_unlocks` (une
 > partition par compte : le **pays d'origine**, une colonne statique posée une fois par LWT, et une

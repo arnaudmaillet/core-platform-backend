@@ -138,10 +138,15 @@ impl<TR: TileRepository + 'static> CountryLikesWorker<TR> {
     async fn count(&self, post: Uuid, delta: i64, day: NaiveDate, event: &str) -> Result<(), GeoDiscoveryError> {
         let Some(card) = self.tile_repository.get_card(&PostId::from(post)).await? else { return Ok(()) };
         let (Some(lat), Some(lng)) = (card.lat, card.lng) else { return Ok(()) };
-        match self.atlas.country_at(lat, lng) {
-            Some(country) => self.activity.add(country, day, delta, 0, event).await,
-            None => Ok(()),
+        let Some(country) = self.atlas.country_at(lat, lng) else { return Ok(()) };
+        if self.activity.add(country, day, delta, 0, event).await? {
+            // The Shop cover (#942), best effort: the like itself is counted
+            // above, once; a lost write only dims one post's chance.
+            if let Err(e) = self.activity.add_post_likes(country, day, post, delta).await {
+                tracing::warn!(error = %e, %post, "country cover: post likes not recorded");
+            }
         }
+        Ok(())
     }
 }
 

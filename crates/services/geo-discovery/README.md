@@ -202,6 +202,22 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > per-day Redis counts at most once a minute (`GEO_STANDINGS_CACHE_SECS`). The home country is
 > free: a member's recorded home country costs **0** on the ladder they read.
 >
+> **Shop covers (#942).** Each standing also carries a `cover`: the Shop card background. It is the
+> country's **most liked post over the window** that the radar would show anyone, anywhere: not deleted
+> or moderated, the author not private or hidden to an anonymous reader, not a ghost, and with a
+> public location audience. A city-level author's post is never a cover, and the post must have been
+> published in that country. Locked countries get theirs too: it is advertising, so it carries no author.
+> - **Fields.** `kind` is `MEDIA_IMAGE`, `MEDIA_VIDEO` or `TEXT`. `poster_url` holds the photo or the
+>   video's poster. A text cover carries its `caption`, cut to 200 characters. `preview_url` stays empty
+>   until media makes a short preview loop.
+> - **Storage.** Every counted like also adds to the post's score in its country's day
+>   (`sg:geo:{ctop:CC}:YYYYMMDD`, a ZSET of the day's 100 most liked posts, kept 40 days). This write is
+>   best effort: a failure only dims one post's chance.
+> - **Reads.** `GetCountryStandings` alone reads covers, so the purchases that price from the ladder never
+>   wait on them. Covers are picked once per ladder: the window summed for each liked country (one
+>   script), the 3 most liked tried. A failing check serves no covers, and a country without one gets
+>   none: the client draws the flag.
+>
 > **Country unlocks (#665).** A member's countries live in `geo_discovery.country_unlocks` (one
 > partition per account: the **home country**, a static column set once with an LWT, and one row per
 > country unlocked). The home country is the account's `country_of_residence` (account
