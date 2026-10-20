@@ -11,7 +11,7 @@ use crate::application::port::{
 use crate::domain::aggregate::FeedEntry;
 use crate::domain::value_object::interest::{affinity, BOOST_INTERESTS};
 use crate::domain::value_object::{
-    hot_score, ContentLevel, DiscoveryCursor, DiscoveryRanking, DiscoveryStream, PostId, ProfileId,
+    hot_score, ContentLevel, DiscoveryCursor, DiscoveryRanking, DiscoveryStream, PostId, PostKindFilter, ProfileId,
     StreamPosition, Viewer, TRENDING_PER_FRESH,
 };
 use crate::error::TimelineError;
@@ -44,6 +44,8 @@ pub struct GetDiscoveryFeedQuery {
     /// Only the posts carrying this hashtag, normalized (#830): TRENDING and
     /// RECENT over the pool's per-tag streams.
     pub hashtag:       Option<String>,
+    /// Only posts of this kind (#949).
+    pub post_kind:     PostKindFilter,
 }
 
 #[derive(Debug)]
@@ -96,6 +98,8 @@ struct Filter<'a, SG: ?Sized> {
     muted:        HashSet<crate::domain::value_object::AuthorId>,
     /// The hashtags of every post read, for the interest ranking.
     tags:         HashMap<PostId, Vec<String>>,
+    /// The kind of post a page keeps (#949).
+    post_kind:    PostKindFilter,
 }
 
 impl<SG: SocialGraphClient + ?Sized> Filter<'_, SG> {
@@ -114,6 +118,7 @@ impl<SG: SocialGraphClient + ?Sized> Filter<'_, SG> {
         let shown = |e: &PoolEntry| {
             meta.get(&e.post_id)
                 .filter(|m| m.shown_at(self.level) && m.author_id == Some(e.author_id))
+                .filter(|m| self.post_kind.keeps(m.format))
                 .filter(|_| !muted.contains(&e.author_id))
         };
         let unknown: Vec<_> = entries
@@ -373,6 +378,7 @@ impl<SG: SocialGraphClient> QueryHandler<GetDiscoveryFeedQuery> for GetDiscovery
             visible:      HashMap::new(),
             muted,
             tags:         HashMap::new(),
+            post_kind:    query.post_kind,
         };
         let mut page = match query.ranking {
             DiscoveryRanking::Nearby => self.nearby_page(query, &cursor, &mut filter, size).await?,
@@ -394,7 +400,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::domain::value_object::{AuthorId, ContentAccess, DiscoveryMeta, Interest, ProfileId, Restriction};
+    use crate::domain::value_object::{AuthorId, ContentAccess, DiscoveryMeta, Interest, PostFormat, ProfileId, Restriction};
 
     /// An in-memory pool: one ordered map per stream, plus the meta.
     #[derive(Default)]
@@ -420,8 +426,13 @@ mod tests {
                 restriction,
                 deleted: false,
                 tags: Vec::new(),
+                format: PostFormat::Unknown,
             });
             post_id
+        }
+
+        fn shape(&self, post_id: PostId, format: PostFormat) {
+            self.meta.lock().unwrap().get_mut(&post_id).unwrap().format = format;
         }
 
         fn tag(&self, post_id: PostId, tags: &[&str]) {
@@ -453,7 +464,7 @@ mod tests {
 
     #[async_trait]
     impl DiscoveryPool for MemPool {
-        async fn record_published(&self, _: &PostId, _: &AuthorId, _: i64, _: &[String]) -> Result<(), TimelineError> { Ok(()) }
+        async fn record_published(&self, _: &PostId, _: &AuthorId, _: i64, _: &[String], _: PostFormat) -> Result<(), TimelineError> { Ok(()) }
         async fn record_popularity(&self, _: &PostId, _: f64) -> Result<(), TimelineError> { Ok(()) }
         async fn record_restriction(&self, _: &PostId, _: Restriction, _: i64) -> Result<(), TimelineError> { Ok(()) }
         async fn record_deleted(&self, _: &PostId) -> Result<(), TimelineError> { Ok(()) }
@@ -550,6 +561,7 @@ mod tests {
             page_token,
             personalize_for: None,
             hashtag: None,
+            post_kind: PostKindFilter::Any,
         })
     }
 
@@ -581,6 +593,43 @@ mod tests {
         // A token is bound to its ranking.
         let err = h.handle(query(DiscoveryRanking::Recent, 4, first.next_page_token)).await.unwrap_err();
         assert!(matches!(err, TimelineError::InvalidPageToken { .. }));
+    }
+
+    /// #949: a kind filter keeps its kind, and the posts of unknown kind
+    /// (published before the pool kept it); NEARBY too.
+    #[tokio::test]
+    async fn a_kind_filter_keeps_its_kind_and_the_unknown() {
+        let pool = Arc::new(MemPool::default());
+        let a = author();
+        let media = pool.put(DiscoveryStream::Recent, a, 9.0, Restriction::None);
+        pool.shape(media, PostFormat::Media);
+        let text = pool.put(DiscoveryStream::Recent, a, 8.0, Restriction::None);
+        pool.shape(text, PostFormat::TextOnly);
+        let unknown = pool.put(DiscoveryStream::Recent, a, 7.0, Restriction::None);
+        let h = handler(Arc::clone(&pool), Arc::new(Graph::default()), vec![media, text, unknown]);
+        let ids = |page: DiscoveryPage| page.items.iter().map(|e| e.post_id).collect::<Vec<_>>();
+
+        for (ranking, filter, expected) in [
+            (DiscoveryRanking::Recent, PostKindFilter::Any, vec![media, text, unknown]),
+            (DiscoveryRanking::Recent, PostKindFilter::Media, vec![media, unknown]),
+            (DiscoveryRanking::Recent, PostKindFilter::TextOnly, vec![text, unknown]),
+            (DiscoveryRanking::Nearby, PostKindFilter::TextOnly, vec![text, unknown]),
+        ] {
+            let mut q = query(ranking, 10, None);
+            q.payload.post_kind = filter;
+            assert_eq!(ids(h.handle(q).await.unwrap()), expected, "{ranking:?} {filter:?}");
+        }
+    }
+
+    #[test]
+    fn a_published_kind_maps_to_its_format() {
+        assert_eq!(PostFormat::from_event_kind("TextOnly"), PostFormat::TextOnly);
+        assert_eq!(PostFormat::from_event_kind("Carousel"), PostFormat::Media);
+        assert_eq!(PostFormat::from_event_kind("MainVideo"), PostFormat::Media);
+        assert_eq!(PostFormat::from_event_kind("image"), PostFormat::Unknown);
+        for format in [PostFormat::Unknown, PostFormat::Media, PostFormat::TextOnly] {
+            assert_eq!(PostFormat::from_code(format.code()), format);
+        }
     }
 
     #[tokio::test]

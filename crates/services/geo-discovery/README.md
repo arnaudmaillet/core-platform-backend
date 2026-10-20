@@ -80,7 +80,9 @@ with a scale: CITY = R5, DISTRICT = R7, STREET = R9) from `posts_by_tile`, or a 
 the place's 200 newest posts by virality (ties to the newest), then carries on with the older ones
 newest first. Cards go through the Focus path (`GetGeoTimeline`), so a page is hydrated and gated the
 same way: a guest's country, a member's countries, ghosts and city-level authors, the reader's
-audience; a page can come back short with a token.
+audience; a page can come back short with a token. `post_kind` (#949: `MEDIA`, `TEXT_ONLY`) keeps one kind
+of post: the card keeps its post's kind (`map_post_cards.post_kind`, from `PostPublished.kind`); a card
+indexed before that passes every filter.
 
 Three atomic Lua scripts drive the hot path: `ZADD_TOPK` (cap per tile, evict lowest on overflow),
 `ZADD_XX` (update only if member present — evicted posts never re-inserted), `PRUNE_COLD_TILES` (evict
@@ -382,7 +384,8 @@ async fn main() -> anyhow::Result<()> {
 - **Migrations:** `0001_create_keyspace.cql` → `0002_create_posts_by_tile_table.cql` →
   `0003_create_map_post_cards_table.cql` → `0004_add_author_tier_column.cql` →
   `0005_add_caption_column.cql` … → `0010_create_posts_by_country.cql` (#833) →
-  `0011_country_visas.cql` (#910: `country_unlocks.visa_until`, `country_visa_purchases`) against `geo_discovery`,
+  `0011_country_visas.cql` (#910: `country_unlocks.visa_until`, `country_visa_purchases`) →
+  `0012_add_card_post_kind.cql` (#949: `map_post_cards.post_kind`) against `geo_discovery`,
   applied **before** first start. Posts indexed before `0010` are not filed by country (their country
   page lists them only once re-announced); nothing was live when it shipped.
 - **Stateful gotchas:** `GEO_DEFAULT_RETENTION_SECS` must equal the Scylla table TTL; the composite

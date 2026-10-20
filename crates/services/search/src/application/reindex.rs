@@ -139,6 +139,7 @@ mod tests {
             indexed_at: chrono::Utc::now(),
             version: DocVersion::new(1),
             visible_until: None,
+            post_kind: None,
         })
     }
 

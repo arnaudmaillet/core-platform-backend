@@ -90,7 +90,9 @@ pub(super) fn properties_for(kind: EntityKind) -> Value {
             "caption":       { "type": "text", "analyzer": "folding" },
             "hashtags":      { "type": "keyword" },
             "author_handle": { "type": "text", "analyzer": "folding", "fields": { "raw": { "type": "keyword" } } },
-            "thumbnail_key": { "type": "keyword", "index": false }
+            "thumbnail_key": { "type": "keyword", "index": false },
+            // #949: added in place (additive `_mapping` update).
+            "post_kind":     { "type": "keyword" }
         }),
         EntityKind::Hashtag => json!({
             "tag": {

@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, Utc};
 
-use super::value_object::{AuthorId, EntityKind, SortStrategy};
+use super::value_object::{AuthorId, EntityKind, PostKindFilter, SortStrategy};
 use crate::error::SearchError;
 
 /// Hard ceiling on a page so a caller can't ask the engine for an unbounded scan.
@@ -25,6 +25,8 @@ pub struct SearchQuery {
     pub page_token: Option<String>,
     /// Caller-resolved block/mute exclusions — search never indexes these.
     pub exclude_author_ids: Vec<AuthorId>,
+    /// Post hits of this kind only (#949).
+    pub post_kind: PostKindFilter,
 }
 
 impl SearchQuery {
@@ -51,7 +53,14 @@ impl SearchQuery {
             page_size: clamp_page(page_size),
             page_token,
             exclude_author_ids,
+            post_kind: PostKindFilter::Any,
         })
+    }
+
+    /// Post hits of `post_kind` only (#949).
+    pub fn with_post_kind(mut self, post_kind: PostKindFilter) -> Self {
+        self.post_kind = post_kind;
+        self
     }
 }
 

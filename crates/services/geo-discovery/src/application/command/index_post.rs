@@ -7,6 +7,7 @@ use crate::application::port::{CardStore, PinStore, SpatialIndex, TileRepository
 use crate::domain::country_atlas::CountryAtlas;
 use crate::domain::entity::{MapPostCard, RadarPin};
 use crate::domain::value_object::{
+    PostFormat,
     AuthorId, GeoCoordinate, H3Index, H3Resolution, PostId, RetentionTtl, Suppression,
     ViralityScore,
 };
@@ -38,6 +39,8 @@ pub struct IndexPostCommand {
     /// Author tier at publish time. 0=Standard, 1=Premium, 2=VIP.
     /// Sourced from the `PostPublished` event (denormalized by services/post).
     pub author_tier:       u8,
+    /// Media or text-only, from `PostPublished.kind` (#949).
+    pub format:            PostFormat,
 }
 
 impl Command for IndexPostCommand {}
@@ -115,6 +118,7 @@ where
             author_tier:       cmd.author_tier,
             lat:               Some(cmd.lat),
             lng:               Some(cmd.lng),
+            format:            cmd.format,
         };
 
         // A post the map already suppressed (deleted or moderated, possibly

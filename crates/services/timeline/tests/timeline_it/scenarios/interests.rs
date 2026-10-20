@@ -33,6 +33,7 @@ async fn publish(h: &TestHarness, caption: &str, published_at_ms: i64) -> String
         author_id: harness::random_author().as_uuid().to_string(),
         published_at_ms,
         tags:      timeline::domain::value_object::interest::hashtags(caption),
+        format:    Default::default(),
     })
     .await;
     post_id
@@ -63,6 +64,7 @@ async fn for_you(h: &TestHarness, reader: Option<ProfileId>) -> DiscoveryPage {
         page_token:      None,
         personalize_for: reader,
         hashtag:         None,
+        post_kind:       Default::default(),
     };
     h.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.expect("discovery page")
 }

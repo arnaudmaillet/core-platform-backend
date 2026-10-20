@@ -16,7 +16,7 @@ use crate::application::country_access::{country_filter, CountryFilter};
 use crate::application::port::{CardStore, PlaceEntry, TileRepository};
 use crate::application::query::get_geo_timeline::{GetGeoTimelineHandler, GetGeoTimelineQuery};
 use crate::domain::entity::MapPostCard;
-use crate::domain::value_object::{MapScope, Place, Viewer};
+use crate::domain::value_object::{MapScope, Place, PostKindFilter, Viewer};
 use crate::error::GeoDiscoveryError;
 
 /// The newest posts a popular page ranks; older ones follow, newest first.
@@ -41,6 +41,8 @@ pub struct ListPlacePostsQuery {
     pub page_token: Option<String>,
     pub viewer:     Viewer,
     pub scope:      MapScope,
+    /// Only posts of this kind (#949): a page can come back short.
+    pub post_kind:  PostKindFilter,
 }
 
 #[derive(Debug, Default)]
@@ -158,7 +160,11 @@ where
             .into_iter()
             .map(|card| (card.post_id, card))
             .collect();
-        Ok(entries.iter().filter_map(|e| found.remove(&e.post_id)).collect())
+        Ok(entries
+            .iter()
+            .filter_map(|e| found.remove(&e.post_id))
+            .filter(|card| q.post_kind.keeps(card.format))
+            .collect())
     }
 }
 
@@ -256,6 +262,7 @@ mod tests {
             author_tier:       0,
             lat:               None,
             lng:               None,
+            format:            Default::default(),
         }
     }
 

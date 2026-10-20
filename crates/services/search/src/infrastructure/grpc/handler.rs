@@ -18,6 +18,7 @@ use crate::domain::{
     AuthorId, EntityKind, HitDisplay, SearchHit, SearchQuery, SearchResults, SortStrategy,
     SuggestQuery, Suggestions, Viewer,
 };
+use crate::domain::value_object::PostKindFilter;
 use transport::grpc::edge;
 use crate::error::SearchError;
 
@@ -185,7 +186,12 @@ impl SearchServiceHandler {
                 .filter_map(|id| AuthorId::new(id).ok())
                 .collect(),
         )
-        .map_err(to_status)?;
+        .map_err(to_status)?
+        .with_post_kind(match proto::PostKindFilter::try_from(req.post_kind) {
+            Ok(proto::PostKindFilter::Media) => PostKindFilter::Media,
+            Ok(proto::PostKindFilter::TextOnly) => PostKindFilter::TextOnly,
+            _ => PostKindFilter::Any,
+        });
         let results = self
             .search
             .handle(Envelope::new(Uuid::now_v7(), RunSearch { query }))

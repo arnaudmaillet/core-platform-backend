@@ -134,6 +134,7 @@ mod tests {
             page_size: 10,
             page_token: String::new(),
             exclude_author_ids: vec![],
+            post_kind: 0,
         });
         let resp = handler.search(request).await.unwrap().into_inner();
         assert_eq!(resp.hits.len(), 1);
@@ -157,6 +158,7 @@ mod tests {
             page_size: 10,
             page_token: String::new(),
             exclude_author_ids: vec![],
+            post_kind: 0,
         };
         // An anonymous edge client is filtered…
         let mut request = Request::new(search());
@@ -179,6 +181,7 @@ mod tests {
             page_size: 10,
             page_token: String::new(),
             exclude_author_ids: vec![],
+            post_kind: 0,
         });
         let status = handler.search(request).await.unwrap_err();
         assert_eq!(status.code(), tonic::Code::InvalidArgument);
@@ -198,6 +201,7 @@ mod tests {
             page_size: 10,
             page_token: String::new(),
             exclude_author_ids: vec![],
+            post_kind: 0,
         };
         let request = Request::new(proto::MultiSearchRequest {
             searches: vec![one("rust"), one("pasta")],

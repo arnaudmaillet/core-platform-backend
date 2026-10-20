@@ -155,6 +155,69 @@ pub struct DiscoveryMeta {
     pub deleted:         bool,
     /// The caption's hashtags, normalized (#662: what a reaction teaches).
     pub tags:            Vec<String>,
+    /// Media or text-only (#949); `Unknown` when published before it was kept.
+    pub format:          PostFormat,
+}
+
+/// A post's kind as a list's kind filter sees it (#949).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PostFormat {
+    /// Not recorded (published before the pool kept it).
+    #[default]
+    Unknown,
+    /// Photo, carousel or video.
+    Media,
+    TextOnly,
+}
+
+impl PostFormat {
+    /// From `PostPublished.kind` (post's `PostKind`).
+    pub fn from_event_kind(kind: &str) -> Self {
+        match kind {
+            "TextOnly" => Self::TextOnly,
+            "Carousel" | "MainVideo" => Self::Media,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// Its code in the pool's meta ('' = unknown).
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Unknown => "",
+            Self::Media => "m",
+            Self::TextOnly => "t",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Self {
+        match code {
+            "m" => Self::Media,
+            "t" => Self::TextOnly,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// Which posts a discovery page keeps by kind (#949).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PostKindFilter {
+    #[default]
+    Any,
+    Media,
+    TextOnly,
+}
+
+impl PostKindFilter {
+    /// A post of unknown kind passes every filter: the client filters too.
+    pub fn keeps(self, format: PostFormat) -> bool {
+        matches!(
+            (self, format),
+            (Self::Any, _)
+                | (_, PostFormat::Unknown)
+                | (Self::Media, PostFormat::Media)
+                | (Self::TextOnly, PostFormat::TextOnly)
+        )
+    }
 }
 
 impl DiscoveryMeta {
@@ -309,6 +372,7 @@ mod tests {
             restriction:     Restriction::None,
             deleted:         false,
             tags:            Vec::new(),
+            format:          PostFormat::Unknown,
         };
         assert!(base.shown_at(ContentLevel::Restricted));
         let gated = DiscoveryMeta { restriction: Restriction::AgeGated, ..base.clone() };

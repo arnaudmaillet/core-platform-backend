@@ -10,7 +10,7 @@
 
 use chrono::{DateTime, Utc};
 
-use super::value_object::EntityKind;
+use super::value_object::{EntityKind, PostFormat};
 
 /// The union of everything search ingests. One decoded event in, one
 /// [`super::mutation::IndexMutation`] out.
@@ -86,6 +86,8 @@ pub struct PostSnapshot {
     pub created_at: DateTime<Utc>,
     /// When the post leaves its author's post window (#664); `None` without one.
     pub visible_until: Option<DateTime<Utc>>,
+    /// Media or text-only (#949); `None` when unknown.
+    pub post_kind: Option<PostFormat>,
     pub revision: u64,
 }
 

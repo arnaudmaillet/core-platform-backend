@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3a95d04882c4adf9b0b14b0e4cf75aad78b27f2d5f8d60ce30033c7d43de556d
+  source_sha256: 0d0b1ea4a7a16f41e3a7673463817fb73b8b0afe258dd24c9e61dd7d75410e3c
   translated_at: 2026-10-20
   status: complete
 ---
@@ -217,6 +217,8 @@ async fn main() -> anyhow::Result<()> {
 > **État de build :** complet jusqu'à la Phase 7 (8 phases : scaffold → proto → domaine → application+ports → adaptateur OpenSearch+décodage → serveur+consommateurs → IT live → durcissement). La suite d'intégration live est derrière le feature `integration-search`. L'ingestion post, **profil** et modération est entièrement câblée (le contenu post + profil est hydraté via `GetPost` / `GetProfileById`).
 >
 > **Résultats selon le lecteur.** Pour tout appelant hors mesh, une page de résultats est filtrée par le `CheckAccess` de social-graph sur ses auteurs (un appel groupé, découpé selon les plafonds de la RPC) : un résultat **post** ne reste que si son auteur est `VISIBLE` pour le lecteur (pas un auteur privé qu'il ne suit pas, pas de blocage dans un sens ou l'autre, pas masqué) ; un résultat **profil** reste sauf s'il est `HIDDEN` (un profil privé reste trouvable par son en-tête) ; les hashtags restent toujours. Les suggestions suivent la règle des profils ; les suggestions de posts sont retirées pour les clients (elles ne nomment pas d'auteur). Si le contrôle échoue, search reste disponible (fail-open) mais ne montre rien de non vérifié : résultats profils et posts retirés, hashtags gardés, `degraded = true`. Une page peut revenir plus courte ; le curseur ne change pas. `exclude_author_ids` reste une exclusion supplémentaire fournie par l'appelant (les exclusions personnelles ne sont jamais indexées).
+
+> **Un seul type de post (#949).** `SearchRequest.post_kind` (`MEDIA` : photo, carrousel, vidéo ; `TEXT_ONLY`) garde les résultats posts de ce type. Un document post porte `post_kind` (`media` / `text_only`, depuis le `PostView.kind` hydraté). La requête n'exclut que l'autre type : les profils, les hashtags et un post indexé avant que son type soit gardé correspondent encore ; une réindexation remplit le champ.
 
 ---
 

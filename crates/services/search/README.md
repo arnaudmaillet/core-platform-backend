@@ -204,6 +204,8 @@ async fn main() -> anyhow::Result<()> {
 >
 > **Viewer-aware results.** For any caller but the mesh, a page of hits is filtered with social-graph's `CheckAccess` on its authors (one bulk call, split to the RPC's caps): a **post** hit stays only if its author is `VISIBLE` to the reader (not a private author they don't follow, no block either way, not hidden); a **profile** hit stays unless `HIDDEN` (a private profile stays findable by its header); hashtags always stay. Suggestions follow the profile rule; post suggestions are dropped for clients (they name no author). If the check fails, search stays up (fail-open) but shows nothing unchecked: profile and post hits are dropped, hashtags kept, `degraded = true`. A page can come back short; the cursor is unchanged. `exclude_author_ids` remains an extra, caller-supplied exclusion (personal exclusions are never indexed).
 
+> **One kind of post (#949).** `SearchRequest.post_kind` (`MEDIA`: photo, carousel, video; `TEXT_ONLY`) keeps post hits of that kind. A post document carries `post_kind` (`media` / `text_only`, from the hydrated `PostView.kind`). The query excludes the other kind only, so profiles, hashtags and a post indexed before its kind was kept still match; a reindex fills the field in.
+
 ---
 
 ## ⚙️ Configuration & Runtime Environment &nbsp;·&nbsp; CORE

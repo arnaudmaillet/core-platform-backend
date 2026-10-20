@@ -20,6 +20,8 @@ pub use timeline_api as proto;
 
 pub use proto::timeline_service_server::TimelineServiceServer;
 
+use crate::domain::value_object::PostKindFilter;
+
 pub struct TimelineServiceHandler<QB>
 where
     QB: QueryBus + Send + Sync + 'static,
@@ -171,6 +173,11 @@ where
             page_token: if req.page_token.is_empty() { None } else { Some(req.page_token) },
             personalize_for,
             hashtag,
+            post_kind: match proto::PostKindFilter::try_from(req.post_kind) {
+                Ok(proto::PostKindFilter::Media) => PostKindFilter::Media,
+                Ok(proto::PostKindFilter::TextOnly) => PostKindFilter::TextOnly,
+                _ => PostKindFilter::Any,
+            },
         };
 
         let page = self

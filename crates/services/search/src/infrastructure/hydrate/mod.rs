@@ -19,6 +19,7 @@ use crate::domain::{
     EntityDeletion, EntityKind, PostEvent, PostSnapshot, ProfileEvent, ProfileSnapshot, SourceEvent,
 };
 use crate::error::SearchError;
+use crate::domain::value_object::PostFormat;
 use crate::infrastructure::decode::ContentRef;
 
 /// Turns a [`ContentRef`] (from the decode layer) into a projectable
@@ -190,6 +191,11 @@ fn post_event(view: post_api::PostView, revision: u64) -> SourceEvent {
         // Kept, not dropped, past its author's window: widening the window
         // brings it back without a re-index (#664).
         visible_until: (view.visible_until_ms > 0).then(|| ms_to_dt(view.visible_until_ms)),
+        post_kind: match post_api::PostKind::try_from(view.kind) {
+            Ok(post_api::PostKind::TextOnly) => Some(PostFormat::TextOnly),
+            Ok(post_api::PostKind::Carousel | post_api::PostKind::MainVideo) => Some(PostFormat::Media),
+            _ => None,
+        },
         revision,
     };
     SourceEvent::Post(PostEvent::Published(snapshot))

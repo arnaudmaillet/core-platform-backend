@@ -10,7 +10,8 @@
 //!   after the tag's last post.
 //! - `timeline:disc:post:<post_id>` — a HASH per post: `a` author, `t`
 //!   published_at_ms, `g` hashtags (space-separated), `p` popularity, `r`
-//!   restriction code, `v` moderation version, `x` deleted. It expires with the window (a decision recorded
+//!   restriction code, `v` moderation version, `x` deleted, `k` kind (`m`
+//!   media, `t` text-only, #949). It expires with the window (a decision recorded
 //!   before the publication — a tombstone — lives a full window).
 //!
 //! The pool is a cache-like read model: if Redis loses it, it refills from new
@@ -27,7 +28,7 @@ use redis_storage::RedisClient;
 
 use crate::application::port::{DiscoveryPool, PoolEntry};
 use crate::domain::value_object::{
-    hot_score, AuthorId, DiscoveryMeta, DiscoveryStream, PostId, Restriction, StreamPosition,
+    hot_score, AuthorId, DiscoveryMeta, DiscoveryStream, PostFormat, PostId, Restriction, StreamPosition,
 };
 use crate::error::TimelineError;
 
@@ -91,9 +92,9 @@ fn fred_err(e: fred::error::Error) -> TimelineError {
 
 /// Records a publication in the meta; returns `[p, r, x]` ('' when unset).
 ///
-/// KEYS[1] = meta · ARGV = author, published_at_ms, ttl_secs, hashtags
+/// KEYS[1] = meta · ARGV = author, published_at_ms, ttl_secs, hashtags, kind
 const META_PUBLISHED: &str = r#"
-redis.call('HSET', KEYS[1], 'a', ARGV[1], 't', ARGV[2], 'g', ARGV[4])
+redis.call('HSET', KEYS[1], 'a', ARGV[1], 't', ARGV[2], 'g', ARGV[4], 'k', ARGV[5])
 redis.call('EXPIRE', KEYS[1], ARGV[3])
 local r = redis.call('HMGET', KEYS[1], 'p', 'r', 'x')
 for i = 1, 3 do if not r[i] then r[i] = '' end end
@@ -301,6 +302,7 @@ fn parse_meta(post_id: PostId, fields: &[Option<String>]) -> DiscoveryMeta {
         restriction:     field(3).map_or(Restriction::None, |r| Restriction::from_code(r.parse().unwrap_or(u8::MAX))),
         deleted:         field(4).is_some(),
         tags:            field(5).map(|g| g.split(' ').map(str::to_owned).collect()).unwrap_or_default(),
+        format:          field(6).map_or(PostFormat::Unknown, PostFormat::from_code),
     }
 }
 
@@ -312,6 +314,7 @@ impl DiscoveryPool for RedisDiscoveryPool {
         author_id:       &AuthorId,
         published_at_ms: i64,
         tags:            &[String],
+        format:          PostFormat,
     ) -> Result<(), TimelineError> {
         let Some(ttl) = self.remaining_secs(published_at_ms) else {
             return Ok(()); // already out of the window
@@ -322,7 +325,13 @@ impl DiscoveryPool for RedisDiscoveryPool {
             .eval(
                 META_PUBLISHED,
                 vec![meta_key(post_id)],
-                vec![author_id.to_string(), published_at_ms.to_string(), ttl.to_string(), tags.join(" ")],
+                vec![
+                    author_id.to_string(),
+                    published_at_ms.to_string(),
+                    ttl.to_string(),
+                    tags.join(" "),
+                    format.code().to_owned(),
+                ],
             )
             .await
             .map_err(fred_err)?;
@@ -472,7 +481,7 @@ impl DiscoveryPool for RedisDiscoveryPool {
             let fields: Vec<Option<String>> = self
                 .client
                 .inner
-                .hmget(meta_key(post_id), vec!["a", "t", "p", "r", "x", "g"])
+                .hmget(meta_key(post_id), vec!["a", "t", "p", "r", "x", "g", "k"])
                 .await
                 .map_err(fred_err)?;
             Ok::<_, TimelineError>((*post_id, fields))

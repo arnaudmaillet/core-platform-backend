@@ -153,6 +153,10 @@ interest tags unless it opted out (#662).
   the pool's slot, written by the same scripts (publication, popularity, restriction, deletion), trimmed
   to the window and expiring a window after the tag's last post. Same filters and paging as the rest of
   the feed; a tag unused for 3 days pages empty.
+- **One kind of post (#949).** `post_kind` (`MEDIA`: photo, carousel, video; `TEXT_ONLY`) keeps one kind,
+  on every ranking. The pool keeps a post's kind in its meta (`k`, from `PostPublished.kind`). A post
+  published before that has no kind and passes every filter: the client filters too. A page can come back
+  short with a token.
 - **Pool** (Redis, `timeline:{disc}:recent|fresh|hot` + a `timeline:disc:post:<id>` hash per post): posts
   published in the last `TIMELINE_DISCOVERY_WINDOW_SECS` (72 h), capped at `TIMELINE_DISCOVERY_POOL_CAP`. Fed
   by one consumer (`timeline-discovery`) on `post.v1.events` (published with the caption's hashtags /

@@ -168,6 +168,7 @@ fn post_doc(s: PostSnapshot, now: DateTime<Utc>) -> Result<PostDoc, SearchError>
         indexed_at: now,
         version: DocVersion::new(s.revision),
         visible_until: s.visible_until,
+        post_kind: s.post_kind,
     })
 }
 
@@ -233,6 +234,7 @@ mod tests {
             thumbnail_key: "thumbs/post-1.jpg".to_owned(),
             created_at: created(),
             visible_until: None,
+            post_kind: Some(crate::domain::value_object::PostFormat::Media),
             revision: 7,
         }
     }

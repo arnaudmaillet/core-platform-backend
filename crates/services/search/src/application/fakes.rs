@@ -42,6 +42,7 @@ pub fn post_event(post_id: &str, author_id: &str, caption: &str, revision: u64) 
         thumbnail_key: format!("thumbs/{post_id}.jpg"),
         created_at: t0(),
         visible_until: None,
+        post_kind: None,
         revision,
     }))
 }
@@ -326,6 +327,9 @@ impl SearchIndex for InMemorySearchIndex {
                 continue;
             }
             if !query.kinds.is_empty() && !query.kinds.contains(&doc.kind()) {
+                continue;
+            }
+            if matches!(doc, IndexDocument::Post(p) if !query.post_kind.keeps(p.post_kind)) {
                 continue;
             }
             if excluded(doc, query) || !matches_text(doc, &query.text) {

@@ -9,7 +9,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::value_object::{AuthorId, DocVersion, EntityKind, PopularityScore, Searchable};
+use super::value_object::{AuthorId, DocVersion, EntityKind, PopularityScore, PostFormat, Searchable};
 
 /// A document in one of the per-kind indices. The `version` drives external
 /// versioning at write time; `searchable` is the moderation-visibility filter.
@@ -105,6 +105,9 @@ pub struct PostDoc {
     /// searchable from then on. `None` without a window.
     #[serde(default)]
     pub visible_until: Option<DateTime<Utc>>,
+    /// Media or text-only (#949); `None` when indexed before it was kept.
+    #[serde(default)]
+    pub post_kind: Option<PostFormat>,
 }
 
 /// A hashtag document — the discoverable tag entity, derived from the post

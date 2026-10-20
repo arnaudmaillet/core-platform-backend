@@ -35,7 +35,7 @@ use cqrs::{CommandBus, Envelope};
 
 use crate::application::command::apply_discovery_signal::{ApplyDiscoverySignalCommand, DiscoverySignal};
 use crate::domain::value_object::interest::hashtags;
-use crate::domain::value_object::Restriction;
+use crate::domain::value_object::{PostFormat, Restriction};
 use crate::infrastructure::worker::{build_dlq_producer, dispatch_outcome};
 
 const TOPIC_POST: &str = "post.v1.events";
@@ -58,6 +58,9 @@ pub struct DiscoveryEvent {
     published_at_ms: Option<i64>,
     #[serde(default)]
     caption:         Option<String>,
+    /// post's `PostKind` (#949).
+    #[serde(default)]
+    kind:            Option<String>,
     // moderation.v1.events
     #[serde(default)]
     subject:         Option<Subject>,
@@ -112,6 +115,7 @@ fn outcome(event: &DiscoveryEvent) -> Outcome {
                     author_id: author_id.clone(),
                     published_at_ms,
                     tags:      hashtags(event.caption.as_deref().unwrap_or_default()),
+                    format:    PostFormat::from_event_kind(event.kind.as_deref().unwrap_or_default()),
                 })
             }
             _ => Outcome::Poison("PostPublished without post_id, profile_id or published_at_ms".into()),
@@ -270,7 +274,8 @@ mod tests {
         PostEvent::PostPublished(PostPublishedEvent {
             post_id:         POST.into(),
             profile_id:      AUTHOR.into(),
-            kind:            "image".into(),
+            // The producer's own spelling (#949).
+            kind:            post::domain::value_object::PostKind::MainVideo.to_string(),
             published_at_ms: 1_760_000_000_000,
             author_tier:     0,
             audio_id:        None,
@@ -306,6 +311,7 @@ mod tests {
                 author_id:       AUTHOR.into(),
                 published_at_ms: 1_760_000_000_000,
                 tags:            vec!["paris".into(), "golden_hour".into()],
+                format:          PostFormat::Media,
             })
         );
         let deleted = PostEvent::PostDeleted(PostDeletedEvent {

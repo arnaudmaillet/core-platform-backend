@@ -223,6 +223,28 @@ impl TestHarness {
         self.index_post_by(Uuid::now_v7(), lat, lng, virality, caption, thumbnail).await
     }
 
+    /// Indexes a post of a kind (#949) at `(lat, lng)`.
+    pub async fn index_post_of_kind(&self, lat: f64, lng: f64, format: geo_discovery::domain::value_object::PostFormat) -> Uuid {
+        let post = Uuid::now_v7();
+        let cmd = IndexPostCommand {
+            post_id:           post.to_string(),
+            author_id:         Uuid::now_v7().to_string(),
+            author_handle:     "tester".to_owned(),
+            author_avatar_url: String::new(),
+            thumbnail_url:     String::new(),
+            caption:           String::new(),
+            lat,
+            lng,
+            virality_score:    1.0,
+            published_at_ms:   chrono::Utc::now().timestamp_millis(),
+            retention_secs:    None,
+            author_tier:       0,
+            format,
+        };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
+        post
+    }
+
     /// Indexes a post with a given id (to replay events out of order).
     pub async fn index_post_with_id(&self, post: Uuid, lat: f64, lng: f64) {
         let cmd = IndexPostCommand {
@@ -238,6 +260,7 @@ impl TestHarness {
             published_at_ms:   chrono::Utc::now().timestamp_millis(),
             retention_secs:    None,
             author_tier:       0,
+            format:            Default::default(),
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
     }
@@ -258,6 +281,7 @@ impl TestHarness {
             published_at_ms:   chrono::Utc::now().timestamp_millis(),
             retention_secs:    Some(retention_secs),
             author_tier:       0,
+            format:            Default::default(),
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
         post_uuid
@@ -280,6 +304,7 @@ impl TestHarness {
             published_at_ms,
             retention_secs:    None,
             author_tier:       0,
+            format:            Default::default(),
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
         post_uuid
@@ -302,6 +327,7 @@ impl TestHarness {
             published_at_ms,
             retention_secs:    None,
             author_tier:       0,
+            format:            Default::default(),
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
         post_uuid
@@ -316,8 +342,35 @@ impl TestHarness {
         page_token: Option<String>,
         scope: MapScope,
     ) -> PlacePostsPage {
-        let query = ListPlacePostsQuery { place, sort, limit, page_token, viewer: Viewer::Internal, scope };
+        let query = ListPlacePostsQuery {
+            place,
+            sort,
+            limit,
+            page_token,
+            viewer: Viewer::Internal,
+            scope,
+            post_kind: Default::default(),
+        };
         self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.expect("list_place_posts")
+    }
+
+    /// A place's first page of one kind (#949), newest first.
+    pub async fn place_posts_of_kind(
+        &self,
+        place: geo_discovery::domain::value_object::Place,
+        post_kind: geo_discovery::domain::value_object::PostKindFilter,
+    ) -> Vec<Uuid> {
+        let query = ListPlacePostsQuery {
+            place,
+            sort: PlaceSort::Recent,
+            limit: 50,
+            page_token: None,
+            viewer: Viewer::Internal,
+            scope: MapScope::All,
+            post_kind,
+        };
+        let page = self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.expect("list_place_posts");
+        page.cards.into_iter().map(|c| c.post_id).collect()
     }
 
     /// Every post of a place, page by page (#833).
@@ -376,6 +429,7 @@ impl TestHarness {
             published_at_ms:   chrono::Utc::now().timestamp_millis(),
             retention_secs:    None,
             author_tier:       0,
+            format:            Default::default(),
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))

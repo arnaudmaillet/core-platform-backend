@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: c13d97471384cbcfe0a633f2cb00f601fcec693304233d9eb49a803f8ad7debf
+  source_sha256: 6c189d8300dd5f75f788b715eadc740b5876edde8756b57cacde778da30aa1c6
   translated_at: 2026-10-20
   status: complete
 ---
@@ -92,7 +92,9 @@ plus ancien après le dernier post ; `POPULAR` classe les 200 posts les plus ré
 (à égalité, le plus récent), puis continue avec les plus anciens du plus récent au plus ancien. Les cartes
 passent par le chemin Focus (`GetGeoTimeline`), donc une page est hydratée et filtrée de la même façon :
 le pays d'un invité, les pays d'un membre, les fantômes et les auteurs au niveau ville, l'audience du
-lecteur ; une page peut revenir incomplète avec un jeton.
+lecteur ; une page peut revenir incomplète avec un jeton. `post_kind` (#949 : `MEDIA`, `TEXT_ONLY`) garde
+un seul type de post : la carte garde le type de son post (`map_post_cards.post_kind`, depuis
+`PostPublished.kind`) ; une carte indexée avant passe tous les filtres.
 
 Trois scripts Lua atomiques pilotent le chemin chaud : `ZADD_TOPK` (cap par tuile, évince le plus bas au
 débordement), `ZADD_XX` (mise à jour seulement si le membre est présent — les posts évincés ne sont jamais
@@ -411,7 +413,8 @@ async fn main() -> anyhow::Result<()> {
 - **Migrations :** `0001_create_keyspace.cql` → `0002_create_posts_by_tile_table.cql` →
   `0003_create_map_post_cards_table.cql` → `0004_add_author_tier_column.cql` →
   `0005_add_caption_column.cql` … → `0010_create_posts_by_country.cql` (#833) →
-  `0011_country_visas.cql` (#910 : `country_unlocks.visa_until`, `country_visa_purchases`) sur `geo_discovery`,
+  `0011_country_visas.cql` (#910 : `country_unlocks.visa_until`, `country_visa_purchases`) →
+  `0012_add_card_post_kind.cql` (#949 : `map_post_cards.post_kind`) sur `geo_discovery`,
   appliquées **avant** le premier démarrage. Les posts indexés avant `0010` ne sont pas rangés par pays
   (leur page pays ne les liste qu'une fois réannoncés) ; rien n'était en production à sa sortie.
 - **Pièges liés à l'état :** `GEO_DEFAULT_RETENTION_SECS` doit égaler le TTL de la table Scylla ; la clé de
