@@ -14,6 +14,7 @@ use thiserror::Error;
 /// | WAL-9002 | InvalidIdempotencyKey | 422  | No        |
 /// | WAL-9003 | InvalidPageToken      | 422  | No        |
 /// | WAL-9004 | InvalidSpend          | 422  | No        |
+/// | WAL-9005 | UnknownStakePack      | 422  | No        |
 /// | DB-*     | Storage (delegated)   | var  | var       |
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -41,6 +42,10 @@ pub enum WalletError {
     #[error("invalid gem spend: {reason}")]
     InvalidSpend { reason: String },
 
+    /// A `pack_id` no stake pack offer has (#941).
+    #[error("unknown stake pack: '{pack_id}'")]
+    UnknownStakePack { pack_id: String },
+
     /// post or comment could not tell what a like lands on (fail closed).
     #[error("{service} unavailable: {reason}")]
     PeerUnavailable { service: &'static str, reason: String },
@@ -61,6 +66,7 @@ impl AppError for WalletError {
             WalletError::InvalidPageToken { .. } => "WAL-9003",
             WalletError::GemSpendingRestricted => "WAL-3001",
             WalletError::InvalidSpend { .. } => "WAL-9004",
+            WalletError::UnknownStakePack { .. } => "WAL-9005",
             WalletError::PeerUnavailable { .. } => "WAL-6001",
             WalletError::EventPublishFailed(_) => "WAL-6002",
         }
@@ -109,6 +115,7 @@ impl AppError for WalletError {
             WalletError::InvalidPageToken { .. } => "This page is no longer valid; start again.",
             WalletError::GemSpendingRestricted => "Gems can't be spent before 18.",
             WalletError::InvalidSpend { .. } => "This purchase is not valid.",
+            WalletError::UnknownStakePack { .. } => "This pack is no longer on sale.",
             WalletError::PeerUnavailable { .. } | WalletError::EventPublishFailed(_) => {
                 "Your likes couldn't be sent right now; they will be retried."
             }

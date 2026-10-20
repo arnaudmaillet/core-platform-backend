@@ -36,15 +36,17 @@ message Wallet {
     int32                     streak_days     = 13;
     google.protobuf.Timestamp last_claim_at   = 14;
 
-    // Shots left in the ×100 stake pack; 0 = none.
+    // Shots left in the stake pack; 0 = none.
     int32                     stake_shots     = 15;
 
     // The caller may not spend gems (under 18, or age unknown): hide the
     // stake pack and the country unlocks. Set on the edge only.
     bool                      gem_spending_restricted = 16;
-    // The ×100 stake pack's terms (server policy).
+    // The default stake pack's terms (server policy): the first of
+    // `stake_packs`, kept for clients that predate several packs.
     int64                     stake_pack_price        = 17;
     int32                     stake_pack_shots        = 18;
+    // Points per shot, for every pack.
     int32                     points_per_shot         = 19;
 
     // The points balance a claim never takes past (server policy): a claim is
@@ -55,6 +57,20 @@ message Wallet {
     // The probability each conviction level C1–C4 stands for (#888, server
     // policy; C1 first): shown when the curator picks a level.
     repeated double           conviction_probabilities = 21;
+
+    // The stake packs on sale (#941, server policy), the default pack first.
+    repeated StakePackOffer   stake_packs             = 22;
+    // The pack the `stake_shots` left came from; empty when none are left.
+    string                    stake_pack_id           = 23;
+}
+
+// One stake pack on sale (#941).
+message StakePackOffer {
+    // Stable id, `shots_<shots>` (e.g. `shots_10`); BuyStakePack names it.
+    string pack_id = 1;
+    int32  shots   = 2;
+    // In gems.
+    int64  price   = 3;
 }
 
 message GetWalletRequest {
@@ -86,7 +102,8 @@ message WalletTransaction {
     int64                     balance_after  = 4;
     TransactionKind           kind           = 5;
     google.protobuf.Timestamp created_at     = 6;
-    // What it was for, when it names something (COUNTRY_UNLOCK: the country).
+    // What it was for, when it names something (COUNTRY_UNLOCK: the country;
+    // STAKE_PACK: the pack id, empty before #941).
     string                    ref_id         = 7;
 }
 
@@ -104,6 +121,9 @@ message BuyStakePackRequest {
     string account_id      = 1;
     // As for ClaimReward: a retry with the same key charges at most once.
     string idempotency_key = 2;
+    // One of `Wallet.stake_packs` (#941); empty = the default pack. A
+    // `pack_id` not on sale is WAL-9005 (INVALID_ARGUMENT).
+    string pack_id         = 3;
 }
 
 message BuyStakePackResponse {

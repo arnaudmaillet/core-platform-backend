@@ -166,7 +166,7 @@ async fn concurrent_pack_buys_charge_once_and_gem_spends_are_recorded() {
         let store = Arc::clone(&store);
         tokio::spawn(async move {
             let key = IdempotencyKey::for_operation(Operation::StakePack, &Uuid::now_v7().to_string()).unwrap();
-            store.buy_stake_pack(&account, &key, &StakePackPolicy::default(), 100, Utc::now()).await.unwrap().0
+            store.buy_stake_pack(&account, &key, &StakePackPolicy::default().default_offer(), 100, Utc::now()).await.unwrap().0
         })
     });
     let mut bought = 0;
@@ -183,6 +183,7 @@ async fn concurrent_pack_buys_charge_once_and_gem_spends_are_recorded() {
     let (replay, again) = store.spend_gems(&account, &key, &spend, 100, Utc::now()).await.unwrap();
     assert_eq!((first, wallet.gems), (SpendOutcome::Spent, 20));
     assert_eq!((replay, again.gems), (SpendOutcome::Spent, 20), "charged once");
+    assert_eq!((again.stake_shots, again.stake_pack_id.as_deref()), (3, Some("shots_3")), "#941: the pack is kept by a gem spend");
     let more = GemSpend { amount: 30, kind: TransactionKind::CountryUnlock, ref_id: Some("US".into()) };
     let key = IdempotencyKey::for_operation(Operation::SpendGems, "country-US").unwrap();
     assert_eq!(store.spend_gems(&account, &key, &more, 100, Utc::now()).await.unwrap().0, SpendOutcome::InsufficientGems);
@@ -191,7 +192,7 @@ async fn concurrent_pack_buys_charge_once_and_gem_spends_are_recorded() {
     let kinds: Vec<_> = history.iter().map(|t| (t.kind, t.delta, t.ref_id.as_deref())).collect();
     assert_eq!(kinds, vec![
         (TransactionKind::CountryUnlock, -30, Some("FR")),
-        (TransactionKind::StakePack, -50, None),
+        (TransactionKind::StakePack, -50, Some("shots_3")),
         (TransactionKind::StarterGift, 100, None),
     ]);
     assert_reconciles(&pool, &account).await;

@@ -68,18 +68,55 @@ impl ClaimPolicy {
     }
 }
 
-/// The ×100 stake pack's terms: `shots` of `points_per_shot` of the buyer's
-/// own points, for `price_gems`. Packs do not stack; shots never expire.
+/// One stake pack on sale (#941): `shots` shots for `price_gems`. Its id is
+/// `shots_{shots}`, so two offers never share one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StakePackOffer {
+    pub shots:      i32,
+    pub price_gems: i64,
+}
+
+impl StakePackOffer {
+    pub fn id(&self) -> String {
+        format!("shots_{}", self.shots)
+    }
+}
+
+/// The stake packs' terms: each offer's shots are of `points_per_shot` of the
+/// buyer's own points. Packs do not stack; shots never expire. `offers` is
+/// never empty, distinct in shots; the first is the default pack (an older
+/// client's, which names none).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StakePackPolicy {
-    pub shots:           i32,
-    pub price_gems:      i64,
+    pub offers:          Vec<StakePackOffer>,
     pub points_per_shot: i32,
 }
 
 impl Default for StakePackPolicy {
     fn default() -> Self {
-        Self { shots: 3, price_gems: 50, points_per_shot: 100 }
+        Self {
+            offers:          vec![
+                StakePackOffer { shots: 3, price_gems: 50 },
+                StakePackOffer { shots: 10, price_gems: 150 },
+                StakePackOffer { shots: 25, price_gems: 325 },
+            ],
+            points_per_shot: 100,
+        }
+    }
+}
+
+impl StakePackPolicy {
+    /// The default pack.
+    pub fn default_offer(&self) -> StakePackOffer {
+        self.offers[0]
+    }
+
+    /// The offer `pack_id` names; empty = the default pack.
+    pub fn offer(&self, pack_id: &str) -> Option<StakePackOffer> {
+        if pack_id.is_empty() {
+            return Some(self.default_offer());
+        }
+        self.offers.iter().copied().find(|offer| offer.id() == pack_id)
     }
 }
 
@@ -136,6 +173,9 @@ pub struct Wallet {
     /// The chain recorded by the last claim.
     pub streak_days:   i32,
     pub stake_shots:   i32,
+    /// The pack the shots came from (#941); `None` before #941 or before any
+    /// pack. Kept once the shots run out.
+    pub stake_pack_id: Option<String>,
 }
 
 impl Wallet {
@@ -154,6 +194,7 @@ impl Wallet {
             claimed_day: None,
             streak_days: 0,
             stake_shots: 0,
+            stake_pack_id: None,
         }
     }
 
@@ -214,11 +255,11 @@ impl Wallet {
         self.last_claim_at = Some(now);
     }
 
-    /// What buying a stake pack would do.
-    pub fn decide_stake_pack(&self, policy: &StakePackPolicy) -> PackDecision {
+    /// What buying `offer` would do.
+    pub fn decide_stake_pack(&self, offer: &StakePackOffer) -> PackDecision {
         if self.stake_shots > 0 {
             PackDecision::StillActive
-        } else if self.gems < policy.price_gems {
+        } else if self.gems < offer.price_gems {
             PackDecision::InsufficientGems
         } else {
             PackDecision::Buy
@@ -226,9 +267,16 @@ impl Wallet {
     }
 
     /// Records a pack [`Self::decide_stake_pack`] allowed.
-    pub fn apply_stake_pack(&mut self, policy: &StakePackPolicy) {
-        self.spend_gems(policy.price_gems);
-        self.stake_shots = policy.shots;
+    pub fn apply_stake_pack(&mut self, offer: &StakePackOffer) {
+        self.spend_gems(offer.price_gems);
+        self.stake_shots = offer.shots;
+        self.stake_pack_id = Some(offer.id());
+    }
+
+    /// The pack the shots left came from; `None` once they ran out. A wallet
+    /// loaded before #941 holds the default pack.
+    pub fn active_stake_pack(&self, policy: &StakePackPolicy) -> Option<String> {
+        (self.stake_shots > 0).then(|| self.stake_pack_id.clone().unwrap_or_else(|| policy.default_offer().id()))
     }
 
     /// Whether `amount` gems can be spent.
@@ -369,15 +417,32 @@ mod tests {
     #[test]
     fn a_pack_needs_the_gems_and_an_empty_one() {
         let policy = StakePackPolicy::default();
+        let pack = policy.default_offer();
         let mut w = wallet();
-        assert_eq!(w.decide_stake_pack(&policy), PackDecision::Buy);
-        w.apply_stake_pack(&policy);
+        assert_eq!(w.decide_stake_pack(&pack), PackDecision::Buy);
+        w.apply_stake_pack(&pack);
         assert_eq!((w.gems, w.gems_spent, w.stake_shots), (50, 50, 3));
-        assert_eq!(w.decide_stake_pack(&policy), PackDecision::StillActive, "packs do not stack");
+        assert_eq!(w.active_stake_pack(&policy).as_deref(), Some("shots_3"));
+        assert_eq!(w.decide_stake_pack(&pack), PackDecision::StillActive, "packs do not stack");
         w.stake_shots = 0;
+        assert_eq!(w.active_stake_pack(&policy), None, "spent");
         w.gems = 49;
-        assert_eq!(w.decide_stake_pack(&policy), PackDecision::InsufficientGems);
+        assert_eq!(w.decide_stake_pack(&pack), PackDecision::InsufficientGems);
         assert!(!w.can_spend_gems(50) && w.can_spend_gems(49) && !w.can_spend_gems(0));
+    }
+
+    #[test]
+    fn packs_are_named_by_their_shots_and_empty_is_the_default() {
+        let policy = StakePackPolicy::default();
+        let ids: Vec<_> = policy.offers.iter().map(StakePackOffer::id).collect();
+        assert_eq!(ids, ["shots_3", "shots_10", "shots_25"]);
+        assert_eq!(policy.offer(""), Some(policy.default_offer()));
+        assert_eq!(policy.offer("shots_10"), Some(StakePackOffer { shots: 10, price_gems: 150 }));
+        assert_eq!(policy.offer("shots_7"), None);
+
+        let mut legacy = wallet();
+        legacy.stake_shots = 2;
+        assert_eq!(legacy.active_stake_pack(&policy).as_deref(), Some("shots_3"), "a pre-#941 pack is the default");
     }
 
     #[test]
