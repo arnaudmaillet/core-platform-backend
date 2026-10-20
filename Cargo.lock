@@ -2166,6 +2166,7 @@ dependencies = [
  "h3o",
  "http",
  "maxminddb",
+ "media-api",
  "moderation",
  "post",
  "profile",
