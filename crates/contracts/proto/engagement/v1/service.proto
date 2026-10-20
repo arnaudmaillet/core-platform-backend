@@ -6,6 +6,8 @@ import "engagement/v1/messages.proto";
 
 service EngagementService {
     // Increments the view counter for a post. Fire-and-forget on the hot path.
+    // With `account_id` and `profile_id` (a member, #944), the view also enters
+    // the profile's viewing history (best effort: it never fails the count).
     rpc RecordView        (RecordViewRequest)        returns (CommandResponse);
 
     // Increments the share counter for a post. Fire-and-forget on the hot path.
@@ -49,4 +51,15 @@ service EngagementService {
     // What an account saved, with each post's profile, paged. Mesh only
     // (never on the edge): the GDPR data export (#872).
     rpc ListSavedPostsByAccount (ListSavedPostsByAccountRequest) returns (ListSavedPostsByAccountResponse);
+    // A profile's viewing history (#944): the posts it viewed, most recently
+    // viewed first, each once, kept 90 days. Owner only (the History tab):
+    // anyone else is refused. Recorded by RecordView with the profile.
+    rpc ListViewHistory (ListViewHistoryRequest) returns (ListViewHistoryResponse);
+    // Takes one post out of it. Idempotent.
+    rpc RemoveViewHistoryEntry (RemoveViewHistoryEntryRequest) returns (RemoveViewHistoryEntryResponse);
+    // Clears it. Idempotent.
+    rpc ClearViewHistory (ClearViewHistoryRequest) returns (ClearViewHistoryResponse);
+    // What an account viewed, with each post's profile, paged. Mesh only
+    // (never on the edge): the GDPR data export (#944).
+    rpc ListViewHistoryByAccount (ListViewHistoryByAccountRequest) returns (ListViewHistoryByAccountResponse);
 }

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 73502af5fdfdf84f7f78be2ecfda8d59a0c5673a818f33756547b077cc149bf4
+  source_sha256: 4bee09929b7bbb2cea5e8e15842e66802c39db1380c58ca4c4a1afb1954a09cb
   translated_at: 2026-10-20
   status: complete
 ---
@@ -287,7 +287,9 @@ canal via le `GetFormerMemberHistory` mesh de chat, ses propres messages et ceux
 `{"from": "another member"}` — « directe » est le type de la conversation, jamais la taille de ses membres ;
 les groupes quittés (#656, `left_at_ms`) sont inclus, jusqu'au départ, sans leurs membres) ; pour le compte, ses
 likes (`ListLikesByAccount` d'engagement, #665 : un like est un point, celui du compte), ses posts
-enregistrés (`saves.json` : `ListSavedPostsByAccount` d'engagement, mesh uniquement, #872), son wallet
+enregistrés (`saves.json` : `ListSavedPostsByAccount` d'engagement, mesh uniquement, #872), son historique
+de vues (`view_history.json` : `ListViewHistoryByAccount` d'engagement, mesh uniquement, #944, les 90 derniers
+jours), son wallet
 (`wallet.json` : `ExportWallet` du wallet, mesh uniquement — lu sans en ouvrir un, avec les articles du
 catalogue achetés par le compte (`owned_items`, #892) —, toutes les pages
 de `ListWalletTransactions`, et `ListStakePositions`, chaque mise avec son règlement ; sans

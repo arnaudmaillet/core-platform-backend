@@ -4,4 +4,5 @@ pub mod get_post_engagement;
 pub mod list_likes_by_account;
 pub mod list_likes_by_profile;
 pub mod list_saved_posts;
+pub mod list_view_history;
 pub mod profile_tab;

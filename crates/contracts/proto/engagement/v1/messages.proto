@@ -7,7 +7,12 @@ import "google/protobuf/timestamp.proto";
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 message RecordViewRequest {
-    string post_id = 1;
+    string post_id    = 1;
+    // A member's view (#944): with both set, it also enters that profile's
+    // viewing history. Bound to the edge token (`sub` and `pids`); empty for
+    // a guest, whose view only counts.
+    string account_id = 2;
+    string profile_id = 3;
 }
 
 message RecordShareRequest {
@@ -190,4 +195,64 @@ message ListSavedPostsByAccountResponse {
     repeated SavedPostView posts           = 1;
     // Empty on the last page.
     string                 next_page_token = 2;
+}
+
+// ── Viewing history (#944) ────────────────────────────────────────────────────
+
+// One viewed post: the last time the profile viewed it.
+message ViewedPostView {
+    string                    post_id    = 1;
+    // The profile that viewed it.
+    string                    profile_id = 2;
+    google.protobuf.Timestamp viewed_at  = 3;
+}
+
+message ListViewHistoryRequest {
+    // One of the caller's profiles (the edge token's `pids`).
+    string profile_id = 1;
+    // Default 30, capped at 100.
+    int32  limit      = 2;
+    // The `next_page_token` of the previous page (empty: the first).
+    string page_token = 3;
+}
+
+message ListViewHistoryResponse {
+    // Most recently viewed first, each post once. Hydrate through post, which
+    // leaves out what the reader may no longer see. A page may be shorter than
+    // `limit` and still be followed.
+    repeated ViewedPostView posts           = 1;
+    // Empty on the last page.
+    string                  next_page_token = 2;
+}
+
+message RemoveViewHistoryEntryRequest {
+    // The caller's account (the edge token's subject).
+    string account_id = 1;
+    // One of the account's profiles (the edge token's `pids`).
+    string profile_id = 2;
+    string post_id    = 3;
+}
+
+message RemoveViewHistoryEntryResponse {}
+
+message ClearViewHistoryRequest {
+    string account_id = 1;
+    string profile_id = 2;
+}
+
+message ClearViewHistoryResponse {}
+
+message ListViewHistoryByAccountRequest {
+    string account_id = 1;
+    // Default 100, capped at 500.
+    int32  limit      = 2;
+    // The `next_page_token` of the previous page (empty: the first).
+    string page_token = 3;
+}
+
+message ListViewHistoryByAccountResponse {
+    // By profile, then post.
+    repeated ViewedPostView posts           = 1;
+    // Empty on the last page.
+    string                  next_page_token = 2;
 }

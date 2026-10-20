@@ -6,8 +6,10 @@ use cqrs::{CommandBus, Envelope, QueryBus};
 use transport::grpc::edge;
 use crate::application::command::{
     record_share::RecordShareCommand, record_view::RecordViewCommand, save_post::SavePostCommand,
+    view_history::{ChangeViewHistoryCommand, HistoryChange},
 };
-use crate::application::port::{AccountLike, PostEngagementSnapshot, SavedCursor, SavedPost};
+use crate::application::port::{AccountLike, PostEngagementSnapshot, SavedCursor, SavedPost, ViewCursor, ViewedPost};
+use crate::application::query::list_view_history::{ListViewHistoryByAccountQuery, ListViewHistoryQuery, ViewHistoryPage};
 use crate::application::query::list_saved_posts::{
     ListSavedPostsByAccountQuery, ListSavedPostsQuery, SavedPage, ACCOUNT_DEFAULT_LIMIT, ACCOUNT_MAX_LIMIT,
 };
@@ -57,12 +59,31 @@ where
         &self,
         request: Request<proto::RecordViewRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
-        let cmd = RecordViewCommand { post_id: request.into_inner().post_id };
-        self.command_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
-            .await
-            .map(|_| ok_response())
-            .map_err(cqrs_to_status)
+        // A member's view (#944) enters its profile's history: both bound to
+        // the token first, so a refused binding counts nothing either.
+        let member = {
+            let req = request.get_ref();
+            match (req.account_id.as_str(), req.profile_id.as_str()) {
+                ("", "") => None,
+                (account_id, profile_id) => {
+                    edge::require_account(&request, account_id)?;
+                    edge::require_profile(&request, profile_id)?;
+                    Some((account_id.to_owned(), profile_id.to_owned()))
+                }
+            }
+        };
+        let post_id = request.into_inner().post_id;
+        let cmd = RecordViewCommand { post_id: post_id.clone() };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.map_err(cqrs_to_status)?;
+        if let Some((account_id, profile_id)) = member {
+            // Best effort: the count is the hot path's; a lost history entry
+            // only misses one row of the History tab.
+            let change = ChangeViewHistoryCommand { account_id, profile_id, change: HistoryChange::Viewed { post_id } };
+            if let Err(e) = self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), change)).await {
+                tracing::warn!(error = %e, "view history: view not recorded");
+            }
+        }
+        Ok(ok_response())
     }
 
     pub async fn record_share(
@@ -316,6 +337,86 @@ where
             next_page_token,
         }))
     }
+
+    /// A profile's viewing history (#944): its owner's alone.
+    pub async fn list_view_history(
+        &self,
+        request: Request<proto::ListViewHistoryRequest>,
+    ) -> Result<Response<proto::ListViewHistoryResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let after = match req.page_token.as_str() {
+            "" => None,
+            token => Some(ViewCursor::decode(token).ok_or_else(|| Status::invalid_argument("malformed page_token"))?),
+        };
+        let query = ListViewHistoryQuery { profile_id: req.profile_id, limit: req.limit, after };
+        let page: ViewHistoryPage =
+            self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListViewHistoryResponse {
+            posts:           page.posts.into_iter().map(viewed_to_proto).collect(),
+            next_page_token: page.next.map(|c| c.encode()).unwrap_or_default(),
+        }))
+    }
+
+    pub async fn remove_view_history_entry(
+        &self,
+        request: Request<proto::RemoveViewHistoryEntryRequest>,
+    ) -> Result<Response<proto::RemoveViewHistoryEntryResponse>, Status> {
+        let req = request.get_ref();
+        let change = HistoryChange::Removed { post_id: req.post_id.clone() };
+        self.change_history(&request, &req.account_id, &req.profile_id, change).await?;
+        Ok(Response::new(proto::RemoveViewHistoryEntryResponse {}))
+    }
+
+    pub async fn clear_view_history(
+        &self,
+        request: Request<proto::ClearViewHistoryRequest>,
+    ) -> Result<Response<proto::ClearViewHistoryResponse>, Status> {
+        let req = request.get_ref();
+        self.change_history(&request, &req.account_id, &req.profile_id, HistoryChange::Cleared).await?;
+        Ok(Response::new(proto::ClearViewHistoryResponse {}))
+    }
+
+    async fn change_history<T>(
+        &self,
+        request: &Request<T>,
+        account_id: &str,
+        profile_id: &str,
+        change: HistoryChange,
+    ) -> Result<(), Status> {
+        edge::require_account(request, account_id)?;
+        edge::require_profile(request, profile_id)?;
+        let cmd = ChangeViewHistoryCommand { account_id: account_id.to_owned(), profile_id: profile_id.to_owned(), change };
+        self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.map_err(cqrs_to_status)
+    }
+
+    /// Mesh only (#944): what an account viewed, for the GDPR export.
+    pub async fn list_view_history_by_account(
+        &self,
+        request: Request<proto::ListViewHistoryByAccountRequest>,
+    ) -> Result<Response<proto::ListViewHistoryByAccountResponse>, Status> {
+        let req = request.into_inner();
+        let after = match req.page_token.rsplit_once(':') {
+            _ if req.page_token.is_empty() => None,
+            Some((profile, post)) if !profile.is_empty() && !post.is_empty() => Some((profile.to_owned(), post.to_owned())),
+            _ => return Err(Status::invalid_argument("malformed page_token")),
+        };
+        let query = ListViewHistoryByAccountQuery { account_id: req.account_id, limit: req.limit, after };
+        let views: Vec<ViewedPost> =
+            self.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.map_err(cqrs_to_status)?;
+        let limit = match req.limit {
+            l if l <= 0 => ACCOUNT_DEFAULT_LIMIT,
+            l => l.min(ACCOUNT_MAX_LIMIT),
+        };
+        let next_page_token = match views.last() {
+            Some(last) if views.len() == limit as usize => format!("{}:{}", last.profile_id, last.post_id),
+            _ => String::new(),
+        };
+        Ok(Response::new(proto::ListViewHistoryByAccountResponse {
+            posts: views.into_iter().map(viewed_to_proto).collect(),
+            next_page_token,
+        }))
+    }
 }
 
 // ── Proto trait implementation ────────────────────────────────────────────────
@@ -356,6 +457,34 @@ where
         request: Request<proto::ListSavedPostsByAccountRequest>,
     ) -> Result<Response<proto::ListSavedPostsByAccountResponse>, Status> {
         self.list_saved_posts_by_account(request).await
+    }
+
+    async fn list_view_history(
+        &self,
+        request: Request<proto::ListViewHistoryRequest>,
+    ) -> Result<Response<proto::ListViewHistoryResponse>, Status> {
+        self.list_view_history(request).await
+    }
+
+    async fn remove_view_history_entry(
+        &self,
+        request: Request<proto::RemoveViewHistoryEntryRequest>,
+    ) -> Result<Response<proto::RemoveViewHistoryEntryResponse>, Status> {
+        self.remove_view_history_entry(request).await
+    }
+
+    async fn clear_view_history(
+        &self,
+        request: Request<proto::ClearViewHistoryRequest>,
+    ) -> Result<Response<proto::ClearViewHistoryResponse>, Status> {
+        self.clear_view_history(request).await
+    }
+
+    async fn list_view_history_by_account(
+        &self,
+        request: Request<proto::ListViewHistoryByAccountRequest>,
+    ) -> Result<Response<proto::ListViewHistoryByAccountResponse>, Status> {
+        self.list_view_history_by_account(request).await
     }
 
     async fn get_like_positions(
@@ -415,6 +544,17 @@ fn reader_of<T>(request: &Request<T>) -> (EngagementReader, Option<String>) {
 }
 
 // ── Conversion helpers ────────────────────────────────────────────────────────
+
+fn viewed_to_proto(view: ViewedPost) -> proto::ViewedPostView {
+    proto::ViewedPostView {
+        post_id:    view.post_id,
+        profile_id: view.profile_id,
+        viewed_at:  Some(prost_types::Timestamp {
+            seconds: view.viewed_at_ms.div_euclid(1_000),
+            nanos:   (view.viewed_at_ms.rem_euclid(1_000) * 1_000_000) as i32,
+        }),
+    }
+}
 
 fn saved_to_proto(save: SavedPost) -> proto::SavedPostView {
     proto::SavedPostView {

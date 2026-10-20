@@ -290,6 +290,18 @@ impl EngagementService for EngagementServer {
     async fn list_saved_posts_by_account(&self, _: Request<engagement_api::ListSavedPostsByAccountRequest>) -> Result<Response<engagement_api::ListSavedPostsByAccountResponse>, Status> {
         Err(Status::unimplemented("list_saved_posts_by_account"))
     }
+    async fn list_view_history(&self, _: Request<engagement_api::ListViewHistoryRequest>) -> Result<Response<engagement_api::ListViewHistoryResponse>, Status> {
+        Err(Status::unimplemented("list_view_history"))
+    }
+    async fn remove_view_history_entry(&self, _: Request<engagement_api::RemoveViewHistoryEntryRequest>) -> Result<Response<engagement_api::RemoveViewHistoryEntryResponse>, Status> {
+        Err(Status::unimplemented("remove_view_history_entry"))
+    }
+    async fn clear_view_history(&self, _: Request<engagement_api::ClearViewHistoryRequest>) -> Result<Response<engagement_api::ClearViewHistoryResponse>, Status> {
+        Err(Status::unimplemented("clear_view_history"))
+    }
+    async fn list_view_history_by_account(&self, _: Request<engagement_api::ListViewHistoryByAccountRequest>) -> Result<Response<engagement_api::ListViewHistoryByAccountResponse>, Status> {
+        Err(Status::unimplemented("list_view_history_by_account"))
+    }
 }
 
 /// An in-process `engagement` on a loopback port, and a channel to it.

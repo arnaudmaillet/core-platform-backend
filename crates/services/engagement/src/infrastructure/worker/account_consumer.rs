@@ -13,7 +13,7 @@ use transport::kafka::consumer::{run_consumer, ProcessOutcome, RetryPolicy};
 use transport::kafka::producer::KafkaProducerHandle;
 
 use crate::application::erasure::LikeEraser;
-use crate::application::port::SavedPosts;
+use crate::application::port::{SavedPosts, ViewHistory};
 use crate::infrastructure::worker::build_dlq_producer;
 
 const TOPIC: &str = "account.v1.events";
@@ -56,6 +56,7 @@ pub struct AccountConsumer {
     kafka_config: KafkaClientConfig,
     eraser:       LikeEraser,
     saves:        Arc<dyn SavedPosts>,
+    history:      Arc<dyn ViewHistory>,
     group_id:     String,
 }
 
@@ -64,9 +65,10 @@ impl AccountConsumer {
         kafka_config: KafkaClientConfig,
         eraser: LikeEraser,
         saves: Arc<dyn SavedPosts>,
+        history: Arc<dyn ViewHistory>,
         group_id: impl Into<String>,
     ) -> Self {
-        Self { kafka_config, eraser, saves, group_id: group_id.into() }
+        Self { kafka_config, eraser, saves, history, group_id: group_id.into() }
     }
 
     pub async fn run(self) {
@@ -107,8 +109,12 @@ impl AccountConsumer {
                         let erased = match worker.eraser.erase(&account, erased_at, now).await {
                             Ok(targets) => {
                                 tracing::info!(targets, "a deleted account's likes erased");
-                                // Its saves (#872): every profile's.
-                                worker.saves.forget_account(&account, now).await
+                                // Its saves (#872) and viewing history (#944):
+                                // every profile's.
+                                match worker.saves.forget_account(&account, now).await {
+                                    Ok(()) => worker.history.forget_account(&account, now).await,
+                                    Err(e) => Err(e),
+                                }
                             }
                             Err(e) => Err(e),
                         };

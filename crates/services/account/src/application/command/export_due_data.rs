@@ -122,6 +122,7 @@ fn readme(now: DateTime<Utc>) -> String {
                              channels your own messages, the others' as placeholders)\n\
          likes.json          the posts and comments you liked, and how many points\n\
          saves.json          the posts you saved, and with which profile\n\
+         view_history.json   the posts you viewed over the last 90 days, and with which profile\n\
          wallet.json         your points and gems, every movement, your stakes and how they settled,\n\
                              the items you bought with gems\n\
          media.json          your photos and videos, each with a download link\n\n\
