@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 11c238c47534c459cb1b72275532651efb351a396ac708a053a3ef8e110f0c44
-  translated_at: 2026-10-12
+  source_sha256: 12953e07299c80ba2a4df5fa1ca53ded3adf0aad86c273c0e02d42365534eb00
+  translated_at: 2026-10-20
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -248,13 +248,12 @@ l'appelant : la première mise la plus récente d'abord, filtrées `ACTIVE` / `S
 `NOT_REWARDED`. **Aucune gem tant que le règlement est en mode shadow** (décision produit du
 2026-10-11) : l'app n'affiche jamais de gems absentes du solde.
 
-**Cadeau de bienvenue (#827).** Un invité accumule des likes avant d'avoir un compte : 50 à son premier
-lancement, puis 25 par journée pleine écoulée, 3 jours au plus (125 au maximum). L'app affiche ce tas
-pendant que l'invité attend. Quand l'appareil de l'invité devient membre (inscription ou connexion
-portant le refresh token de l'invité), auth publie `guest_upgraded`. Cet événement porte le compte, un
-SHA-256 de l'appareil (sa clé App Attest, sinon son id d'appareil — jamais l'id brut) et la date du
-premier lancement de l'invité. Le wallet crédite alors le tas à cet instant en points (`WELCOME_GIFT`),
-**une fois par appareil, quel que soit le compte qui se connecte** :
+**Cadeau de bienvenue (#827, #943).** L'appareil d'un invité qui devient membre reçoit 50 likes fixes,
+quelle que soit la durée passée en invité (décision du propriétaire du 2026-10-14 : la croissance de 25
+par jour est supprimée). Quand l'appareil devient membre (inscription ou connexion portant le refresh
+token de l'invité), auth publie `guest_upgraded`. Cet événement porte le compte et un SHA-256 de
+l'appareil (sa clé App Attest, sinon son id d'appareil — jamais l'id brut). Le wallet crédite alors le
+cadeau en points (`WELCOME_GIFT`), **une fois par appareil, quel que soit le compte qui se connecte** :
 - **Une fois par appareil :** l'appareil est d'abord réservé sur le shard de l'UUID nul
   (`welcome_gifts`, migration 0009), si bien qu'un autre compte sur cet appareil ne reçoit rien.
 - **Une fois par compte :** un compte qui a déjà réservé un autre appareil ne reçoit plus rien, même si le
@@ -263,7 +262,7 @@ premier lancement de l'invité. Le wallet crédite alors le tas à cet instant e
   le même crédit.
 - **Plafond :** le crédit est borné sous `points_cap`.
 - **Effacement :** effacer le compte détache l'appareil mais le garde comme déjà accueilli.
-- **Réglages :** `WALLET_WELCOME_GIFT_FIRST` / `_DAILY` / `_DAYS`.
+- **Réglage :** `WALLET_WELCOME_GIFT`.
 
 **Conviction (#888, charte §6–§9).** `StakeRequest.conviction` (C1–C4 ; `UNSPECIFIED` = un stake rapide)
 dit à quel point le curateur est sûr que la cible finira la journée dans le top : une prédiction
@@ -376,7 +375,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_CURATOR_DAILY_CAP` | `40` | le maximum qu'un compte reçoit de l'enveloppe d'un jour |
 | `WALLET_ENVELOPE_TARGET_CAP_BPS` | `200` | le maximum que les positions d'une cible reçoivent ensemble, en points de base du pool (≤ 10000) |
 | `WALLET_OUTCOME_TOP_PERCENT` | `15` | une cible marque quand elle finit la journée dans cette part du top des cibles du jour (1–100) |
-| `WALLET_WELCOME_GIFT_FIRST` / `_DAILY` / `_DAYS` | `50` / `25` / `3` | le cadeau de bienvenue (#827) : likes au premier lancement de l'invité, par journée pleine ensuite, et combien de ces journées |
+| `WALLET_WELCOME_GIFT` | `50` | le cadeau de bienvenue (#827, #943) : les likes que reçoit l'appareil d'un invité quand il devient membre |
 | `WALLET_CONVICTION_PROBABILITIES` | `0.25,0.40,0.60,0.80` | la probabilité que représente chaque niveau de conviction C1–C4 (#888) : quatre valeurs croissantes dans ]0, 1[ ; toute autre valeur garde le défaut |
 | `WALLET_ENVELOPE_SECS` | `600` | fréquence à laquelle l'enveloppe cherche une journée terminée |
 | `WALLET_ALLOW_LOG_PUBLISHER` | non défini | `true` : démarrer sans `KAFKA_BROKERS`, en journalisant les événements (local seulement) |

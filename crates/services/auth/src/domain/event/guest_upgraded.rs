@@ -14,7 +14,8 @@ pub struct GuestUpgraded {
     /// SHA-256 (lowercase hex) of the device: its App Attest key when one
     /// vouched for the install, else its device id. Never the raw id.
     pub device_key_hash: String,
-    /// When the guest first opened the app (the gift grows from then).
+    /// When the guest first opened the app. Informational: the welcome gift
+    /// is a flat amount (#943).
     pub guest_since: DateTime<Utc>,
     pub occurred_at: DateTime<Utc>,
     pub correlation_id: Uuid,

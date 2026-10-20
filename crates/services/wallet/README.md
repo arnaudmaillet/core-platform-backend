@@ -224,12 +224,12 @@ newest first stake first, filtered `ACTIVE` / `SETTLED` (or both), ≤ 100 a pag
 `WALLET_SETTLEMENT_DELAY_SECS`), `settled_at` once settled, and a `StakeVerdict`: `PENDING` until the
 day's envelope is computed, then `REWARDED` / `NOT_REWARDED`. **No gems while settlement is shadow
 mode** (product decision 2026-10-11): the app never shows gems the balance does not hold.
-**Welcome gift (#827).** A guest collects likes before it has an account: 50 at its first launch, then 25
-for each full day after it, 3 days at most (125 at most). The app shows that pile while the guest waits.
-When the guest's device becomes a member (sign-up or sign-in carrying the guest's refresh token), auth
-publishes `guest_upgraded`. That event carries the account, a SHA-256 of the device (its App Attest key,
-else its device id — never the raw id) and when the guest first launched. The wallet then credits the
-pile at that moment as points (`WELCOME_GIFT`), **once per device, whoever signs in**:
+**Welcome gift (#827, #943).** A guest's device that becomes a member is credited a flat 50 likes, however
+long it was a guest (owner decision 2026-10-14: the 25-a-day growth is gone). When the device becomes a
+member (sign-up or sign-in carrying the guest's refresh token), auth publishes `guest_upgraded`. That
+event carries the account and a SHA-256 of the device (its App Attest key, else its device id — never the
+raw id). The wallet then credits the gift as points (`WELCOME_GIFT`), **once per device, whoever signs
+in**:
 - **Once per device:** the device is claimed on the nil UUID's shard first (`welcome_gifts`, migration
   0009), so another account on that device gets nothing.
 - **Once per account:** an account that already claimed another device gets nothing more, even if the cap
@@ -237,7 +237,7 @@ pile at that moment as points (`WELCOME_GIFT`), **once per device, whoever signs
 - **Idempotent:** the credit uses the service's key `sys:welcome-gift`, so a redelivery answers it.
 - **Cap:** the credit is clamped under `points_cap`.
 - **Erasure:** erasing the account unlinks the device but keeps it welcomed.
-- **Knobs:** `WALLET_WELCOME_GIFT_FIRST` / `_DAILY` / `_DAYS`.
+- **Knob:** `WALLET_WELCOME_GIFT`.
 
 **Conviction (#888, charter §6–§9).** `StakeRequest.conviction` (C1–C4; `UNSPECIFIED` = a quick stake)
 is how sure the curator is that the target ends the day in the top: a prediction recorded and
@@ -346,7 +346,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_CURATOR_DAILY_CAP` | `40` | the most one account receives from a day's envelope |
 | `WALLET_ENVELOPE_TARGET_CAP_BPS` | `200` | the most one target's positions receive together, in basis points of the pool (≤ 10000) |
 | `WALLET_OUTCOME_TOP_PERCENT` | `15` | a target scores when it ends the day in this top share of the day's targets (1–100) |
-| `WALLET_WELCOME_GIFT_FIRST` / `_DAILY` / `_DAYS` | `50` / `25` / `3` | the welcome gift (#827): likes at the guest's first launch, per full day after it, and how many such days |
+| `WALLET_WELCOME_GIFT` | `50` | the welcome gift (#827, #943): the likes a guest's device gets when it becomes a member |
 | `WALLET_CONVICTION_PROBABILITIES` | `0.25,0.40,0.60,0.80` | the probability each conviction level C1–C4 stands for (#888): four ascending values in (0, 1); anything else keeps the default |
 | `WALLET_ENVELOPE_SECS` | `600` | how often the envelope checks for a finished day |
 | `WALLET_ALLOW_LOG_PUBLISHER` | unset | `true`: start without `KAFKA_BROKERS`, logging events (local only) |
