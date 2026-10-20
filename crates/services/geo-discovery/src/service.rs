@@ -50,6 +50,8 @@ impl Service for GeoDiscoveryService {
         // A member's countries and unlocks: the caller's account (#665).
         authenticated("/geo_discovery.v1.GeoDiscoveryService/GetCountryUnlocks"),
         authenticated("/geo_discovery.v1.GeoDiscoveryService/UnlockCountry"),
+        // A 24 h visa (#910): the caller's account.
+        authenticated("/geo_discovery.v1.GeoDiscoveryService/BuyCountryVisa"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

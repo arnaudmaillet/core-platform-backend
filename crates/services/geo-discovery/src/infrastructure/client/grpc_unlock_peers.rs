@@ -12,7 +12,7 @@ use tonic::service::interceptor::InterceptedService;
 use transport::grpc::mesh::MeshTokenInterceptor;
 use wallet_api::wallet_service_client::WalletServiceClient;
 
-use crate::application::port::{GemSpend, GemWallet, ResidenceDirectory};
+use crate::application::port::{CountrySpend, GemSpend, GemWallet, ResidenceDirectory};
 use crate::domain::value_object::CountryCode;
 use crate::error::GeoDiscoveryError;
 
@@ -49,6 +49,7 @@ impl GemWallet for GrpcGemWallet {
     async fn spend_for_country(
         &self,
         account: Uuid,
+        purpose: CountrySpend,
         country: CountryCode,
         amount: i64,
         key: &str,
@@ -57,7 +58,10 @@ impl GemWallet for GrpcGemWallet {
         let mut request = tonic::Request::new(wallet_api::SpendGemsRequest {
             account_id:      account.to_string(),
             amount,
-            kind:            wallet_api::TransactionKind::CountryUnlock as i32,
+            kind:            match purpose {
+                CountrySpend::Unlock => wallet_api::TransactionKind::CountryUnlock,
+                CountrySpend::Visa => wallet_api::TransactionKind::CountryVisa,
+            } as i32,
             ref_id:          country.to_string(),
             idempotency_key: key.to_owned(),
         });

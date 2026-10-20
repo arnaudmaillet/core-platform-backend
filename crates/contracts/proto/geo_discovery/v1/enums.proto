@@ -64,6 +64,21 @@ enum UnlockCountryOutcome {
     UNLOCK_COUNTRY_OUTCOME_PRICE_CHANGED     = 4;
 }
 
+// What became of a 24 h visa purchase (#910).
+enum CountryVisaOutcome {
+    COUNTRY_VISA_OUTCOME_UNSPECIFIED       = 0;
+    // The visa runs until `expires_at` (24 h more than its previous end, or
+    // than now).
+    COUNTRY_VISA_OUTCOME_GRANTED           = 1;
+    // The home country, or unlocked for good: no visa, nothing charged.
+    COUNTRY_VISA_OUTCOME_ALREADY_UNLOCKED  = 2;
+    // `price_gems` is what it costs, `gems` what the wallet holds.
+    COUNTRY_VISA_OUTCOME_INSUFFICIENT_GEMS = 3;
+    // The rank moved since the app showed the price: `price_gems` is the new
+    // one. Nothing charged; ask again with it.
+    COUNTRY_VISA_OUTCOME_PRICE_CHANGED     = 4;
+}
+
 // The order of a place page (#833).
 enum PlaceSort {
     // RECENT.

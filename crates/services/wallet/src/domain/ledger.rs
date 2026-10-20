@@ -51,6 +51,8 @@ pub enum TransactionKind {
     AppIcon,
     /// An accent theme bought with gems (#946; `ref_id`: the item id).
     Theme,
+    /// A 24 h country visa bought with gems (#910; `ref_id`: the country).
+    CountryVisa,
     /// Written by a newer version of this service.
     Unknown,
 }
@@ -66,6 +68,7 @@ impl TransactionKind {
             Self::WelcomeGift => "welcome_gift",
             Self::AppIcon => "app_icon",
             Self::Theme => "theme",
+            Self::CountryVisa => "country_visa",
             Self::Unknown => "unknown",
         }
     }
@@ -80,6 +83,7 @@ impl TransactionKind {
             "welcome_gift" => Self::WelcomeGift,
             "app_icon" => Self::AppIcon,
             "theme" => Self::Theme,
+            "country_visa" => Self::CountryVisa,
             _ => Self::Unknown,
         }
     }
@@ -180,6 +184,7 @@ mod tests {
             TransactionKind::WelcomeGift,
             TransactionKind::AppIcon,
             TransactionKind::Theme,
+            TransactionKind::CountryVisa,
         ] {
             assert_eq!(TransactionKind::parse(k.as_str()), k);
         }

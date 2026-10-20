@@ -12,6 +12,15 @@ pub struct GemSpend {
     pub gems:  i64,
 }
 
+/// What gems spent on a country buy: the wallet's ledger kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CountrySpend {
+    /// A permanent unlock (#665): `COUNTRY_UNLOCK`.
+    Unlock,
+    /// A 24 h visa (#910): `COUNTRY_VISA`.
+    Visa,
+}
+
 /// The account's gems, in the wallet (#665): read, and spent for a country
 /// (`SpendGems`, once per `key`). Failures are
 /// `UnlockDependencyUnavailable` (an unlock fails closed).
@@ -23,6 +32,7 @@ pub trait GemWallet: Send + Sync + 'static {
     async fn spend_for_country(
         &self,
         account: Uuid,
+        purpose: CountrySpend,
         country: CountryCode,
         amount: i64,
         key: &str,

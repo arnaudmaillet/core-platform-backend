@@ -56,6 +56,10 @@ pub enum GeoDiscoveryError {
     #[error("country access needs a client principal")]
     CountryAccessNeedsCaller,
 
+    /// A visa purchase's key (#910): 8–40 of `[A-Za-z0-9_-]`.
+    #[error("an idempotency key is 8–40 characters of letters, digits, '-' or '_'")]
+    InvalidIdempotencyKey,
+
     // ── GEO-3xxx: country unlocks (#665) ──────────────────────────────────────
     /// Gems are not spent under 18 (or with an unknown age).
     #[error("gems cannot be spent by this account")]
@@ -96,6 +100,7 @@ impl AppError for GeoDiscoveryError {
             Self::DomainViolation { .. } => "GEO-9003",
             Self::InvalidCountryCode(_)  => "GEO-9004",
             Self::CountryAccessNeedsCaller => "GEO-9005",
+            Self::InvalidIdempotencyKey => "GEO-9006",
             Self::AccessCheckUnavailable { .. } => "GEO-6001",
             Self::UnlockDependencyUnavailable { .. } => "GEO-6002",
             Self::GemSpendingRestricted => "GEO-3001",
@@ -115,6 +120,7 @@ impl AppError for GeoDiscoveryError {
             | Self::InvalidAuthorId(_)
             | Self::InvalidCountryCode(_)
             | Self::CountryAccessNeedsCaller
+            | Self::InvalidIdempotencyKey
             | Self::DomainViolation { .. } => StatusCode::UNPROCESSABLE_ENTITY,
 
             Self::InvalidH3Index(_) => StatusCode::UNPROCESSABLE_ENTITY,
@@ -149,7 +155,8 @@ impl AppError for GeoDiscoveryError {
             | Self::InvalidPostId(_)
             | Self::InvalidAuthorId(_)
             | Self::InvalidCountryCode(_)
-            | Self::CountryAccessNeedsCaller => Severity::Low,
+            | Self::CountryAccessNeedsCaller
+            | Self::InvalidIdempotencyKey => Severity::Low,
 
             Self::AccessCheckUnavailable { .. } | Self::UnlockDependencyUnavailable { .. } => Severity::Medium,
             Self::GemSpendingRestricted => Severity::Low,
@@ -199,6 +206,7 @@ impl AppError for GeoDiscoveryError {
                 "The request contains an invalid domain value.",
             Self::InvalidCountryCode(_) => "The provided country code is not valid.",
             Self::CountryAccessNeedsCaller => "Country access needs a signed-in or guest session.",
+            Self::InvalidIdempotencyKey => "This request key is not valid.",
 
             Self::Validation(e) => e.user_facing_message(),
 

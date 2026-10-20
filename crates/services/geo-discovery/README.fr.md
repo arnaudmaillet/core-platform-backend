@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: bd98c2bc7dce0dbd459d828e7a1a035541d65bad5831697de087eeffa0b43c68
-  translated_at: 2026-10-10
+  source_sha256: c022105232788e3cfbe3c3524755170589a714872eaa591e680351acc4f98d38
+  translated_at: 2026-10-20
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -156,6 +156,7 @@ service GeoDiscoveryService {
   rpc GetCountryStandings (GetCountryStandingsRequest) returns (GetCountryStandingsResponse); // le classement des pays (#665)
   rpc GetCountryUnlocks (GetCountryUnlocksRequest) returns (GetCountryUnlocksResponse); // les pays d'un membre (#665)
   rpc UnlockCountry (UnlockCountryRequest) returns (UnlockCountryResponse);             // en débloquer un avec des gems (#665)
+  rpc BuyCountryVisa (BuyCountryVisaRequest) returns (BuyCountryVisaResponse);          // un visa de 24 h avec des gems (#910)
 }
 message QueryTileRequest  { Viewport viewport = 1; int32 zoom_level = 2; string guest_principal = 3; } // zoom ∈ [0,15]; 3 = mesh only
 message QueryTileResponse { reserved 1; repeated RadarPin pins = 3; int32 tile_count = 2; } // le champ 1 était `cards`
@@ -210,7 +211,8 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > mêmes pour tout lecteur) renvoie chaque pays que la carte dessine, classé par les **likes des posts
 > publiés là-bas sur les 30 derniers jours** (`GEO_STANDINGS_WINDOW_DAYS` ; égalités départagées par le
 > code pays), avec ses posts et le prix pour le débloquer — **50 gems** pour les rangs 1–10, **30** pour
-> 11–30, **15** au-delà. Calculé depuis les compteurs Redis par jour au plus une fois par minute
+> 11–30, **15** au-delà — et celui d'un visa de 24 h (`visa_price_gems`, #910 : 20 % de ce prix, arrondi :
+> **10 / 6 / 3**). Calculé depuis les compteurs Redis par jour au plus une fois par minute
 > (`GEO_STANDINGS_CACHE_SECS`). Le pays d'origine est gratuit : celui qu'un membre a enregistré coûte
 > **0** dans le classement qu'il lit.
 >
@@ -234,9 +236,26 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > prix qui a bougé entre-temps.
 > Wallet ou account injoignable ⇒ **`GEO-6002`** (`UNAVAILABLE`, fail-closed).
 >
+> **Visas de 24 h (#910).** Une dépense de gems récurrente : un déblocage temporaire.
+> `BuyCountryVisa(country_code, expected_price, idempotency_key)` (edge `authenticated`, adultes
+> seulement comme un déblocage : `GEO-3001`) : le pays d'origine ou un pays débloqué répond
+> `ALREADY_UNLOCKED` ; un prix différent du prix de visa du classement répond `PRICE_CHANGED` ; sinon le
+> prix et la **nouvelle fin** du visa — 24 h après la fin du visa en cours, ou après maintenant — sont
+> enregistrés sous la clé du client (`country_visa_purchases`, gardée 7 jours), les gems sont demandés à
+> `SpendGems` (`COUNTRY_VISA`, clé `visa-<CC>-<clé>`), et le visa est écrit : `GRANTED` avec
+> `expires_at`, ou `INSUFFICIENT_GEMS` (l'enregistrement supprimé). Un nouvel essai avec la même clé
+> paie une fois et accorde la **même** fin, jamais une seconde prolongation ; une clé fait 8 à 40
+> caractères `[A-Za-z0-9_-]` (sinon **`GEO-9006`**). Un visa est le `visa_until` de la ligne du pays
+> (migration 0011), écrit avec un TTL qui finit avec lui, si bien que l'unique lecture de partition de la
+> carte le voit ; débloquer le pays pour de bon l'efface (sans remboursement), et un déblocage impayé de
+> ce pays le laisse courir. `GetCountryUnlocks` liste les visas en cours (`visas`, avec `expires_at`) ;
+> un visa ne compte jamais comme un déblocage ailleurs.
+>
 > **Le filtre de la carte des membres** (`GEO_COUNTRY_UNLOCKS_ENABLED`, **coupé** par défaut tant que
-> la boutique de l'app n'est pas branchée) : `QueryTile` et `GetGeoTimeline` d'un membre ne montrent
-> alors que les posts de son pays d'origine et de ses pays débloqués, **et en mer** (un post hors de
+> la boutique de l'app n'est pas branchée) : `QueryTile`, `GetGeoTimeline` et `ListPlacePosts` d'un
+> membre ne montrent alors que les posts de son pays d'origine, de ses pays débloqués, de ses visas
+> **jusqu'à la fin de chacun** (vérifiée à chaque lecture, quel que soit le cache du client), **et en
+> mer** (un post hors de
 > toute frontière) ; la carte d'un invité ne change pas, le mesh n'est jamais filtré. Une lecture de
 > partition par requête (`Strict` : un déblocage apparaît à la lecture suivante).
 >
@@ -268,6 +287,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 | GEO-9001..9003 | 422 | malformed UUIDs / domain violation |
 | GEO-6001 | 503 | audience check (social-graph `CheckAccess`) unavailable; client reads fail closed (`UNAVAILABLE`, retryable) |
 | GEO-9004/9005 | 422 | code pays ISO invalide / accès par pays sans principal client (mesh) |
+| GEO-9006 | 422 | clé d'achat de visa invalide (#910) |
 
 ---
 
@@ -379,7 +399,8 @@ async fn main() -> anyhow::Result<()> {
 
 - **Migrations :** `0001_create_keyspace.cql` → `0002_create_posts_by_tile_table.cql` →
   `0003_create_map_post_cards_table.cql` → `0004_add_author_tier_column.cql` →
-  `0005_add_caption_column.cql` … → `0010_create_posts_by_country.cql` (#833) sur `geo_discovery`,
+  `0005_add_caption_column.cql` … → `0010_create_posts_by_country.cql` (#833) →
+  `0011_country_visas.cql` (#910 : `country_unlocks.visa_until`, `country_visa_purchases`) sur `geo_discovery`,
   appliquées **avant** le premier démarrage. Les posts indexés avant `0010` ne sont pas rangés par pays
   (leur page pays ne les liste qu'une fois réannoncés) ; rien n'était en production à sa sortie.
 - **Pièges liés à l'état :** `GEO_DEFAULT_RETENTION_SECS` doit égaler le TTL de la table Scylla ; la clé de

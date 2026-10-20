@@ -178,6 +178,8 @@ message CountryStanding {
     int64  posts        = 4;
     // What unlocking it costs, in gems.
     int64  price_gems   = 5;
+    // What a 24 h visa to it costs, in gems (#910).
+    int64  visa_price_gems = 6;
 }
 
 message GetCountryStandingsResponse {
@@ -199,8 +201,19 @@ message GetCountryUnlocksResponse {
     repeated string unlocked_countries = 2;
     // The wallet's gems, so the shop's balance line is one read.
     int64           gems               = 3;
-    // The member map filter is on: the map shows only these countries.
+    // The member map filter is on: the map shows only these countries (and
+    // `visas`' until they end).
     bool            filtering          = 4;
+    // The running 24 h visas (#910), of countries not unlocked for good.
+    repeated CountryVisa visas         = 5;
+}
+
+// A running 24 h visa (#910).
+message CountryVisa {
+    // ISO 3166-1 alpha-2.
+    string                    country_code = 1;
+    // When the country leaves the map again (the server stops it then).
+    google.protobuf.Timestamp expires_at   = 2;
 }
 
 message UnlockCountryRequest {
@@ -217,4 +230,26 @@ message UnlockCountryResponse {
     int64                gems               = 3;
     // The country's current price.
     int64                price_gems         = 4;
+}
+
+message BuyCountryVisaRequest {
+    string account_id      = 1;
+    string country_code    = 2;
+    // The visa price the app showed (`CountryStanding.visa_price_gems`).
+    int64  expected_price  = 3;
+    // Client-generated (8–40 characters: letters, digits, `-`, `_`), a new
+    // one per purchase. A retry with the same key charges at most once and
+    // grants the same end.
+    string idempotency_key = 4;
+}
+
+message BuyCountryVisaResponse {
+    CountryVisaOutcome        outcome    = 1;
+    // The running visas after the call.
+    repeated CountryVisa      visas      = 2;
+    int64                     gems       = 3;
+    // The visa's current price (the agreed one for a retried purchase).
+    int64                     price_gems = 4;
+    // GRANTED: when this country's visa ends.
+    google.protobuf.Timestamp expires_at = 5;
 }

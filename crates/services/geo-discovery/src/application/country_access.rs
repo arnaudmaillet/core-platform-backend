@@ -85,7 +85,8 @@ impl CountryFilter {
 }
 
 /// The country filter of a reader's map: a guest's granted country; a
-/// member's home and unlocked countries (#665); nothing else.
+/// member's home and unlocked countries (#665) and running visas (#910,
+/// until their end); nothing else.
 pub async fn country_filter(
     grants:  &dyn CountryGrantStore,
     unlocks: &dyn CountryUnlockStore,
@@ -98,7 +99,9 @@ pub async fn country_filter(
             Some(country) => CountryFilter::Only { countries: vec![country], open_sea: false },
             None => CountryFilter::Nothing,
         },
-        MapScope::Member(account) => CountryFilter::Only { countries: unlocks.get(*account).await?.all(), open_sea: true },
+        MapScope::Member(account) => {
+            CountryFilter::Only { countries: unlocks.get(*account).await?.on_map(chrono::Utc::now()), open_sea: true }
+        }
     })
 }
 
@@ -217,5 +220,21 @@ mod tests {
         assert!(filter.admits(atlas, 40.4168, -3.7038), "Madrid: unlocked");
         assert!(!filter.admits(atlas, 52.52, 13.405), "Berlin: locked");
         assert!(filter.admits(atlas, 45.0, -30.0), "mid-Atlantic: the sea");
+    }
+
+    /// #910: a running visa opens its country on the member's map; an
+    /// expired one does not, whatever the store still holds.
+    #[tokio::test]
+    async fn a_running_visa_opens_its_country_until_it_ends() {
+        let unlocks = MemUnlocks::default();
+        let me = uuid::Uuid::now_v7();
+        let (de, it) = (CountryCode::try_from("DE").unwrap(), CountryCode::try_from("IT").unwrap());
+        let now = chrono::Utc::now();
+        unlocks.grant_visa(me, de, now + chrono::TimeDelta::hours(3)).await.unwrap();
+        unlocks.grant_visa(me, it, now - chrono::TimeDelta::minutes(1)).await.unwrap();
+        let filter = country_filter(&MemGrants::default(), &unlocks, &MapScope::Member(me)).await.unwrap();
+        let atlas = CountryAtlas::embedded();
+        assert!(filter.admits(atlas, 52.52, 13.405), "Berlin: a running visa");
+        assert!(!filter.admits(atlas, 41.9028, 12.4964), "Rome: the visa ended");
     }
 }
