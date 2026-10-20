@@ -8,11 +8,34 @@ use uuid::Uuid;
 
 use crate::geo_it::harness::{MapScope, TestHarness};
 
-/// A spot of its own per test (shared containers): somewhere in northern
-/// Siberia, offset by a random street-sized step.
+/// A spot of its own per test (shared containers): inland northern Siberia,
+/// its latitude and longitude drawn apart over 8° × 40°, from a randomly
+/// seeded hash of a fresh v7 id (unique, but its tail is a counter within a
+/// millisecond). With one jitter for both (a single diagonal of street-sized
+/// steps), two scenarios could share an R9 cell (#966).
 fn own_spot() -> (f64, f64) {
-    let jitter = (Uuid::now_v7().as_u128() % 10_000) as f64 / 10_000.0;
-    (71.0 + jitter, 120.0 + jitter)
+    use std::hash::BuildHasher;
+    let random = std::collections::hash_map::RandomState::new().hash_one(Uuid::now_v7());
+    let unit = |bits: u64| (bits % 1_000_000) as f64 / 1_000_000.0;
+    (62.0 + 8.0 * unit(random & 0xffff_ffff), 100.0 + 40.0 * unit(random >> 32))
+}
+
+/// #966: spots drawn together (as the scenarios draw a few) fall in distinct
+/// R9 cells; the old diagonal shared one in about 4 % of runs. 50 spots over
+/// the box's ~15 M cells collide with p ≈ 50² / (2 × 15 M) ≈ 0.008 %.
+#[test]
+fn spots_fall_in_distinct_r9_cells() {
+    const SPOTS: usize = 50;
+    let cells: std::collections::HashSet<_> = (0..SPOTS)
+        .map(|_| {
+            let (lat, lng) = own_spot();
+            match Place::around(lat, lng, H3Resolution::R9).unwrap() {
+                Place::Cell { index, .. } => index.as_i64(),
+                _ => unreachable!(),
+            }
+        })
+        .collect();
+    assert_eq!(cells.len(), SPOTS);
 }
 
 fn now_ms() -> i64 {
