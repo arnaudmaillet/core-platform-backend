@@ -56,6 +56,9 @@ pub struct Post {
     /// Read path only (#809): its author hides like counts from this reader
     /// (never the author); never stored.
     like_counts_hidden: bool,
+    /// The card style its author applied (#914): a `card.<name>` catalogue
+    /// item their account owns; `None`: the default card.
+    card_style_id: Option<String>,
     pending_events: Vec<DomainEvent>,
 }
 
@@ -97,6 +100,7 @@ impl Post {
             visible_until: None,
             downloads_disabled: false,
             like_counts_hidden: false,
+            card_style_id: None,
             pending_events: Vec::new(),
         })
     }
@@ -140,6 +144,7 @@ impl Post {
             visible_until: None,
             downloads_disabled: false,
             like_counts_hidden: false,
+            card_style_id: None,
             pending_events: Vec::new(),
         }
     }
@@ -322,6 +327,34 @@ impl Post {
         self.like_counts_hidden = !show_like_counts;
     }
     pub fn downloads_disabled(&self) -> bool { self.downloads_disabled }
+
+    /// The card style (#914); see [`Self::set_card_style`].
+    pub fn card_style_id(&self) -> Option<&str> { self.card_style_id.as_deref() }
+
+    /// Restores the stored card style.
+    pub fn with_card_style(mut self, style: Option<String>) -> Self {
+        self.card_style_id = style;
+        self
+    }
+
+    /// Applies a card style (a `card.<name>` item the author's account owns;
+    /// checked by the caller), or the default card (#914). Free: nothing is
+    /// consumed, the style stays the account's.
+    pub fn set_card_style(&mut self, style: Option<String>) -> Result<(), PostError> {
+        if let Some(id) = &style
+            && !is_card_style_id(id)
+        {
+            return Err(PostError::DomainViolation { field: "card_style_id".into(), message: format!("'{id}' is not a card style") });
+        }
+        self.card_style_id = style;
+        Ok(())
+    }
+
+    /// Withholds the card style from this read (#914: other viewers during the
+    /// experiment window; read path only).
+    pub fn withhold_card_style(&mut self) {
+        self.card_style_id = None;
+    }
     pub fn like_counts_hidden(&self) -> bool { self.like_counts_hidden }
 
     /// Records when the post leaves its author's post window (#664), for a
@@ -390,6 +423,14 @@ fn validate_attachments(kind: PostKind, attachments: &[MediaAttachment]) -> Resu
     }
 
     Ok(())
+}
+
+/// A card style's catalogue id (#914): `card.<name>`, `name` 1–32 of
+/// `[a-z0-9_]` (the wallet's item ids).
+pub fn is_card_style_id(id: &str) -> bool {
+    id.strip_prefix("card.").is_some_and(|name| {
+        (1..=32).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    })
 }
 
 #[cfg(test)]

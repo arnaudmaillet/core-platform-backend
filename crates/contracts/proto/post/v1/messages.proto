@@ -85,6 +85,14 @@ message PostView {
     // The author hides like counts from this reader (#809): counts are
     // withheld (engagement, counter); the app shows none.
     bool                    like_counts_hidden  = 21;
+    // #914: the card style its author applied, a wallet catalogue item id
+    // (`card.<name>`); empty: the default card. Withheld from every reader but
+    // the author while the post is in its experiment window (24 h after
+    // publication, until #889 defines it), except for a GetPost with
+    // `detail` set, so that the control and test cohorts see the default
+    // card. The app draws it from bundled art keyed by id, at the default
+    // card's visual weight.
+    string     card_style_id                    = 22;
 }
 
 message BatchGetLikeVisibilityRequest {
@@ -110,6 +118,9 @@ message PostSummary {
     // A repost (it has a parent), and whether it carries a place (#829).
     bool       is_repost    = 6;
     bool       has_place    = 7;
+    // #914: the post's card style (the author's profile shows it at all times,
+    // the owner's agreed exception to the experiment window).
+    string        card_style_id = 8;
 }
 
 message CommandResponse {
@@ -185,6 +196,9 @@ message ListRecentlyDeletedResponse {
 
 message GetPostRequest {
     string post_id = 1;
+    // #914: the read is the post detail screen, where a card style shows even
+    // during the post's experiment window. Feed cards leave it unset.
+    bool   detail  = 3;
     // Mesh only (the GDPR data export, #653): read the post as its author —
     // the location as the author sees it, whatever their sharing (#657).
     // Honoured only from a mesh caller and only when it names the post's
@@ -203,4 +217,13 @@ message ListPostsByProfileRequest {
 message ListPostsByProfileResponse {
     repeated PostSummary posts      = 1;
     string               next_token = 2;
+}
+
+message SetPostCardStyleRequest {
+    string post_id       = 1;
+    // The post's author (the edge caller's own profile).
+    string profile_id    = 2;
+    // A `card.<name>` item the author's account owns (wallet
+    // ListOwnedItems); empty: the default card.
+    string card_style_id = 3;
 }

@@ -65,6 +65,12 @@ impl PostService for PostServer {
     async fn update_post(&self, _: Request<post_api::UpdatePostRequest>) -> Result<Response<post_api::CommandResponse>, Status> {
         Err(Status::unimplemented("UpdatePost"))
     }
+    async fn set_post_card_style(
+        &self,
+        _: Request<post_api::SetPostCardStyleRequest>,
+    ) -> Result<Response<post_api::CommandResponse>, Status> {
+        Err(Status::unimplemented("SetPostCardStyle"))
+    }
     async fn delete_post(&self, _: Request<post_api::DeletePostRequest>) -> Result<Response<post_api::CommandResponse>, Status> {
         Err(Status::unimplemented("DeletePost"))
     }

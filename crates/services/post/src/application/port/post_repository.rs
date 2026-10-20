@@ -18,6 +18,8 @@ pub struct PostSummary {
     pub is_repost:  bool,
     /// It carries a place (#829, the Places tab).
     pub has_place:  bool,
+    /// Its card style (#914).
+    pub card_style_id: Option<String>,
 }
 
 #[async_trait]
@@ -27,6 +29,8 @@ pub trait PostRepository: Send + Sync + 'static {
     async fn update_lifecycle(&self, post: &Post) -> Result<(), PostError>;
     /// Persists the post's moderation state to both tables.
     async fn update_moderation(&self, post: &Post) -> Result<(), PostError>;
+    /// Writes the post's card style (#914) on both tables.
+    async fn update_card_style(&self, post: &Post) -> Result<(), PostError>;
     async fn find_by_id(&self, id: &PostId) -> Result<Option<Post>, PostError>;
     async fn list_by_profile(
         &self,

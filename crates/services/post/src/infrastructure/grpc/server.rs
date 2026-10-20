@@ -61,6 +61,13 @@ where
 
     // ── Queries ───────────────────────────────────────────────────────────────
 
+    async fn set_post_card_style(
+        &self,
+        request: Request<proto::SetPostCardStyleRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.set_post_card_style(request).await
+    }
+
     async fn get_post(
         &self,
         request: Request<proto::GetPostRequest>,

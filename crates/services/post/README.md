@@ -83,6 +83,7 @@ Every write **dual-writes both tables sequentially**. Attachments are stored as 
 | ScyllaDB (`post`) | durable store | reads + writes fail | **Hard** — `UNAVAILABLE` |
 | Kafka | event emission | downstream projections stall | **Soft** — writes commit; see note |
 | media (`GetAsset`, `BatchResolveDelivery`, #907) | attachments' media assets | writes naming an asset fail; reads lose renditions | **Write:** `UNAVAILABLE` (`PST-5002`, retryable). **Read:** fail-open — attachments keep their URLs |
+| wallet (`ListOwnedItems`, #914) | card style ownership | a style cannot be applied | `UNAVAILABLE` (`PST-5003`, retryable); the default card always works; reads unaffected |
 
 **Upstream (blast radius — `post.*` events feed most of the read fleet):**
 
@@ -106,6 +107,7 @@ service PostService {
   rpc CreatePost (CreatePostRequest) returns (CreatePostResponse);          // draft; PostId pre-generated at boundary
   rpc PublishPost (PublishPostRequest) returns (CommandResponse);           // Draft→Published; emits PostPublished
   rpc UpdatePost (UpdatePostRequest) returns (CommandResponse);             // emits PostUpdated
+  rpc SetPostCardStyle (SetPostCardStyleRequest) returns (CommandResponse); // #914 the author's owned card style, or the default
   rpc DeletePost (DeletePostRequest) returns (CommandResponse);             // soft-delete; emits post.deleted
   rpc RestorePost (RestorePostRequest) returns (CommandResponse);           // #663 within 30 days: published again (re-emits PostPublished at its original time) or a draft
   rpc ListRecentlyDeleted (ListRecentlyDeletedRequest) returns (ListRecentlyDeletedResponse); // #663 the author's restorable posts, newest deletion first
@@ -192,6 +194,19 @@ the holder's own posts over the mesh with `GetPostRequest.as_author_id` set to t
 point, whatever their sharing — honoured only from the mesh and only for the post's author (an edge
 caller's field is dropped before the query).
 
+**Card styles (#914).** A card style is a wallet catalogue item (`card.<name>`) the author's
+**account** buys once; `SetPostCardStyle(post_id, profile_id, card_style_id)` (the post's author)
+applies it **free** to one of their own posts, or the default card (empty). It checks the account owns
+it (wallet `ListOwnedItems` over the mesh, `POST_WALLET_GRPC_ENDPOINT`; **`PST-1011`**
+`PERMISSION_DENIED` otherwise, **`PST-5003`** `UNAVAILABLE` when the wallet cannot tell) and writes it on
+both tables (migration 0017). Deleting the post consumes nothing. **Neutral during the experiment:**
+`PostView.card_style_id` is withheld from every reader but the author (and the GDPR export) while the
+post is inside its experiment window (`POST_CARD_STYLE_NEUTRAL_SECS`, 24 h after publication until #889
+defines it), so the control and the test cohorts both see the default card (charter V5.3 §8–9). The
+owner's agreed exception: a `GetPost` with `detail` set (the post detail screen) and the author's
+profile list (`PostSummary.card_style_id`) show it at all times. The app draws it from bundled art at
+the default card's visual weight.
+
 ### Error contract (`PST-xxxx`)
 
 | Code | Variant | HTTP |
@@ -216,6 +231,8 @@ caller's field is dropped before the query).
 | PST-9007 | `InvalidMediaAssetId` (not a UUID) | 422 |
 | PST-5001 | `AccessCheckUnavailable` (social-graph `CheckAccess` did not answer; retryable) | 503 → `UNAVAILABLE` |
 | PST-5002 | `MediaUnavailable` (media `GetAsset` did not answer a write naming an asset; retryable) | 503 → `UNAVAILABLE` |
+| PST-5003 | `WalletUnavailable` (the wallet could not say whether the author owns a card style, #914; retryable) | 503 → `UNAVAILABLE` |
+| PST-1011 | `ItemNotOwned` (a card style the author's account does not own, #914) | 403 → `PERMISSION_DENIED` |
 
 **Media assets (#907).** An attachment may name its media asset (`MediaAttachmentInput.asset_id`, the
 id `media.IssueUploadTicket` returned). On write, post asks media (`GetAsset`) and refuses it with
@@ -341,6 +358,8 @@ async fn main() -> anyhow::Result<()> {
 | `POST_SOCIAL_GRAPH_GRPC_ENDPOINT` | **Yes** (prod) | `http://localhost:50053` | social-graph mesh endpoint for the audience check (`CheckAccess`). Reads by anyone but the author fail closed (`PST-5001`, `UNAVAILABLE`) when it does not answer. |
 | `POST_SOCIAL_GRAPH_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Deadlines for that call. |
 | `POST_MEDIA_GRPC_ENDPOINT` | No | unset | media mesh endpoint (#907): checks attachments' assets on write, delivers them on read. Unset: asset ids are dropped, attachments keep their URLs. |
+| `POST_WALLET_GRPC_ENDPOINT` | No | unset | wallet's mesh endpoint (#914): whether an author owns a card style (`ListOwnedItems`, post's mesh token). Unset: a style cannot be applied (`PST-5003`). Deadlines `POST_WALLET_RPC_TIMEOUT_MS` / `POST_WALLET_CONNECT_TIMEOUT_MS` (500 / 1000). |
+| `POST_CARD_STYLE_NEUTRAL_SECS` | No | `86400` | how long after publication other readers see a styled post's default card (#914). |
 | `POST_MEDIA_RPC_TIMEOUT_MS` / `_CONNECT_TIMEOUT_MS` | No | `300` / `1000` | Deadlines for those calls (short: reads fail open). |
 | `POST_SIGNED_VIDEOS_ENABLED` | No | `false` | a private author's videos go SIGNED too (#921); on only once media plays SIGNED videos (`MEDIA_CDN_COOKIE_*`) |
 
@@ -355,7 +374,8 @@ async fn main() -> anyhow::Result<()> {
 
 - **Migrations:** `migrations/0001_create_keyspace.cql` → `0002_create_posts_table.cql` →
   `0003_create_posts_by_profile_table.cql` → `0004`–`0007` (audio, author tiers, geo, moderation
-  columns; online `ALTER`s) against `post`, applied **before** first start.
+  columns; online `ALTER`s) … → `0017_add_card_style.cql` (#914) against `post`, applied **before**
+  first start.
 - **Rollout/Rollback:** `<TODO>`; stateless service, safe to roll.
 - **Schema gotcha:** the creator-index clustering order (`created_at DESC, post_id ASC`) is a read
   contract — don't change it after data exists.

@@ -95,6 +95,7 @@ mod tests {
         async fn update_content(&self, _: &Post) -> Result<(), PostError> { unreachable!() }
         async fn update_lifecycle(&self, _: &Post) -> Result<(), PostError> { unreachable!() }
         async fn update_moderation(&self, _: &Post) -> Result<(), PostError> { unreachable!() }
+        async fn update_card_style(&self, _: &Post) -> Result<(), PostError> { unreachable!() }
         async fn find_by_id(&self, id: &PostId) -> Result<Option<Post>, PostError> {
             Ok(self.1.iter().find(|(p, _)| p == id).map(|(p, assets)| self.build(p, assets)))
         }
@@ -106,6 +107,7 @@ mod tests {
         ) -> Result<(Vec<PostSummary>, Option<String>), PostError> {
             let start: usize = token.map_or(0, |t| t.parse().unwrap());
             let page: Vec<PostSummary> = self.1.iter().skip(start).take(2).map(|(p, _)| PostSummary {
+                card_style_id: None,
                 post_id:    p.clone(),
                 kind:       PostKind::Carousel,
                 status:     PostStatus::Published,
