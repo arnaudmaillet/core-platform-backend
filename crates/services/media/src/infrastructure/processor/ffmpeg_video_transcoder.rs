@@ -31,6 +31,14 @@ const HLS_SEGMENT_SECS: u32 = 4;
 const AUDIO_BITRATE_K: u32 = 128;
 const MANIFEST_MIME: &str = "application/vnd.apple.mpegurl";
 
+/// The preview loop (#963): the video's first seconds, muted, its short side
+/// at most this many pixels, as a small progressive MP4.
+const PREVIEW_SECS: u32 = 3;
+const PREVIEW_SHORT_SIDE: u32 = 360;
+const PREVIEW_BITRATE_K: u32 = 600;
+/// A preview past this is dropped: a card plays it in place.
+const PREVIEW_MAX_BYTES: u64 = 300 * 1024;
+
 /// ffmpeg-backed [`VideoTranscoder`]: turns a validated video master into the
 /// 3-rung CMAF/HLS ladder (per-rung fMP4 playlists + segments under a hand-built
 /// master playlist), a still poster, and a poster-derived BlurHash, writing every
@@ -84,9 +92,19 @@ impl VideoTranscoder for FfmpegVideoTranscoder {
             artifacts.poster_dimensions,
             artifacts.poster_size,
         );
+        let mut renditions = vec![manifest, poster];
+        if let Some((dimensions, size)) = artifacts.preview {
+            renditions.push(Rendition::new(
+                crate::domain::value_object::RenditionKind::Preview,
+                MimeType::new("video/mp4")?,
+                root.object("preview.mp4"),
+                dimensions,
+                size,
+            ));
+        }
 
         Ok(TranscodeOutput {
-            renditions: vec![manifest, poster],
+            renditions,
             blurhash: Blurhash::new(artifacts.blurhash)?,
         })
     }
@@ -109,6 +127,8 @@ struct TranscodeArtifacts {
     master_size: u64,
     poster_size: u64,
     blurhash: String,
+    /// The preview loop's dimensions and size, when one was made (#963).
+    preview: Option<(Dimensions, u64)>,
 }
 
 /// Stages the source bytes, extracts the poster, transcodes each applicable rung,
@@ -148,6 +168,20 @@ fn build_ladder(input: &Path, work: &Path) -> Result<TranscodeArtifacts, MediaEr
         content_type: "image/jpeg",
         bytes: poster_bytes.clone(),
     }];
+
+    // The preview loop (#963), best effort: a video without one stays READY.
+    let preview = match build_preview(input, work, src_w, src_h) {
+        Ok(Some((bytes, dimensions))) => {
+            let size = bytes.len() as u64;
+            files.push(OutputFile { relative: "preview.mp4".to_owned(), content_type: "video/mp4", bytes });
+            Some((dimensions, size))
+        }
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "video preview not made");
+            None
+        }
+    };
 
     // Transcode each rung and collect its playlist + init + segments.
     let mut variants = Vec::new();
@@ -201,7 +235,42 @@ fn build_ladder(input: &Path, work: &Path) -> Result<TranscodeArtifacts, MediaEr
         top_dimensions,
         poster_dimensions,
         blurhash,
+        preview,
     })
+}
+
+/// The preview's even dimensions: the short side brought down to
+/// [`PREVIEW_SHORT_SIDE`], never up, the aspect kept.
+fn preview_dimensions(src_w: u32, src_h: u32) -> (u32, u32) {
+    let short = src_w.min(src_h).max(2);
+    let target = short.min(PREVIEW_SHORT_SIDE);
+    let scale = |side: u32| {
+        let v = (u64::from(side) * u64::from(target) / u64::from(short)) as u32;
+        (v - v % 2).max(2)
+    };
+    (scale(src_w), scale(src_h))
+}
+
+/// The preview loop (#963): `None` when it came out past [`PREVIEW_MAX_BYTES`].
+fn build_preview(input: &Path, work: &Path, src_w: u32, src_h: u32) -> Result<Option<(Vec<u8>, Dimensions)>, MediaError> {
+    let (w, h) = preview_dimensions(src_w, src_h);
+    let out = work.join("preview.mp4");
+    let maxrate = PREVIEW_BITRATE_K * 7 / 6;
+    run_ffmpeg(&[
+        "-y", "-i", &input.to_string_lossy(),
+        "-t", &PREVIEW_SECS.to_string(), "-an",
+        "-vf", &format!("scale={w}:{h}"),
+        "-c:v", "libx264", "-profile:v", "main", "-pix_fmt", "yuv420p", "-preset", "veryfast",
+        "-b:v", &format!("{PREVIEW_BITRATE_K}k"), "-maxrate", &format!("{maxrate}k"), "-bufsize", &format!("{maxrate}k"),
+        "-movflags", "+faststart",
+        &out.to_string_lossy(),
+    ])?;
+    let bytes = std::fs::read(&out).map_err(|e| MediaError::ProcessingFailed { reason: format!("read preview: {e}") })?;
+    if bytes.len() as u64 > PREVIEW_MAX_BYTES {
+        tracing::warn!(bytes = bytes.len(), "video preview past its budget: dropped");
+        return Ok(None);
+    }
+    Ok(Some((bytes, Dimensions::new(w, h)?)))
 }
 
 struct Variant {
@@ -327,6 +396,16 @@ mod tests {
         assert!(master.contains("720w/playlist.m3u8"));
     }
 
+    /// #963: the short side comes down to 360 px, never up, even and in
+    /// proportion.
+    #[test]
+    fn a_preview_keeps_the_aspect_with_a_360_px_short_side() {
+        assert_eq!(preview_dimensions(1080, 1920), (360, 640));
+        assert_eq!(preview_dimensions(1920, 1080), (640, 360));
+        assert_eq!(preview_dimensions(240, 426), (240, 426), "never upscaled");
+        assert_eq!(preview_dimensions(1081, 1921).0 % 2, 0);
+    }
+
     #[test]
     fn content_types_cover_the_hls_tree() {
         assert_eq!(content_type_for("master.m3u8"), "application/vnd.apple.mpegurl");
@@ -366,5 +445,9 @@ mod tests {
         }
         assert_eq!(art.top_dimensions, Dimensions::new(1080, 1920).unwrap());
         assert!(!art.blurhash.is_empty());
+        // #963: the preview loop, small and in proportion.
+        let preview = art.files.iter().find(|f| f.relative == "preview.mp4").expect("a preview");
+        assert!(preview.bytes.len() as u64 <= PREVIEW_MAX_BYTES, "{} bytes", preview.bytes.len());
+        assert_eq!(art.preview.map(|(d, _)| d), Some(Dimensions::new(360, 640).unwrap()));
     }
 }

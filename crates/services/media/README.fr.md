@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 57888fbf5726137e5970f1a88da40eefe391f493e2fd5e01e829bdfea13c300e
+  source_sha256: 286dcf47d468ce66ac713f6feab4c0fcc16b14c44e58c8bf799d9dcf190c8a71
   translated_at: 2026-10-20
   status: complete
 ---
@@ -308,6 +308,14 @@ L'asset est READY avec sa grande planche ; il n'est jamais servi comme une vidé
 disposition de chaque planche à sa rendition (`DeliveredRendition.sheet` : nombre d'images, colonnes,
 durée d'une image, gouttière, taille de cellule), déduite du type. Un clip de test de 3 s donne des
 planches d'environ 28 Ko / 37 Ko et une image fixe d'environ 8 Ko.
+
+**Boucles d'aperçu vidéo (#963).** À côté de son échelle HLS et de son affiche, une `VIDEO` reçoit un
+**`PREVIEW`** : ses 3 premières secondes, sans son, en H.264 (main), son petit côté à 360 px au plus
+(jamais agrandi), à ~600 kbit/s, un MP4 progressif (`+faststart`). Une carte le joue sur place, comme la
+couverture d'un pays dans le Shop. Il est au mieux : un aperçu qui échoue, ou qui dépasse 300 Ko, est
+laissé de côté et la vidéo reste READY. Il est livré comme les autres renditions, selon la visibilité
+de l'asset (celui d'une vidéo SIGNED demande ses cookies). Les vidéos transcodées avant n'en ont pas ;
+pas de rattrapage.
 
 ### Contrat d'erreur
 

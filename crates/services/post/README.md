@@ -285,7 +285,7 @@ pending gets `PST-1010` (`ABORTED`): retry it.
 
 | Topic | Trigger | Key | Consumers |
 |---|---|---|---|
-| `post.v1.events` | every lifecycle event (`PostPublished` / `PostUpdated` / `PostDeleted`); `PostPublished` carries the denormalized `author_tier`, plus `caption` / `thumbnail_url` / optional `lat`/`lng` for the geo projection | `post_id` | `search`, `timeline`, `realtime`, `geo-discovery`, `notification` |
+| `post.v1.events` | every lifecycle event (`PostPublished` / `PostUpdated` / `PostDeleted`); `PostPublished` carries the denormalized `author_tier`, plus `caption` / `thumbnail_url` / optional `lat`/`lng` and `cover_asset_id` (the first attachment's media asset, #963) for the geo projection | `post_id` | `search`, `timeline`, `realtime`, `geo-discovery`, `notification` |
 | `post.deleted` | `DeletePost` success | `post_id` | `timeline`, `geo-discovery` |
 
 > **One stream, one legacy topic.** `post.v1.events` is the unified, versioned stream (the fleet convention, like `moderation.v1.events` / `profile.v1.events`): the whole internally-tagged `DomainEvent`, keyed by `post_id`. The legacy per-type `post.published` / `post.updated` topics are retired (#487: geo-discovery and notification moved onto `post.v1.events`); `post.deleted` (bare payload) remains for timeline's and geo-discovery's deletion consumers.

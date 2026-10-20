@@ -26,6 +26,11 @@ pub struct PostPublishedEvent {
     /// pin image. Absent for text-only posts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thumbnail_url:   Option<String>,
+    /// The first attachment's media asset (#963): geo-discovery resolves a
+    /// video cover's preview loop from it. Absent for text-only posts and for
+    /// attachments stored before they named their asset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover_asset_id:  Option<String>,
     /// Client-supplied post location (WGS-84). Absent → the post is NOT
     /// geo-indexed (geo-discovery skips it). `lat`/`lng` are always emitted
     /// together or not at all.

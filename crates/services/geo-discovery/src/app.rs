@@ -63,6 +63,9 @@ pub struct Backends {
     pub wallet:    Arc<dyn GemWallet>,
     /// The account's country of residence (a member's home, #665).
     pub residence: Arc<dyn ResidenceDirectory>,
+    /// The videos' preview loops (#963, media); `None`: covers paint their
+    /// poster only.
+    pub previews:  Option<Arc<dyn crate::application::port::MediaPreviews>>,
 }
 
 /// A fully-wired geo-discovery service bound to its backends. The buses exposed
@@ -95,7 +98,7 @@ impl App {
         cfg:      GeoDiscoveryConfig,
         backends: Backends,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let Backends { scylla, redis, kafka, audience, geo_ip, wallet, residence } = backends;
+        let Backends { scylla, redis, kafka, audience, geo_ip, wallet, residence, previews } = backends;
 
         let scylla_client = Arc::new(ScyllaSessionBuilder::new(scylla).build().await?);
         let redis_client = RedisClientBuilder::new(redis).build().await?;
@@ -122,16 +125,18 @@ impl App {
             atlas,
             location:        Arc::clone(&location),
         });
-        let standings = Arc::new(
-            CountryStandings::new(
-                Arc::clone(&activity),
-                atlas,
-                UnlockPricing::default(),
-                cfg.standings_window_days,
-                std::time::Duration::from_secs(cfg.standings_cache_secs),
-            )
-            .with_covers(Arc::clone(&cover_cards) as _),
-        );
+        let standings = CountryStandings::new(
+            Arc::clone(&activity),
+            atlas,
+            UnlockPricing::default(),
+            cfg.standings_window_days,
+            std::time::Duration::from_secs(cfg.standings_cache_secs),
+        )
+        .with_covers(Arc::clone(&cover_cards) as _);
+        let standings = Arc::new(match previews {
+            Some(previews) => standings.with_previews(previews),
+            None => standings,
+        });
         let unlocking = Arc::new(CountryUnlocking {
             store: Arc::clone(&unlocks),
             standings: Arc::clone(&standings),

@@ -393,6 +393,7 @@ fn rendition_from_proto(value: i32) -> Option<RenditionKind> {
         7 => Some(RenditionKind::Poster),
         8 => Some(RenditionKind::SheetSmall),
         9 => Some(RenditionKind::SheetLarge),
+        10 => Some(RenditionKind::Preview),
         _ => None,
     }
 }
@@ -441,6 +442,7 @@ fn rendition_kind_to_proto(kind: RenditionKind) -> i32 {
         RenditionKind::Poster => 7,
         RenditionKind::SheetSmall => 8,
         RenditionKind::SheetLarge => 9,
+        RenditionKind::Preview => 10,
     }
 }
 

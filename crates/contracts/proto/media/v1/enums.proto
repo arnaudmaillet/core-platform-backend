@@ -89,6 +89,10 @@ enum RenditionKind {
     MEDIA_RENDITION_KIND_SHEET_SMALL = 8;
     // The same with 256 px cells.
     MEDIA_RENDITION_KIND_SHEET_LARGE = 9;
+    // A VIDEO's short muted preview loop (#963): its first seconds, small
+    // (an MP4 of at most ~300 KB), for a card that plays it in place, such
+    // as a country's Shop cover. Absent when the video could not make one.
+    MEDIA_RENDITION_KIND_PREVIEW     = 10;
 }
 
 // How a delivery URL is brokered. PUBLIC media gets a content-addressed, immutable

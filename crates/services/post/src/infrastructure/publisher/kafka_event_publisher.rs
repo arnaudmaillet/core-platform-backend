@@ -100,6 +100,7 @@ mod tests {
             audio_kind:      None,
             caption:         "hello world".to_owned(),
             thumbnail_url:   Some("https://cdn/t.jpg".to_owned()),
+            cover_asset_id:  None,
             lat:             Some(48.8566),
             lng:             Some(2.3522),
         });
@@ -126,6 +127,7 @@ mod tests {
             audio_kind:      None,
             caption:         "at the beach".to_owned(),
             thumbnail_url:   Some("https://cdn/t.jpg".to_owned()),
+            cover_asset_id:  None,
             lat:             Some(48.8566),
             lng:             Some(2.3522),
         })
@@ -145,6 +147,7 @@ mod tests {
             audio_kind:      None,
             caption:         String::new(),
             thumbnail_url:   None,
+            cover_asset_id:  None,
             lat:             None,
             lng:             None,
         })

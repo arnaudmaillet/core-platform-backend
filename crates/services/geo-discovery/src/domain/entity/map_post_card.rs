@@ -45,6 +45,9 @@ pub struct MapPostCard {
     /// Media or text-only (#949); `Unknown` on cards indexed before it was kept.
     #[serde(default)]
     pub format:            PostFormat,
+    /// The post's first media asset (#963: a video cover's preview loop).
+    #[serde(default)]
+    pub cover_asset_id:    Option<Uuid>,
 }
 
 impl MapPostCard {
@@ -105,8 +108,9 @@ mod tests {
         assert_eq!(card.format, PostFormat::Unknown);
         assert_eq!(card.caption, "hi");
 
-        let now = MapPostCard { format: PostFormat::TextOnly, ..card };
+        assert_eq!(card.cover_asset_id, None);
+        let now = MapPostCard { format: PostFormat::TextOnly, cover_asset_id: Some(Uuid::nil()), ..card };
         let back: MapPostCard = rmp_serde::from_slice(&rmp_serde::to_vec(&now).unwrap()).unwrap();
-        assert_eq!(back.format, PostFormat::TextOnly);
+        assert_eq!((back.format, back.cover_asset_id), (PostFormat::TextOnly, Some(Uuid::nil())));
     }
 }

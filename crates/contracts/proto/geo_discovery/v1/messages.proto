@@ -195,8 +195,9 @@ message CountryCover {
     CoverKind kind        = 2;
     // A still to paint: the photo, or the video's poster. Empty for TEXT.
     string    poster_url  = 3;
-    // VIDEO only: a short muted preview loop. Empty until media makes one;
-    // paint the poster meanwhile.
+    // VIDEO only: a short muted preview loop (#963: media's PREVIEW, the
+    // video's first 3 s, an MP4 of at most ~300 KB). Empty when the video has
+    // none (older, or delivered SIGNED): paint the poster.
     string    preview_url = 4;
     // TEXT only: the caption, at most 200 characters.
     string    caption     = 5;

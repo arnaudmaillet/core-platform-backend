@@ -183,6 +183,8 @@ mod tests {
         assert_eq!(asset.state(), AssetState::Ready);
         assert!(asset.rendition(RenditionKind::Manifest).is_some());
         assert!(asset.rendition(RenditionKind::Poster).is_some());
+        // #963: and its preview loop, kept with the rest.
+        assert_eq!(asset.rendition(RenditionKind::Preview).map(|r| r.mime_type().as_str().to_owned()), Some("video/mp4".into()));
         assert_eq!(*fx.publisher.event_types().last().unwrap(), "media.asset_ready");
     }
 

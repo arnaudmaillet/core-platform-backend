@@ -43,6 +43,7 @@ pub async fn serve(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         residence: Arc::new(crate::infrastructure::client::GrpcResidenceDirectory::new(
             crate::service::mesh_channel("GEO_ACCOUNT_GRPC_ENDPOINT", "http://localhost:50059").map_err(|e| e.to_string())?,
         )),
+        previews: crate::service::media_previews_from_env().map_err(|e| e.to_string())?,
     };
 
     let app = App::build(cfg, backends).await?;

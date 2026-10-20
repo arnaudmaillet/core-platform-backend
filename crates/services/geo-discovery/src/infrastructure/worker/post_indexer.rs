@@ -44,6 +44,9 @@ pub struct PostPublishedEvent {
     /// post's `PostKind` (#949).
     #[serde(default)]
     pub kind:            String,
+    /// The first attachment's media asset (#963).
+    #[serde(default)]
+    pub cover_asset_id:  Option<String>,
     /// Cover thumbnail for the map pin. Absent for text-only posts.
     #[serde(default)]
     pub thumbnail_url:   Option<String>,
@@ -220,6 +223,7 @@ where
             retention_secs:    event.retention_secs,
             author_tier:       event.author_tier,
             format:            crate::domain::value_object::PostFormat::from_event_kind(&event.kind),
+            cover_asset_id:    event.cover_asset_id.clone(),
         };
 
         handler.handle(Envelope::new(Uuid::now_v7(), cmd)).await?;
@@ -261,6 +265,7 @@ mod tests {
             audio_kind:      None,
             caption:         "hi".to_owned(),
             thumbnail_url:   Some("https://cdn/t.jpg".to_owned()),
+            cover_asset_id:  Some("0190f0a0-0000-7000-8000-0000000000cc".to_owned()),
             lat:             Some(48.85),
             lng:             Some(2.35),
         }));
@@ -269,6 +274,7 @@ mod tests {
         assert_eq!((published.lat, published.lng), (Some(48.85), Some(2.35)));
         assert_eq!((published.author_tier, published.published_at_ms), (2, 1_700_000_000_000));
         assert_eq!((published.caption.as_str(), published.thumbnail_url.as_deref()), ("hi", Some("https://cdn/t.jpg")));
+        assert_eq!(published.cover_asset_id.as_deref(), Some("0190f0a0-0000-7000-8000-0000000000cc"), "#963");
         assert_eq!(
             crate::domain::value_object::PostFormat::from_event_kind(&published.kind),
             crate::domain::value_object::PostFormat::TextOnly

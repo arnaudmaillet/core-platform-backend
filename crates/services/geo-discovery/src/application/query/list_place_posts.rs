@@ -263,6 +263,7 @@ mod tests {
             lat:               None,
             lng:               None,
             format:            Default::default(),
+            cover_asset_id:    None,
         }
     }
 

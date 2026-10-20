@@ -33,6 +33,8 @@ pub struct MapCardRow {
     pub lng:                Option<f64>,
     /// Migration 0012 (#949): NULL on older rows (unknown kind).
     pub post_kind:          Option<String>,
+    /// Migration 0013 (#963): NULL on older rows (no preview).
+    pub cover_asset_id:     Option<Uuid>,
     /// `TTL(author_handle)`: the card's remaining seconds (NULL for a tombstone).
     pub ttl_secs:           Option<i32>,
 }
@@ -54,6 +56,7 @@ impl MapCardRow {
             lat:               self.lat,
             lng:               self.lng,
             format:            crate::domain::value_object::PostFormat::from_code(self.post_kind.as_deref()),
+            cover_asset_id:    self.cover_asset_id,
         })
     }
 }
