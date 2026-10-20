@@ -76,6 +76,8 @@ impl Service for ProfileService {
         authenticated("/profile.v1.ProfileService/UpdateBanner"),
         // #913: the profile's owner wears an owned avatar frame.
         authenticated("/profile.v1.ProfileService/EquipAvatarFrame"),
+        // #912: the profile's owner picks earned badges to show.
+        authenticated("/profile.v1.ProfileService/SetBadgeShowcase"),
         authenticated("/profile.v1.ProfileService/SetVisibility"),
         authenticated("/profile.v1.ProfileService/SetInteractionSettings"),
         authenticated("/profile.v1.ProfileService/SetLocationSettings"),

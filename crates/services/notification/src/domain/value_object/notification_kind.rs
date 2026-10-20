@@ -26,6 +26,9 @@ pub enum NotificationKind {
     SupervisionEnded,
     /// The supervision ended: the teen turned 18.
     SupervisionCameOfAge,
+    /// The recipient's account earned a badge (#912; subject: the account,
+    /// the app finds the badge in the wallet's owned items).
+    BadgeAwarded,
 }
 
 impl NotificationKind {
@@ -43,6 +46,7 @@ impl NotificationKind {
             Self::SupervisionStarted   => 10,
             Self::SupervisionEnded     => 11,
             Self::SupervisionCameOfAge => 12,
+            Self::BadgeAwarded => 13,
         }
     }
 
@@ -60,6 +64,7 @@ impl NotificationKind {
             10 => Ok(Self::SupervisionStarted),
             11 => Ok(Self::SupervisionEnded),
             12 => Ok(Self::SupervisionCameOfAge),
+            13 => Ok(Self::BadgeAwarded),
             n => Err(NotificationError::UnknownNotificationKind { kind: n.to_string() }),
         }
     }
@@ -82,6 +87,7 @@ impl NotificationKind {
             Self::SupervisionStarted   => "supervision_started",
             Self::SupervisionEnded     => "supervision_ended",
             Self::SupervisionCameOfAge => "supervision_came_of_age",
+            Self::BadgeAwarded => "badge_awarded",
         }
     }
 }

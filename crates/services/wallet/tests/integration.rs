@@ -242,6 +242,36 @@ async fn concurrent_purchases_of_an_item_charge_once() {
     assert!(store.owned_items(&account).await.unwrap().is_empty(), "erased with the account");
 }
 
+/// #912: raced awards of one badge record it once, with one outbox event.
+#[tokio::test]
+async fn a_badge_is_awarded_once_even_raced() {
+    let pool = pool().await;
+    let store = store(&pool);
+    let account = AccountId::from_uuid(Uuid::now_v7());
+    let awards = (0..5).map(|_| {
+        let store = Arc::clone(&store);
+        tokio::spawn(async move { store.award_badge(&account, "badge.continent_eu", &["prof-1".to_owned()], Utc::now()).await.unwrap() })
+    });
+    let mut announced = 0;
+    let mut times = Vec::new();
+    for award in awards {
+        let (at, event) = award.await.unwrap();
+        announced += usize::from(event.is_some());
+        times.push(at.timestamp_micros());
+    }
+    assert_eq!(announced, 1, "one award, one announcement");
+    times.dedup();
+    assert_eq!(times.len(), 1, "every call answers the first award's time");
+    let (outbox,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM wallet_outbox WHERE account_id = $1")
+        .bind(account.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(outbox, 1);
+    let owned: Vec<_> = store.owned_items(&account).await.unwrap().into_iter().map(|o| o.item_id).collect();
+    assert_eq!(owned, ["badge.continent_eu"]);
+}
+
 fn announcement() -> StakeAnnouncement {
     StakeAnnouncement { profile_id: "liker".into(), author_profile_id: "author".into(), conviction: None }
 }

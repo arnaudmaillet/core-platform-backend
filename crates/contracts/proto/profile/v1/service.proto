@@ -68,6 +68,13 @@ service ProfileService {
     // (UNAVAILABLE) when the wallet cannot tell. Edge: the profile's owner.
     rpc EquipAvatarFrame(EquipAvatarFrameRequest) returns (CommandResponse);
 
+    // Picks the badges the profile shows (#912): in order, at most three,
+    // each one its account earned (wallet ListOwnedItems, family BADGE);
+    // every read then carries them (`ProfileView.badges`). PRF-6007
+    // (PERMISSION_DENIED) for a badge the account has not earned; PRF-9001
+    // for more than three or a repeat. Edge: the profile's owner.
+    rpc SetBadgeShowcase(SetBadgeShowcaseRequest) returns (CommandResponse);
+
     // Toggle profile visibility between Public and Private.
     rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
 

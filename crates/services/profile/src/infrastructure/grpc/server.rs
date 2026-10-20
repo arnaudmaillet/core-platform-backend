@@ -259,4 +259,12 @@ where
         self.equip_avatar_frame(request).await
     }
 
+
+    async fn set_badge_showcase(
+        &self,
+        request: Request<proto::SetBadgeShowcaseRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.set_badge_showcase(request).await
+    }
+
 }

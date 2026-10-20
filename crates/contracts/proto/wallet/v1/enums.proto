@@ -54,7 +54,7 @@ enum TransactionKind {
 
 // What kind of thing a catalogue item is (#892). An item id is
 // `<family>.<name>`: `icon.<name>`, `theme.<name>`, `frame.<name>`,
-// `banner.<name>`, `card.<name>`.
+// `banner.<name>`, `card.<name>`, `badge.<name>`.
 enum ItemFamily {
     ITEM_FAMILY_UNSPECIFIED = 0;
     // An alternate app icon; applied on the device, nothing stored server-side.
@@ -70,6 +70,9 @@ enum ItemFamily {
     // A post card style (#914): an author applies it to their own posts
     // (post.v1 SetPostCardStyle).
     ITEM_FAMILY_CARD_STYLE      = 5;
+    // A badge (#912): earned, never sold (AwardBadge, from the service whose
+    // rule it is), owned by the account, shown in profiles' showcases.
+    ITEM_FAMILY_BADGE           = 6;
 }
 
 // The outcome of a catalogue purchase: ordinary states the app renders.

@@ -70,6 +70,10 @@ pub struct Profile {
     /// (`frame.<name>`) its account owns.
     #[serde(default)]
     avatar_frame_id: Option<String>,
+    /// The badges the profile shows (#912), in order: owned by its account,
+    /// at most [`BADGE_SHOWCASE_SLOTS`].
+    #[serde(default)]
+    badge_showcase: Vec<ShowcasedBadge>,
     website_url: Option<WebsiteUrl>,
     custom_links: Vec<ProfileLink>,
     profile_kind: ProfileKind,
@@ -142,6 +146,7 @@ impl Profile {
             avatar_asset_id: None,
             banner_asset_id: None,
             avatar_frame_id: None,
+            badge_showcase: Vec::new(),
             website_url: None,
             custom_links: Vec::new(),
             profile_kind: params.profile_kind,
@@ -255,6 +260,7 @@ impl Profile {
             avatar_asset_id: None,
             banner_asset_id: None,
             avatar_frame_id: None,
+            badge_showcase: Vec::new(),
             website_url,
             custom_links,
             profile_kind,
@@ -449,6 +455,35 @@ impl Profile {
     /// Restores the stored location settings (a column added after
     /// [`Self::reconstitute`]'s set).
     /// Reconstitution: the avatar's and banner's media assets (#907).
+    /// Reconstitution: the badge showcase (#912).
+    pub fn with_badge_showcase(mut self, showcase: Vec<ShowcasedBadge>) -> Self {
+        self.badge_showcase = showcase;
+        self
+    }
+
+    /// Shows `badges` (each a `badge.<name>` its account earned, with when;
+    /// checked by the caller), in order, or none (#912).
+    pub fn set_badge_showcase(&mut self, badges: Vec<ShowcasedBadge>, correlation_id: Uuid) -> Result<(), ProfileError> {
+        self.require_active()?;
+        let violation = |message: String| ProfileError::DomainViolation { field: "badge_ids".into(), message };
+        if badges.len() > BADGE_SHOWCASE_SLOTS {
+            return Err(violation(format!("at most {BADGE_SHOWCASE_SLOTS} badges")));
+        }
+        for (i, badge) in badges.iter().enumerate() {
+            if !badge.badge_id.starts_with("badge.") || badges[..i].iter().any(|b| b.badge_id == badge.badge_id) {
+                return Err(violation(format!("'{}' twice or not a badge", badge.badge_id)));
+            }
+        }
+        self.badge_showcase = badges;
+        let now = self.touch_now();
+        self.pending_events.push(DomainEvent::ProfileUpdated(ProfileUpdated {
+            profile_id: self.id,
+            occurred_at: now,
+            correlation_id,
+        }));
+        Ok(())
+    }
+
     /// Reconstitution: the avatar frame worn (#913).
     pub fn with_avatar_frame(mut self, frame: Option<String>) -> Self {
         self.avatar_frame_id = frame;
@@ -821,6 +856,7 @@ impl Profile {
     pub fn avatar_asset_id(&self) -> Option<MediaAssetId> { self.avatar_asset_id }
     pub fn banner_asset_id(&self) -> Option<MediaAssetId> { self.banner_asset_id }
     pub fn avatar_frame_id(&self) -> Option<&str> { self.avatar_frame_id.as_deref() }
+    pub fn badge_showcase(&self) -> &[ShowcasedBadge] { &self.badge_showcase }
     pub fn website_url(&self) -> Option<&WebsiteUrl> { self.website_url.as_ref() }
     pub fn custom_links(&self) -> &[ProfileLink] { &self.custom_links }
     pub fn profile_kind(&self) -> ProfileKind { self.profile_kind }
@@ -869,6 +905,16 @@ impl Profile {
         self.touch(now);
         now
     }
+}
+
+/// How many badges a profile shows at most (#912).
+pub const BADGE_SHOWCASE_SLOTS: usize = 3;
+
+/// A badge a profile shows (#912), and when its account earned it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ShowcasedBadge {
+    pub badge_id:   String,
+    pub awarded_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// An avatar frame's catalogue id (#913): `frame.<name>`, `name` 1–32 of
@@ -1029,6 +1075,21 @@ mod tests {
         assert_eq!((p.banner_url(), p.banner_asset_id()), (None, Some(video)));
         p.update_banner(Some(BannerUrl::new("https://cdn.example/c.jpg").unwrap()), None, Uuid::now_v7()).unwrap();
         assert_eq!(p.banner_asset_id(), None, "a still banner set by URL");
+    }
+
+    /// #912: a showcase holds at most three distinct badges, in order.
+    #[test]
+    fn a_showcase_holds_three_distinct_badges() {
+        let mut p = sample_profile();
+        let badge = |id: &str| ShowcasedBadge { badge_id: id.into(), awarded_at: chrono::Utc::now() };
+        p.set_badge_showcase(vec![badge("badge.continent_eu"), badge("badge.continent_as")], Uuid::now_v7()).unwrap();
+        assert_eq!(p.badge_showcase().len(), 2);
+        assert!(p.set_badge_showcase(vec![badge("badge.a"), badge("badge.a")], Uuid::now_v7()).is_err(), "twice");
+        assert!(p.set_badge_showcase(vec![badge("frame.gold")], Uuid::now_v7()).is_err(), "not a badge");
+        let four = ["a", "b", "c", "d"].map(|n| badge(&format!("badge.{n}"))).to_vec();
+        assert!(p.set_badge_showcase(four, Uuid::now_v7()).is_err(), "three at most");
+        p.set_badge_showcase(vec![], Uuid::now_v7()).unwrap();
+        assert!(p.badge_showcase().is_empty());
     }
 
     /// #913: a profile wears one frame, or none; only frame ids.

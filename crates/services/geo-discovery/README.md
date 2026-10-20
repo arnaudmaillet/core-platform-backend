@@ -144,6 +144,7 @@ service GeoDiscoveryService {
   rpc GetCountryUnlocks (GetCountryUnlocksRequest) returns (GetCountryUnlocksResponse); // a member's countries (#665)
   rpc UnlockCountry (UnlockCountryRequest) returns (UnlockCountryResponse);             // unlock one with gems (#665)
   rpc BuyCountryVisa (BuyCountryVisaRequest) returns (BuyCountryVisaResponse);          // a 24 h visa with gems (#910)
+  rpc ListContinents (ListContinentsRequest) returns (ListContinentsResponse);          // continents, their countries and badges (#912)
 }
 message QueryTileRequest  { Viewport viewport = 1; int32 zoom_level = 2; string guest_principal = 3; } // zoom ∈ [0,15]; 3 = mesh only
 message QueryTileResponse { reserved 1; repeated RadarPin pins = 3; int32 tile_count = 2; } // field 1 was `cards`
@@ -215,6 +216,15 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > (with the gems held; the pending row dropped). A retry after a failure between the spend and the
 > record pays the **agreed** price (the wallet replays the key) and is never refused for a price
 > that moved meanwhile. The wallet or account unreachable ⇒ **`GEO-6002`** (`UNAVAILABLE`, fail-closed).
+>
+> **Continent badges (#912).** `data/continents.json` puts each of the atlas's 237 countries on one of
+> seven continents (`AF`, `AN`, `AS`, `EU`, `NA`, `OC`, `SA`; Natural Earth's, its "Seven seas" islands with
+> the nearest one). `ListContinents` (edge `public_read`) serves it with each continent's badge
+> (`badge.continent_<code>`), the table the app draws progress from. A member who holds **every**
+> country of a continent — home and permanent unlocks, never a 24 h visa — earns its badge: the
+> unlock and the shop read (`GetCountryUnlocks`) call the wallet's mesh-only `AwardBadge` with the
+> caller's profiles (the token's `pids`), best effort (a failure is logged and retried on the next
+> read; the wallet awards once). Notification then tells each profile.
 >
 > **24 h visas (#910).** A recurring gem sink: a temporary unlock. `BuyCountryVisa(country_code,
 > expected_price, idempotency_key)` (edge `authenticated`, adults only like an unlock: `GEO-3001`): the

@@ -22,6 +22,8 @@ impl NotificationKind {
             Self::AppealUpheld | Self::AppealOverturned => None,
             // Feed only: no preference category covers supervision notices.
             Self::SupervisionStarted | Self::SupervisionEnded | Self::SupervisionCameOfAge => None,
+            // Feed only: the app celebrates it when it reads the feed (#912).
+            Self::BadgeAwarded => None,
         }
     }
 
@@ -40,6 +42,7 @@ impl NotificationKind {
             Self::SupervisionStarted => "NTF_PUSH_SUPERVISION_STARTED",
             Self::SupervisionEnded => "NTF_PUSH_SUPERVISION_ENDED",
             Self::SupervisionCameOfAge => "NTF_PUSH_SUPERVISION_CAME_OF_AGE",
+            Self::BadgeAwarded => "NTF_PUSH_BADGE_AWARDED",
         }
     }
 }

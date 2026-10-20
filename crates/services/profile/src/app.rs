@@ -203,6 +203,14 @@ impl App {
                         .with_images(images)
                         .with_wallet(economy.wallet.clone()),
                 )?
+                .register::<crate::application::command::SetBadgeShowcaseCommand, _>(
+                    crate::application::command::SetBadgeShowcaseHandler {
+                        repo:      Arc::clone(&repository),
+                        cache:     Arc::clone(&cache),
+                        publisher: Arc::clone(&publisher),
+                        wallet:    economy.wallet.clone(),
+                    },
+                )?
                 .register::<crate::application::command::EquipAvatarFrameCommand, _>(
                     crate::application::command::EquipAvatarFrameHandler {
                         repo:      Arc::clone(&repository),

@@ -38,6 +38,10 @@ pub trait GemWallet: Send + Sync + 'static {
         key: &str,
         end_user: Option<&str>,
     ) -> Result<GemSpend, GeoDiscoveryError>;
+
+    /// Awards a badge to `account` (#912, wallet `AwardBadge`), once,
+    /// announced to `profile_ids`. Returns whether this call awarded it.
+    async fn award_badge(&self, account: Uuid, badge_id: &str, profile_ids: &[String]) -> Result<bool, GeoDiscoveryError>;
 }
 
 /// The account's country of residence (account), the first choice for the

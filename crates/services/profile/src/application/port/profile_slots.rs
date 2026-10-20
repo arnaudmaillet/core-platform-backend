@@ -59,4 +59,8 @@ pub trait GemWallet: Send + Sync + 'static {
     /// Whether `account` owns the catalogue item `item_id` (#913; wallet
     /// `ListOwnedItems`, free items included).
     async fn owns(&self, account: &AccountId, item_id: &str) -> Result<bool, ProfileError>;
+
+    /// The badges `account` earned and when (#912; wallet `ListOwnedItems`,
+    /// family BADGE).
+    async fn badges(&self, account: &AccountId) -> Result<Vec<(String, chrono::DateTime<chrono::Utc>)>, ProfileError>;
 }

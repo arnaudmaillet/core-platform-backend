@@ -1,4 +1,5 @@
-//! What the wallet announces on `wallet.v1.events` (#665): likes staked.
+//! What the wallet announces on `wallet.v1.events` (#665): likes staked;
+//! badges awarded (#912).
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,19 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WalletEvent {
     StakeCommitted(StakeCommitted),
+    BadgeAwarded(BadgeAwarded),
+}
+
+/// An account earned a badge (#912), once: notification tells each of its
+/// profiles (`profile_ids`, from the awarding caller's token; may be empty).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BadgeAwarded {
+    pub account_id:  String,
+    /// `badge.<name>`, e.g. `badge.continent_eu`.
+    pub badge_id:    String,
+    #[serde(default)]
+    pub profile_ids: Vec<String>,
+    pub awarded_at:  DateTime<Utc>,
 }
 
 /// A batch of likes landed on a post or a comment. Announced at least once
@@ -37,6 +51,7 @@ impl WalletEvent {
     pub fn event_type(&self) -> &'static str {
         match self {
             Self::StakeCommitted(_) => "stake_committed",
+            Self::BadgeAwarded(_) => "badge_awarded",
         }
     }
 
@@ -44,6 +59,7 @@ impl WalletEvent {
     pub fn key(&self) -> String {
         match self {
             Self::StakeCommitted(e) => format!("{}:{}", e.target_kind, e.target_id),
+            Self::BadgeAwarded(e) => e.account_id.clone(),
         }
     }
 }

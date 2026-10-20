@@ -37,6 +37,11 @@ enum NotificationKind {
     NOTIFICATION_KIND_SUPERVISION_ENDED       = 11;
     // The supervision ended because the teen turned 18.
     NOTIFICATION_KIND_SUPERVISION_CAME_OF_AGE = 12;
+    // The recipient's account earned a badge (#912, from the platform: no
+    // sender; subject: SUBJECT_KIND_ACCOUNT, the account — the app finds the
+    // badge, the newest of family BADGE, in wallet ListOwnedItems, and
+    // celebrates it). Feed only.
+    NOTIFICATION_KIND_BADGE_AWARDED           = 13;
 }
 
 // Discriminates the entity that was interacted with.

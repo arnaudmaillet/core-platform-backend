@@ -80,6 +80,21 @@ impl GemWallet for GrpcGemWallet {
             .into_inner();
         Ok(GemSpend { spent: answer.outcome == wallet_api::SpendGemsOutcome::Spent as i32, gems: answer.gems })
     }
+
+    async fn award_badge(&self, account: Uuid, badge_id: &str, profile_ids: &[String]) -> Result<bool, GeoDiscoveryError> {
+        let answer = self
+            .wallet
+            .clone()
+            .award_badge(wallet_api::AwardBadgeRequest {
+                account_id:  account.to_string(),
+                badge_id:    badge_id.to_owned(),
+                profile_ids: profile_ids.to_vec(),
+            })
+            .await
+            .map_err(unavailable("wallet"))?
+            .into_inner();
+        Ok(answer.newly_awarded)
+    }
 }
 
 pub struct GrpcResidenceDirectory {

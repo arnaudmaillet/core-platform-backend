@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 0d0f57e7b75acd42142a2514497bc94cf581aed5b111cd10177e44d545fd78f8
+  source_sha256: 7e2cc47cf4ad7eaf15267ac5643e4f9059a2ad02814f8b025b65205946a07d2a
   translated_at: 2026-10-20
   status: complete
 ---
@@ -249,6 +249,13 @@ liste des profils du compte (migration 0020), et chaque lecture porte `avatar_fr
 `ProfileSummaryView`, les résultats profil de search). L'app le dessine depuis des visuels embarqués
 indexés par id, et il ne change aucune taille, aucun ordre ni aucun classement (charte V5.3 §35).
 
+**Vitrines de badges (#912).** Un profil montre jusqu'à trois badges obtenus par son **compte** (badges du
+wallet, p. ex. `badge.continent_eu`), dans l'ordre : `SetBadgeShowcase(badge_ids)` (le propriétaire)
+vérifie chacun auprès de `ListOwnedItems` du wallet (famille `BADGE` ; **`PRF-6007`** pour un badge non
+obtenu, `PRF-9001` au-delà de trois ou pour un doublon) et garde sa date d'obtention. Enregistrée en
+JSON (`profiles.badge_showcase`, migration 0021) ; chaque lecture porte `ProfileView.badges` (`badge_id`,
+`awarded_at`). Une liste vide l'efface.
+
 **Bannières animées (#915, #947).** `UpdateBanner` avec `banner_asset_id` seul (sans `banner_url`) désigne
 une **vidéo du compte** (la vidéo de l'un de ses posts) : le `GetAsset` de media doit la dire `VIDEO`
 READY détenue par le compte (sinon **`PRF-5007`**, `FAILED_PRECONDITION`), et le compte doit posséder
@@ -403,7 +410,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Déploiement, migrations & rollback
 
-- **Migrations :** `crates/services/profile/migrations/00{01..20}_*.cql` sur le keyspace `profile`,
+- **Migrations :** `crates/services/profile/migrations/00{01..21}_*.cql` sur le keyspace `profile`,
   appliquées **avant** le premier démarrage.
 - **Bump de version de cache :** pour invalider le cache à l'échelle de la flotte lors d'un changement de
   schéma, incrémenter le préfixe de clé `v1:` — sans flush, sans interruption.

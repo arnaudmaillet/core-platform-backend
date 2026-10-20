@@ -336,3 +336,18 @@ message ListOwnedItemsResponse {
     // Free items first, then the bought ones, oldest first.
     repeated OwnedItem items = 1;
 }
+
+message AwardBadgeRequest {
+    string          account_id  = 1;
+    // `badge.<name>`, e.g. `badge.continent_eu`.
+    string          badge_id    = 2;
+    // The account's profiles to tell (the caller's edge token `pids`); may
+    // be empty.
+    repeated string profile_ids = 3;
+}
+
+message AwardBadgeResponse {
+    // This call awarded it (false: it was before).
+    bool                      newly_awarded = 1;
+    google.protobuf.Timestamp awarded_at    = 2;
+}

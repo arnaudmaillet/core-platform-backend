@@ -111,13 +111,25 @@ return 1
 
 // ── Payload shape (from wallet.v1.events, #665) ───────────────────────────────
 
-/// The wallet's events, tagged on `type`; only a stake matters here.
+/// The wallet's events, tagged on `type`: a stake (a like notice) and a badge
+/// award (#912).
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ReactionKafkaEvent {
     StakeCommitted(StakeCommittedPayload),
+    BadgeAwarded(BadgeAwardedPayload),
     #[serde(other)]
     Other,
+}
+
+/// An account earned a badge: each of `profile_ids` is told (#912).
+#[derive(Debug, Deserialize)]
+struct BadgeAwardedPayload {
+    pub account_id:  String,
+    pub badge_id:    String,
+    #[serde(default)]
+    pub profile_ids: Vec<String>,
+    pub awarded_at:  chrono::DateTime<chrono::Utc>,
 }
 
 /// A batch of likes: who liked (`profile_id`), what (`target_kind`,
@@ -250,6 +262,9 @@ where
     /// The stream yields one message at a time, so cross-event collapse is handled by
     /// the Redis-backed window in `accumulate_in_window`, not this in-memory batch.
     async fn process_one(&self, event: &ReactionKafkaEvent) -> ProcessOutcome {
+        if let ReactionKafkaEvent::BadgeAwarded(award) = event {
+            return ProcessOutcome::from_result(self.notify_badge(award).await);
+        }
         let mut batch: HashMap<CollapseKey, CollapseBuffer> = HashMap::new();
         self.accumulate(event, &mut batch).await;
 
@@ -279,7 +294,7 @@ where
                 };
                 (e.target_id.as_str(), e.profile_id.as_str(), e.staked_at.timestamp_millis(), kind, e.author_profile_id.as_str())
             }
-            ReactionKafkaEvent::StakeCommitted(_) | ReactionKafkaEvent::Other => return,
+            ReactionKafkaEvent::StakeCommitted(_) | ReactionKafkaEvent::BadgeAwarded(_) | ReactionKafkaEvent::Other => return,
         };
 
         let sender_uuid = match Uuid::parse_str(sender_str) {
@@ -365,6 +380,47 @@ where
         }
 
         if had_hard_error { Err(()) } else { Ok(()) }
+    }
+
+    /// A badge award (#912): one platform notice per profile of the account,
+    /// on its account; feed only. Redelivery is harmless (ids and unread
+    /// claims are per badge and profile). A malformed account id is poison; a
+    /// malformed profile id is skipped.
+    async fn notify_badge(&self, award: &BadgeAwardedPayload) -> Result<(), NotificationError> {
+        let account = SubjectId::try_from(award.account_id.as_str())?;
+        for raw in &award.profile_ids {
+            let Ok(target) = ProfileId::try_from(raw.as_str()) else {
+                tracing::warn!(profile_id = %raw, "badge notice: not a profile id — skipped");
+                continue;
+            };
+            let business_key = format!("badge_awarded:{}:{}:{}", award.account_id, award.badge_id, target);
+            let notification = Notification::from_platform(
+                NotificationId::deterministic(&business_key),
+                target,
+                NotificationKind::BadgeAwarded,
+                SubjectKind::Account,
+                account,
+                award.awarded_at,
+            );
+            self.repository.insert(&notification).await?;
+            let first = self.counter.increment_once(&target, &business_key).await?;
+            let payload = Arc::new(NotificationPayload {
+                notification_id:   notification.id().as_uuid(),
+                target_profile_id: notification.target_profile_id().as_uuid(),
+                sender_profile_id: notification.sender_profile_id().as_uuid(),
+                sample_sender_ids: notification.sample_sender_ids().to_vec(),
+                sender_count:      notification.sender_count(),
+                kind:              notification.kind(),
+                subject_kind:      notification.subject_kind(),
+                subject_id:        notification.subject_id().as_uuid(),
+                created_at_ms:     notification.created_at().timestamp_millis(),
+            });
+            if first {
+                self.push.notify(Arc::clone(&payload));
+            }
+            self.stream_reg.broadcast(&target, payload);
+        }
+        Ok(())
     }
 
     async fn process_collapsed(
@@ -538,5 +594,14 @@ mod tests {
         assert!(matches!(stake(false, "post"), ReactionKafkaEvent::StakeCommitted(StakeCommittedPayload { first: false, .. })));
         let other: ReactionKafkaEvent = serde_json::from_str(r#"{"type":"something_new"}"#).unwrap();
         assert!(matches!(other, ReactionKafkaEvent::Other));
+        // #912: the wallet's own wire.
+        let award = wallet::domain::event::WalletEvent::BadgeAwarded(wallet::domain::event::BadgeAwarded {
+            account_id:  Uuid::now_v7().to_string(),
+            badge_id:    "badge.continent_eu".into(),
+            profile_ids: vec![Uuid::now_v7().to_string()],
+            awarded_at:  chrono::Utc::now(),
+        });
+        let decoded: ReactionKafkaEvent = serde_json::from_slice(&serde_json::to_vec(&award).unwrap()).unwrap();
+        assert!(matches!(decoded, ReactionKafkaEvent::BadgeAwarded(BadgeAwardedPayload { ref badge_id, .. }) if badge_id == "badge.continent_eu"));
     }
 }

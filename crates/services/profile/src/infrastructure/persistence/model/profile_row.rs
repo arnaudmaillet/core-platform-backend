@@ -65,6 +65,8 @@ pub struct ProfileRow {
     pub banner_asset_id: Option<Uuid>,
     /// The avatar frame worn (#913); NULL: none.
     pub avatar_frame_id: Option<String>,
+    /// The badge showcase (#912), JSON; NULL: none.
+    pub badge_showcase: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -173,6 +175,9 @@ impl TryFrom<ProfileRow> for Profile {
             row.avatar_asset_id.map(MediaAssetId::from_uuid),
             row.banner_asset_id.map(MediaAssetId::from_uuid),
         )
-        .with_avatar_frame(row.avatar_frame_id))
+        .with_avatar_frame(row.avatar_frame_id)
+        .with_badge_showcase(
+            row.badge_showcase.as_deref().and_then(|json| serde_json::from_str(json).ok()).unwrap_or_default(),
+        ))
     }
 }

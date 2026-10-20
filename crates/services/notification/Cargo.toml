@@ -67,6 +67,8 @@ moderation = { workspace = true }
 account = { workspace = true }
 # Wire-contract test of the mention worker: post's own `post.v1.events` (#487).
 post = { workspace = true }
+# Wire-contract test of the badge notice: the wallet's own `badge_awarded` (#912).
+wallet = { workspace = true }
 # Edge principals (the token's claims) in the integration suite.
 auth-context = { workspace = true }
 

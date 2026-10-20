@@ -15,7 +15,7 @@ use crate::application::port::{
     PackOutcome, PurchaseOutcome, SpendOutcome, StakeAnnouncement, StakeCursor, StakeOutcome, StakeResult, StakeStatus, TransactionCursor, WalletStore,
     WelcomeGiftOutcome,
 };
-use crate::domain::event::{StakeCommitted, WalletEvent};
+use crate::domain::event::{BadgeAwarded, StakeCommitted, WalletEvent};
 use crate::domain::{
     AccountId, Allocation, CalibrationRow, CatalogItem, ClaimDecision, ClaimPolicy, Conviction, Currency, DayPosition, DuePosition, EnvelopeDay,
     IdempotencyKey, PackDecision, PurchaseDecision, Settlement, StakeAsk,
@@ -385,6 +385,62 @@ impl WalletStore for PgWalletStore {
         };
         tx.commit().await.map_err(storage)?;
         Ok((outcome, wallet))
+    }
+
+    #[instrument(name = "wallet.award_badge", skip(self, profile_ids))]
+    async fn award_badge(
+        &self,
+        account: &AccountId,
+        badge_id: &str,
+        profile_ids: &[String],
+        now: DateTime<Utc>,
+    ) -> Result<(DateTime<Utc>, Option<OutboxEvent>), WalletError> {
+        let mut tx = self.pool(account)?.begin().await.map_err(storage)?;
+        let inserted: Option<(DateTime<Utc>,)> = sqlx::query_as(
+            "INSERT INTO owned_items (account_id, item_id, acquired_at) VALUES ($1, $2, $3) \
+             ON CONFLICT (account_id, item_id) DO NOTHING RETURNING acquired_at",
+        )
+        .bind(account.as_uuid())
+        .bind(badge_id)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage)?;
+        let Some((awarded_at,)) = inserted else {
+            let (awarded_at,): (DateTime<Utc>,) =
+                sqlx::query_as("SELECT acquired_at FROM owned_items WHERE account_id = $1 AND item_id = $2")
+                    .bind(account.as_uuid())
+                    .bind(badge_id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(storage)?;
+            tx.commit().await.map_err(storage)?;
+            return Ok((awarded_at, None));
+        };
+        // Its announcement, in the same transaction: never an award without it.
+        let outbox = OutboxEvent {
+            id:      Uuid::now_v7(),
+            account: *account,
+            event:   WalletEvent::BadgeAwarded(BadgeAwarded {
+                account_id:  account.to_string(),
+                badge_id:    badge_id.to_owned(),
+                profile_ids: profile_ids.to_vec(),
+                awarded_at,
+            }),
+        };
+        sqlx::query(
+            "INSERT INTO wallet_outbox (id, account_id, event, created_at, claimed_until) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(outbox.id)
+        .bind(account.as_uuid())
+        .bind(sqlx::types::Json(&outbox.event))
+        .bind(now)
+        .bind(now + chrono::TimeDelta::seconds(WRITER_LEASE_SECS))
+        .execute(&mut *tx)
+        .await
+        .map_err(storage)?;
+        tx.commit().await.map_err(storage)?;
+        Ok((awarded_at, Some(outbox)))
     }
 
     async fn owned_items(&self, account: &AccountId) -> Result<Vec<OwnedItem>, WalletError> {

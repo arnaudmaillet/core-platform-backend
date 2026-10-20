@@ -251,7 +251,7 @@ where
         edge::require_account(&request, &request.get_ref().account_id)?;
         let unlocking = self.unlocking()?;
         let account = account_uuid(&request.get_ref().account_id)?;
-        let (countries, gems) = unlocking.view(account).await.map_err(app_to_status)?;
+        let (countries, gems) = unlocking.view(account, &caller_profiles(&request)).await.map_err(app_to_status)?;
         Ok(Response::new(proto::GetCountryUnlocksResponse {
             home_country:       countries.home.map(|c| c.to_string()).unwrap_or_default(),
             unlocked_countries: countries.all().iter().map(ToString::to_string).collect(),
@@ -271,6 +271,7 @@ where
         let spender = Spender {
             adult: edge::principal(&request).is_some_and(|p| p.is_adult()),
             token: edge::bearer_token(request.metadata()),
+            profile_ids: caller_profiles(&request),
         };
         let req = request.into_inner();
         let account = account_uuid(&req.account_id)?;
@@ -303,6 +304,7 @@ where
         let spender = Spender {
             adult: edge::principal(&request).is_some_and(|p| p.is_adult()),
             token: edge::bearer_token(request.metadata()),
+            profile_ids: caller_profiles(&request),
         };
         let req = request.into_inner();
         let account = account_uuid(&req.account_id)?;
@@ -386,12 +388,34 @@ where
     ) -> Result<Response<proto::BuyCountryVisaResponse>, Status> {
         self.buy_country_visa_inner(request).await
     }
+
+    async fn list_continents(
+        &self,
+        _request: Request<proto::ListContinentsRequest>,
+    ) -> Result<Response<proto::ListContinentsResponse>, Status> {
+        use crate::domain::continents::Continents;
+        let continents = Continents::embedded()
+            .all()
+            .iter()
+            .map(|(code, countries)| proto::Continent {
+                continent_code: code.clone(),
+                badge_id:       Continents::badge_id(code),
+                country_codes:  countries.iter().map(ToString::to_string).collect(),
+            })
+            .collect();
+        Ok(Response::new(proto::ListContinentsResponse { continents }))
+    }
 }
 
 // ── Conversion helpers ────────────────────────────────────────────────────────
 
 fn timestamp(at: chrono::DateTime<chrono::Utc>) -> prost_types::Timestamp {
     prost_types::Timestamp { seconds: at.timestamp(), nanos: i32::try_from(at.timestamp_subsec_nanos()).unwrap_or(0) }
+}
+
+/// The edge caller's profiles (the token's `pids`), told of a badge (#912).
+fn caller_profiles<T>(request: &Request<T>) -> Vec<String> {
+    edge::principal(request).map(|p| p.profile_ids().map(str::to_owned).collect()).unwrap_or_default()
 }
 
 /// The member's running visas now (#910).

@@ -281,6 +281,21 @@ where
         }
     }
 
+    /// Picks the badges the profile shows (#912). Edge: the profile's owner.
+    pub async fn set_badge_showcase(
+        &self,
+        request: Request<proto::SetBadgeShowcaseRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let cmd = crate::application::command::SetBadgeShowcaseCommand { profile_id: req.profile_id.clone(), badge_ids: req.badge_ids };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| Self::ok_cmd(&req.profile_id))
+            .map_err(cqrs_error_to_status)
+    }
+
     /// Wears an avatar frame, or none (#913). Edge: the profile's owner.
     pub async fn equip_avatar_frame(
         &self,
@@ -988,6 +1003,15 @@ fn profile_view_to_proto(v: ProfileView) -> proto::ProfileView {
         avatar_asset_id:   v.avatar_asset_id.unwrap_or_default(),
         banner_asset_id:   v.banner_asset_id.unwrap_or_default(),
         avatar_frame_id:   v.avatar_frame_id.unwrap_or_default(),
+        badges:            v.badges.into_iter()
+            .map(|b| proto::ShowcasedBadge {
+                badge_id:   b.badge_id,
+                awarded_at: Some(prost_types::Timestamp {
+                    seconds: b.awarded_at.timestamp(),
+                    nanos:   i32::try_from(b.awarded_at.timestamp_subsec_nanos()).unwrap_or(0),
+                }),
+            })
+            .collect(),
         avatar:            None,
         banner:            None,
         website_url:       v.website_url.unwrap_or_default(),

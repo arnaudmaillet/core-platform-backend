@@ -40,11 +40,11 @@ async fn a_member_unlocks_a_country_once_and_its_map_follows() {
     assert!(!h.pins_near_in(EVORA.0, EVORA.1, scope()).await.contains(&evora), "locked");
 
     // Portugal is quiet on this ladder: 15 gems.
-    let price = h.unlocking.unlock(me, "PT", 50, &Spender { adult: true, token: None }, Utc::now()).await.unwrap();
+    let price = h.unlocking.unlock(me, "PT", 50, &Spender { adult: true, token: None, profile_ids: vec![] }, Utc::now()).await.unwrap();
     assert_eq!(price.outcome, UnlockOutcome::PriceChanged);
-    let unlocked = h.unlocking.unlock(me, "PT", price.price, &Spender { adult: true, token: None }, Utc::now()).await.unwrap();
+    let unlocked = h.unlocking.unlock(me, "PT", price.price, &Spender { adult: true, token: None, profile_ids: vec![] }, Utc::now()).await.unwrap();
     assert_eq!(unlocked.outcome, UnlockOutcome::Unlocked);
-    let again = h.unlocking.unlock(me, "PT", price.price, &Spender { adult: true, token: None }, Utc::now()).await.unwrap();
+    let again = h.unlocking.unlock(me, "PT", price.price, &Spender { adult: true, token: None, profile_ids: vec![] }, Utc::now()).await.unwrap();
     assert_eq!(again.outcome, UnlockOutcome::AlreadyUnlocked);
     assert_eq!(h.wallet.spent.lock().unwrap().iter().filter(|(a, _, _)| *a == me).count(), 1, "charged once");
 
@@ -83,7 +83,7 @@ async fn a_pending_purchase_is_kept_settled_or_dropped() {
 async fn a_visa_opens_a_country_until_its_end_and_an_unlock_ends_it() {
     let h = TestHarness::start().await;
     let me = Uuid::now_v7();
-    let adult = Spender { adult: true, token: None };
+    let adult = Spender { adult: true, token: None, profile_ids: vec![] };
     // Milliseconds, what the store keeps.
     let now = Utc::now().duration_trunc(TimeDelta::milliseconds(1)).unwrap();
     let day = TimeDelta::hours(VISA_HOURS);
