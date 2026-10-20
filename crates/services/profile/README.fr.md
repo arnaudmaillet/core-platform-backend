@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: d29379b68483afc5b4b6ee19f69388eff82c9b4b86f33beafeadf1d73863df0b
+  source_sha256: 3e67859d31cda5d4346f1fae72f12b98521aefdf8257cc2b1bd0fcc2692379a4
   translated_at: 2026-10-20
   status: complete
 ---
@@ -143,6 +143,7 @@ service ProfileService {
   rpc GetHandleChangePrice(GetHandleChangePriceRequest) returns (HandleChangePrice);   // #911 le prix du prochain changement / le délai du changement gratuit
   rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);
   rpc UpdateBanner(UpdateBannerRequest) returns (CommandResponse);
+  rpc EquipAvatarFrame(EquipAvatarFrameRequest) returns (CommandResponse);   // #913 porter un cadre possédé, ou aucun
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
   rpc SetInteractionLimit(SetInteractionLimitRequest) returns (CommandResponse); // #669 mettre en attente les commentaires / messages des non-abonnés ou abonnés récents jusqu'à une date (≤ 4 semaines)
   rpc ClearInteractionLimit(ClearInteractionLimitRequest) returns (CommandResponse);
@@ -239,6 +240,15 @@ Demander le handle actuel du profil ne change rien. Le compteur (`profile.handle
 compté, jamais débité deux fois. Les appelants mesh changent gratuitement, sans être comptés. Wallet
 injoignable ⇒ `PRF-6003`. Effacer le compte efface le compteur.
 
+**Cadres d'avatar (#913).** Un cadre est un article du catalogue du wallet (`frame.<nom>`) que le
+**compte** achète une fois (`PurchaseItem` du wallet) et que chaque **profil** porte ou non.
+`EquipAvatarFrame(frame_id)` (le propriétaire du profil) vérifie que le compte le possède
+(`ListOwnedItems` du wallet sur le mesh ; sinon **`PRF-6007`** `PERMISSION_DENIED`, `PRF-6003` quand le
+wallet ne peut pas répondre) ; un `frame_id` vide l'enlève. Il est enregistré sur le profil et sur la
+liste des profils du compte (migration 0020), et chaque lecture porte `avatar_frame_id` (`ProfileView`,
+`ProfileSummaryView`, les résultats profil de search). L'app le dessine depuis des visuels embarqués
+indexés par id, et il ne change aucune taille, aucun ordre ni aucun classement (charte V5.3 §35).
+
 ### Ports Rust (contrat hexagonal)
 
 ```rust
@@ -272,6 +282,7 @@ réactivement).
 | PRF-6004 | `HandleChangePriceChanged` (pas le prix affiché ; `ChangeHandle` le répond dans la réponse, #911) | 422 | No |
 | PRF-6005 | `HandleChangeCooldown` (un appelant restreint a changé il y a moins de 30 jours ; dans la réponse, #911) | 422 | No |
 | PRF-6006 | `InsufficientGems` (dans la réponse, #911) | 422 | No |
+| PRF-6007 | `ItemNotOwned` (un article du catalogue que le compte ne possède pas, #913) | 403 | No |
 | PRF-9001–9010 | domain / parse / validation | 422 | No |
 | SDB-* / RDB-* | storage (delegated) | varies | varies |
 
@@ -382,7 +393,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Déploiement, migrations & rollback
 
-- **Migrations :** `crates/services/profile/migrations/00{01..19}_*.cql` sur le keyspace `profile`,
+- **Migrations :** `crates/services/profile/migrations/00{01..20}_*.cql` sur le keyspace `profile`,
   appliquées **avant** le premier démarrage.
 - **Bump de version de cache :** pour invalider le cache à l'échelle de la flotte lors d'un changement de
   schéma, incrémenter le préfixe de clé `v1:` — sans flush, sans interruption.

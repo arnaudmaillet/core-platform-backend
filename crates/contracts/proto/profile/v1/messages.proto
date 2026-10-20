@@ -66,6 +66,11 @@ message ProfileView {
     // when media could not answer in time (fail-open: the URLs still deliver).
     media.v1.DeliveredMedia         avatar               = 32;
     media.v1.DeliveredMedia         banner               = 33;
+    // #913: the avatar frame the profile wears, a wallet catalogue item id
+    // (`frame.<name>`); empty: none. Shown to everyone; the app draws it from
+    // bundled art keyed by id (an unknown id draws no frame). No effect on
+    // any size, order or ranking.
+    string                          avatar_frame_id      = 34;
 }
 
 // Which of a profile's tabs others see (#829). post serves the Reposts and
@@ -89,6 +94,8 @@ message ProfileSummaryView {
     // #907: as on ProfileView.
     string                  avatar_asset_id = 8;
     media.v1.DeliveredMedia avatar          = 9;
+    // #913: as on ProfileView.
+    string                  avatar_frame_id = 10;
 }
 
 message CommandResponse {
@@ -167,6 +174,13 @@ message UpdateBannerRequest {
     string banner_url = 2;
     // #907: as UpdateAvatarRequest.avatar_asset_id.
     string banner_asset_id = 3;
+}
+
+message EquipAvatarFrameRequest {
+    string profile_id = 1;
+    // A `frame.<name>` item the profile's account owns (wallet
+    // ListOwnedItems); empty: wear none.
+    string frame_id   = 2;
 }
 
 message SetVisibilityRequest {

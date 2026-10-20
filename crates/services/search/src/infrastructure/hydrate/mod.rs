@@ -109,6 +109,7 @@ impl GrpcSourceHydrator {
             display_name: view.display_name,
             bio: view.bio,
             avatar_key: view.avatar_url,
+            avatar_frame_id: view.avatar_frame_id,
             verified: view.verified,
             created_at: view.created_at.map(ts_to_dt).unwrap_or_else(Utc::now),
             // The profile's own monotonic version is the authoritative content version.

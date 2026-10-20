@@ -364,6 +364,7 @@ fn family_to_proto(family: ItemFamily) -> proto::ItemFamily {
     match family {
         ItemFamily::AppIcon => proto::ItemFamily::AppIcon,
         ItemFamily::Theme => proto::ItemFamily::Theme,
+        ItemFamily::AvatarFrame => proto::ItemFamily::AvatarFrame,
     }
 }
 
@@ -430,6 +431,7 @@ fn transaction_to_proto(t: &Transaction) -> proto::WalletTransaction {
             TransactionKind::CountryVisa => proto::TransactionKind::CountryVisa,
             TransactionKind::ProfileSlot => proto::TransactionKind::ProfileSlot,
             TransactionKind::HandleChange => proto::TransactionKind::HandleChange,
+            TransactionKind::AvatarFrame => proto::TransactionKind::AvatarFrame,
             TransactionKind::Unknown => proto::TransactionKind::Unspecified,
         } as i32,
         created_at:     Some(timestamp(t.created_at)),
@@ -602,8 +604,15 @@ mod tests {
         let me = Uuid::now_v7().to_string();
         let catalog = h.list_catalog(as_caller(&me, proto::ListCatalogRequest {})).await.unwrap().into_inner();
         let items: Vec<_> = catalog.items.iter().map(|i| (i.item_id.as_str(), i.family, i.price)).collect();
-        let theme = proto::ItemFamily::Theme as i32;
-        assert_eq!(items, [("theme.pink", theme, 0), ("theme.violet", theme, 50), ("theme.red", theme, 50)]);
+        let (theme, frame) = (proto::ItemFamily::Theme as i32, proto::ItemFamily::AvatarFrame as i32);
+        assert_eq!(items, [
+            ("theme.pink", theme, 0),
+            ("theme.violet", theme, 50),
+            ("theme.red", theme, 50),
+            ("frame.gold", frame, 60),
+            ("frame.neon", frame, 60),
+            ("frame.aurora", frame, 60),
+        ]);
 
         let purchase = |account: &str| proto::PurchaseItemRequest {
             account_id:      account.to_owned(),

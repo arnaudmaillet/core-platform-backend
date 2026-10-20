@@ -113,6 +113,8 @@ pub enum HitDisplay {
         handle: String,
         display_name: String,
         avatar_key: String,
+        /// #913; empty: none.
+        avatar_frame_id: String,
         verified: bool,
     },
     Post {

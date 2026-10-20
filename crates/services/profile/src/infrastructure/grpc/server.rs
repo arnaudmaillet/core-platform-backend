@@ -251,4 +251,12 @@ where
         self.get_handle_change_price(request).await
     }
 
+
+    async fn equip_avatar_frame(
+        &self,
+        request: Request<proto::EquipAvatarFrameRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.equip_avatar_frame(request).await
+    }
+
 }

@@ -144,7 +144,7 @@ impl App {
         let slots = Arc::new(crate::application::profile_slots::ProfileSlots {
             store:    Arc::clone(&slot_store),
             profiles: Arc::new(crate::application::profile_slots::IndexedProfiles(Arc::clone(&repository))),
-            wallet:   economy.wallet,
+            wallet:   economy.wallet.clone(),
             policy:   economy.slots,
         });
         let share_token_handler = || {
@@ -201,6 +201,14 @@ impl App {
                 .register::<UpdateBannerCommand, _>(
                     UpdateBannerHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))
                         .with_images(images),
+                )?
+                .register::<crate::application::command::EquipAvatarFrameCommand, _>(
+                    crate::application::command::EquipAvatarFrameHandler {
+                        repo:      Arc::clone(&repository),
+                        cache:     Arc::clone(&cache),
+                        publisher: Arc::clone(&publisher),
+                        wallet:    economy.wallet.clone(),
+                    },
                 )?
                 .register::<SetVisibilityCommand, _>(
                     SetVisibilityHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))

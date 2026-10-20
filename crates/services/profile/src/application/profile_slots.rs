@@ -231,6 +231,10 @@ pub(crate) mod fakes {
             spent.push((*account, key.to_owned(), amount));
             Ok(GemSpend { spent: true, gems: *balance })
         }
+
+        async fn owns(&self, _: &AccountId, item_id: &str) -> Result<bool, ProfileError> {
+            Ok(item_id == "frame.gold")
+        }
     }
 }
 

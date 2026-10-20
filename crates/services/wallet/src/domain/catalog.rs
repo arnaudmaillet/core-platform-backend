@@ -13,15 +13,18 @@ pub enum ItemFamily {
     AppIcon,
     /// An app accent theme (`theme.<name>`, #946).
     Theme,
+    /// An avatar frame (`frame.<name>`, #913), equipped per profile.
+    AvatarFrame,
 }
 
 impl ItemFamily {
-    pub const ALL: [Self; 2] = [Self::AppIcon, Self::Theme];
+    pub const ALL: [Self; 3] = [Self::AppIcon, Self::Theme, Self::AvatarFrame];
 
     fn prefix(self) -> &'static str {
         match self {
             Self::AppIcon => "icon",
             Self::Theme => "theme",
+            Self::AvatarFrame => "frame",
         }
     }
 
@@ -38,6 +41,7 @@ impl ItemFamily {
         match self {
             Self::AppIcon => TransactionKind::AppIcon,
             Self::Theme => TransactionKind::Theme,
+            Self::AvatarFrame => TransactionKind::AvatarFrame,
         }
     }
 }
@@ -64,11 +68,21 @@ pub struct Catalog {
 }
 
 impl Default for Catalog {
-    /// The accent themes (#946): pink free, violet and red bought. No
-    /// alternate icon until the app bundles one (`WALLET_CATALOG` adds them).
+    /// The accent themes (#946): pink free, violet and red bought; three
+    /// avatar frames (#913). No alternate icon until the app bundles one
+    /// (`WALLET_CATALOG` adds them).
     fn default() -> Self {
-        let theme = |name: &str, price_gems| CatalogItem { id: format!("theme.{name}"), family: ItemFamily::Theme, price_gems };
-        Self { items: vec![theme("pink", 0), theme("violet", 50), theme("red", 50)] }
+        let item = |family, id: &str, price_gems| CatalogItem { id: id.to_owned(), family, price_gems };
+        Self {
+            items: vec![
+                item(ItemFamily::Theme, "theme.pink", 0),
+                item(ItemFamily::Theme, "theme.violet", 50),
+                item(ItemFamily::Theme, "theme.red", 50),
+                item(ItemFamily::AvatarFrame, "frame.gold", 60),
+                item(ItemFamily::AvatarFrame, "frame.neon", 60),
+                item(ItemFamily::AvatarFrame, "frame.aurora", 60),
+            ],
+        }
     }
 }
 
@@ -121,7 +135,8 @@ mod tests {
     fn an_item_id_names_its_family() {
         assert_eq!(ItemFamily::of("theme.violet"), Some(ItemFamily::Theme));
         assert_eq!(ItemFamily::of("icon.night_2"), Some(ItemFamily::AppIcon));
-        for bad in ["theme", "theme.", "frame.gold", "theme.Violet", "theme.a.b", ".violet"] {
+        assert_eq!(ItemFamily::of("frame.gold"), Some(ItemFamily::AvatarFrame));
+        for bad in ["theme", "theme.", "medal.gold", "theme.Violet", "theme.a.b", ".violet"] {
             assert_eq!(ItemFamily::of(bad), None, "{bad:?}");
         }
     }

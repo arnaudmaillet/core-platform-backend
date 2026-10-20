@@ -84,6 +84,9 @@ pub struct ProfileView {
     pub avatar_asset_id: Option<String>,
     #[serde(default)]
     pub banner_asset_id: Option<String>,
+    /// The avatar frame worn (#913), shown to everyone.
+    #[serde(default)]
+    pub avatar_frame_id: Option<String>,
 }
 
 impl From<&Profile> for ProfileView {
@@ -98,6 +101,7 @@ impl From<&Profile> for ProfileView {
             banner_url: p.banner_url().map(|u| u.as_str().to_owned()),
             avatar_asset_id: p.avatar_asset_id().map(|a| a.as_str()),
             banner_asset_id: p.banner_asset_id().map(|a| a.as_str()),
+            avatar_frame_id: p.avatar_frame_id().map(str::to_owned),
             website_url: p.website_url().map(|u| u.as_str().to_owned()),
             custom_links: p.custom_links().iter().map(ProfileLinkView::from).collect(),
             profile_kind: p.profile_kind().as_str().to_owned(),
@@ -201,6 +205,7 @@ mod viewer_tests {
             avatar_url: None,
             avatar_asset_id: None,
             banner_asset_id: None,
+            avatar_frame_id: None,
             banner_url: None,
             website_url: Some("https://alice.example".into()),
             custom_links: Vec::new(),

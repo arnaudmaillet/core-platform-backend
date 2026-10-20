@@ -27,6 +27,7 @@ use thiserror::Error;
 /// | PRF-6004 | HandleChangePriceChanged | 422  | Low      | No        |
 /// | PRF-6005 | HandleChangeCooldown     | 422  | Low      | No        |
 /// | PRF-6006 | InsufficientGems         | 422  | Low      | No        |
+/// | PRF-6007 | ItemNotOwned             | 403  | Low      | No        |
 /// | PRF-9001 | DomainViolation          | 422  | Medium   | No        |
 /// | PRF-9002 | InvalidProfileId         | 422  | Low      | No        |
 /// | PRF-9003 | InvalidHandle            | 422  | Low      | No        |
@@ -138,6 +139,10 @@ pub enum ProfileError {
     #[error("not enough gems")]
     InsufficientGems,
 
+    /// A catalogue item the account does not own (#913).
+    #[error("'{item}' is not owned by this account")]
+    ItemNotOwned { item: String },
+
     // ── Domain invariants & parse errors (PRF-9xxx) ───────────────────────────
 
     #[error("domain invariant violated on '{field}': {message}")]
@@ -200,6 +205,7 @@ impl AppError for ProfileError {
             ProfileError::HandleChangePriceChanged { .. } => "PRF-6004",
             ProfileError::HandleChangeCooldown => "PRF-6005",
             ProfileError::InsufficientGems => "PRF-6006",
+            ProfileError::ItemNotOwned { .. } => "PRF-6007",
 
             ProfileError::DomainViolation { .. }  => "PRF-9001",
             ProfileError::InvalidProfileId(_)     => "PRF-9002",
@@ -230,7 +236,7 @@ impl AppError for ProfileError {
             | ProfileError::NoPendingVerification => StatusCode::CONFLICT,
 
             ProfileError::MediaUnavailable { .. } | ProfileError::WalletUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
-            ProfileError::GemSpendingRestricted => StatusCode::FORBIDDEN,
+            ProfileError::GemSpendingRestricted | ProfileError::ItemNotOwned { .. } => StatusCode::FORBIDDEN,
 
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         }
@@ -298,6 +304,7 @@ impl AppError for ProfileError {
             ProfileError::HandleChangePriceChanged { .. } => "The price of a handle change has changed.",
             ProfileError::HandleChangeCooldown          => "You can change your handle again later.",
             ProfileError::InsufficientGems              => "You don't have enough gems.",
+            ProfileError::ItemNotOwned { .. }           => "Buy this item in the Shop first.",
             _                                           => "A domain constraint was violated.",
         }
     }

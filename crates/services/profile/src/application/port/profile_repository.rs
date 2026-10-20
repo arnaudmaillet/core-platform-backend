@@ -20,6 +20,8 @@ pub struct ProfileSummary {
     pub avatar_url: Option<String>,
     /// The avatar's media asset (#907).
     pub avatar_asset_id: Option<MediaAssetId>,
+    /// The avatar frame worn (#913).
+    pub avatar_frame_id: Option<String>,
     pub profile_kind: String,
     pub visibility: String,
     pub status: String,

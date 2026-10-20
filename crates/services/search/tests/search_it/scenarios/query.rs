@@ -33,6 +33,14 @@ async fn federated_typo_tolerant_match_and_kind_filter() {
 
     let only_people = ids(&h.search_opts("distributed", vec![PROFILE, POST], vec![]).await);
     assert_eq!(only_people, vec!["post-1".to_owned(), "prof-1".to_owned()]);
+
+    // #913: a profile hit carries the avatar frame it was indexed with.
+    let profiles = h.search_opts("distributed", vec![PROFILE], vec![]).await;
+    let frame = profiles.hits.iter().find_map(|hit| match &hit.display {
+        Some(search::infrastructure::grpc::proto::search_hit::Display::Profile(p)) => Some(p.avatar_frame_id.clone()),
+        _ => None,
+    });
+    assert_eq!(frame.as_deref(), Some("frame.gold"));
 }
 
 #[tokio::test]

@@ -261,12 +261,14 @@ fn display_to_proto(display: HitDisplay) -> proto::search_hit::Display {
             handle,
             display_name,
             avatar_key,
+            avatar_frame_id,
             verified,
         } => Display::Profile(proto::ProfileHit {
             handle,
             display_name,
             avatar_key,
             verified,
+            avatar_frame_id,
         }),
         HitDisplay::Post {
             author_id,
