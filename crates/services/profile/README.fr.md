@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3e67859d31cda5d4346f1fae72f12b98521aefdf8257cc2b1bd0fcc2692379a4
+  source_sha256: 0d0f57e7b75acd42142a2514497bc94cf581aed5b111cd10177e44d545fd78f8
   translated_at: 2026-10-20
   status: complete
 ---
@@ -248,6 +248,16 @@ wallet ne peut pas répondre) ; un `frame_id` vide l'enlève. Il est enregistré
 liste des profils du compte (migration 0020), et chaque lecture porte `avatar_frame_id` (`ProfileView`,
 `ProfileSummaryView`, les résultats profil de search). L'app le dessine depuis des visuels embarqués
 indexés par id, et il ne change aucune taille, aucun ordre ni aucun classement (charte V5.3 §35).
+
+**Bannières animées (#915, #947).** `UpdateBanner` avec `banner_asset_id` seul (sans `banner_url`) désigne
+une **vidéo du compte** (la vidéo de l'un de ses posts) : le `GetAsset` de media doit la dire `VIDEO`
+READY détenue par le compte (sinon **`PRF-5007`**, `FAILED_PRECONDITION`), et le compte doit posséder
+l'article `banner.animated` du catalogue du wallet (500 gems ; sinon **`PRF-6007`**,
+`PERMISSION_DENIED`). La bannière est alors cet asset, sans URL d'image fixe ; les lectures client
+portent `ProfileView.banner` avec le `MANIFEST` de la vidéo (la boucle) et son `POSTER`, et `banner_url`
+est le poster. Le serveur ne coupe ni ne plafonne la vidéo ; l'app la lit sans le son et montre le poster
+avec Réduire les animations, en mode Économie d'énergie et en veille. Les deux champs vides effacent la
+bannière ; une bannière fixe par URL fonctionne comme avant.
 
 ### Ports Rust (contrat hexagonal)
 

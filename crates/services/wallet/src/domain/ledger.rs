@@ -59,6 +59,8 @@ pub enum TransactionKind {
     HandleChange,
     /// An avatar frame bought with gems (#913; `ref_id`: the item id).
     AvatarFrame,
+    /// The animated banner bought with gems (#915; `ref_id`: the item id).
+    AnimatedBanner,
     /// Written by a newer version of this service.
     Unknown,
 }
@@ -78,6 +80,7 @@ impl TransactionKind {
             Self::ProfileSlot => "profile_slot",
             Self::HandleChange => "handle_change",
             Self::AvatarFrame => "avatar_frame",
+            Self::AnimatedBanner => "animated_banner",
             Self::Unknown => "unknown",
         }
     }
@@ -96,6 +99,7 @@ impl TransactionKind {
             "profile_slot" => Self::ProfileSlot,
             "handle_change" => Self::HandleChange,
             "avatar_frame" => Self::AvatarFrame,
+            "animated_banner" => Self::AnimatedBanner,
             _ => Self::Unknown,
         }
     }
@@ -200,6 +204,7 @@ mod tests {
             TransactionKind::ProfileSlot,
             TransactionKind::HandleChange,
             TransactionKind::AvatarFrame,
+            TransactionKind::AnimatedBanner,
         ] {
             assert_eq!(TransactionKind::parse(k.as_str()), k);
         }

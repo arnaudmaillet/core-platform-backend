@@ -200,7 +200,8 @@ impl App {
                 )?
                 .register::<UpdateBannerCommand, _>(
                     UpdateBannerHandler::new(Arc::clone(&repository), Arc::clone(&cache), Arc::clone(&publisher))
-                        .with_images(images),
+                        .with_images(images)
+                        .with_wallet(economy.wallet.clone()),
                 )?
                 .register::<crate::application::command::EquipAvatarFrameCommand, _>(
                     crate::application::command::EquipAvatarFrameHandler {

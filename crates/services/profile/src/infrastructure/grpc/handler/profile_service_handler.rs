@@ -921,6 +921,14 @@ where
             vec![(avatar_asset_id.as_str(), avatar), (banner_asset_id.as_str(), banner)],
         )
         .await;
+        // An animated banner (#947) has no still URL: its poster is it.
+        if view.banner_url.is_empty()
+            && let Some(poster) = view.banner.as_ref().and_then(|b| {
+                b.renditions.iter().find(|r| r.kind == media_api::RenditionKind::MediaRenditionKindPoster as i32)
+            })
+        {
+            view.banner_url = poster.url.clone();
+        }
         Ok(Response::new(view))
     }
 }

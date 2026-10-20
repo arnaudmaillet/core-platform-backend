@@ -117,6 +117,15 @@ impl profile::application::port::MediaImages for FakePrivateDocuments {
         let owned = self.owned.lock().unwrap().iter().any(|(a, o)| *a == asset.as_str() && *o == account.to_string());
         if owned { Ok(()) } else { Err(ProfileError::MediaAssetNotUsable { id: asset.as_str() }) }
     }
+
+    /// A video (#947): any asset the account uploaded.
+    async fn check_video(
+        &self,
+        asset: &profile::domain::value_object::MediaAssetId,
+        account: &AccountId,
+    ) -> Result<(), ProfileError> {
+        self.check_image(asset, account).await
+    }
 }
 
 #[async_trait::async_trait]
@@ -149,6 +158,8 @@ pub struct TestHarness {
 #[derive(Default)]
 pub struct FakeGemWallet {
     pub spent: std::sync::Mutex<Vec<(String, i64)>>,
+    /// (account, item) granted beyond `frame.gold`, which everyone owns.
+    pub granted: std::sync::Mutex<Vec<(String, String)>>,
 }
 
 #[async_trait::async_trait]
@@ -171,13 +182,14 @@ impl profile::application::port::GemWallet for FakeGemWallet {
         Ok(profile::application::port::GemSpend { spent: true, gems })
     }
 
-    /// Every account owns `frame.gold` (#913).
+    /// Every account owns `frame.gold` (#913); others as granted.
     async fn owns(
         &self,
-        _: &profile::domain::value_object::AccountId,
+        account: &profile::domain::value_object::AccountId,
         item_id: &str,
     ) -> Result<bool, profile::error::ProfileError> {
-        Ok(item_id == "frame.gold")
+        let granted = self.granted.lock().unwrap().iter().any(|(a, i)| *a == account.to_string() && i == item_id);
+        Ok(item_id == "frame.gold" || granted)
     }
 }
 

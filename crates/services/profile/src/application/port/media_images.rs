@@ -12,6 +12,11 @@ pub trait MediaImages: Send + Sync + 'static {
     /// [`ProfileError::MediaAssetNotUsable`] otherwise, one answer for every
     /// case; [`ProfileError::MediaUnavailable`] when media cannot answer.
     async fn check_image(&self, asset: &MediaAssetId, account: &AccountId) -> Result<(), ProfileError>;
+
+    /// `Ok` when `asset` is a READY video (`VIDEO`, a post's) of `account`
+    /// (#947: an animated banner); [`ProfileError::MediaAssetNotUsable`]
+    /// otherwise; [`ProfileError::MediaUnavailable`] when media cannot answer.
+    async fn check_video(&self, asset: &MediaAssetId, account: &AccountId) -> Result<(), ProfileError>;
 }
 
 /// The asset an avatar / banner update names, checked (#907). Without
@@ -48,6 +53,10 @@ mod tests {
                 Some((a, o)) if a == *asset && o == *account => Ok(()),
                 Some(_) => Err(ProfileError::MediaAssetNotUsable { id: asset.as_str() }),
             }
+        }
+
+        async fn check_video(&self, asset: &MediaAssetId, account: &AccountId) -> Result<(), ProfileError> {
+            self.check_image(asset, account).await
         }
     }
 
