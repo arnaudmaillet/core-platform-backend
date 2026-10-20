@@ -55,8 +55,8 @@ async fn a_countrys_cover_is_its_most_liked_post_anyone_may_see() {
     let activity = Arc::clone(&h.standings.activity);
     let now = Utc::now() - TimeDelta::days(1_500 + i64::from(rand_day()));
     let today = now.date_naive();
-    // Reykjavík: Iceland.
-    let (lat, lng) = (64.1466, -21.9426);
+    // Central Iceland (the atlas's coarse coast leaves Reykjavík at sea).
+    let (lat, lng) = (64.9, -18.6);
     let (hidden_author, shown_author) = (uuid::Uuid::now_v7(), uuid::Uuid::now_v7());
     let hidden = h.index_post_by(hidden_author, lat, lng, 1.0, "hidden", "https://cdn/hidden.jpg").await;
     let shown = h.index_post_by(shown_author, lat, lng, 1.0, "shown", "https://cdn/shown.jpg").await;
