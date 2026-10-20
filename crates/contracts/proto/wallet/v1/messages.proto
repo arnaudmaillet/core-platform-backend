@@ -197,7 +197,9 @@ message ExportWalletRequest {
 
 message ExportWalletResponse {
     // Absent: the account never opened a wallet.
-    Wallet wallet = 1;
+    Wallet             wallet      = 1;
+    // The catalogue items the account bought (#892); free ones are not listed.
+    repeated OwnedItem owned_items = 2;
 }
 
 message ListStakePositionsRequest {
@@ -285,4 +287,51 @@ message ListMyStakesResponse {
     repeated MyStake stakes          = 1;
     // Empty on the last page.
     string           next_page_token = 2;
+}
+
+// One item of the gem catalogue (#892).
+message CatalogItem {
+    // `<family>.<name>`, e.g. `theme.violet`; stable, the app's art key.
+    string     item_id = 1;
+    ItemFamily family  = 2;
+    // In gems; 0 = free, owned by every account.
+    int64      price   = 3;
+}
+
+message ListCatalogRequest {}
+
+message ListCatalogResponse {
+    repeated CatalogItem items = 1;
+}
+
+message PurchaseItemRequest {
+    string account_id      = 1;
+    // As for ClaimReward: a retry with the same key charges at most once.
+    string idempotency_key = 2;
+    string item_id         = 3;
+    // The price the app showed; another one answers PRICE_CHANGED.
+    int64  expected_price  = 4;
+}
+
+message PurchaseItemResponse {
+    PurchaseOutcome outcome = 1;
+    // The wallet after the call.
+    Wallet          wallet  = 2;
+}
+
+// A catalogue item an account owns.
+message OwnedItem {
+    string                    item_id     = 1;
+    ItemFamily                family      = 2;
+    // When it was bought; unset for a free item.
+    google.protobuf.Timestamp acquired_at = 3;
+}
+
+message ListOwnedItemsRequest {
+    string account_id = 1;
+}
+
+message ListOwnedItemsResponse {
+    // Free items first, then the bought ones, oldest first.
+    repeated OwnedItem items = 1;
 }

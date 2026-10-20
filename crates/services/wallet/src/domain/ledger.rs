@@ -47,6 +47,10 @@ pub enum TransactionKind {
     Stake,
     /// The likes a guest collected, credited when it became a member (#827).
     WelcomeGift,
+    /// An alternate app icon bought with gems (#892; `ref_id`: the item id).
+    AppIcon,
+    /// An accent theme bought with gems (#946; `ref_id`: the item id).
+    Theme,
     /// Written by a newer version of this service.
     Unknown,
 }
@@ -60,6 +64,8 @@ impl TransactionKind {
             Self::CountryUnlock => "country_unlock",
             Self::Stake => "stake",
             Self::WelcomeGift => "welcome_gift",
+            Self::AppIcon => "app_icon",
+            Self::Theme => "theme",
             Self::Unknown => "unknown",
         }
     }
@@ -72,6 +78,8 @@ impl TransactionKind {
             "country_unlock" => Self::CountryUnlock,
             "stake" => Self::Stake,
             "welcome_gift" => Self::WelcomeGift,
+            "app_icon" => Self::AppIcon,
+            "theme" => Self::Theme,
             _ => Self::Unknown,
         }
     }
@@ -102,6 +110,8 @@ pub enum Operation {
     SpendGems,
     /// A batch of likes.
     Stake,
+    /// A catalogue purchase (#892).
+    Purchase,
 }
 
 impl Operation {
@@ -111,6 +121,7 @@ impl Operation {
             Self::StakePack => "pack",
             Self::SpendGems => "spend",
             Self::Stake => "stake",
+            Self::Purchase => "item",
         }
     }
 }
@@ -167,6 +178,8 @@ mod tests {
             TransactionKind::StakePack,
             TransactionKind::CountryUnlock,
             TransactionKind::WelcomeGift,
+            TransactionKind::AppIcon,
+            TransactionKind::Theme,
         ] {
             assert_eq!(TransactionKind::parse(k.as_str()), k);
         }

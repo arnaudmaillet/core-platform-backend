@@ -33,6 +33,34 @@ enum TransactionKind {
     // The welcome gift: a flat 50 likes, credited once when a guest's device
     // became a member (points; #827, #943).
     TRANSACTION_KIND_WELCOME_GIFT   = 6;
+    // An alternate app icon bought (gems; #892); `ref_id` is the item id.
+    TRANSACTION_KIND_APP_ICON       = 7;
+    // An accent theme bought (gems; #946); `ref_id` is the item id.
+    TRANSACTION_KIND_THEME          = 8;
+}
+
+// What kind of thing a catalogue item is (#892). An item id is
+// `<family>.<name>`: `icon.<name>`, `theme.<name>`.
+enum ItemFamily {
+    ITEM_FAMILY_UNSPECIFIED = 0;
+    // An alternate app icon; applied on the device, nothing stored server-side.
+    ITEM_FAMILY_APP_ICON    = 1;
+    // An app accent theme; applied on the device, nothing stored server-side.
+    ITEM_FAMILY_THEME       = 2;
+}
+
+// The outcome of a catalogue purchase: ordinary states the app renders.
+enum PurchaseOutcome {
+    PURCHASE_OUTCOME_UNSPECIFIED       = 0;
+    PURCHASE_OUTCOME_PURCHASED         = 1;
+    // The account owns it already (or it is free): nothing charged.
+    PURCHASE_OUTCOME_ALREADY_OWNED     = 2;
+    PURCHASE_OUTCOME_INSUFFICIENT_GEMS = 3;
+    // `expected_price` is not the item's price: nothing charged; ListCatalog
+    // has the current one.
+    PURCHASE_OUTCOME_PRICE_CHANGED     = 4;
+    // No item with that id is on sale: nothing charged.
+    PURCHASE_OUTCOME_UNKNOWN_ITEM      = 5;
 }
 
 // The outcome of a claim: ordinary states the app renders, not errors.

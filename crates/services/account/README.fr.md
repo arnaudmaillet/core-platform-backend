@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 08f04523095039b3744b8f203f4c65b8d4f046bd005fde4ad3e8d3fab877f389
-  translated_at: 2026-10-11
+  source_sha256: 73502af5fdfdf84f7f78be2ecfda8d59a0c5673a818f33756547b077cc149bf4
+  translated_at: 2026-10-20
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -288,7 +288,8 @@ canal via le `GetFormerMemberHistory` mesh de chat, ses propres messages et ceux
 les groupes quittés (#656, `left_at_ms`) sont inclus, jusqu'au départ, sans leurs membres) ; pour le compte, ses
 likes (`ListLikesByAccount` d'engagement, #665 : un like est un point, celui du compte), ses posts
 enregistrés (`saves.json` : `ListSavedPostsByAccount` d'engagement, mesh uniquement, #872), son wallet
-(`wallet.json` : `ExportWallet` du wallet, mesh uniquement — lu sans en ouvrir un —, toutes les pages
+(`wallet.json` : `ExportWallet` du wallet, mesh uniquement — lu sans en ouvrir un, avec les articles du
+catalogue achetés par le compte (`owned_items`, #892) —, toutes les pages
 de `ListWalletTransactions`, et `ListStakePositions`, chaque mise avec son règlement ; sans
 `ACCOUNT_WALLET_GRPC_ENDPOINT` l'archive part sans lui, avec un log) et ses médias
 (`ListAssetsByOwner`, liens valables 7 jours). Le serveur lance la passe toutes les

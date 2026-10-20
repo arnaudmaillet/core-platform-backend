@@ -7,14 +7,14 @@ use chrono::{DateTime, DurationRound, NaiveDate, TimeDelta, Utc};
 use uuid::Uuid;
 
 use crate::application::port::{
-    AudienceCheck, ClaimOutcome, EnvelopeSummary, EventPublisher, GemSpend, LikePositions, MyStakeRecord, OutboxEvent, PackOutcome,
-    SpendOutcome, StakeAnnouncement, StakeCursor, StakeOutcome, StakePositionRecord, StakeResult, StakeStatus, TargetDirectory,
+    AudienceCheck, ClaimOutcome, EnvelopeSummary, EventPublisher, GemSpend, LikePositions, MyStakeRecord, OutboxEvent, OwnedItem,
+    PackOutcome, PurchaseOutcome, SpendOutcome, StakeAnnouncement, StakeCursor, StakeOutcome, StakePositionRecord, StakeResult, StakeStatus, TargetDirectory,
     TransactionCursor, WalletStore, WelcomeGiftOutcome,
 };
 use crate::config::WalletConfig;
 use crate::domain::{
-    AccountId, CalibrationReport, ClaimState, Currency, IdempotencyKey, Operation, StakeAsk, StakeTarget, Transaction,
-    TransactionKind,
+    AccountId, CalibrationReport, Catalog, ClaimState, Currency, IdempotencyKey, Operation, StakeAsk, StakeTarget, Transaction,
+    ItemFamily, TransactionKind,
     Wallet,
 };
 use crate::error::WalletError;
@@ -43,6 +43,21 @@ pub struct ClaimReply {
 pub struct PackReply {
     pub outcome: PackOutcome,
     pub view:    WalletView,
+}
+
+/// A catalogue purchase's answer (#892).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PurchaseReply {
+    pub outcome: PurchaseOutcome,
+    pub view:    WalletView,
+}
+
+/// An item the account owns (#892); `acquired_at` is `None` for a free one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedItemView {
+    pub item_id:     String,
+    pub family:      ItemFamily,
+    pub acquired_at: Option<DateTime<Utc>>,
 }
 
 /// A batch of likes' answer.
@@ -491,6 +506,67 @@ impl Wallets {
         Ok(HistoryPage { transactions, next_page_token })
     }
 
+    /// The gem catalogue (#892), in display order.
+    pub fn catalog(&self) -> &Catalog {
+        &self.config.catalog
+    }
+
+    /// Buys the catalogue item `item_id`, shown to the caller at
+    /// `expected_price` (#892). `restricted`: the caller may not spend gems
+    /// (under 18, or age unknown) — `WAL-3001`. An id not on sale answers
+    /// `UnknownItem`, nothing charged.
+    pub async fn purchase_item(
+        &self,
+        account: &str,
+        key: &str,
+        item_id: &str,
+        expected_price: i64,
+        restricted: bool,
+        now: DateTime<Utc>,
+    ) -> Result<PurchaseReply, WalletError> {
+        let account = AccountId::parse(account)?;
+        let key = IdempotencyKey::for_operation(Operation::Purchase, key)?;
+        if restricted {
+            return Err(WalletError::GemSpendingRestricted);
+        }
+        let now = ledger_time(now);
+        let (outcome, wallet) = match self.config.catalog.item(item_id) {
+            Some(item) => {
+                self.store.purchase_item(&account, &key, item, expected_price, self.config.starter_gems, now).await?
+            }
+            None => (PurchaseOutcome::UnknownItem, self.store.open(&account, self.config.starter_gems, now).await?),
+        };
+        Ok(PurchaseReply { outcome, view: self.view(wallet, now) })
+    }
+
+    /// The items the account owns (#892): the catalogue's free ones, then the
+    /// bought ones, oldest first — kept when no longer on sale.
+    pub async fn owned_items(&self, account: &str) -> Result<Vec<OwnedItemView>, WalletError> {
+        let bought = self.bought_items(account).await?;
+        let mut owned: Vec<OwnedItemView> = self
+            .config
+            .catalog
+            .free_items()
+            .filter(|item| bought.iter().all(|b| b.item_id != item.id))
+            .map(|item| OwnedItemView { item_id: item.id.clone(), family: item.family, acquired_at: None })
+            .collect();
+        owned.extend(bought);
+        Ok(owned)
+    }
+
+    /// The items the account bought, oldest first (its GDPR export, #892);
+    /// one of a family this version does not know is left out.
+    pub async fn bought_items(&self, account: &str) -> Result<Vec<OwnedItemView>, WalletError> {
+        let bought = self.store.owned_items(&AccountId::parse(account)?).await?;
+        Ok(bought
+            .into_iter()
+            .filter_map(|OwnedItem { item_id, acquired_at }| {
+                let family = ItemFamily::of(&item_id)?;
+                Some(OwnedItemView { item_id, family, acquired_at: Some(acquired_at) })
+            })
+            .collect())
+    }
+
     /// The account's wallet for its GDPR export, without opening one;
     /// `None` when it never had one.
     pub async fn export(&self, account: &str, now: DateTime<Utc>) -> Result<Option<WalletView>, WalletError> {
@@ -639,6 +715,8 @@ pub(crate) mod fakes {
         pub envelope_days: Mutex<HashMap<chrono::NaiveDate, MemEnvelopeDay>>,
         /// device key hash → the account its welcome gift went to (#827)
         pub welcome: Mutex<HashMap<String, Option<AccountId>>>,
+        /// (account, item bought), oldest first (#892)
+        owned:   Mutex<Vec<(AccountId, OwnedItem)>>,
     }
 
     impl MemoryStore {
@@ -725,6 +803,41 @@ pub(crate) mod fakes {
                 PackDecision::InsufficientGems => PackOutcome::InsufficientGems,
             };
             Ok((outcome, wallet))
+        }
+
+        async fn purchase_item(
+            &self,
+            account: &AccountId,
+            key: &IdempotencyKey,
+            item: &crate::domain::CatalogItem,
+            expected_price: i64,
+            starter_gems: i64,
+            now: DateTime<Utc>,
+        ) -> Result<(PurchaseOutcome, Wallet), WalletError> {
+            use crate::domain::PurchaseDecision;
+            let mut wallet = self.open_locked(account, starter_gems, now);
+            if self.replayed(account, key).is_some() {
+                return Ok((PurchaseOutcome::Purchased, wallet));
+            }
+            let owned = self.owned.lock().unwrap().iter().any(|(a, o)| a == account && o.item_id == item.id);
+            let outcome = match wallet.decide_purchase(item, expected_price, owned) {
+                PurchaseDecision::Buy => {
+                    wallet.spend_gems(item.price_gems);
+                    let movement = (Currency::Gems, -item.price_gems, wallet.gems, item.family.transaction_kind(), Some(item.id.clone()));
+                    self.record(account, movement, key.as_str(), now);
+                    self.owned.lock().unwrap().push((*account, OwnedItem { item_id: item.id.clone(), acquired_at: now }));
+                    self.wallets.lock().unwrap().insert(*account, wallet.clone());
+                    PurchaseOutcome::Purchased
+                }
+                PurchaseDecision::AlreadyOwned => PurchaseOutcome::AlreadyOwned,
+                PurchaseDecision::PriceChanged => PurchaseOutcome::PriceChanged,
+                PurchaseDecision::InsufficientGems => PurchaseOutcome::InsufficientGems,
+            };
+            Ok((outcome, wallet))
+        }
+
+        async fn owned_items(&self, account: &AccountId) -> Result<Vec<OwnedItem>, WalletError> {
+            Ok(self.owned.lock().unwrap().iter().filter(|(a, _)| a == account).map(|(_, o)| o.clone()).collect())
         }
 
         async fn spend_gems(
@@ -916,6 +1029,7 @@ pub(crate) mod fakes {
             self.positions.lock().unwrap().retain(|(a, _), _| a != account);
             self.settlements.lock().unwrap().retain(|(a, _), _| a != account);
             self.ledger.lock().unwrap().retain(|(t, _)| t.account != *account);
+            self.owned.lock().unwrap().retain(|(a, _)| a != account);
             Ok(self.wallets.lock().unwrap().remove(account).is_some())
         }
 
@@ -1296,6 +1410,55 @@ mod tests {
         );
         let history = w.history(&account, None, 10, "").await.unwrap();
         assert_eq!(history.transactions[0].ref_id.as_deref(), Some("shots_10"), "the ledger names the pack");
+    }
+
+    /// #892, #946: a theme is bought once, at the price shown, adult only,
+    /// idempotent per key; pink is free and owned by every account; an
+    /// unknown id charges nothing; erasure forgets what was bought.
+    #[tokio::test]
+    async fn a_catalogue_item_is_bought_once_at_the_price_shown() {
+        use crate::application::port::PurchaseOutcome as P;
+        let w = wallets();
+        let account = Uuid::now_v7().to_string();
+        let buy = |item: &'static str, price: i64, k: String| {
+            let (w, account) = (&w, account.clone());
+            async move { w.purchase_item(&account, &k, item, price, false, at(8, 10)).await.unwrap() }
+        };
+        assert!(matches!(
+            w.purchase_item(&account, &key(), "theme.violet", 50, true, at(8, 10)).await,
+            Err(WalletError::GemSpendingRestricted)
+        ));
+        assert_eq!(buy("theme.violet", 40, key()).await.outcome, P::PriceChanged);
+        assert_eq!(buy("theme.gold", 50, key()).await.outcome, P::UnknownItem);
+        assert_eq!(buy("theme.pink", 0, key()).await.outcome, P::AlreadyOwned, "free");
+
+        let k = key();
+        let bought = buy("theme.violet", 50, k.clone()).await;
+        assert_eq!((bought.outcome, bought.view.wallet.gems), (P::Purchased, 50));
+        assert_eq!(buy("theme.violet", 50, k).await.outcome, P::Purchased, "a retry answers the same");
+        assert_eq!(buy("theme.violet", 50, key()).await.outcome, P::AlreadyOwned, "charged once");
+        let short = buy("theme.red", 50, key()).await;
+        assert_eq!((short.outcome, short.view.wallet.gems), (P::Purchased, 0));
+        assert_eq!(buy("theme.red", 50, key()).await.outcome, P::AlreadyOwned);
+
+        let owned: Vec<_> = w.owned_items(&account).await.unwrap().into_iter().map(|o| (o.item_id, o.acquired_at.is_some())).collect();
+        assert_eq!(owned, [("theme.pink".into(), false), ("theme.violet".into(), true), ("theme.red".into(), true)]);
+        let history = w.history(&account, Some(Currency::Gems), 10, "").await.unwrap();
+        let spent: Vec<_> = history.transactions.iter().map(|t| (t.kind, t.delta, t.ref_id.as_deref())).take(2).collect();
+        assert_eq!(spent, [(TransactionKind::Theme, -50, Some("theme.red")), (TransactionKind::Theme, -50, Some("theme.violet"))]);
+
+        w.erase(&AccountId::parse(&account).unwrap()).await.unwrap();
+        assert_eq!(w.bought_items(&account).await.unwrap(), [], "erased with the account");
+    }
+
+    #[tokio::test]
+    async fn without_gems_nothing_is_bought() {
+        use crate::application::port::PurchaseOutcome as P;
+        let w = Wallets::new(Arc::new(MemoryStore::default()), WalletConfig { starter_gems: 49, ..WalletConfig::default() });
+        let account = Uuid::now_v7().to_string();
+        let reply = w.purchase_item(&account, &key(), "theme.violet", 50, false, at(8, 10)).await.unwrap();
+        assert_eq!((reply.outcome, reply.view.wallet.gems), (P::InsufficientGems, 49));
+        assert_eq!(w.bought_items(&account).await.unwrap(), []);
     }
 
     /// A claim's key cannot pass as a paid pack: keys are scoped per operation.

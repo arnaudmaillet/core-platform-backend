@@ -11,14 +11,14 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::application::port::{
-    ClaimOutcome, ClaimResult, EnvelopeSummary, GemSpend, MyStakeRecord, SettlementRecord, StakePositionRecord, OutboxEvent, PackOutcome,
-    SpendOutcome, StakeAnnouncement, StakeCursor, StakeOutcome, StakeResult, StakeStatus, TransactionCursor, WalletStore,
+    ClaimOutcome, ClaimResult, EnvelopeSummary, GemSpend, MyStakeRecord, SettlementRecord, StakePositionRecord, OutboxEvent, OwnedItem,
+    PackOutcome, PurchaseOutcome, SpendOutcome, StakeAnnouncement, StakeCursor, StakeOutcome, StakeResult, StakeStatus, TransactionCursor, WalletStore,
     WelcomeGiftOutcome,
 };
 use crate::domain::event::{StakeCommitted, WalletEvent};
 use crate::domain::{
-    AccountId, Allocation, CalibrationRow, ClaimDecision, ClaimPolicy, Conviction, Currency, DayPosition, DuePosition, EnvelopeDay,
-    IdempotencyKey, PackDecision, Settlement, StakeAsk,
+    AccountId, Allocation, CalibrationRow, CatalogItem, ClaimDecision, ClaimPolicy, Conviction, Currency, DayPosition, DuePosition, EnvelopeDay,
+    IdempotencyKey, PackDecision, PurchaseDecision, Settlement, StakeAsk,
     StakeDecision, StakePackOffer, StakePackPolicy, StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
@@ -335,6 +335,68 @@ impl WalletStore for PgWalletStore {
         Ok((outcome, wallet))
     }
 
+    #[instrument(name = "wallet.purchase_item", skip(self, key))]
+    async fn purchase_item(
+        &self,
+        account: &AccountId,
+        key: &IdempotencyKey,
+        item: &CatalogItem,
+        expected_price: i64,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<(PurchaseOutcome, Wallet), WalletError> {
+        let (mut tx, mut wallet) = self.locked(account, starter_gems, now).await?;
+        let outcome = if replayed(&mut tx, account, key).await?.is_some() {
+            PurchaseOutcome::Purchased
+        } else {
+            let (owned,): (bool,) =
+                sqlx::query_as("SELECT EXISTS (SELECT 1 FROM owned_items WHERE account_id = $1 AND item_id = $2)")
+                    .bind(account.as_uuid())
+                    .bind(&item.id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(storage)?;
+            match wallet.decide_purchase(item, expected_price, owned) {
+                PurchaseDecision::Buy => {
+                    wallet.spend_gems(item.price_gems);
+                    write_gems(&mut tx, &wallet, now).await?;
+                    let movement = Movement {
+                        currency:      Currency::Gems,
+                        delta:         -item.price_gems,
+                        balance_after: wallet.gems,
+                        kind:          item.family.transaction_kind(),
+                        ref_id:        Some(&item.id),
+                        conviction:    None,
+                    };
+                    record(&mut tx, account, movement, key, now).await?;
+                    sqlx::query("INSERT INTO owned_items (account_id, item_id, acquired_at) VALUES ($1, $2, $3)")
+                        .bind(account.as_uuid())
+                        .bind(&item.id)
+                        .bind(now)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(storage)?;
+                    PurchaseOutcome::Purchased
+                }
+                PurchaseDecision::AlreadyOwned => PurchaseOutcome::AlreadyOwned,
+                PurchaseDecision::PriceChanged => PurchaseOutcome::PriceChanged,
+                PurchaseDecision::InsufficientGems => PurchaseOutcome::InsufficientGems,
+            }
+        };
+        tx.commit().await.map_err(storage)?;
+        Ok((outcome, wallet))
+    }
+
+    async fn owned_items(&self, account: &AccountId) -> Result<Vec<OwnedItem>, WalletError> {
+        let rows: Vec<(String, DateTime<Utc>)> =
+            sqlx::query_as("SELECT item_id, acquired_at FROM owned_items WHERE account_id = $1 ORDER BY acquired_at, item_id")
+                .bind(account.as_uuid())
+                .fetch_all(self.pool(account)?)
+                .await
+                .map_err(storage)?;
+        Ok(rows.into_iter().map(|(item_id, acquired_at)| OwnedItem { item_id, acquired_at }).collect())
+    }
+
     #[instrument(name = "wallet.spend_gems", skip(self, key))]
     async fn spend_gems(
         &self,
@@ -611,6 +673,11 @@ impl WalletStore for PgWalletStore {
             .await
             .map_err(storage)?;
         sqlx::query("DELETE FROM stakes WHERE account_id = $1")
+            .bind(account.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(storage)?;
+        sqlx::query("DELETE FROM owned_items WHERE account_id = $1")
             .bind(account.as_uuid())
             .execute(&mut *tx)
             .await
