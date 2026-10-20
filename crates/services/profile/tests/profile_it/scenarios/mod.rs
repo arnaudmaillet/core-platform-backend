@@ -13,3 +13,4 @@ mod interaction_settings;
 mod share_tokens;
 mod supervision_floors;
 mod profile_slots;
+mod handle_changes;

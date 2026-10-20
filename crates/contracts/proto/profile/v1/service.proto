@@ -32,7 +32,19 @@ service ProfileService {
 
     // Atomically swap the public @handle using ScyllaDB LWT.
     // The old handle enters a 30-day tombstone reservation period.
+    // A gem sink (#911): an account's first handle change is free, later ones
+    // cost gems (server policy, GetHandleChangePrice), charged once and only
+    // when the new handle is claimed. A caller who may not spend gems (under
+    // 18, or age unknown) changes for free once per 30 days. Refusals are
+    // in-band (`CommandResponse.handle_change`: PRICE_CHANGED,
+    // INSUFFICIENT_GEMS, COOLDOWN; nothing changed, nothing charged). Asking
+    // for the profile's current handle changes nothing.
     rpc ChangeHandle(ChangeHandleRequest) returns (CommandResponse);
+
+    // What the profile's next handle change costs its account (#911): the
+    // price (0 when free), and for a caller who may not spend gems when the
+    // next free change opens. Edge: the profile's owner.
+    rpc GetHandleChangePrice(GetHandleChangePriceRequest) returns (HandleChangePrice);
 
     // Replace the avatar CDN URL.
     rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);

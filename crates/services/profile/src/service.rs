@@ -100,6 +100,8 @@ impl Service for ProfileService {
         // Profile slots (#916): the caller's account.
         authenticated("/profile.v1.ProfileService/GetProfileSlots"),
         authenticated("/profile.v1.ProfileService/BuyProfileSlot"),
+        // Paid handle changes (#911): the profile's owner.
+        authenticated("/profile.v1.ProfileService/GetHandleChangePrice"),
     ];
 
     async fn build(infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -127,8 +129,11 @@ impl Service for ProfileService {
             publisher,
             media.clone().map(|m| m as Arc<dyn crate::application::port::PrivateDocuments>),
             media.clone().map(|m| m as Arc<dyn crate::application::port::MediaImages>),
-            slot_wallet_from_env()?,
-            slot_policy_from_env(),
+            crate::app::Economy {
+                wallet:        gem_wallet_from_env()?,
+                slots:         slot_policy_from_env(),
+                handle_change: handle_change_policy_from_env(),
+            },
         )
             .await
             .map_err(|e| anyhow::anyhow!("profile app build: {e}"))?;
@@ -180,7 +185,8 @@ impl Service for ProfileService {
             Some(media) => handler.with_media(media),
             None => handler,
         }
-        .with_slots(Arc::clone(&self.app.slots));
+        .with_slots(Arc::clone(&self.app.slots))
+        .with_changes(Arc::clone(&self.app.handle_changes));
 
         let reflection = ReflectionBuilder::configure()
             .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
@@ -288,7 +294,7 @@ fn media_from_env() -> anyhow::Result<Option<Arc<crate::infrastructure::client::
 /// `PROFILE_WALLET_RPC_TIMEOUT_MS` / `PROFILE_WALLET_CONNECT_TIMEOUT_MS`,
 /// 1 s / 500 ms). Unset: slots cannot be bought (`PRF-6003`); creating within
 /// the slots owned still works.
-fn slot_wallet_from_env() -> anyhow::Result<Option<Arc<dyn crate::application::port::SlotWallet>>> {
+fn gem_wallet_from_env() -> anyhow::Result<Option<Arc<dyn crate::application::port::GemWallet>>> {
     let Some(endpoint) = std::env::var("PROFILE_WALLET_GRPC_ENDPOINT").ok().filter(|v| !v.trim().is_empty()) else {
         tracing::warn!("PROFILE_WALLET_GRPC_ENDPOINT unset: profile slots cannot be bought");
         return Ok(None);
@@ -301,7 +307,7 @@ fn slot_wallet_from_env() -> anyhow::Result<Option<Arc<dyn crate::application::p
         .timeout(ms("PROFILE_WALLET_RPC_TIMEOUT_MS", 1_000))
         .connect_timeout(ms("PROFILE_WALLET_CONNECT_TIMEOUT_MS", 500))
         .connect_lazy();
-    Ok(Some(Arc::new(crate::infrastructure::client::GrpcSlotWallet::new(channel))))
+    Ok(Some(Arc::new(crate::infrastructure::client::GrpcGemWallet::new(channel))))
 }
 
 /// `PROFILE_MAX_SLOTS` (5) and `PROFILE_SLOT_BASE_PRICE` (100 gems, the 2nd
@@ -314,6 +320,15 @@ fn slot_policy_from_env() -> crate::application::profile_slots::SlotPolicy {
         max_slots:  number("PROFILE_MAX_SLOTS").and_then(|v| i32::try_from(v).ok()).unwrap_or(defaults.max_slots),
         base_price: number("PROFILE_SLOT_BASE_PRICE").unwrap_or(defaults.base_price),
     }
+}
+
+/// `PROFILE_HANDLE_CHANGE_PRICE` (100 gems, #911): a paid handle change's
+/// price; an unparsable or non-positive value keeps the default. A caller who
+/// may not spend gems changes for free once per 30 days.
+fn handle_change_policy_from_env() -> crate::application::handle_changes::HandleChangePolicy {
+    let defaults = crate::application::handle_changes::HandleChangePolicy::default();
+    let price = std::env::var("PROFILE_HANDLE_CHANGE_PRICE").ok().and_then(|v| v.trim().parse::<i64>().ok()).filter(|v| *v > 0);
+    crate::application::handle_changes::HandleChangePolicy { price: price.unwrap_or(defaults.price), ..defaults }
 }
 
 #[cfg(test)]

@@ -55,6 +55,8 @@ pub enum TransactionKind {
     CountryVisa,
     /// A profile slot bought with gems (#916; `ref_id`: the slot number).
     ProfileSlot,
+    /// A paid handle change (#911; `ref_id`: the profile).
+    HandleChange,
     /// Written by a newer version of this service.
     Unknown,
 }
@@ -72,6 +74,7 @@ impl TransactionKind {
             Self::Theme => "theme",
             Self::CountryVisa => "country_visa",
             Self::ProfileSlot => "profile_slot",
+            Self::HandleChange => "handle_change",
             Self::Unknown => "unknown",
         }
     }
@@ -88,6 +91,7 @@ impl TransactionKind {
             "theme" => Self::Theme,
             "country_visa" => Self::CountryVisa,
             "profile_slot" => Self::ProfileSlot,
+            "handle_change" => Self::HandleChange,
             _ => Self::Unknown,
         }
     }
@@ -190,6 +194,7 @@ mod tests {
             TransactionKind::Theme,
             TransactionKind::CountryVisa,
             TransactionKind::ProfileSlot,
+            TransactionKind::HandleChange,
         ] {
             assert_eq!(TransactionKind::parse(k.as_str()), k);
         }

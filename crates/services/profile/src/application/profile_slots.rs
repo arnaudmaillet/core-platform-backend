@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::application::port::{ProfileRepository, ProfileSlotStore, SlotWallet};
+use crate::application::port::{GemPurchase, GemWallet, ProfileRepository, ProfileSlotStore};
 use crate::domain::value_object::AccountId;
 use crate::error::ProfileError;
 
@@ -109,7 +109,7 @@ pub struct ProfileSlots {
     pub profiles: Arc<dyn AccountProfiles>,
     /// `None`: slots cannot be bought (`WalletUnavailable`); creating within
     /// the slots owned still works.
-    pub wallet: Option<Arc<dyn SlotWallet>>,
+    pub wallet: Option<Arc<dyn GemWallet>>,
     pub policy: SlotPolicy,
 }
 
@@ -154,7 +154,7 @@ impl ProfileSlots {
         }
         let wallet = self.wallet.as_ref().ok_or_else(|| ProfileError::WalletUnavailable { reason: "not configured".into() })?;
         let slot = state.slots + 1;
-        let spend = wallet.spend_for_slot(account, slot, price, &format!("profile-slot-{slot}"), token).await?;
+        let spend = wallet.spend(account, GemPurchase::ProfileSlot { slot }, price, &format!("profile-slot-{slot}"), token).await?;
         if !spend.spent {
             return Ok(SlotReply { outcome: SlotOutcome::InsufficientGems, state, gems: Some(spend.gems), price });
         }
@@ -174,7 +174,7 @@ pub(crate) mod fakes {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::application::port::SlotSpend;
+    use crate::application::port::GemSpend;
 
     #[derive(Default)]
     pub struct MemSlots(pub Mutex<HashMap<AccountId, i32>>);
@@ -203,33 +203,33 @@ pub(crate) mod fakes {
 
     /// Gems per account (100 by default), spends keyed once.
     #[derive(Default)]
-    pub struct MemSlotWallet {
+    pub struct MemGemWallet {
         pub gems:  Mutex<HashMap<AccountId, i64>>,
         pub spent: Mutex<Vec<(AccountId, String, i64)>>,
     }
 
     #[async_trait]
-    impl SlotWallet for MemSlotWallet {
-        async fn spend_for_slot(
+    impl GemWallet for MemGemWallet {
+        async fn spend(
             &self,
             account: &AccountId,
-            _: i32,
+            _: GemPurchase,
             amount: i64,
             key: &str,
             _: Option<&str>,
-        ) -> Result<SlotSpend, ProfileError> {
+        ) -> Result<GemSpend, ProfileError> {
             let mut gems = self.gems.lock().unwrap();
             let balance = gems.entry(*account).or_insert(100);
             let mut spent = self.spent.lock().unwrap();
             if spent.iter().any(|(a, k, _)| a == account && k == key) {
-                return Ok(SlotSpend { spent: true, gems: *balance });
+                return Ok(GemSpend { spent: true, gems: *balance });
             }
             if *balance < amount {
-                return Ok(SlotSpend { spent: false, gems: *balance });
+                return Ok(GemSpend { spent: false, gems: *balance });
             }
             *balance -= amount;
             spent.push((*account, key.to_owned(), amount));
-            Ok(SlotSpend { spent: true, gems: *balance })
+            Ok(GemSpend { spent: true, gems: *balance })
         }
     }
 }
@@ -254,12 +254,12 @@ mod tests {
         slots:    ProfileSlots,
         profiles: Arc<MemProfiles>,
         store:    Arc<MemSlots>,
-        wallet:   Arc<MemSlotWallet>,
+        wallet:   Arc<MemGemWallet>,
     }
 
     fn world() -> World {
         let (profiles, store, wallet) =
-            (Arc::new(MemProfiles::default()), Arc::new(MemSlots::default()), Arc::new(MemSlotWallet::default()));
+            (Arc::new(MemProfiles::default()), Arc::new(MemSlots::default()), Arc::new(MemGemWallet::default()));
         let slots = ProfileSlots {
             store:    Arc::clone(&store) as _,
             profiles: Arc::clone(&profiles) as _,

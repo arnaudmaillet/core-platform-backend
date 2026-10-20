@@ -24,26 +24,35 @@ pub trait ProfileSlotStore: Send + Sync + 'static {
     async fn erase(&self, account: &AccountId) -> Result<(), ProfileError>;
 }
 
-/// What the wallet answered to a slot's gem spend.
+/// What gems buy from profile: the wallet's ledger kind and `ref_id`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SlotSpend {
+pub enum GemPurchase {
+    /// A profile slot (#916): `PROFILE_SLOT`, `ref_id` = the slot number.
+    ProfileSlot { slot: i32 },
+    /// A paid handle change (#911): `HANDLE_CHANGE`, `ref_id` = the profile.
+    HandleChange { profile: crate::domain::value_object::ProfileId },
+}
+
+/// What the wallet answered to a gem spend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GemSpend {
     pub spent: bool,
     /// Gems left.
     pub gems:  i64,
 }
 
-/// The account's gems in the wallet (mesh `SpendGems`, kind `PROFILE_SLOT`,
-/// once per `key`). Failures are `WalletUnavailable`: a purchase fails closed.
+/// The account's gems in the wallet (mesh `SpendGems`, once per `key`).
+/// Failures are `WalletUnavailable`: a purchase fails closed.
 #[async_trait]
-pub trait SlotWallet: Send + Sync + 'static {
-    /// `slot`: the slot bought (its `ref_id`); `end_user`: the buyer's edge
-    /// token, forwarded so the wallet checks the spender itself (#852).
-    async fn spend_for_slot(
+pub trait GemWallet: Send + Sync + 'static {
+    /// `end_user`: the buyer's edge token, forwarded so the wallet checks the
+    /// spender itself (#852).
+    async fn spend(
         &self,
         account: &AccountId,
-        slot: i32,
+        purchase: GemPurchase,
         amount: i64,
         key: &str,
         end_user: Option<&str>,
-    ) -> Result<SlotSpend, ProfileError>;
+    ) -> Result<GemSpend, ProfileError>;
 }

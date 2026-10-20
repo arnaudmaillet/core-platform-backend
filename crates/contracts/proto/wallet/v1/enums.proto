@@ -42,6 +42,8 @@ enum TransactionKind {
     TRANSACTION_KIND_COUNTRY_VISA   = 9;
     // A profile slot bought (gems; #916); `ref_id` is the slot number.
     TRANSACTION_KIND_PROFILE_SLOT   = 10;
+    // A paid handle change (gems; #911); `ref_id` is the profile id.
+    TRANSACTION_KIND_HANDLE_CHANGE  = 11;
 }
 
 // What kind of thing a catalogue item is (#892). An item id is

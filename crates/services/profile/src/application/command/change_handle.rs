@@ -3,14 +3,20 @@ use std::sync::Arc;
 use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
+use crate::application::handle_changes::HandleChanges;
 use crate::application::port::{EventPublisher, ProfileCache, ProfileRepository};
 use crate::domain::value_object::{Handle, ProfileId};
 use crate::error::ProfileError;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ChangeHandleCommand {
     pub profile_id: String,
     pub new_handle: String,
+    /// The price the app showed (#911).
+    pub expected_price: i64,
+    /// The end user changing it (#911); `None`: a mesh caller, free and
+    /// uncounted.
+    pub payer: Option<crate::application::handle_changes::HandlePayer>,
 }
 
 impl Command for ChangeHandleCommand {}
@@ -32,11 +38,19 @@ pub struct ChangeHandleHandler {
     repo: Arc<dyn ProfileRepository>,
     cache: Arc<dyn ProfileCache>,
     publisher: Arc<dyn EventPublisher>,
+    /// Paid handle changes (#911); `None`: every change is free.
+    changes: Option<Arc<HandleChanges>>,
 }
 
 impl ChangeHandleHandler {
     pub fn new(repo: Arc<dyn ProfileRepository>, cache: Arc<dyn ProfileCache>, publisher: Arc<dyn EventPublisher>) -> Self {
-        Self { repo, cache, publisher }
+        Self { repo, cache, publisher, changes: None }
+    }
+
+    /// Prices end users' handle changes (#911).
+    pub fn with_changes(mut self, changes: Arc<HandleChanges>) -> Self {
+        self.changes = Some(changes);
+        self
     }
 }
 
@@ -55,11 +69,34 @@ impl CommandHandler<ChangeHandleCommand> for ChangeHandleHandler {
             .await?
             .ok_or_else(|| ProfileError::ProfileNotFound { id: cmd.profile_id.clone() })?;
 
+        // Its own handle already (a retry after the change): nothing to do,
+        // nothing charged.
+        if profile.handle() == &new_handle {
+            return Ok(());
+        }
+
         if !self.repo.handle_is_available(&new_handle, Some(profile.id())).await? {
             return Err(ProfileError::HandleAlreadyTaken {
                 handle: new_handle.as_str().to_owned(),
             });
         }
+
+        // An end user's change is priced (#911): refusals before any claim.
+        let now = chrono::Utc::now();
+        let account = profile.account_id();
+        let priced = match (&self.changes, &cmd.payer) {
+            (Some(changes), Some(payer)) => {
+                let quote = changes.quote(&account, payer, now).await?;
+                if quote.next_change_at.is_some() {
+                    return Err(ProfileError::HandleChangeCooldown);
+                }
+                if quote.price != cmd.expected_price {
+                    return Err(ProfileError::HandleChangePriceChanged { price: quote.price });
+                }
+                Some((changes, payer, quote))
+            }
+            _ => None,
+        };
 
         let old_handle = profile.change_handle(new_handle.clone(), envelope.correlation_id)?;
 
@@ -71,6 +108,23 @@ impl CommandHandler<ChangeHandleCommand> for ChangeHandleHandler {
             return Err(ProfileError::HandleAlreadyTaken {
                 handle: new_handle.as_str().to_owned(),
             });
+        }
+
+        // Charged only once the handle is ours; given back when unpaid.
+        if let Some((changes, payer, quote)) = &priced
+            && quote.price > 0
+        {
+            let charged = match changes.charge(&account, profile.id(), quote, payer).await {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(ProfileError::InsufficientGems),
+                Err(e) => Err(e),
+            };
+            if let Err(e) = charged {
+                if let Err(release) = self.repo.release_handle_claim(&new_handle, profile.id()).await {
+                    tracing::error!(error = %release, handle = new_handle.as_str(), "handle claim not released after an unpaid change");
+                }
+                return Err(e);
+            }
         }
 
         if let Err(e) = self.repo.save(&profile).await {
@@ -92,6 +146,14 @@ impl CommandHandler<ChangeHandleCommand> for ChangeHandleHandler {
         let _ = self.cache.invalidate_handle(new_handle.as_str()).await;
         let _ = self.cache.invalidate_by_id(&id).await;
         let _ = self.cache.invalidate_account_profiles(&profile.account_id()).await;
+
+        // Counted once saved: a crash before it leaves this change uncounted
+        // (the next one is priced as if it had not happened), never charged twice.
+        if let Some((changes, _, quote)) = &priced
+            && let Err(e) = changes.record(&account, quote, now).await
+        {
+            tracing::warn!(error = %e, "handle change not counted");
+        }
 
         Ok(())
     }

@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: e69873f03f5a146e4ad525a1af92ce043ce438cfe1d95cd7d4160af2642f61a0
+  source_sha256: cddbb1e8aece464b30e300449be4dc9fc18e1a824f8ddaaee1e2b983dc973792
   translated_at: 2026-10-20
   status: complete
 ---
@@ -96,6 +96,7 @@ seule fois.
 | Packs de mises (`BuyStakePack`, edge ; #941) | des tirs de 100 points **de l'acheteur** ; en vente par défaut `shots_3` (3 tirs, 50 gems — le pack par défaut, pour une requête qui n'en nomme aucun), `shots_10` (10, 150) et `shots_25` (25, 325) ; tout ou rien, un pack à la fois (`PACK_STILL_ACTIVE` tant qu'il reste des tirs, rien n'est débité) ; les tirs n'expirent jamais ; un pack qui n'est pas en vente renvoie `WAL-9005` ; le `ref_id` de la ligne du registre est l'id du pack et `Wallet.stake_pack_id` le pack chargé |
 | Déblocage de pays / visa de 24 h (`SpendGems`, mesh ; #910) | geo-discovery fixe le prix, vérifie que l'acheteur est adulte et demande les gems avec sa propre clé (`COUNTRY_UNLOCK` ou `COUNTRY_VISA`) ; `ref_id` = le code du pays |
 | Emplacement de profil (`SpendGems`, mesh ; #916) | profile fixe le prix de l'emplacement, vérifie que l'acheteur est adulte et demande les gems avec la clé `profile-slot-<n>` (`PROFILE_SLOT`) ; `ref_id` = le numéro de l'emplacement |
+| Changement de handle payant (`SpendGems`, mesh ; #911) | profile fixe le prix du changement (le premier est gratuit), vérifie que le payeur est adulte et demande les gems avec la clé `handle-change-<n>` une fois le handle réservé (`HANDLE_CHANGE`) ; `ref_id` = le profil |
 | Article du catalogue (`PurchaseItem`, edge ; #892) | voir le catalogue ci-dessous |
 
 **Le catalogue de gems (#892).** Ce que les gems achètent, en politique serveur (`WALLET_CATALOG`),

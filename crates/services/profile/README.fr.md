@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a3b920cc790260b438377c099c9ee72c759d3f950103da977b6a4d112a4f3b66
+  source_sha256: d29379b68483afc5b4b6ee19f69388eff82c9b4b86f33beafeadf1d73863df0b
   translated_at: 2026-10-20
   status: complete
 ---
@@ -139,7 +139,8 @@ service ProfileService {
   // Lifecycle (all return CommandResponse)
   rpc CreateProfile(CreateProfileRequest) returns (CommandResponse); // privé quand l'`age` du jeton est 13–17
   rpc UpdateProfile(UpdateProfileRequest) returns (CommandResponse);
-  rpc ChangeHandle(ChangeHandleRequest) returns (CommandResponse);   // LWT
+  rpc ChangeHandle(ChangeHandleRequest) returns (CommandResponse);   // LWT ; payant (#911)
+  rpc GetHandleChangePrice(GetHandleChangePriceRequest) returns (HandleChangePrice);   // #911 le prix du prochain changement / le délai du changement gratuit
   rpc UpdateAvatar(UpdateAvatarRequest) returns (CommandResponse);
   rpc UpdateBanner(UpdateBannerRequest) returns (CommandResponse);
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
@@ -223,6 +224,21 @@ fail-closed) ; créer dans la limite des emplacements détenus ne l'appelle jama
 et plafonds restent par **compte** dans le wallet, qui refuse les mises sur ses propres profils : des
 profils en plus n'ajoutent aucun pouvoir de curation. Effacer le compte efface ses emplacements.
 
+**Changements de handle payants (#911).** Une dépense de gems sans effet sur le classement ni la
+visibilité. Le **premier** changement de handle d'un compte est gratuit ; les suivants coûtent
+`PROFILE_HANDLE_CHANGE_PRICE` (100) gems. Un appelant qui ne peut pas dépenser de gems (moins de 18 ans,
+ou âge inconnu) change gratuitement, **une fois tous les 30 jours**. `ChangeHandleRequest.expected_price`
+doit être le prix affiché par `GetHandleChangePrice` (qui donne aussi le `next_change_at` d'un appelant
+restreint). Les refus sont dans la réponse, sans rien changer ni débiter : `CommandResponse.handle_change`
+= `PRICE_CHANGED`, `INSUFFICIENT_GEMS` ou `COOLDOWN` (`CHANGED` en cas de succès). Les gems ne sont
+débités **qu'après** la réservation du nouveau handle (un handle pris ou invalide n'est jamais débité ;
+une réservation impayée est rendue), via le `SpendGems` du wallet (`HANDLE_CHANGE`, `ref_id` = le
+profil, clé `handle-change-<n>` selon le numéro du changement du compte : un nouvel essai paie une fois).
+Demander le handle actuel du profil ne change rien. Le compteur (`profile.handle_changes`, migration
+0019) augmente une fois le changement enregistré ; une panne entre les deux laisse ce changement non
+compté, jamais débité deux fois. Les appelants mesh changent gratuitement, sans être comptés. Wallet
+injoignable ⇒ `PRF-6003`. Effacer le compte efface le compteur.
+
 ### Ports Rust (contrat hexagonal)
 
 ```rust
@@ -252,7 +268,10 @@ réactivement).
 | PRF-5007 | `MediaAssetNotUsable` (l'asset d'un avatar / d'une bannière n'est pas une image utilisable du compte du profil, #907) | 422 | No |
 | PRF-6001 | `NoFreeProfileSlot` (tous les emplacements sont utilisés ; `CreateProfile` le répond dans la réponse, #916) | 422 | No |
 | PRF-6002 | `GemSpendingRestricted` (un emplacement ne s'achète qu'adulte, #916) | 403 | No |
-| PRF-6003 | `WalletUnavailable` (le wallet n'a pas pu répondre à un achat d'emplacement, #916) | 503 | **Yes** |
+| PRF-6003 | `WalletUnavailable` (le wallet n'a pas pu répondre à un achat d'emplacement ou à un changement de handle payant, #916, #911) | 503 | **Yes** |
+| PRF-6004 | `HandleChangePriceChanged` (pas le prix affiché ; `ChangeHandle` le répond dans la réponse, #911) | 422 | No |
+| PRF-6005 | `HandleChangeCooldown` (un appelant restreint a changé il y a moins de 30 jours ; dans la réponse, #911) | 422 | No |
+| PRF-6006 | `InsufficientGems` (dans la réponse, #911) | 422 | No |
 | PRF-9001–9010 | domain / parse / validation | 422 | No |
 | SDB-* / RDB-* | storage (delegated) | varies | varies |
 
@@ -346,8 +365,9 @@ async fn main() -> anyhow::Result<()> {
 | `PROFILE_GRPC_ADDR` | No | `0.0.0.0:50052` | gRPC bind address. |
 | `PROFILE_MEDIA_GRPC_ENDPOINT` | No | — | endpoint mesh de media : vérifie les documents privés d'une demande de vérification (#777) et les assets des avatars / bannières à l'écriture ; les livre à la lecture (#907, fail-open). Non définie : les demandes ne prennent que des liens, les images que leurs URLs. |
 | `PROFILE_MEDIA_RPC_TIMEOUT_MS` / `PROFILE_MEDIA_CONNECT_TIMEOUT_MS` | No | `500` / `1000` | délais de ces appels. |
-| `PROFILE_WALLET_GRPC_ENDPOINT` | No | — | endpoint mesh du wallet (#916) : les gems des emplacements de profil (`SpendGems`, jeton mesh du pod). Non définie : les emplacements ne s'achètent pas (`PRF-6003`). |
+| `PROFILE_WALLET_GRPC_ENDPOINT` | No | — | endpoint mesh du wallet (#916, #911) : les gems des emplacements de profil et des changements de handle payants (`SpendGems`, jeton mesh du pod). Non définie : aucun des deux ne s'achète (`PRF-6003`). |
 | `PROFILE_WALLET_RPC_TIMEOUT_MS` / `PROFILE_WALLET_CONNECT_TIMEOUT_MS` | No | `1000` / `500` | délais de cet appel. |
+| `PROFILE_HANDLE_CHANGE_PRICE` | No | `100` | le prix d'un changement de handle payant en gems (#911 ; le premier changement est gratuit). |
 | `PROFILE_MAX_SLOTS` / `PROFILE_SLOT_BASE_PRICE` | No | `5` / `100` | emplacements de profil (#916) : le plafond, et le prix du 2ᵉ emplacement en gems (chacun des suivants double). |
 | `PROFILE_BACKFILL_VISIBILITY` | No | non défini | `1`/`true`/`yes` : au démarrage, ré-annonce une fois la visibilité de chaque profil **privé** (`ProfileVisibilityChanged`, #927). Post en déduit qu'il doit passer en SIGNED les images d'un auteur privé (#919), et les profils déjà privés avant que post ne projette cette visibilité ne l'ont jamais ré-annoncée. Public est la valeur par défaut partout, donc les profils publics sont ignorés. Mêmes règles d'exécution unique que le backfill des onglets ci-dessous : à définir le temps d'un déploiement, avec ou avant post → media (core-platform-infra#88), puis à retirer. |
 | `PROFILE_BACKFILL_TAB_SETTINGS` | No | non défini | `1`/`true`/`yes` : au démarrage, ré-annonce une fois les réglages d'onglets non par défaut de chaque profil (`ProfileTabSettingsChanged`, #873), pour les consommateurs démarrés après que ces événements ont quitté la rétention de `profile.v1.events` (engagement, post). Chaque réplica le lance, à chaque démarrage (les répétitions sont sans effet, le dernier écrit l'emporte) : à définir le temps d'un déploiement, au premier déploiement, puis à retirer ; lancé pendant que des propriétaires modifient leurs réglages, une ancienne valeur ré-annoncée peut arriver après une plus récente. |
@@ -362,7 +382,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Déploiement, migrations & rollback
 
-- **Migrations :** `crates/services/profile/migrations/00{01..18}_*.cql` sur le keyspace `profile`,
+- **Migrations :** `crates/services/profile/migrations/00{01..19}_*.cql` sur le keyspace `profile`,
   appliquées **avant** le premier démarrage.
 - **Bump de version de cache :** pour invalider le cache à l'échelle de la flotte lors d'un changement de
   schéma, incrémenter le préfixe de clé `v1:` — sans flush, sans interruption.

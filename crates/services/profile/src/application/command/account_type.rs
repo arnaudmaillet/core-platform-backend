@@ -225,6 +225,8 @@ pub struct EraseAccountVerificationsHandler {
     pub verifications: Arc<dyn VerificationStore>,
     /// The account's profile slots go with it (#916).
     pub slots:         Option<Arc<dyn crate::application::port::ProfileSlotStore>>,
+    /// And its handle change count (#911).
+    pub handle_changes: Option<Arc<dyn crate::application::handle_changes::HandleChangeStore>>,
 }
 
 impl CommandHandler<EraseAccountVerificationsCommand> for EraseAccountVerificationsHandler {
@@ -245,6 +247,9 @@ impl CommandHandler<EraseAccountVerificationsCommand> for EraseAccountVerificati
         }
         if let Some(slots) = &self.slots {
             slots.erase(&account).await?;
+        }
+        if let Some(changes) = &self.handle_changes {
+            changes.erase(&account).await?;
         }
         Ok(())
     }

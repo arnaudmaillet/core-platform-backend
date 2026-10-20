@@ -81,7 +81,7 @@ async fn a_claim_left_by_an_interrupted_rename_is_healed_on_read() {
         .expect("create");
     let id = h.get_by_handle(&old).await.expect("created").id;
     h.command_bus
-        .dispatch(Envelope::new(Uuid::now_v7(), ChangeHandleCommand { profile_id: id.clone(), new_handle: new.clone() }))
+        .dispatch(Envelope::new(Uuid::now_v7(), ChangeHandleCommand { profile_id: id.clone(), new_handle: new.clone(), ..Default::default() }))
         .await
         .expect("rename");
 
@@ -190,7 +190,7 @@ async fn a_verified_profiles_released_handle_is_held_for_good() {
     let rename = |to: &str| {
         h.command_bus.dispatch(Envelope::new(
             Uuid::now_v7(),
-            ChangeHandleCommand { profile_id: id.clone(), new_handle: to.to_owned() },
+            ChangeHandleCommand { profile_id: id.clone(), new_handle: to.to_owned(), ..Default::default() },
         ))
     };
     rename(&other).await.expect("rename away");
