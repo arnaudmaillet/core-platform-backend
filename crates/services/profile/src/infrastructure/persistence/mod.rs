@@ -8,3 +8,5 @@ pub mod scylla_share_token_store;
 pub use scylla_share_token_store::ScyllaShareTokenStore;
 pub mod scylla_supervision_floors;
 pub use scylla_supervision_floors::ScyllaSupervisionFloors;
+pub mod scylla_profile_slot_store;
+pub use scylla_profile_slot_store::ScyllaProfileSlotStore;

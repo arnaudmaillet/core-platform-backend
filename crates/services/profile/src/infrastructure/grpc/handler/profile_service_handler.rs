@@ -45,6 +45,9 @@ where
     /// Delivers avatars and banners on read (#907); `None` when media is not
     /// configured.
     media:       Option<Arc<dyn MediaDelivery>>,
+    /// Profile slots (#916); `None`: GetProfileSlots / BuyProfileSlot are
+    /// UNAVAILABLE.
+    slots:       Option<Arc<crate::application::profile_slots::ProfileSlots>>,
 }
 
 impl<CB, QB> ProfileServiceHandler<CB, QB>
@@ -53,13 +56,66 @@ where
     QB: QueryBus + Send + Sync + 'static,
 {
     pub fn new(command_bus: CB, query_bus: QB) -> Self {
-        Self { command_bus, query_bus, staff: edge::StaffGate::deny_all(), media: None }
+        Self { command_bus, query_bus, staff: edge::StaffGate::deny_all(), media: None, slots: None }
     }
 
     /// Avatars and banners carry their media asset's delivery (#907).
     pub fn with_media(mut self, media: Arc<dyn MediaDelivery>) -> Self {
         self.media = Some(media);
         self
+    }
+
+    pub fn with_slots(mut self, slots: Arc<crate::application::profile_slots::ProfileSlots>) -> Self {
+        self.slots = Some(slots);
+        self
+    }
+
+    fn slots(&self) -> Result<&crate::application::profile_slots::ProfileSlots, Status> {
+        self.slots.as_deref().ok_or_else(|| Status::unavailable("profile slots are not configured"))
+    }
+
+    /// The caller's account's profile slots (#916). Edge: the caller's account.
+    pub async fn get_profile_slots(
+        &self,
+        request: Request<proto::GetProfileSlotsRequest>,
+    ) -> Result<Response<proto::ProfileSlots>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let account = crate::domain::value_object::AccountId::try_from(request.get_ref().account_id.as_str())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let state = self.slots()?.state(&account).await.map_err(profile_error_to_status)?;
+        Ok(Response::new(slots_to_proto(state)))
+    }
+
+    /// Buys the account's next profile slot (#916). Edge: the caller's
+    /// account, an adult (the token's `age`), whose token goes on to the
+    /// wallet.
+    pub async fn buy_profile_slot(
+        &self,
+        request: Request<proto::BuyProfileSlotRequest>,
+    ) -> Result<Response<proto::BuyProfileSlotResponse>, Status> {
+        use crate::application::profile_slots::SlotOutcome;
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let adult = edge::principal(&request).is_some_and(|p| p.is_adult());
+        let token = edge::bearer_token(request.metadata());
+        let req = request.into_inner();
+        let account = crate::domain::value_object::AccountId::try_from(req.account_id.as_str())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let reply = self
+            .slots()?
+            .buy(&account, req.expected_price, adult, token.as_deref())
+            .await
+            .map_err(profile_error_to_status)?;
+        Ok(Response::new(proto::BuyProfileSlotResponse {
+            outcome:    match reply.outcome {
+                SlotOutcome::Bought => proto::ProfileSlotOutcome::Bought,
+                SlotOutcome::MaxReached => proto::ProfileSlotOutcome::MaxReached,
+                SlotOutcome::InsufficientGems => proto::ProfileSlotOutcome::InsufficientGems,
+                SlotOutcome::PriceChanged => proto::ProfileSlotOutcome::PriceChanged,
+            } as i32,
+            slots:      Some(slots_to_proto(reply.state)),
+            gems:       reply.gems.unwrap_or_default(),
+            price_gems: reply.price,
+        }))
     }
 
     /// Only for clients: a mesh reader has no use for renditions, and would
@@ -78,6 +134,7 @@ where
         Response::new(proto::CommandResponse {
             success:    true,
             profile_id: profile_id.to_owned(),
+            no_free_slot: false,
         })
     }
 }
@@ -112,11 +169,22 @@ where
             locale:       req.locale,
             minor,
         };
-        self.command_bus
-            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
-            .await
-            .map(|_| Self::ok_cmd(&req.account_id))
-            .map_err(cqrs_error_to_status)
+        match self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await {
+            Ok(_) => Ok(Self::ok_cmd(&req.account_id)),
+            // Every slot in use (#916): answered in-band, nothing created.
+            Err(cqrs::error::CqrsError::Handler(e)) if {
+                use error::AppError as _;
+                e.error_code() == "PRF-6001"
+            } =>
+            {
+                Ok(Response::new(proto::CommandResponse {
+                    success:      false,
+                    profile_id:   String::new(),
+                    no_free_slot: true,
+                }))
+            }
+            Err(e) => Err(cqrs_error_to_status(e)),
+        }
     }
 
     pub async fn update_profile(
@@ -1076,6 +1144,33 @@ fn masking_reason_i32_to_str(v: i32) -> Option<&'static str> {
 }
 
 // ── Error mapping ─────────────────────────────────────────────────────────────
+
+fn slots_to_proto(state: crate::application::profile_slots::SlotState) -> proto::ProfileSlots {
+    proto::ProfileSlots {
+        slots:      state.slots,
+        used:       state.used,
+        max_slots:  state.max_slots,
+        next_price: state.next_price.unwrap_or_default(),
+    }
+}
+
+/// A slot call's error (#916): `PERMISSION_DENIED` for a minor, `UNAVAILABLE`
+/// when the wallet cannot answer; the stable code in `x-error-code`.
+fn profile_error_to_status(err: crate::error::ProfileError) -> Status {
+    use error::AppError as _;
+    let message = err.to_string();
+    let mut status = match err.http_status().as_u16() {
+        403 => Status::permission_denied(message),
+        404 => Status::not_found(message),
+        422 => Status::invalid_argument(message),
+        502 | 503 => Status::unavailable(message),
+        _ => Status::internal(message),
+    };
+    if let Ok(code) = err.error_code().parse() {
+        status.metadata_mut().insert("x-error-code", code);
+    }
+    status
+}
 
 pub fn cqrs_error_to_status(err: cqrs::error::CqrsError) -> Status {
     use cqrs::error::CqrsError;

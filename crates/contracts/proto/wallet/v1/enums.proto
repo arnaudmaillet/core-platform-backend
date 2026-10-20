@@ -40,6 +40,8 @@ enum TransactionKind {
     // A 24 h country visa on the map (gems; #910); `ref_id` is the country
     // code.
     TRANSACTION_KIND_COUNTRY_VISA   = 9;
+    // A profile slot bought (gems; #916); `ref_id` is the slot number.
+    TRANSACTION_KIND_PROFILE_SLOT   = 10;
 }
 
 // What kind of thing a catalogue item is (#892). An item id is

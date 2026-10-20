@@ -94,6 +94,10 @@ message ProfileSummaryView {
 message CommandResponse {
     bool   success    = 1;
     string profile_id = 2;
+    // CreateProfile only (#916): every profile slot of the account is in use;
+    // nothing was created (`success` is false). GetProfileSlots says what the
+    // next slot costs.
+    bool   no_free_slot = 3;
 }
 
 // ── Command request messages ──────────────────────────────────────────────────
@@ -442,4 +446,37 @@ message ShareTokenResponse {
 
 message ResolveShareTokenRequest {
     string token = 1;
+}
+
+// ── Profile slots (#916) ──────────────────────────────────────────────────────
+
+message GetProfileSlotsRequest {
+    string account_id = 1;
+}
+
+message ProfileSlots {
+    // Slots the account owns (one free, plus the bought or grandfathered).
+    int32 slots      = 1;
+    // Profiles alive.
+    int32 used       = 2;
+    // The most slots an account may own.
+    int32 max_slots  = 3;
+    // The next slot's price in gems; 0 at the cap.
+    int64 next_price = 4;
+}
+
+message BuyProfileSlotRequest {
+    string account_id     = 1;
+    // The price the app showed (ProfileSlots.next_price).
+    int64  expected_price = 2;
+}
+
+message BuyProfileSlotResponse {
+    ProfileSlotOutcome outcome    = 1;
+    // The account's slots after the call.
+    ProfileSlots       slots      = 2;
+    // The wallet's gems, when it was asked (BOUGHT, INSUFFICIENT_GEMS).
+    int64              gems       = 3;
+    // The slot's price (the current one on PRICE_CHANGED).
+    int64              price_gems = 4;
 }

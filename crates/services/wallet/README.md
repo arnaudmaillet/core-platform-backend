@@ -79,6 +79,7 @@ service's own start with `sys:` (e.g. `sys:starter-gems`). No caller key holds a
 |---|---|
 | Stake packs (`BuyStakePack`, edge; #941) | shots of 100 of the buyer's **own** points; on sale by default `shots_3` (3 shots, 50 gems — the default pack, for a request naming none), `shots_10` (10, 150) and `shots_25` (25, 325); all or nothing, one pack at a time (`PACK_STILL_ACTIVE` while shots are left, nothing charged); shots never expire; a pack not on sale is `WAL-9005`; the ledger row's `ref_id` is the pack id and `Wallet.stake_pack_id` the loaded pack |
 | Country unlock / 24 h visa (`SpendGems`, mesh; #910) | geo-discovery prices the country, checks the spender is an adult, and asks for the gems with a key of its own (`COUNTRY_UNLOCK` or `COUNTRY_VISA`); `ref_id` = the country code |
+| Profile slot (`SpendGems`, mesh; #916) | profile prices the slot, checks the buyer is an adult, and asks for the gems keyed `profile-slot-<n>` (`PROFILE_SLOT`); `ref_id` = the slot number |
 | Catalogue item (`PurchaseItem`, edge; #892) | see the catalogue below |
 
 **The gem catalogue (#892).** What gems buy, as server policy (`WALLET_CATALOG`), never influence,
@@ -203,6 +204,7 @@ the UX criteria of §41.
 |---|---|---|
 | the app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack`, `Stake`, `ListMyStakes`, `ListCatalog`, `PurchaseItem`, `ListOwnedItems` | balance, claim, pack, likes, the stakes list and the Shop unavailable (the app keeps the default theme); the rest of the app works |
 | geo-discovery | `SpendGems` | country unlocks refused (fail-closed); the map works |
+| profile | `SpendGems` | profile slots cannot be bought (fail-closed); profiles work |
 | account | `ExportWallet`, `ListStakePositions`, `ListWalletTransactions` | GDPR exports retried next pass |
 | post, comment, social-graph (downstream) | `GetPost`, `GetComment`, `CheckAccess` | likes refused (`WAL-6001`, retried by the app) |
 | engagement (downstream) | `GetLikePositions` | settlements wait (retried after the lease) |
@@ -268,7 +270,7 @@ is how sure the curator is that the target ends the day in the top: a prediction
   to the scoring.
 - **Probabilities:** `Wallet.conviction_probabilities` gives the probability each level stands for
   (`WALLET_CONVICTION_PROBABILITIES`, default 0.25 / 0.40 / 0.60 / 0.80).
-**Mesh callers are checked (#852, `MESH_CALLER_GATE`):** `SpendGems` takes **geo-discovery** only, and
+**Mesh callers are checked (#852, `MESH_CALLER_GATE`):** `SpendGems` takes **geo-discovery** and **profile** (#916) only, and
 the end user's edge token it forwards (`authorization`) must name the account's owner, an adult; the
 export reads (and `ListWalletTransactions` over the mesh) take **account** only — the caller's
 ServiceAccount token, `x-mesh-token`. `off` until the infra provides the tokens (core-platform-infra#62).

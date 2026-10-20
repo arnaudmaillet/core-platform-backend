@@ -228,4 +228,19 @@ where
     ) -> Result<Response<proto::ProfileView>, Status> {
         self.resolve_share_token(request).await
     }
+
+    async fn get_profile_slots(
+        &self,
+        request: Request<proto::GetProfileSlotsRequest>,
+    ) -> Result<Response<proto::ProfileSlots>, Status> {
+        self.get_profile_slots(request).await
+    }
+
+    async fn buy_profile_slot(
+        &self,
+        request: Request<proto::BuyProfileSlotRequest>,
+    ) -> Result<Response<proto::BuyProfileSlotResponse>, Status> {
+        self.buy_profile_slot(request).await
+    }
+
 }

@@ -21,6 +21,9 @@ use thiserror::Error;
 /// | PRF-5005 | MediaUnavailable         | 503  | Medium   | **Yes**   |
 /// | PRF-5006 | SupervisionLocked        | 422  | Low      | No        |
 /// | PRF-5007 | MediaAssetNotUsable      | 422  | Low      | No        |
+/// | PRF-6001 | NoFreeProfileSlot        | 422  | Low      | No        |
+/// | PRF-6002 | GemSpendingRestricted    | 403  | Low      | No        |
+/// | PRF-6003 | WalletUnavailable        | 503  | Medium   | **Yes**   |
 /// | PRF-9001 | DomainViolation          | 422  | Medium   | No        |
 /// | PRF-9002 | InvalidProfileId         | 422  | Low      | No        |
 /// | PRF-9003 | InvalidHandle            | 422  | Low      | No        |
@@ -102,6 +105,21 @@ pub enum ProfileError {
     #[error("media is unavailable: {reason}")]
     MediaUnavailable { reason: String },
 
+    // ── Profile slots (PRF-6xxx, #916) ────────────────────────────────────────
+
+    /// Every profile slot of the account is in use: `CreateProfile` answers it
+    /// in-band (`CommandResponse.no_free_slot`).
+    #[error("the account has no free profile slot")]
+    NoFreeProfileSlot,
+
+    /// Gems are not spent under 18 (or with an unknown age).
+    #[error("gems cannot be spent by this account")]
+    GemSpendingRestricted,
+
+    /// The wallet could not answer a slot purchase (fail closed).
+    #[error("wallet unavailable: {reason}")]
+    WalletUnavailable { reason: String },
+
     // ── Domain invariants & parse errors (PRF-9xxx) ───────────────────────────
 
     #[error("domain invariant violated on '{field}': {message}")]
@@ -158,6 +176,9 @@ impl AppError for ProfileError {
             ProfileError::MediaUnavailable { .. } => "PRF-5005",
             ProfileError::SupervisionLocked { .. } => "PRF-5006",
             ProfileError::MediaAssetNotUsable { .. } => "PRF-5007",
+            ProfileError::NoFreeProfileSlot => "PRF-6001",
+            ProfileError::GemSpendingRestricted => "PRF-6002",
+            ProfileError::WalletUnavailable { .. } => "PRF-6003",
 
             ProfileError::DomainViolation { .. }  => "PRF-9001",
             ProfileError::InvalidProfileId(_)     => "PRF-9002",
@@ -187,7 +208,8 @@ impl AppError for ProfileError {
             | ProfileError::VerificationPending
             | ProfileError::NoPendingVerification => StatusCode::CONFLICT,
 
-            ProfileError::MediaUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            ProfileError::MediaUnavailable { .. } | ProfileError::WalletUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            ProfileError::GemSpendingRestricted => StatusCode::FORBIDDEN,
 
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         }
@@ -215,6 +237,7 @@ impl AppError for ProfileError {
             ProfileError::Cache(e)               => e.is_retryable(),
             ProfileError::ConcurrentModification => true,
             ProfileError::MediaUnavailable { .. } => true,
+            ProfileError::WalletUnavailable { .. } => true,
             _                                    => false,
         }
     }
@@ -248,6 +271,9 @@ impl AppError for ProfileError {
             ProfileError::SupervisionLocked { .. }      => "Your supervisor set this; you can only make it stricter.",
             ProfileError::MediaAssetNotUsable { .. }    => "This image can't be used here.",
             ProfileError::TooManyCustomLinks { .. }     => "You may have at most 5 custom links.",
+            ProfileError::NoFreeProfileSlot             => "Every profile slot is in use.",
+            ProfileError::GemSpendingRestricted         => "Gems can't be spent before 18.",
+            ProfileError::WalletUnavailable { .. }      => "Profile slots can't be bought right now. Please retry.",
             _                                           => "A domain constraint was violated.",
         }
     }

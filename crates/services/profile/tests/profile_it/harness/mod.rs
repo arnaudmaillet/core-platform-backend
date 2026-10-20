@@ -138,6 +138,36 @@ pub struct TestHarness {
     /// A raw session, for scenarios that must shape rows directly (e.g. age a
     /// handle tombstone past its reservation).
     pub scylla:      Arc<ScyllaClient>,
+    /// Profile slots (#916), over the real store; the wallet is the fake one.
+    pub slots:       Arc<profile::application::profile_slots::ProfileSlots>,
+    pub wallet:      Arc<FakeSlotWallet>,
+}
+
+/// A wallet: 1 000 gems per account, spends keyed once.
+#[derive(Default)]
+pub struct FakeSlotWallet {
+    pub spent: std::sync::Mutex<Vec<(String, i64)>>,
+}
+
+#[async_trait::async_trait]
+impl profile::application::port::SlotWallet for FakeSlotWallet {
+    async fn spend_for_slot(
+        &self,
+        account: &profile::domain::value_object::AccountId,
+        _: i32,
+        amount: i64,
+        key: &str,
+        _: Option<&str>,
+    ) -> Result<profile::application::port::SlotSpend, profile::error::ProfileError> {
+        let mut spent = self.spent.lock().unwrap();
+        let mine = |s: &&(String, i64)| s.0.starts_with(&account.as_uuid().to_string());
+        let key = format!("{}:{key}", account.as_uuid());
+        if !spent.iter().any(|(k, _)| *k == key) {
+            spent.push((key, amount));
+        }
+        let gems = 1_000 - spent.iter().filter(mine).map(|(_, a)| a).sum::<i64>();
+        Ok(profile::application::port::SlotSpend { spent: true, gems })
+    }
 }
 
 impl TestHarness {
@@ -176,12 +206,15 @@ impl TestHarness {
 
         let publisher = Arc::new(CapturingEventPublisher::default());
         let documents = Arc::new(FakePrivateDocuments::default());
+        let wallet = Arc::new(FakeSlotWallet::default());
         let app = App::build(
             backends,
             cache_registry,
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
             Some(Arc::clone(&documents) as Arc<dyn PrivateDocuments>),
             Some(Arc::clone(&documents) as Arc<dyn profile::application::port::MediaImages>),
+            Some(Arc::clone(&wallet) as Arc<dyn profile::application::port::SlotWallet>),
+            profile::application::profile_slots::SlotPolicy::default(),
         )
         .await
         .expect("integration: build profile app");
@@ -194,7 +227,16 @@ impl TestHarness {
             publisher,
             documents,
             scylla,
+            slots: app.slots,
+            wallet,
         }
+    }
+
+    /// Gives `account` `slots` profile slots (#916), for a scenario creating
+    /// several profiles on one account.
+    pub async fn grant_slots(&self, account_id: &str, slots: i32) {
+        let account = AccountId::try_from(account_id).expect("account id");
+        self.slots.store.init(&account, slots).await.expect("grant slots");
     }
 
     /// Creates a profile, expecting success.

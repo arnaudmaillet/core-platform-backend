@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8fa9ca2ac3d3bd8dcd7f434c2b334dba3f4febf38e1891422bda3de7812e1496
+  source_sha256: e69873f03f5a146e4ad525a1af92ce043ce438cfe1d95cd7d4160af2642f61a0
   translated_at: 2026-10-20
   status: complete
 ---
@@ -95,6 +95,7 @@ seule fois.
 |---|---|
 | Packs de mises (`BuyStakePack`, edge ; #941) | des tirs de 100 points **de l'acheteur** ; en vente par défaut `shots_3` (3 tirs, 50 gems — le pack par défaut, pour une requête qui n'en nomme aucun), `shots_10` (10, 150) et `shots_25` (25, 325) ; tout ou rien, un pack à la fois (`PACK_STILL_ACTIVE` tant qu'il reste des tirs, rien n'est débité) ; les tirs n'expirent jamais ; un pack qui n'est pas en vente renvoie `WAL-9005` ; le `ref_id` de la ligne du registre est l'id du pack et `Wallet.stake_pack_id` le pack chargé |
 | Déblocage de pays / visa de 24 h (`SpendGems`, mesh ; #910) | geo-discovery fixe le prix, vérifie que l'acheteur est adulte et demande les gems avec sa propre clé (`COUNTRY_UNLOCK` ou `COUNTRY_VISA`) ; `ref_id` = le code du pays |
+| Emplacement de profil (`SpendGems`, mesh ; #916) | profile fixe le prix de l'emplacement, vérifie que l'acheteur est adulte et demande les gems avec la clé `profile-slot-<n>` (`PROFILE_SLOT`) ; `ref_id` = le numéro de l'emplacement |
 | Article du catalogue (`PurchaseItem`, edge ; #892) | voir le catalogue ci-dessous |
 
 **Le catalogue de gems (#892).** Ce que les gems achètent, en politique serveur (`WALLET_CATALOG`),
@@ -228,6 +229,7 @@ Les commentaires, les cohortes et les signaux Sybil rejoindront le rapport avec 
 |---|---|---|
 | l'app | `GetWallet`, `ClaimReward`, `ListWalletTransactions`, `BuyStakePack`, `Stake`, `ListMyStakes`, `ListCatalog`, `PurchaseItem`, `ListOwnedItems` | solde, réclamation, pack, likes, liste des mises et boutique indisponibles (l'app garde le thème par défaut) ; le reste de l'app fonctionne |
 | geo-discovery | `SpendGems` | déblocages de pays refusés (fail-closed) ; la carte fonctionne |
+| profile | `SpendGems` | les emplacements de profil ne s'achètent pas (fail-closed) ; les profils fonctionnent |
 | account | `ExportWallet`, `ListStakePositions`, `ListWalletTransactions` | exports RGPD réessayés au passage suivant |
 | post, comment, social-graph (en aval) | `GetPost`, `GetComment`, `CheckAccess` | likes refusés (`WAL-6001`, renvoyés par l'app) |
 | engagement (en aval) | `GetLikePositions` | les règlements attendent (réessayés après le bail) |
@@ -298,7 +300,7 @@ enregistrée et **figée**, notée plus tard (#889), **sans effet** sur le stake
   (`WALLET_CONVICTION_PROBABILITIES`, par défaut 0,25 / 0,40 / 0,60 / 0,80).
 
 **Les appelants mesh sont vérifiés (#852, `MESH_CALLER_GATE`) :** `SpendGems` n'accepte que
-**geo-discovery**, et le jeton edge de l'utilisateur qu'il transmet (`authorization`) doit désigner le
+**geo-discovery** et **profile** (#916), et le jeton edge de l'utilisateur qu'il transmet (`authorization`) doit désigner le
 propriétaire du compte, majeur ; les lectures d'export (et `ListWalletTransactions` sur le mesh)
 n'acceptent qu'**account** — le jeton de ServiceAccount de l'appelant, `x-mesh-token`. `off` tant que
 l'infra ne fournit pas les jetons (core-platform-infra#62).

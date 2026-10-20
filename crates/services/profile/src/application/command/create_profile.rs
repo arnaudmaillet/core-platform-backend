@@ -55,11 +55,19 @@ pub struct CreateProfileHandler {
     publisher: Arc<dyn EventPublisher>,
     /// Supervision floors (#670): a supervised teen's new profile is born at them.
     floors: Option<Arc<dyn crate::application::port::SupervisionFloors>>,
+    /// Profile slots (#916): a create past the account's slots is refused.
+    slots: Option<Arc<crate::application::profile_slots::ProfileSlots>>,
 }
 
 impl CreateProfileHandler {
     pub fn new(repo: Arc<dyn ProfileRepository>, cache: Arc<dyn ProfileCache>, publisher: Arc<dyn EventPublisher>) -> Self {
-        Self { repo, cache, publisher, floors: None }
+        Self { repo, cache, publisher, floors: None, slots: None }
+    }
+
+    /// Enforces the account's profile slots (#916).
+    pub fn with_slots(mut self, slots: Arc<crate::application::profile_slots::ProfileSlots>) -> Self {
+        self.slots = Some(slots);
+        self
     }
 
     /// Applies supervision floors to new profiles (#670).
@@ -84,6 +92,10 @@ impl CommandHandler<CreateProfileCommand> for CreateProfileHandler {
         let profile_kind = ProfileKind::try_from(cmd.profile_kind.as_str())?;
         let locale = Locale::new(&cmd.locale)?;
 
+        // One profile per slot (#916): `NoFreeProfileSlot`, answered in-band.
+        if let Some(slots) = &self.slots {
+            slots.check_create(&account_id).await?;
+        }
         if !self.repo.handle_is_available(&handle, None).await? {
             return Err(ProfileError::HandleAlreadyTaken { handle: handle.as_str().to_owned() });
         }

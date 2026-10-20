@@ -3,3 +3,6 @@
 pub mod grpc_private_documents;
 
 pub use grpc_private_documents::{GrpcPrivateDocuments, MediaDelivery};
+pub mod grpc_slot_wallet;
+
+pub use grpc_slot_wallet::GrpcSlotWallet;

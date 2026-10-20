@@ -22,6 +22,7 @@ async fn suspension_hides_every_profile_of_the_account_until_reactivation() {
     let account = harness::random_account_id();
     let (main, alt, policy_hidden) =
         (harness::random_handle(), harness::random_handle(), harness::random_handle());
+    h.grant_slots(&account, 3).await;
     for handle in [&main, &alt, &policy_hidden] {
         h.create(&account, handle, "Alice").await;
     }
@@ -78,6 +79,7 @@ async fn deactivation_hides_the_profiles_until_the_holder_signs_back_in() {
 
     let account = harness::random_account_id();
     let (main, policy_hidden) = (harness::random_handle(), harness::random_handle());
+    h.grant_slots(&account, 2).await;
     for handle in [&main, &policy_hidden] {
         h.create(&account, handle, "Alice").await;
     }

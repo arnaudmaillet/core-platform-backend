@@ -60,7 +60,9 @@ async fn floors_tighten_lock_and_lift() {
     let qr = SetDiscoverySettingsCommand { profile_id: profile.id.clone(), by_qr: Some(false), ..Default::default() };
     h.command_bus.dispatch(Envelope::new(Uuid::now_v7(), qr)).await.expect("not covered by a floor");
 
-    // A profile the teen creates now is born at the floors.
+    // A profile the teen creates now is born at the floors (a second slot
+    // first, #916).
+    h.grant_slots(&account, 2).await;
     let second = harness::random_handle();
     h.create(&account, &second, "Teen 2").await;
     let born = h.get_by_handle(&second).await.expect("created");

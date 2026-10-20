@@ -21,7 +21,10 @@ service ProfileService {
     // ── Profile lifecycle ─────────────────────────────────────────────────────
 
     // Create a new public profile linked to an account.
-    // One account can own multiple profiles (1-to-N relationship).
+    // One account can own multiple profiles (1-to-N relationship), one per
+    // profile slot (#916): every account has one free, more are bought
+    // (BuyProfileSlot). With every slot in use nothing is created and the
+    // response says so in-band: `success = false`, `no_free_slot = true`.
     rpc CreateProfile(CreateProfileRequest) returns (CommandResponse);
 
     // Update mutable profile metadata: bio, display_name, website, links, locale.
@@ -114,4 +117,21 @@ service ProfileService {
     // NOT_FOUND for a malformed or revoked token, a profile that is not
     // active, or one whose owner turned "reachable by QR / shared link" off.
     rpc ResolveShareToken(ResolveShareTokenRequest) returns (ProfileView);
+
+    // ── Profile slots (#916) ──────────────────────────────────────────────────
+
+    // The caller's account's profile slots: owned, in use, the cap and the
+    // next slot's price (server policy: 100 / 200 / 400 / 800 gems for the
+    // 2nd to the 5th). A slot is kept for good: deleting a profile frees it.
+    // An account holding more profiles than slots from before keeps them.
+    // Edge: the caller's account.
+    rpc GetProfileSlots(GetProfileSlotsRequest) returns (ProfileSlots);
+
+    // Buys the account's next profile slot with gems, at the price the app
+    // showed: answered in-band (BOUGHT, MAX_REACHED, INSUFFICIENT_GEMS,
+    // PRICE_CHANGED). Each slot is charged at most once, whatever the retries.
+    // PRF-6002 (PERMISSION_DENIED) under 18 or with an unknown age (a minor
+    // keeps one profile); PRF-6003 (UNAVAILABLE) when the wallet cannot
+    // answer. Edge: the caller's account.
+    rpc BuyProfileSlot(BuyProfileSlotRequest) returns (BuyProfileSlotResponse);
 }
