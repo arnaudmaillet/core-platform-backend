@@ -19,8 +19,13 @@ pub enum RenditionKind {
     Large,
     /// A video's adaptive-streaming playback manifest (the master playlist).
     Manifest,
-    /// A still poster frame for feed first-paint before playback starts.
+    /// A still poster frame for feed first-paint before playback starts; an
+    /// animated avatar's still, its sheet's last frame (#948).
     Poster,
+    /// An animated avatar's sprite sheet with 128 px cells (#945).
+    SheetSmall,
+    /// An animated avatar's sprite sheet with 256 px cells (#945).
+    SheetLarge,
 }
 
 impl RenditionKind {
@@ -33,6 +38,8 @@ impl RenditionKind {
             Self::Large => "large",
             Self::Manifest => "manifest",
             Self::Poster => "poster",
+            Self::SheetSmall => "sheet_small",
+            Self::SheetLarge => "sheet_large",
         }
     }
 
@@ -66,6 +73,8 @@ impl TryFrom<&str> for RenditionKind {
             "large" => Ok(Self::Large),
             "manifest" => Ok(Self::Manifest),
             "poster" => Ok(Self::Poster),
+            "sheet_small" => Ok(Self::SheetSmall),
+            "sheet_large" => Ok(Self::SheetLarge),
             other => Err(MediaError::DomainViolation {
                 field: "rendition_kind".into(),
                 message: format!("unknown rendition kind: '{other}'"),

@@ -485,6 +485,8 @@ impl Asset {
         // private document has none (its bytes live at its private key).
         let master = match self.kind {
             MediaKind::Video => Some(RenditionKind::Manifest),
+            // An animated avatar is its sheets (#945).
+            MediaKind::AvatarClip => Some(RenditionKind::SheetLarge),
             MediaKind::PrivateDocument => None,
             _ => Some(RenditionKind::Original),
         };

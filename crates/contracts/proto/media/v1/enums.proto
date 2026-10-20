@@ -28,6 +28,14 @@ enum MediaKind {
     // a short-lived signed link to staff over the mesh (GetPrivateDocumentUrl).
     // Purged 30 days after the request's decision, and with the account.
     MEDIA_KIND_PRIVATE_DOCUMENT = 4;
+    // An animated avatar's clip (#945, #948): MP4 or QuickTime, ≤ 20 MiB, at
+    // least 2 s (its first 3 s are used, muted). The worker bakes it into two
+    // sprite sheets (SHEET_SMALL, SHEET_LARGE: 24 frames at 12 fps, square
+    // 128 / 256 px cells, 4 columns, a 2 px transparent gutter inside each
+    // cell, AVIF) that loop seamlessly (the last frame flows into the first),
+    // and a POSTER: the sheet's last frame, for consumers that cannot play a
+    // sheet (push images, link previews, web). Never served as a video.
+    MEDIA_KIND_AVATAR_CLIP      = 5;
 }
 
 // The asset lifecycle state machine. An asset is created PENDING at ticket time,
@@ -72,8 +80,15 @@ enum RenditionKind {
     // The adaptive-streaming playback manifest — a video's playback entry point.
     // Concrete packaging (HLS m3u8 / DASH mpd) rides in its mime_type.
     MEDIA_RENDITION_KIND_MANIFEST    = 6;
-    // A still poster frame for feed first-paint before playback starts.
+    // A still poster frame for feed first-paint before playback starts. For an
+    // AVATAR_CLIP: its sheet's last frame (#948), the same picture the sheet
+    // rests on.
     MEDIA_RENDITION_KIND_POSTER      = 7;
+    // An animated avatar's sprite sheet (#945), 128 px cells; its layout rides
+    // in DeliveredRendition.sheet.
+    MEDIA_RENDITION_KIND_SHEET_SMALL = 8;
+    // The same with 256 px cells.
+    MEDIA_RENDITION_KIND_SHEET_LARGE = 9;
 }
 
 // How a delivery URL is brokered. PUBLIC media gets a content-addressed, immutable

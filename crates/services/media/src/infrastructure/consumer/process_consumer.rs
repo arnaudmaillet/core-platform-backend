@@ -37,7 +37,7 @@ async fn process(handler: &ProcessAssetHandler, event: &DomainEvent) -> ProcessO
     match event {
         // Image finalizations only; video is transcoded by the dedicated
         // media-worker (a committed no-op here).
-        DomainEvent::AssetUploaded(e) if e.kind != MediaKind::Video => {
+        DomainEvent::AssetUploaded(e) if !matches!(e.kind, MediaKind::Video | MediaKind::AvatarClip) => {
             let cmd = ProcessAssetCommand { asset_id: e.asset_id };
             let result = handler
                 .handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now())

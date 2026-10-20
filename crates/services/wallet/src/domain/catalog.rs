@@ -24,10 +24,14 @@ pub enum ItemFamily {
     /// A badge (`badge.<name>`, #912): earned, never sold — awarded by the
     /// service whose rule it is (`AwardBadge`), shown in profiles' showcases.
     Badge,
+    /// The animated avatar (`avatar.<name>`, #945): unlocks setting a clip as
+    /// the avatar.
+    AnimatedAvatar,
 }
 
 impl ItemFamily {
-    pub const ALL: [Self; 6] = [Self::AppIcon, Self::Theme, Self::AvatarFrame, Self::AnimatedBanner, Self::CardStyle, Self::Badge];
+    pub const ALL: [Self; 7] =
+        [Self::AppIcon, Self::Theme, Self::AvatarFrame, Self::AnimatedBanner, Self::CardStyle, Self::Badge, Self::AnimatedAvatar];
 
     fn prefix(self) -> &'static str {
         match self {
@@ -37,6 +41,7 @@ impl ItemFamily {
             Self::AnimatedBanner => "banner",
             Self::CardStyle => "card",
             Self::Badge => "badge",
+            Self::AnimatedAvatar => "avatar",
         }
     }
 
@@ -63,6 +68,7 @@ impl ItemFamily {
             Self::CardStyle => TransactionKind::CardStyle,
             // Never bought: no ledger row.
             Self::Badge => TransactionKind::Unknown,
+            Self::AnimatedAvatar => TransactionKind::AnimatedAvatar,
         }
     }
 }
@@ -91,7 +97,7 @@ pub struct Catalog {
 impl Default for Catalog {
     /// The accent themes (#946): pink free, violet and red bought; three
     /// avatar frames (#913); the animated banner (#915, 500 gems); three post
-    /// card styles (#914). No alternate icon until the app bundles one
+    /// card styles (#914); the animated avatar (#945, 500 gems). No alternate icon until the app bundles one
     /// (`WALLET_CATALOG` adds them).
     fn default() -> Self {
         let item = |family, id: &str, price_gems| CatalogItem { id: id.to_owned(), family, price_gems };
@@ -107,6 +113,7 @@ impl Default for Catalog {
                 item(ItemFamily::CardStyle, "card.paper", 80),
                 item(ItemFamily::CardStyle, "card.night", 80),
                 item(ItemFamily::CardStyle, "card.mint", 80),
+                item(ItemFamily::AnimatedAvatar, "avatar.animated", 500),
             ],
         }
     }

@@ -258,6 +258,20 @@ signed download. **Retention:** READY sets a backstop purge 90 days out; `Profil
 deletes what is due, like an owner's delete; a legal hold keeps it. Deleting it always removes its private
 object (never shared).
 
+**Animated avatars (#945, #948).** `MEDIA_KIND_AVATAR_CLIP` (MP4 / QuickTime, ≤ 20 MiB) is a clip the
+`media-worker` **bakes** instead of transcoding (`SheetBaker`, `FfmpegSheetBaker`):
+1. ffmpeg takes its first 3 s, muted, at 12 fps, centre-cropped square (a clip under 2 s fails);
+2. the window of 24 frames whose start best matches the frame right after its end is chosen, and the
+   frames after it are cross-faded into its head, so the last cell flows into the first;
+3. the seam (last cell → first cell, mean luma difference on 32 × 32 thumbnails) must stay under 0.18,
+   else the asset **fails** (`CorruptMedia`, not retried) and the app asks for another clip;
+4. two **AVIF** sprite sheets are written — `SHEET_SMALL` (128 px cells, 512 × 768) and `SHEET_LARGE`
+   (256 px cells, 1024 × 1536), 4 columns, each frame inside a 2 px transparent gutter — and a JPEG
+   **`POSTER`**, the sheets' last frame (256 px), for consumers that cannot play a sheet.
+The asset is READY with its large sheet; it is never served as a video. Delivery adds each sheet's
+layout to its rendition (`DeliveredRendition.sheet`: frame count, columns, frame duration, gutter, cell
+size), derived from the kind. A 3 s test clip bakes to ~28 KB / ~37 KB sheets and an ~8 KB still.
+
 ### Error contract
 
 Every fault implements `error::AppError` with a stable `MED-XXXX` code, mapped to

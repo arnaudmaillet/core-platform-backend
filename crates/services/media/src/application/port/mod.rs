@@ -20,6 +20,7 @@ pub mod malware_scanner;
 pub mod media_probe;
 pub mod moderation_screen;
 pub mod object_store;
+pub mod sheet_baker;
 pub mod video_transcoder;
 
 pub use access_log::{AccessLog, DocumentView};
@@ -32,4 +33,5 @@ pub use malware_scanner::{MalwareScanner, ScanVerdict};
 pub use media_probe::{MediaProbe, MediaProbeReport};
 pub use moderation_screen::{ModerationScreen, ScreenDecision};
 pub use object_store::{ObjectHead, ObjectStore, PresignedUpload};
+pub use sheet_baker::SheetBaker;
 pub use video_transcoder::{TranscodeOutput, VideoTranscoder};

@@ -17,3 +17,4 @@ mod handle_changes;
 mod avatar_frames;
 mod animated_banner;
 mod badge_showcase;
+mod animated_avatar;

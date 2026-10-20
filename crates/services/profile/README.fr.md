@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 7e2cc47cf4ad7eaf15267ac5643e4f9059a2ad02814f8b025b65205946a07d2a
+  source_sha256: 8e2f2d980cd0590c9589f6702ae728beabc934bdb008ef39675389b802274ae3
   translated_at: 2026-10-20
   status: complete
 ---
@@ -248,6 +248,16 @@ wallet ne peut pas répondre) ; un `frame_id` vide l'enlève. Il est enregistré
 liste des profils du compte (migration 0020), et chaque lecture porte `avatar_frame_id` (`ProfileView`,
 `ProfileSummaryView`, les résultats profil de search). L'app le dessine depuis des visuels embarqués
 indexés par id, et il ne change aucune taille, aucun ordre ni aucun classement (charte V5.3 §35).
+
+**Avatars animés (#945, #948).** `UpdateAvatar` avec `avatar_asset_id` seul (sans `avatar_url`) désigne le
+**clip** d'un avatar animé (`AVATAR_CLIP` de media) du compte : le `GetAsset` de media doit le confirmer, ni
+en échec ni en quarantaine (sinon **`PRF-5007`** ; un clip encore en cuisson convient), et le compte doit
+posséder l'article `avatar.animated` du wallet (500 gems ; sinon **`PRF-6007`**). L'avatar est alors cet
+asset, **sans photo** : les lectures client portent `ProfileView.avatar` / `ProfileSummaryView.avatar` avec
+les deux planches de sprites et leur disposition (`SHEET_SMALL` / `SHEET_LARGE`, `DeliveredRendition.sheet`)
+et le `POSTER`, sa dernière image ; `avatar_url` est cette image fixe, pour les lecteurs qui ne savent pas
+jouer une planche (images de push, aperçus de liens, web). Une photo par URL le remplace ; les lectures ne
+portent alors plus de planche.
 
 **Vitrines de badges (#912).** Un profil montre jusqu'à trois badges obtenus par son **compte** (badges du
 wallet, p. ex. `badge.continent_eu`), dans l'ordre : `SetBadgeShowcase(badge_ids)` (le propriétaire)
