@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: b60e371e611148fae195155785a0fe8462677fa30bb9340960a139556c61929d
-  translated_at: 2026-10-13
+  source_sha256: 818d4ab8c28094f2a4c3c8157cd71ae33041c89c3f9d7762e8ad8261f779291b
+  translated_at: 2026-10-20
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -180,6 +180,8 @@ service ChatService {
   rpc ListMembers       (ListMembersRequest)       returns (ListMembersResponse);
   rpc ListSubscriptions (ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
   rpc ListInbox         (ListInboxRequest)         returns (ListInboxResponse);       // #656
+  rpc SyncInbox         (SyncInboxRequest)         returns (SyncInboxResponse);       // #930
+  rpc SyncConversation  (SyncConversationRequest)  returns (SyncConversationResponse); // #930
   rpc ListConversationsByMember (ListConversationsByMemberRequest) returns (ListConversationsByMemberResponse); // mesh only
   rpc GetFormerMemberHistory    (GetFormerMemberHistoryRequest)    returns (GetHistoryResponse);                // mesh only
   // Real-time streams
@@ -315,6 +317,30 @@ Comment les entrées sont tenues :
 - **Réponses.** Accepter déplace l'entrée dans INBOX ; refuser la retire pour celui qui refuse seulement.
 - **Rejeux.** Une entrée ne recule jamais lors d'un rejeu.
 
+**Synchronisation incrémentale (#930).** Un client liste sa boîte de réception, ou un fil, une fois,
+puis ne demande que ce qui a changé. `ListInbox` et `GetHistory` remettent un `sync_watermark` sur leur
+première page ; il est opaque (`i1_…` pour une boîte de réception, `t1_…` pour un fil).
+- **`SyncInbox(profile_id, watermark, limit)`** répond chaque conversation dont l'entrée a changé depuis
+  le watermark, une fois, telle que l'appelant la voit maintenant et dans son dossier. Elle répond aussi
+  les conversations à retirer : supprimées, refusées, ou qui ne s'affichent plus, comme celle d'un
+  demandeur bloqué.
+- **`SyncConversation(conversation_id, requester_id, watermark, limit)`** répond les nouveaux messages,
+  du plus ancien au plus récent, selon les règles d'audience de `GetHistory`. À un membre d'une
+  conversation directe ou d'un groupe, elle répond aussi la position de lecture de chaque membre,
+  filtrée comme dans `ListMembers`.
+- **Les deux** répondent le `watermark` suivant, et `has_more` quand une page pleine en laisse à lire :
+  resynchroniser aussitôt.
+- **Marge.** Une synchro lit jusqu'à 5 s avant le maintenant du serveur, pour qu'une écriture validée en
+  retard soit encore vue la fois suivante. Les clients dédoublonnent par id.
+- **Expiration.** Un watermark de plus de 35 jours répond `CHT-2013` (`OUT_OF_RANGE`) : relister en entier.
+- **Stockage.** Chaque écriture d'inbox, et chaque lecture ou mise en sourdine, ajoute aussi
+  `(changed_at, conversation_id)` au journal des changements du membre `chat.inbox_changes`
+  (migration 0016, TTL de 35 jours). Les messages ne sont qu'ajoutés : un fil se synchronise depuis le
+  journal des messages lui-même.
+- **Limites.** Un changement de filtre ou un blocage retrie ou masque les demandes à la lecture, sans
+  toucher au journal. Un tel changement apparaît au prochain listage complet, ou avec le prochain
+  changement de la conversation.
+
 **Push (#654).** Une fois les entrées d'inbox d'un message écrites, l'`InboxWorker` demande son push au
 service notification sur `chat.message.push` : un événement par message, avec l'expéditeur, un aperçu
 du texte de 100 caractères (vide pour un média) et les `recipients`. Un destinataire est un membre
@@ -397,7 +423,7 @@ le crate partagé `error` :
 | Range | Class |
 |---|---|
 | `CHT-1xxx` | lifecycle |
-| `CHT-2xxx` | validation (`CHT-2011` l'asset média d'un message n'est pas une image / vidéo utilisable de l'expéditeur ; `CHT-2012` son image a été uploadée publique et est encore en traitement — #919) |
+| `CHT-2xxx` | validation (`CHT-2011` l'asset média d'un message n'est pas une image / vidéo utilisable de l'expéditeur ; `CHT-2012` son image a été uploadée publique et est encore en traitement — #919 ; `CHT-2013` un watermark de synchro de plus de 35 jours — #930) |
 | `CHT-3xxx` | events |
 | `CHT-4xxx` | streaming |
 | `CHT-5xxx` | services pairs (`CHT-5001` : le contrôle d'interaction de social-graph est indisponible ; `CHT-5002` : media n'a pas répondu à un envoi qui nomme un asset, #919 — tous deux rejouables) |

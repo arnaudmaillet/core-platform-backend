@@ -123,6 +123,11 @@ pub enum ChatError {
     #[error("invalid page token: '{token}'")]
     InvalidPageToken { token: String },
 
+    /// A sync watermark older than the server keeps changes for (#930): the
+    /// client resyncs in full.
+    #[error("the sync watermark is too old: resync in full")]
+    SyncWatermarkExpired,
+
     #[error("idempotency key must be 8 to 64 letters, digits, '-' or '_'")]
     InvalidIdempotencyKey,
 
@@ -184,6 +189,7 @@ impl AppError for ChatError {
             Self::InvalidParticipantRole { .. }  => "CHT-2008",
             Self::InvalidPageToken { .. }        => "CHT-2009",
             Self::InvalidIdempotencyKey          => "CHT-2010",
+            Self::SyncWatermarkExpired           => "CHT-2013",
 
             Self::EventPublishFailed { .. } => "CHT-3001",
 
@@ -243,6 +249,8 @@ impl AppError for ChatError {
 
             Self::EventPublishFailed { .. }
             | Self::StreamSendFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+
+            Self::SyncWatermarkExpired => StatusCode::GONE,
         }
     }
 
@@ -273,6 +281,8 @@ impl AppError for ChatError {
             | Self::InvalidIdempotencyKey
             | Self::MemberLimitExceeded { .. }
             | Self::DomainViolation { .. } => Severity::Medium,
+
+            Self::SyncWatermarkExpired => Severity::Low,
 
             Self::ConversationNotFound { .. }
             | Self::ConversationConcealed { .. }
@@ -391,6 +401,9 @@ impl AppError for ChatError {
 
             Self::InvalidIdempotencyKey =>
                 "This request key is not valid.",
+
+            Self::SyncWatermarkExpired =>
+                "Your conversations need a full refresh.",
 
             Self::InvalidConversationId(_) => "The conversation ID is not valid.",
             Self::InvalidMessageId(_)      => "The message ID is not valid.",

@@ -103,6 +103,12 @@ const INSERT_ENTRY: &str = "INSERT INTO chat.inbox_entries \
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 const DELETE_LISTING: &str = "DELETE FROM chat.inbox_by_activity \
      WHERE member_id = ? AND folder = ? AND activity = ? AND conversation_id = ?";
+/// The change journal (#930, migration 0016).
+const INSERT_CHANGE: &str = "INSERT INTO chat.inbox_changes (member_id, changed_at, conversation_id) VALUES (?, ?, ?)";
+
+fn change(member: &ProfileId, conversation_id: &ConversationId) -> (Uuid, CqlTimestamp, Uuid) {
+    (member.as_uuid(), to_cql(chrono::Utc::now()), conversation_id.as_uuid())
+}
 
 #[async_trait]
 impl InboxStore for ScyllaInboxStore {
@@ -119,14 +125,18 @@ impl InboxStore for ScyllaInboxStore {
                 batch.append_statement(DELETE_LISTING);
                 batch.append_statement(INSERT_LISTING);
                 batch.append_statement(INSERT_ENTRY);
+                batch.append_statement(INSERT_CHANGE);
                 let delete =
                     (member.as_uuid(), old.folder.as_tinyint(), to_cql(old.activity), old.conversation_id.as_uuid());
-                self.client.session.batch(&batch, (delete, row.clone(), row)).await.map_err(scylla_err)?;
+                let values = (delete, row.clone(), row, change(member, &entry.conversation_id));
+                self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
             }
             None => {
                 batch.append_statement(INSERT_LISTING);
                 batch.append_statement(INSERT_ENTRY);
-                self.client.session.batch(&batch, (row.clone(), row)).await.map_err(scylla_err)?;
+                batch.append_statement(INSERT_CHANGE);
+                let values = (row.clone(), row, change(member, &entry.conversation_id));
+                self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
             }
         }
         Ok(())
@@ -155,9 +165,11 @@ impl InboxStore for ScyllaInboxStore {
         let mut batch = strict_batch(&self.client);
         batch.append_statement(DELETE_LISTING);
         batch.append_statement("DELETE FROM chat.inbox_entries WHERE member_id = ? AND conversation_id = ?");
+        batch.append_statement(INSERT_CHANGE);
         let values = (
             (member.as_uuid(), old.folder.as_tinyint(), to_cql(old.activity), conversation_id.as_uuid()),
             (member.as_uuid(), conversation_id.as_uuid()),
+            change(member, conversation_id),
         );
         self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
         Ok(())
@@ -209,4 +221,74 @@ impl InboxStore for ScyllaInboxStore {
         entries.truncate(limit.max(0) as usize);
         Ok(entries)
     }
+
+    async fn touch(&self, member: &ProfileId, conversation_id: &ConversationId) -> Result<(), ChatError> {
+        let stmt = strict(&self.client, INSERT_CHANGE);
+        self.client.session.execute_unpaged(stmt, change(member, conversation_id)).await.map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn changes(
+        &self,
+        member: &ProfileId,
+        after:  (i64, Uuid),
+        upper:  (i64, Uuid),
+        limit:  i32,
+    ) -> Result<(Vec<(i64, ConversationId)>, bool), ChatError> {
+        // CQL orders a `uuid` its own way, so a page never ends inside a
+        // millisecond: the watermark's own one is read whole and filtered
+        // here, then the later ones up to `limit`, and the last of those read
+        // whole again.
+        let limit = limit.max(1);
+        let mut changes: Vec<(i64, Uuid)> = Vec::new();
+        if after.1 != Uuid::max() {
+            changes.extend(self.changes_at(member, after.0).await?.into_iter().filter(|c| *c > after && *c <= upper));
+        }
+        let mut more = false;
+        if after.0 < upper.0 {
+            let stmt = strict(
+                &self.client,
+                "SELECT changed_at, conversation_id FROM chat.inbox_changes \
+                 WHERE member_id = ? AND changed_at > ? AND changed_at <= ? LIMIT ?",
+            );
+            let rows = self
+                .client
+                .session
+                .execute_unpaged(stmt, (member.as_uuid(), CqlTimestamp(after.0), CqlTimestamp(upper.0), limit))
+                .await
+                .map_err(scylla_err)?;
+            let mut later = change_rows(rows, "inbox.changes")?;
+            if let Some(&(edge, _)) = later.last().filter(|_| later.len() == limit as usize) {
+                more = true;
+                later.retain(|c| c.0 < edge);
+                later.extend(self.changes_at(member, edge).await?);
+            }
+            changes.extend(later);
+        }
+        changes.sort();
+        Ok((changes.into_iter().map(|(ms, id)| (ms, ConversationId::from_uuid(id))).collect(), more))
+    }
+}
+
+impl ScyllaInboxStore {
+    /// Every change of `member` journalled at exactly `ms`.
+    async fn changes_at(&self, member: &ProfileId, ms: i64) -> Result<Vec<(i64, Uuid)>, ChatError> {
+        let stmt = strict(
+            &self.client,
+            "SELECT changed_at, conversation_id FROM chat.inbox_changes WHERE member_id = ? AND changed_at = ?",
+        );
+        let rows = self.client.session.execute_unpaged(stmt, (member.as_uuid(), CqlTimestamp(ms))).await.map_err(scylla_err)?;
+        change_rows(rows, "inbox.changes_at")
+    }
+}
+
+fn change_rows(rows: scylla::response::query_result::QueryResult, at: &'static str) -> Result<Vec<(i64, Uuid)>, ChatError> {
+    let rows = rows
+        .into_rows_result()
+        .map_err(|e| row_err(at, e))?
+        .rows::<(CqlTimestamp, Uuid)>()
+        .map_err(|e| row_err(at, e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| row_err(at, e))?;
+    Ok(rows.into_iter().map(|(changed_at, id)| (changed_at.0, id)).collect())
 }

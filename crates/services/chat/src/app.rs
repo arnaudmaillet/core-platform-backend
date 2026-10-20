@@ -234,6 +234,12 @@ impl App {
                 message_repo:      Arc::clone(&message_repo),
                 max_page_size:     config.max_page_size,
             })?
+            .register::<crate::application::query::get_history::SyncConversationQuery, _>(GetHistoryHandler {
+                conversation_repo: Arc::clone(&conversation_repo),
+                member_repo:       Arc::clone(&member_repo),
+                message_repo:      Arc::clone(&message_repo),
+                max_page_size:     config.max_page_size,
+            })?
             .register::<FormerMemberHistoryQuery, _>(GetHistoryHandler {
                 conversation_repo: Arc::clone(&conversation_repo),
                 member_repo:       Arc::clone(&member_repo),
@@ -252,7 +258,17 @@ impl App {
                 conversation_repo: Arc::clone(&conversation_repo) as Arc<dyn ConversationRepository>,
                 member_repo:       Arc::clone(&member_repo) as Arc<dyn MemberRepository>,
                 inbox:             Arc::clone(&inbox),
-                gate:              interaction_gate,
+                gate:              interaction_gate.clone(),
+                max_page_size:     config.max_page_size,
+                filters:           Arc::clone(&message_filters),
+                messages:          Arc::clone(&message_repo) as Arc<dyn MessageRepository>,
+                offensive:         Arc::new(config.offensive_terms.clone()),
+            })?
+            .register::<crate::application::query::list_inbox::SyncInboxQuery, _>(ListInboxHandler {
+                conversation_repo: Arc::clone(&conversation_repo) as Arc<dyn ConversationRepository>,
+                member_repo:       Arc::clone(&member_repo) as Arc<dyn MemberRepository>,
+                inbox:             Arc::clone(&inbox),
+                gate:              interaction_gate.clone(),
                 max_page_size:     config.max_page_size,
                 filters:           Arc::clone(&message_filters),
                 messages:          Arc::clone(&message_repo) as Arc<dyn MessageRepository>,
@@ -420,10 +436,12 @@ fn build_commands<EP: EventPublisher>(
         .register::<MarkReadCommand, _>(MarkReadHandler {
             conversation_repo: Arc::clone(conversation_repo),
             member_repo:       Arc::clone(member_repo),
+            inbox:             Some(Arc::clone(inbox)),
         })?
         .register::<MuteConversationCommand, _>(MuteConversationHandler {
             conversation_repo: Arc::clone(conversation_repo),
             member_repo:       Arc::clone(member_repo),
+            inbox:             Some(Arc::clone(inbox)),
         })?
         .build();
     Ok(Commands { bus, sender, direct })

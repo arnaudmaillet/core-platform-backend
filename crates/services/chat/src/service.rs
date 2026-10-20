@@ -75,6 +75,9 @@ impl Service for ChatService {
         authenticated("/chat.v1.ChatService/ListMembers"),
         authenticated("/chat.v1.ChatService/ListSubscriptions"),
         authenticated("/chat.v1.ChatService/ListInbox"),
+        // Incremental sync (#930): the caller's profile.
+        authenticated("/chat.v1.ChatService/SyncInbox"),
+        authenticated("/chat.v1.ChatService/SyncConversation"),
         authenticated("/chat.v1.ChatService/StreamConversation"),
         authenticated("/chat.v1.ChatService/StreamPublic"),
     ];

@@ -48,6 +48,9 @@ impl Validate for MuteConversationCommand {
 pub struct MuteConversationHandler<CR, MR> {
     pub conversation_repo: Arc<CR>,
     pub member_repo:       Arc<MR>,
+    /// Journals the change for incremental sync (#930); `None` in tests that
+    /// do not sync.
+    pub inbox:             Option<Arc<dyn crate::application::port::InboxStore>>,
 }
 
 impl<CR, MR> CommandHandler<MuteConversationCommand> for MuteConversationHandler<CR, MR>
@@ -76,6 +79,10 @@ where
         if !self.member_repo.set_muted_until(&conversation_id, &member_id, muted_until).await? {
             return Err(deny_non_member(&*self.conversation_repo, &conversation_id, member_id).await);
         }
+        // Its inbox entry reads otherwise now (#930: muted).
+        if let Some(inbox) = &self.inbox {
+            inbox.touch(&member_id, &conversation_id).await?;
+        }
         Ok(())
     }
 }
@@ -90,6 +97,7 @@ mod tests {
         let handler: MuteConversationHandler<FakeConversations, FakeMembers> = MuteConversationHandler {
             conversation_repo: Arc::clone(&f.conversations),
             member_repo:       Arc::clone(&f.members),
+            inbox:             None,
         };
         let cmd = MuteConversationCommand {
             conversation_id: f.conversation_id.as_str(),

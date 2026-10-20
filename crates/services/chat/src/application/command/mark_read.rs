@@ -45,6 +45,9 @@ impl Validate for MarkReadCommand {
 pub struct MarkReadHandler<CR, MR> {
     pub conversation_repo: Arc<CR>,
     pub member_repo:       Arc<MR>,
+    /// Journals the change for incremental sync (#930); `None` in tests that
+    /// do not sync.
+    pub inbox:             Option<Arc<dyn crate::application::port::InboxStore>>,
 }
 
 impl<CR, MR> CommandHandler<MarkReadCommand> for MarkReadHandler<CR, MR>
@@ -71,6 +74,10 @@ where
             self.member_repo
                 .update_last_read(&conversation_id, &member_id, horizon)
                 .await?;
+            // Its inbox entry reads otherwise now (#930: unread).
+            if let Some(inbox) = &self.inbox {
+                inbox.touch(&member_id, &conversation_id).await?;
+            }
         }
 
         Ok(())
@@ -86,6 +93,7 @@ mod tests {
         let handler: MarkReadHandler<FakeConversations, FakeMembers> = MarkReadHandler {
             conversation_repo: Arc::clone(&f.conversations),
             member_repo:       Arc::clone(&f.members),
+            inbox:             None,
         };
         handler
             .handle(Envelope::new(uuid::Uuid::now_v7(), MarkReadCommand {
@@ -112,5 +120,28 @@ mod tests {
     async fn member_marks_read() {
         let f = Fixture::private_group();
         mark_read(&f, f.owner).await.unwrap();
+    }
+
+    /// #930: a read changes the member's inbox entry (unread), so it is
+    /// journaled for the next sync.
+    #[tokio::test]
+    async fn a_read_is_journaled_for_the_members_inbox_sync() {
+        let f = Fixture::private_group();
+        let inbox = Arc::<crate::application::command::fakes::FakeInbox>::default();
+        let handler: MarkReadHandler<FakeConversations, FakeMembers> = MarkReadHandler {
+            conversation_repo: Arc::clone(&f.conversations),
+            member_repo:       Arc::clone(&f.members),
+            inbox:             Some(Arc::clone(&inbox) as Arc<dyn crate::application::port::InboxStore>),
+        };
+        handler
+            .handle(Envelope::new(uuid::Uuid::now_v7(), MarkReadCommand {
+                conversation_id: f.conversation_id.as_str(),
+                member_id:       f.owner.as_str(),
+                message_id:      MessageId::new().as_str(),
+            }))
+            .await
+            .unwrap();
+        let journal = inbox.1.lock().unwrap();
+        assert_eq!(journal.iter().map(|(m, _, c)| (*m, *c)).collect::<Vec<_>>(), vec![(f.owner, f.conversation_id)]);
     }
 }

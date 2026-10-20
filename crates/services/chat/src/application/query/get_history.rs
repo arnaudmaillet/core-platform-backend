@@ -6,12 +6,41 @@ use uuid::Uuid;
 use crate::application::port::{
     ConversationRepository, MemberRepository, MessageRepository, MessageSummary,
 };
-use crate::domain::value_object::{ConversationId, ProfileId};
+use crate::application::sync::{SyncKind, Watermark};
+use crate::domain::value_object::{ConversationId, ConversationKind, ProfileId};
 use crate::error::ChatError;
 
 pub struct MessagePage {
     pub messages:        Vec<MessageSummary>,
     pub next_page_token: Option<String>,
+    /// `GetHistory`'s first page only (#930): the watermark to sync the thread
+    /// from (taken before reading).
+    pub sync_watermark:  Option<String>,
+}
+
+/// What is new in a thread since a watermark (#930): messages are
+/// append-only, so new messages and the members' read positions.
+pub struct SyncConversationQuery {
+    pub conversation_id: String,
+    pub requester_id:    String,
+    /// From `GetHistory`'s first page, or a previous sync.
+    pub watermark:       String,
+    pub limit:           i32,
+}
+
+pub struct ThreadSync {
+    /// Oldest first.
+    pub messages:      Vec<MessageSummary>,
+    /// Each member's read position now — a direct or group conversation, to
+    /// a member (a channel keeps no receipts for its readers).
+    pub read_receipts: Vec<(ProfileId, Option<crate::domain::value_object::MessageId>)>,
+    pub watermark:     String,
+    /// More messages wait: sync again at once from `watermark`.
+    pub has_more:      bool,
+}
+
+impl Query for SyncConversationQuery {
+    type Response = ThreadSync;
 }
 
 /// Reads a page of conversation history for `requester_id`.
@@ -59,6 +88,7 @@ where
         let requester_id    = ProfileId::try_from(q.requester_id.as_str())?;
         let limit           = q.limit.min(self.max_page_size).max(1);
         let cursor          = q.page_token.as_deref().map(decode_cursor).transpose()?;
+        let sync_watermark  = cursor.is_none().then(|| Watermark::upper(chrono::Utc::now()).encode(SyncKind::Thread));
 
         let conversation = self
             .conversation_repo
@@ -83,7 +113,7 @@ where
             match conversation.public_since().and_then(|w| w.timestamp_ms()) {
                 Some(ms) => Some(ms),
                 None => {
-                    return Ok(MessagePage { messages: Vec::new(), next_page_token: None });
+                    return Ok(MessagePage { messages: Vec::new(), next_page_token: None, sync_watermark });
                 }
             }
         } else {
@@ -100,7 +130,64 @@ where
 
         let next_page_token = next_cursor.map(|(ts, id)| encode_cursor(ts, id));
 
-        Ok(MessagePage { messages, next_page_token })
+        Ok(MessagePage { messages, next_page_token, sync_watermark })
+    }
+}
+
+impl<CR, MR, MSG> QueryHandler<SyncConversationQuery> for GetHistoryHandler<CR, MR, MSG>
+where
+    CR:  ConversationRepository,
+    MR:  MemberRepository,
+    MSG: MessageRepository,
+{
+    type Error = ChatError;
+
+    async fn handle(&self, envelope: Envelope<SyncConversationQuery>) -> Result<ThreadSync, ChatError> {
+        let q = &envelope.payload;
+        let conversation_id = ConversationId::try_from(q.conversation_id.as_str())?;
+        let requester_id = ProfileId::try_from(q.requester_id.as_str())?;
+        let now = chrono::Utc::now();
+        let after = Watermark::decode(&q.watermark, SyncKind::Thread, now)?;
+        let upper = Watermark::upper(now).max_with(after);
+        let limit = q.limit.min(self.max_page_size).max(1);
+        let conversation = self
+            .conversation_repo
+            .find(&conversation_id)
+            .await?
+            .ok_or_else(|| ChatError::ConversationNotFound { conversation_id: conversation_id.as_str() })?;
+        let is_member = self.member_repo.find(&conversation_id, &requester_id).await?.is_some();
+        // The same audience rules as GetHistory.
+        let floor = if is_member {
+            None
+        } else if conversation.visibility().is_public() {
+            match conversation.public_since().and_then(|w| w.timestamp_ms()) {
+                Some(ms) => Some(ms),
+                None => return Ok(ThreadSync { messages: Vec::new(), read_receipts: Vec::new(), watermark: upper.encode(SyncKind::Thread), has_more: false }),
+            }
+        } else {
+            return Err(conversation.concealed());
+        };
+        let (mut messages, has_more) = self
+            .message_repo
+            .list_since(&conversation_id, (after.ms, after.id), (upper.ms, upper.id), floor, limit)
+            .await?;
+        let next = match messages.last() {
+            Some(last) if has_more => Watermark { ms: last.created_at.timestamp_millis(), id: last.message_id },
+            _ => upper,
+        };
+        // A withheld message is its sender's alone (#656).
+        messages.retain(|m| m.visible_to(requester_id.as_uuid()));
+        let read_receipts = if is_member && conversation.kind() != ConversationKind::Channel {
+            self.member_repo
+                .list(&conversation_id)
+                .await?
+                .into_iter()
+                .map(|p| (p.profile_id(), p.last_read()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(ThreadSync { messages, read_receipts, watermark: next.encode(SyncKind::Thread), has_more })
     }
 }
 
@@ -150,7 +237,7 @@ where
             .filter(|m| m.visible_to(me))
             .map(|m| if m.sender_id == me { m } else { m.reduced_to_its_time() })
             .collect();
-        Ok(MessagePage { messages, next_page_token: next_cursor.map(|(ts, id)| encode_cursor(ts, id)) })
+        Ok(MessagePage { messages, next_page_token: next_cursor.map(|(ts, id)| encode_cursor(ts, id)), sync_watermark: None })
     }
 }
 
@@ -285,5 +372,78 @@ mod tests {
         let floors = messages.floors();
         assert_eq!(floors[0], None, "member: full history");
         assert!(floors[1].is_some(), "audience: gated by public_since");
+    }
+
+    /// #930: what is new since a watermark, oldest first and inside the
+    /// grace window, withheld ones only to their sender; the members' read
+    /// positions with them.
+    #[tokio::test]
+    async fn a_member_syncs_the_new_messages_and_the_read_positions() {
+        use crate::application::port::MessageSummary;
+        use crate::domain::value_object::{ContentType, Role};
+
+        let f = Fixture::private_group();
+        let me = f.add_member(Role::Member);
+        let now = chrono::Utc::now().timestamp_millis();
+        let at = |ms| chrono::DateTime::from_timestamp_millis(ms).unwrap();
+        let message = |sender: ProfileId, ms, body: &str, withheld| MessageSummary {
+            message_id: Uuid::now_v7(),
+            sender_id: sender.as_uuid(),
+            content_type: ContentType::Text,
+            body: body.into(),
+            media_ref: None,
+            media_asset_id: None,
+            reply_to: None,
+            created_at: at(ms),
+            withheld,
+        };
+        let messages = Arc::<FakeMessages>::default();
+        messages.seed(vec![
+            message(f.owner, now - 600_000, "already known", false),
+            message(f.owner, now - 60_000, "new", false),
+            message(f.owner, now - 50_000, "withheld", true),
+            message(me, now - 40_000, "mine", false),
+            message(f.owner, now - 1_000, "too fresh", false),
+        ]);
+        let handler: GetHistoryHandler<FakeConversations, FakeMembers, FakeMessages> = GetHistoryHandler {
+            conversation_repo: Arc::clone(&f.conversations),
+            member_repo:       Arc::clone(&f.members),
+            message_repo:      Arc::clone(&messages),
+            max_page_size:     50,
+        };
+        let sync = |requester: ProfileId, watermark: String, limit| {
+            handler.handle(Envelope::new(Uuid::now_v7(), SyncConversationQuery {
+                conversation_id: f.conversation_id.as_str(),
+                requester_id: requester.as_str(),
+                watermark,
+                limit,
+            }))
+        };
+        let since = Watermark { ms: now - 120_000, id: Uuid::nil() }.encode(SyncKind::Thread);
+
+        let page = sync(me, since.clone(), 20).await.unwrap();
+        let bodies: Vec<_> = page.messages.iter().map(|m| m.body.as_str()).collect();
+        assert_eq!(bodies, vec!["new", "mine"]);
+        assert!(!page.has_more);
+        let mut readers: Vec<_> = page.read_receipts.iter().map(|(p, _)| *p).collect();
+        readers.sort_by_key(ProfileId::as_uuid);
+        let mut members = vec![f.owner, me];
+        members.sort_by_key(ProfileId::as_uuid);
+        assert_eq!(readers, members);
+        assert!(sync(me, page.watermark, 20).await.unwrap().messages.is_empty(), "nothing since");
+
+        // A full page resumes after its last message.
+        let first = sync(me, since, 1).await.unwrap();
+        assert!(first.has_more);
+        assert_eq!(first.messages[0].body, "new");
+        let second = sync(me, first.watermark, 1).await.unwrap();
+        assert!(second.messages.is_empty(), "the withheld one is filtered out of its page");
+        assert!(second.has_more);
+        assert_eq!(sync(me, second.watermark, 1).await.unwrap().messages[0].body, "mine");
+
+        // An outsider of a private conversation is told nothing.
+        let fresh = Watermark { ms: now, id: Uuid::nil() }.encode(SyncKind::Thread);
+        let err = sync(Fixture::profile(), fresh, 20).await.err().unwrap();
+        assert!(matches!(err, ChatError::ConversationConcealed { .. }), "{err:?}");
     }
 }

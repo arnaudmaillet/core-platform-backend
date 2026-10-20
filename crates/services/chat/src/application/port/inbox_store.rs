@@ -77,6 +77,23 @@ pub trait InboxStore: Send + Sync + 'static {
     /// Takes `conversation_id` out of `member`'s inbox.
     async fn remove(&self, member: &ProfileId, conversation_id: &ConversationId) -> Result<(), ChatError>;
 
+    /// Journals a change of `member`'s view of `conversation_id` that is not
+    /// an entry write (#930: its read position, its mute). `put` and `remove`
+    /// journal their own.
+    async fn touch(&self, member: &ProfileId, conversation_id: &ConversationId) -> Result<(), ChatError>;
+
+    /// `member`'s journalled changes strictly after `after` (`(ms, id)`), up to
+    /// `upper` included, oldest first (#930); and whether more remain. About
+    /// `limit` of them: a page never splits a millisecond, so resuming after
+    /// its last change skips nothing.
+    async fn changes(
+        &self,
+        member: &ProfileId,
+        after:  (i64, uuid::Uuid),
+        upper:  (i64, uuid::Uuid),
+        limit:  i32,
+    ) -> Result<(Vec<(i64, ConversationId)>, bool), ChatError>;
+
     /// Up to `limit` entries of `folder`, newest first, after the cursor
     /// `(activity_ms, conversation_id)` of the previous page.
     async fn list(
