@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: c022105232788e3cfbe3c3524755170589a714872eaa591e680351acc4f98d38
+  source_sha256: c13d97471384cbcfe0a633f2cb00f601fcec693304233d9eb49a803f8ad7debf
   translated_at: 2026-10-20
   status: complete
 ---
@@ -157,6 +157,7 @@ service GeoDiscoveryService {
   rpc GetCountryUnlocks (GetCountryUnlocksRequest) returns (GetCountryUnlocksResponse); // les pays d'un membre (#665)
   rpc UnlockCountry (UnlockCountryRequest) returns (UnlockCountryResponse);             // en débloquer un avec des gems (#665)
   rpc BuyCountryVisa (BuyCountryVisaRequest) returns (BuyCountryVisaResponse);          // un visa de 24 h avec des gems (#910)
+  rpc ListContinents (ListContinentsRequest) returns (ListContinentsResponse);          // les continents, leurs pays et leurs badges (#912)
 }
 message QueryTileRequest  { Viewport viewport = 1; int32 zoom_level = 2; string guest_principal = 3; } // zoom ∈ [0,15]; 3 = mesh only
 message QueryTileResponse { reserved 1; repeated RadarPin pins = 3; int32 tile_count = 2; } // le champ 1 était `cards`
@@ -235,6 +236,16 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > l'enregistrement paie le prix **convenu** (le wallet rejoue la clé) et n'est jamais refusé pour un
 > prix qui a bougé entre-temps.
 > Wallet ou account injoignable ⇒ **`GEO-6002`** (`UNAVAILABLE`, fail-closed).
+>
+> **Badges de continent (#912).** `data/continents.json` place chacun des 237 pays de l'atlas sur l'un de
+> sept continents (`AF`, `AN`, `AS`, `EU`, `NA`, `OC`, `SA` ; ceux de Natural Earth, ses îles « Seven seas »
+> avec le plus proche). `ListContinents` (edge `public_read`) la sert avec le badge de chaque continent
+> (`badge.continent_<code>`), la table d'où l'app tire sa progression. Un membre qui détient **tous** les
+> pays d'un continent — origine et déblocages permanents, jamais un visa de 24 h — gagne son badge : le
+> déblocage et la lecture de la boutique (`GetCountryUnlocks`) appellent `AwardBadge` du wallet (réservé
+> au mesh) avec les profils de l'appelant (les `pids` du jeton), au mieux (un échec est journalisé et
+> retenté à la lecture suivante ; le wallet n'attribue qu'une fois). Notification prévient alors chaque
+> profil.
 >
 > **Visas de 24 h (#910).** Une dépense de gems récurrente : un déblocage temporaire.
 > `BuyCountryVisa(country_code, expected_price, idempotency_key)` (edge `authenticated`, adultes

@@ -21,10 +21,13 @@ pub enum ItemFamily {
     /// A post card style (`card.<name>`, #914): applied by an author to their
     /// own posts.
     CardStyle,
+    /// A badge (`badge.<name>`, #912): earned, never sold — awarded by the
+    /// service whose rule it is (`AwardBadge`), shown in profiles' showcases.
+    Badge,
 }
 
 impl ItemFamily {
-    pub const ALL: [Self; 5] = [Self::AppIcon, Self::Theme, Self::AvatarFrame, Self::AnimatedBanner, Self::CardStyle];
+    pub const ALL: [Self; 6] = [Self::AppIcon, Self::Theme, Self::AvatarFrame, Self::AnimatedBanner, Self::CardStyle, Self::Badge];
 
     fn prefix(self) -> &'static str {
         match self {
@@ -33,6 +36,7 @@ impl ItemFamily {
             Self::AvatarFrame => "frame",
             Self::AnimatedBanner => "banner",
             Self::CardStyle => "card",
+            Self::Badge => "badge",
         }
     }
 
@@ -44,6 +48,11 @@ impl ItemFamily {
         Self::ALL.into_iter().find(|f| f.prefix() == family).filter(|_| named)
     }
 
+    /// Whether items of this family are sold (badges are earned).
+    pub fn sold(self) -> bool {
+        self != Self::Badge
+    }
+
     /// The ledger kind of a purchase in this family.
     pub fn transaction_kind(self) -> TransactionKind {
         match self {
@@ -52,6 +61,8 @@ impl ItemFamily {
             Self::AvatarFrame => TransactionKind::AvatarFrame,
             Self::AnimatedBanner => TransactionKind::AnimatedBanner,
             Self::CardStyle => TransactionKind::CardStyle,
+            // Never bought: no ledger row.
+            Self::Badge => TransactionKind::Unknown,
         }
     }
 }

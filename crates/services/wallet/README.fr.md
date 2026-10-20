@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 5e0c24cd01815ebac918a2f65cd7773c48b17e71205cb22ddc71108791eeee16
+  source_sha256: 814d56c9e8b9bade8397d058d250971d742d645db6d66b251ebe2efa8c037e52
   translated_at: 2026-10-20
   status: complete
 ---
@@ -19,7 +19,7 @@ i18n:
 > | **Tier** | TIER-0 (fail-closed) |
 > | **Déployable** | `crates/apps/wallet-server` (crate bibliothèque : `crates/services/wallet`) |
 > | **Stockage** | Postgres (cluster CNPG dédié, tables `wallets`, `wallet_transactions`) |
-> | **Asynchrone** | consomme `account.v1.events` (groupe `wallet-account-events`) et `auth.v1.events` (groupe `wallet-auth-events` : le cadeau de bienvenue) · publie `wallet.v1.events` (likes misés) |
+> | **Asynchrone** | consomme `account.v1.events` (groupe `wallet-account-events`) et `auth.v1.events` (groupe `wallet-auth-events` : le cadeau de bienvenue) · publie `wallet.v1.events` (likes misés, badges attribués) |
 > | **Appelants** | l'app (edge client `:9443`) · geo-discovery (mesh `SpendGems`, déblocage de pays) · account (mesh `ExportWallet` / `ListStakePositions` / `ListWalletTransactions`, l'export RGPD) |
 > | **Dépendances** | Postgres, Kafka, post et comment (mesh : là où tombent les likes), social-graph (mesh : le lecteur peut-il le voir), engagement (mesh : `GetLikePositions`, le règlement des mises) |
 > | **SLO** | 99,9 % de dispo · p99 lecture < 50 ms · p99 réclamation < 100 ms |
@@ -262,6 +262,7 @@ service WalletService {
   rpc ListCatalog       (ListCatalogRequest)       returns (ListCatalogResponse);       // edge : tout membre
   rpc PurchaseItem      (PurchaseItemRequest)      returns (PurchaseItemResponse);      // edge : le compte de l'appelant
   rpc ListOwnedItems    (ListOwnedItemsRequest)    returns (ListOwnedItemsResponse);    // edge : le compte de l'appelant
+  rpc AwardBadge        (AwardBadgeRequest)        returns (AwardBadgeResponse);        // mesh seulement (#912) : geo-discovery
 }
 ```
 
@@ -294,6 +295,13 @@ cadeau en points (`WELCOME_GIFT`), **une fois par appareil, quel que soit le com
 - **Plafond :** le crédit est borné sous `points_cap`.
 - **Effacement :** effacer le compte détache l'appareil mais le garde comme déjà accueilli.
 - **Réglage :** `WALLET_WELCOME_GIFT`.
+
+**Badges (#912).** Gagnés, jamais vendus : la famille `badge` (`badge.<nom>`) est refusée dans
+`WALLET_CATALOG` et absente de `ListCatalog`. Le service dont la règle en fait gagner un appelle
+`AwardBadge`, réservé au mesh (appelants : geo-discovery, pour les badges de continent) : le compte le
+possède alors (`owned_items`, listé par `ListOwnedItems` avec la famille `BADGE`), et `badge_awarded`
+part par l'outbox dans la même transaction, une seule fois — un appel ultérieur répond l'heure de la
+première attribution.
 
 **Conviction (#888, charte §6–§9).** `StakeRequest.conviction` (C1–C4 ; `UNSPECIFIED` = un stake rapide)
 dit à quel point le curateur est sûr que la cible finira la journée dans le top : une prédiction
@@ -356,6 +364,7 @@ l'infra ne fournit pas les jetons (core-platform-infra#62).
 | `auth.v1.events` | consommé (`wallet-auth-events`, `run_consumer`) | `guest_upgraded` | le cadeau de bienvenue, une fois par appareil (#827) ; les autres événements sont ignorés ; un événement mal formé part en DLQ |
 | `account.v1.events` | consommé (`wallet-account-events`, `run_consumer`) | `account_deleted` | le portefeuille, son historique et ses mises sont effacés (RGPD art. 17) ; les autres événements sont ignorés ; un identifiant invalide part en DLQ |
 | `wallet.v1.events` | publié (clé : `<target_kind>:<target_id>`) | `stake_committed` | `{account_id, profile_id, target_kind, target_id, author_profile_id, points, total, first, stake_key, staked_at}` — des likes posés ; via l'outbox, au moins une fois (dédoublonnage sur `stake_key`). Pas encore de consommateur : les compteurs de likes y passent dans les parties suivantes |
+| `wallet.v1.events` | publié (clé : le compte) | `badge_awarded` | `{account_id, badge_id, profile_ids, awarded_at}` — un badge obtenu (#912), une fois, via l'outbox ; notification prévient chaque profil |
 
 ---
 

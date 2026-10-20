@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 47c83e18a42aee7db99b5da8eb2238425c0003172bbb85d7f93c6bf9f576508e
-  translated_at: 2026-10-10
+  source_sha256: ca1db23a0adcc7fb2299ac9c5fca656c2113d7c2b80c05075d1be19957e154f7
+  translated_at: 2026-10-20
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -228,7 +228,7 @@ identifiers — via le crate partagé `error`.
 
 | Topic | Consumer group | Purpose | On poison/exhaustion |
 |---|---|---|---|
-| `wallet.v1.events` | `notification-stake-consumer` | notifications de like (#665 : un like est un point) : le **premier** lot de likes d'une personne sur un post ou un commentaire (`stake_committed` avec `first`), l'auteur tiré de l'événement ; les lots suivants et les autres événements du wallet sont ignorés (regroupées) | DLQ `{topic}.dlq` |
+| `wallet.v1.events` | `notification-stake-consumer` | notifications de like (#665 : un like est un point) : le **premier** lot de likes d'une personne sur un post ou un commentaire (`stake_committed` avec `first`), l'auteur tiré de l'événement ; les lots suivants et les autres événements du wallet sont ignorés (regroupées). `badge_awarded` (#912) → `BADGE_AWARDED` de la plateforme à chacun des `profile_ids` de l'événement, sujet = le compte (`SUBJECT_KIND_ACCOUNT` : l'app trouve le badge le plus récent dans les articles possédés du wallet) ; fil seulement, une par (badge, profil) | DLQ `{topic}.dlq` |
 | `social-graph.followed` + `social-graph.follow_requested` | `notification-follow-consumer` | follows → `FOLLOW` to the followee; a request to a private profile → `FOLLOW_REQUEST` to its owner (the app opens the requests inbox); an approved request (`via_request`) → `FOLLOW_ACCEPTED` to the requester, not the owner again (#755). A withdrawn request (`withdrawn_at`: cancelled, declined, cut by a block) **retracts** the owner's `FOLLOW_REQUEST`: deleted, and taken off the badge when still unread and newer than a mark-all-read (a replay does nothing). Subject: the other profile (`SUBJECT_KIND_PROFILE`). Block-gated, self-guarded, one notification per event (deterministic id) | DLQ `{topic}.dlq` |
 | `moderation.v1.events` (`appeal_resolved` only) | `notification-appeal-consumer` | an appeal's outcome → `APPEAL_UPHELD` / `APPEAL_OVERTURNED` to **every profile** moderation names (`profile_ids`: the appellant account's profiles, #744). Subject: the appeal (`SUBJECT_KIND_APPEAL`, the app opens it via `ListMyAppeals`). A platform notice: no sender (nil `sender_profile_id`, `sender_count` 0), not block-gated; one notification per (appeal, profile) (deterministic id). Other moderation events are ignored | DLQ `{topic}.dlq` |
 | `account.v1.events` (`supervision_started` / `supervision_ended` seulement) | `notification-supervision-consumer` | supervision familiale (#670) → `SUPERVISION_STARTED` aux deux côtés ; `SUPERVISION_ENDED` à l'autre côté quand l'un y met fin (aux deux quand un compte est effacé) ; `SUPERVISION_CAME_OF_AGE` aux deux à 18 ans. À chaque profil que account nomme sur l'événement ; expéditeur = le premier profil de l'autre côté (sinon la plateforme), sujet = le compte de l'autre côté (`SUBJECT_KIND_ACCOUNT` : l'app ouvre Réglages → Supervision). Sans filtre de blocage (un ado est toujours prévenu) ; fil seulement (pas de catégorie push) ; une notification par (événement, profil) (id déterministe). Les autres événements de compte sont ignorés | DLQ `{topic}.dlq` |

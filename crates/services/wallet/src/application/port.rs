@@ -212,8 +212,19 @@ pub trait WalletStore: Send + Sync + 'static {
         now: DateTime<Utc>,
     ) -> Result<(PurchaseOutcome, Wallet), WalletError>;
 
-    /// The items `account` bought, oldest first.
+    /// The items `account` bought or earned, oldest first.
     async fn owned_items(&self, account: &AccountId) -> Result<Vec<OwnedItem>, WalletError>;
+
+    /// Awards `badge_id` to `account` (#912), once: a new award records the
+    /// owned item with its `badge_awarded` outbox event (returned, for the
+    /// caller to publish) in one transaction; an earlier one answers its time.
+    async fn award_badge(
+        &self,
+        account: &AccountId,
+        badge_id: &str,
+        profile_ids: &[String],
+        now: DateTime<Utc>,
+    ) -> Result<(DateTime<Utc>, Option<OutboxEvent>), WalletError>;
 
     /// Spends gems (the wallet opened if needed, then locked): a key already
     /// used answers `Spent`; otherwise charged with its ledger row when the

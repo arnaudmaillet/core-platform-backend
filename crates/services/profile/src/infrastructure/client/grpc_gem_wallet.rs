@@ -74,4 +74,24 @@ impl GemWallet for GrpcGemWallet {
         Ok(owned.items.iter().any(|item| item.item_id == item_id))
     }
 
+
+    async fn badges(&self, account: &AccountId) -> Result<Vec<(String, chrono::DateTime<chrono::Utc>)>, ProfileError> {
+        let owned = self
+            .wallet
+            .clone()
+            .list_owned_items(wallet_api::ListOwnedItemsRequest { account_id: account.as_uuid().to_string() })
+            .await
+            .map_err(|status| ProfileError::WalletUnavailable { reason: status.to_string() })?
+            .into_inner();
+        Ok(owned
+            .items
+            .into_iter()
+            .filter(|item| item.family == wallet_api::ItemFamily::Badge as i32)
+            .filter_map(|item| {
+                let at = item.acquired_at?;
+                Some((item.item_id, chrono::DateTime::from_timestamp(at.seconds, u32::try_from(at.nanos).unwrap_or(0))?))
+            })
+            .collect())
+    }
+
 }

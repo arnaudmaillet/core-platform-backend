@@ -558,6 +558,28 @@ impl Wallets {
         Ok(owned)
     }
 
+    /// Awards `badge_id` to `account` (#912; mesh: the service whose rule it
+    /// is), once, announcing it to `profile_ids` (notification). Returns
+    /// whether this call awarded it, and when it was.
+    pub async fn award_badge(
+        &self,
+        account: &str,
+        badge_id: &str,
+        profile_ids: &[String],
+        now: DateTime<Utc>,
+    ) -> Result<(bool, DateTime<Utc>), WalletError> {
+        let account = AccountId::parse(account)?;
+        if ItemFamily::of(badge_id) != Some(ItemFamily::Badge) {
+            return Err(WalletError::InvalidSpend { reason: format!("'{badge_id}' is not a badge") });
+        }
+        let now = ledger_time(now);
+        let (awarded_at, outbox) = self.store.award_badge(&account, badge_id, profile_ids, now).await?;
+        if let Some(event) = &outbox {
+            self.publish(event, now).await;
+        }
+        Ok((outbox.is_some(), awarded_at))
+    }
+
     /// The items the account bought, oldest first (its GDPR export, #892);
     /// one of a family this version does not know is left out.
     pub async fn bought_items(&self, account: &str) -> Result<Vec<OwnedItemView>, WalletError> {
@@ -838,6 +860,32 @@ pub(crate) mod fakes {
                 PurchaseDecision::InsufficientGems => PurchaseOutcome::InsufficientGems,
             };
             Ok((outcome, wallet))
+        }
+
+        async fn award_badge(
+            &self,
+            account: &AccountId,
+            badge_id: &str,
+            profile_ids: &[String],
+            now: DateTime<Utc>,
+        ) -> Result<(DateTime<Utc>, Option<OutboxEvent>), WalletError> {
+            let mut owned = self.owned.lock().unwrap();
+            if let Some((_, o)) = owned.iter().find(|(a, o)| a == account && o.item_id == badge_id) {
+                return Ok((o.acquired_at, None));
+            }
+            owned.push((*account, OwnedItem { item_id: badge_id.to_owned(), acquired_at: now }));
+            let event = OutboxEvent {
+                id:      Uuid::now_v7(),
+                account: *account,
+                event:   crate::domain::event::WalletEvent::BadgeAwarded(crate::domain::event::BadgeAwarded {
+                    account_id:  account.to_string(),
+                    badge_id:    badge_id.to_owned(),
+                    profile_ids: profile_ids.to_vec(),
+                    awarded_at:  now,
+                }),
+            };
+            self.outbox.lock().unwrap().push((event.clone(), false));
+            Ok((now, Some(event)))
         }
 
         async fn owned_items(&self, account: &AccountId) -> Result<Vec<OwnedItem>, WalletError> {
@@ -1455,6 +1503,26 @@ mod tests {
         assert_eq!(w.bought_items(&account).await.unwrap(), [], "erased with the account");
     }
 
+    /// #912: a badge is awarded once, announced once, owned by the account,
+    /// and never sold.
+    #[tokio::test]
+    async fn a_badge_is_awarded_once_and_announced() {
+        let store = Arc::new(MemoryStore::default());
+        let w = Wallets::new(Arc::clone(&store) as _, WalletConfig::default());
+        let account = Uuid::now_v7().to_string();
+        let pids = vec!["prof-1".to_owned()];
+        let (first, awarded) = w.award_badge(&account, "badge.continent_eu", &pids, at(8, 10)).await.unwrap();
+        let (again, awarded_again) = w.award_badge(&account, "badge.continent_eu", &pids, at(9, 10)).await.unwrap();
+        assert!(first && !again, "awarded once");
+        assert_eq!(awarded, awarded_again, "the first award's time");
+        assert_eq!(store.outbox.lock().unwrap().len(), 1, "announced once");
+        let owned = w.owned_items(&account).await.unwrap();
+        assert!(owned.iter().any(|o| o.item_id == "badge.continent_eu" && o.family == ItemFamily::Badge));
+        assert!(w.award_badge(&account, "theme.red", &pids, at(8, 10)).await.is_err(), "only badges");
+        let bought = w.purchase_item(&account, &key(), "badge.continent_eu", 0, false, at(8, 10)).await.unwrap();
+        assert_eq!(bought.outcome, crate::application::port::PurchaseOutcome::UnknownItem, "never sold");
+    }
+
     #[tokio::test]
     async fn without_gems_nothing_is_bought() {
         use crate::application::port::PurchaseOutcome as P;
@@ -1755,11 +1823,11 @@ mod tests {
         assert_eq!((replay.spent, replay.my_total, replay.view.wallet.points), (30, 30, 170));
         let events = l.publisher.events.lock().unwrap().clone();
         assert_eq!(events.len(), 1);
-        let WalletEvent::StakeCommitted(e) = &events[0];
+        let WalletEvent::StakeCommitted(e) = &events[0] else { panic!("a stake") };
         assert_eq!((e.points, e.total, e.first, e.author_profile_id.as_str()), (30, 30, true, "author"));
         let second = l.wallets.stake(&me, batch("post-1", StakeAsk::Points(5), &key(), now), &[], now).await.unwrap();
         assert_eq!(second.my_total, 35);
-        let WalletEvent::StakeCommitted(e) = l.publisher.events.lock().unwrap()[1].clone();
+        let WalletEvent::StakeCommitted(e) = l.publisher.events.lock().unwrap()[1].clone() else { panic!("a stake") };
         assert!(!e.first, "only the first batch notifies");
     }
 

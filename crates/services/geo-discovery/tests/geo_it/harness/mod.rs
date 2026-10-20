@@ -81,6 +81,10 @@ impl GemWallet for ScriptedWallet {
         spent.push((account, key.to_owned(), amount));
         Ok(GemSpend { spent: true, gems: *balance })
     }
+
+    async fn award_badge(&self, _: Uuid, _: &str, _: &[String]) -> Result<bool, GeoDiscoveryError> {
+        Ok(true)
+    }
 }
 
 /// Accounts' countries of residence (#665).

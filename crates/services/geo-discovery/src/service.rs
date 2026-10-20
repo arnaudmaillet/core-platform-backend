@@ -52,6 +52,8 @@ impl Service for GeoDiscoveryService {
         authenticated("/geo_discovery.v1.GeoDiscoveryService/UnlockCountry"),
         // A 24 h visa (#910): the caller's account.
         authenticated("/geo_discovery.v1.GeoDiscoveryService/BuyCountryVisa"),
+        // The continent table (#912): the same for every reader.
+        public_read("/geo_discovery.v1.GeoDiscoveryService/ListContinents"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

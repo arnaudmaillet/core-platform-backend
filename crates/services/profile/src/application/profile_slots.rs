@@ -235,6 +235,10 @@ pub(crate) mod fakes {
         async fn owns(&self, _: &AccountId, item_id: &str) -> Result<bool, ProfileError> {
             Ok(item_id == "frame.gold")
         }
+
+        async fn badges(&self, _: &AccountId) -> Result<Vec<(String, chrono::DateTime<chrono::Utc>)>, ProfileError> {
+            Ok(vec![])
+        }
     }
 }
 

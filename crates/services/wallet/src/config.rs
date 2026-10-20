@@ -149,7 +149,7 @@ fn catalog(value: &str) -> Option<Catalog> {
         .map(|item| {
             let (id, price) = item.split_once(':')?;
             let id = id.trim();
-            let family = ItemFamily::of(id)?;
+            let family = ItemFamily::of(id).filter(|f| f.sold())?;
             let price_gems = price.trim().parse::<i64>().ok().filter(|p| *p >= 0)?;
             Some(CatalogItem { id: id.to_owned(), family, price_gems })
         })
@@ -204,7 +204,7 @@ mod tests {
             ("theme.pink", ItemFamily::Theme, 0),
             ("icon.night", ItemFamily::AppIcon, 40)
         ]);
-        for bad in ["", "theme.red:5,theme.red:6", "medal.gold:10", "theme.red:-1", "theme.red"] {
+        for bad in ["", "theme.red:5,theme.red:6", "medal.gold:10", "badge.continent_eu:0", "theme.red:-1", "theme.red"] {
             assert_eq!(catalog(bad), Catalog::default(), "{bad:?} keeps the default");
         }
     }

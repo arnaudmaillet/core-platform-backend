@@ -231,6 +231,12 @@ off. It is stored on the profile and on the account's profile list (migration 00
 carries `avatar_frame_id` (`ProfileView`, `ProfileSummaryView`, search's profile hits). The app draws
 it from bundled art keyed by id, and it changes no size, order or ranking (charter V5.3 §35).
 
+**Badge showcases (#912).** A profile shows up to three badges its **account** earned (wallet badges, e.g.
+`badge.continent_eu`), in order: `SetBadgeShowcase(badge_ids)` (the owner) checks each against the
+wallet's `ListOwnedItems` (family `BADGE`; **`PRF-6007`** for one not earned, `PRF-9001` for more than
+three or a repeat) and keeps when it was earned. Stored as JSON (`profiles.badge_showcase`, migration
+0021); every read carries `ProfileView.badges` (`badge_id`, `awarded_at`). An empty list clears it.
+
 **Animated banners (#915, #947).** `UpdateBanner` with `banner_asset_id` alone (no `banner_url`) names a
 **video of the account's own** (one of its posts' videos): media's `GetAsset` must say it is a READY
 `VIDEO` owned by the account (**`PRF-5007`**, `FAILED_PRECONDITION`, otherwise), and the account must own
@@ -381,7 +387,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 🚀 Deployment, Migrations & Rollback
 
-- **Migrations:** `crates/services/profile/migrations/00{01..20}_*.cql` against the `profile` keyspace,
+- **Migrations:** `crates/services/profile/migrations/00{01..21}_*.cql` against the `profile` keyspace,
   applied **before** first start.
 - **Cache version bump:** to invalidate cache fleet-wide during a schema change, bump the `v1:` key
   prefix — no flush, no downtime.

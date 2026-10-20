@@ -8,7 +8,7 @@
 > | **Tier** | TIER-0 (fail-closed) |
 > | **Deployable** | `crates/apps/wallet-server` (library crate: `crates/services/wallet`) |
 > | **Datastores** | Postgres (own CNPG cluster, tables `wallets`, `wallet_transactions`) |
-> | **Async** | consumes `account.v1.events` (group `wallet-account-events`) and `auth.v1.events` (group `wallet-auth-events`: the welcome gift) · publishes `wallet.v1.events` (likes staked) |
+> | **Async** | consumes `account.v1.events` (group `wallet-account-events`) and `auth.v1.events` (group `wallet-auth-events`: the welcome gift) · publishes `wallet.v1.events` (likes staked, badges awarded) |
 > | **Upstream callers** | the app (client edge `:9443`) · geo-discovery (mesh `SpendGems`, country unlocks) · account (mesh `ExportWallet` / `ListStakePositions` / `ListWalletTransactions`, the GDPR export) |
 > | **Downstream deps** | Postgres, Kafka, post and comment (mesh: what likes land on), social-graph (mesh: may the reader see it), engagement (mesh: `GetLikePositions`, stake settlement) |
 > | **SLO** | 99.9% avail · p99 read < 50 ms · p99 claim < 100 ms |
@@ -237,6 +237,7 @@ service WalletService {
   rpc ListCatalog       (ListCatalogRequest)       returns (ListCatalogResponse);       // edge: any member
   rpc PurchaseItem      (PurchaseItemRequest)      returns (PurchaseItemResponse);      // edge: the caller's account
   rpc ListOwnedItems    (ListOwnedItemsRequest)    returns (ListOwnedItemsResponse);    // edge: the caller's account
+  rpc AwardBadge        (AwardBadgeRequest)        returns (AwardBadgeResponse);        // mesh only (#912): geo-discovery
 }
 ```
 
@@ -266,6 +267,12 @@ in**:
 - **Cap:** the credit is clamped under `points_cap`.
 - **Erasure:** erasing the account unlinks the device but keeps it welcomed.
 - **Knob:** `WALLET_WELCOME_GIFT`.
+
+**Badges (#912).** Earned, never sold: family `badge` (`badge.<name>`) is refused in `WALLET_CATALOG`
+and absent from `ListCatalog`. The service whose rule earns one calls the mesh-only `AwardBadge`
+(callers: geo-discovery, for continent badges): the account then owns it (`owned_items`, listed by
+`ListOwnedItems` with family `BADGE`), and `badge_awarded` goes out through the outbox in the same
+transaction, once — a later call answers the first award's time.
 
 **Conviction (#888, charter §6–§9).** `StakeRequest.conviction` (C1–C4; `UNSPECIFIED` = a quick stake)
 is how sure the curator is that the target ends the day in the top: a prediction recorded and
@@ -323,6 +330,7 @@ ServiceAccount token, `x-mesh-token`. `off` until the infra provides the tokens 
 | `auth.v1.events` | consumed (`wallet-auth-events`, `run_consumer`) | `guest_upgraded` | the welcome gift, once per device (#827); other events skipped; a malformed one is dead-lettered |
 | `account.v1.events` | consumed (`wallet-account-events`, `run_consumer`) | `account_deleted` | the wallet, its history and its stakes are erased (GDPR Art. 17); other events skipped; a bad id is dead-lettered |
 | `wallet.v1.events` | published (key: `<target_kind>:<target_id>`) | `stake_committed` | `{account_id, profile_id, target_kind, target_id, author_profile_id, points, total, first, stake_key, staked_at}` — likes landed; through the outbox, at least once (dedup on `stake_key`). No consumer yet: the like counts move to it in the next parts |
+| `wallet.v1.events` | published (key: the account) | `badge_awarded` | `{account_id, badge_id, profile_ids, awarded_at}` — a badge earned (#912), once, through the outbox; notification tells each profile |
 
 ---
 

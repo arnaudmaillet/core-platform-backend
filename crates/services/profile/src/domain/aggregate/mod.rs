@@ -1,3 +1,3 @@
 pub mod profile;
 
-pub use profile::{is_frame_id, Profile, ProfileCreateParams};
+pub use profile::{is_frame_id, Profile, ProfileCreateParams, ShowcasedBadge, BADGE_SHOWCASE_SLOTS};

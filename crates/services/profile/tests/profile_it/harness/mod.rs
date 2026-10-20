@@ -191,6 +191,22 @@ impl profile::application::port::GemWallet for FakeGemWallet {
         let granted = self.granted.lock().unwrap().iter().any(|(a, i)| *a == account.to_string() && i == item_id);
         Ok(item_id == "frame.gold" || granted)
     }
+
+    /// The badges granted (#912), awarded at the epoch + 1 day.
+    async fn badges(
+        &self,
+        account: &profile::domain::value_object::AccountId,
+    ) -> Result<Vec<(String, chrono::DateTime<chrono::Utc>)>, profile::error::ProfileError> {
+        let at = chrono::DateTime::from_timestamp(86_400, 0).unwrap();
+        Ok(self
+            .granted
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(a, i)| *a == account.to_string() && i.starts_with("badge."))
+            .map(|(_, i)| (i.clone(), at))
+            .collect())
+    }
 }
 
 impl TestHarness {

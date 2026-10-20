@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::application::country_standings::CountryStandings;
 use crate::application::port::{AccountCountries, CountrySpend, CountryUnlockStore, GemWallet, ResidenceDirectory, VisaPurchase};
+use crate::domain::continents::Continents;
 use crate::domain::country_atlas::CountryAtlas;
 use crate::domain::value_object::CountryCode;
 use crate::error::GeoDiscoveryError;
@@ -71,6 +72,8 @@ pub struct VisaReply {
 pub struct Spender {
     pub adult: bool,
     pub token: Option<String>,
+    /// The caller's profiles (the token's `pids`): told of a badge (#912).
+    pub profile_ids: Vec<String>,
 }
 
 /// An unlock's answer.
@@ -106,11 +109,30 @@ impl CountryUnlocking {
         Ok(countries)
     }
 
-    /// The member's countries and gems (the shop's one read).
-    pub async fn view(&self, account: Uuid) -> Result<(AccountCountries, i64), GeoDiscoveryError> {
+    /// The member's countries and gems (the shop's one read). Also awards
+    /// any continent badge earned and not yet recorded (#912: an award that
+    /// failed at the unlock heals here).
+    pub async fn view(&self, account: Uuid, profile_ids: &[String]) -> Result<(AccountCountries, i64), GeoDiscoveryError> {
         let countries = self.countries(account).await?;
+        self.award_continents(account, &countries, profile_ids).await;
         let gems = self.wallet.gems(account).await?;
         Ok((countries, gems))
+    }
+
+    /// Awards the badge of every continent whose countries the member all
+    /// holds — home and permanent unlocks; a visa never counts (#912).
+    /// Best effort: a failure is logged, the next unlock or shop read retries
+    /// (the wallet awards once).
+    pub async fn award_continents(&self, account: Uuid, countries: &AccountCountries, profile_ids: &[String]) {
+        let held = countries.all();
+        for continent in Continents::embedded().completed(&held) {
+            let badge = Continents::badge_id(continent);
+            match self.wallet.award_badge(account, &badge, profile_ids).await {
+                Ok(true) => tracing::info!(%account, badge, "continent badge awarded"),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(%account, badge, %error, "continent badge not awarded; retried on the next read"),
+            }
+        }
     }
 
     /// Unlocks `country` at `expected_price` for `spender` — who may spend
@@ -159,6 +181,7 @@ impl CountryUnlocking {
         }
         self.store.add(account, country, price, now).await?;
         countries.unlocked.push(country);
+        self.award_continents(account, &countries, &spender.profile_ids).await;
         // Unlocked for good: a running visa to it ends (the store dropped it).
         countries.visas.retain(|(c, _)| *c != country);
         Ok(UnlockReply { outcome: UnlockOutcome::Unlocked, countries, gems: spend.gems, price })
@@ -334,6 +357,8 @@ pub(crate) mod fakes {
     pub struct MemWallet {
         pub gems:  Mutex<HashMap<Uuid, i64>>,
         pub spent: Mutex<Vec<(Uuid, String, i64)>>,
+        /// (account, badge) awarded (#912).
+        pub badges: Mutex<Vec<(Uuid, String)>>,
     }
 
     #[async_trait]
@@ -363,6 +388,14 @@ pub(crate) mod fakes {
             spent.push((account, key.to_owned(), amount));
             Ok(GemSpend { spent: true, gems: *balance })
         }
+        async fn award_badge(&self, account: Uuid, badge_id: &str, _: &[String]) -> Result<bool, GeoDiscoveryError> {
+            let mut badges = self.badges.lock().unwrap();
+            if badges.iter().any(|(a, b)| *a == account && b == badge_id) {
+                return Ok(false);
+            }
+            badges.push((account, badge_id.to_owned()));
+            Ok(true)
+        }
     }
 
     /// Residences by account.
@@ -385,7 +418,7 @@ mod tests {
     use super::*;
 
     fn adult() -> Spender {
-        Spender { adult: true, token: Some("edge-token".into()) }
+        Spender { adult: true, token: Some("edge-token".into()), profile_ids: vec![] }
     }
     use crate::application::country_standings::tests::MemActivity;
     use crate::application::port::CountryActivityStore;
@@ -569,6 +602,34 @@ mod tests {
             Err(GeoDiscoveryError::InvalidIdempotencyKey)
         ));
         assert!(w.unlocking.buy_visa(me, "ZZ", 3, "visa-key-1", &adult(), Utc::now()).await.is_err());
+    }
+
+    /// #912: holding every country of a continent awards its badge, once;
+    /// a visa does not count.
+    #[tokio::test]
+    async fn completing_a_continent_awards_its_badge_once() {
+        let w = world();
+        let me = Uuid::now_v7();
+        w.wallet.gems.lock().unwrap().insert(me, 1_000);
+        let now = Utc::now();
+        // At the price the ladder answers (a quiet ladder ranks by code).
+        let unlock = |code: &'static str| {
+            let w = &w;
+            async move {
+                let quote = w.unlocking.unlock(me, code, 0, &adult(), now).await.unwrap();
+                let done = w.unlocking.unlock(me, code, quote.price, &adult(), now).await.unwrap();
+                assert_eq!(done.outcome, UnlockOutcome::Unlocked, "{code}");
+            }
+        };
+        unlock("AQ").await;
+        unlock("HM").await;
+        let visa = w.unlocking.visa_price(cc("TF"), now).await.unwrap();
+        w.unlocking.buy_visa(me, "TF", visa, "visa-key-tf", &adult(), now).await.unwrap();
+        w.unlocking.view(me, &[]).await.unwrap();
+        assert!(w.wallet.badges.lock().unwrap().is_empty(), "a visa does not complete a continent");
+        unlock("TF").await;
+        w.unlocking.view(me, &[]).await.unwrap();
+        assert_eq!(*w.wallet.badges.lock().unwrap(), vec![(me, "badge.continent_an".to_owned())], "awarded once");
     }
 
     #[tokio::test]

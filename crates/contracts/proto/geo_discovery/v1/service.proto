@@ -65,4 +65,11 @@ service GeoDiscoveryService {
     // GEO-3001 (PERMISSION_DENIED) under 18 or with an unknown age. Edge: the
     // caller's account.
     rpc BuyCountryVisa (BuyCountryVisaRequest) returns (BuyCountryVisaResponse);
+
+    // The continents (#912): each one's countries and badge. A member who
+    // holds every country of a continent for good — home and permanent
+    // unlocks, never a 24 h visa — earns its badge (`badge.continent_<code>`,
+    // wallet AwardBadge), told by a notification; the app draws progress
+    // ("Europe 31 / 44") from this same table. The same for every reader.
+    rpc ListContinents (ListContinentsRequest) returns (ListContinentsResponse);
 }

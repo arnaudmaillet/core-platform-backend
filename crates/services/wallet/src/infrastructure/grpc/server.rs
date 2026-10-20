@@ -62,6 +62,13 @@ impl WalletService for WalletServiceHandler {
         self.purchase_item(request).await
     }
 
+    async fn award_badge(
+        &self,
+        request: Request<proto::AwardBadgeRequest>,
+    ) -> Result<Response<proto::AwardBadgeResponse>, Status> {
+        self.award_badge(request).await
+    }
+
     async fn list_owned_items(
         &self,
         request: Request<proto::ListOwnedItemsRequest>,

@@ -85,4 +85,11 @@ service WalletService {
     // is a device setting the server neither stores nor serves. Edge: the
     // caller's account.
     rpc ListOwnedItems(ListOwnedItemsRequest) returns (ListOwnedItemsResponse);
+
+    // Mesh only (#912): awards a badge to an account, once — the service
+    // whose rule earned it (geo-discovery: a continent's countries all
+    // unlocked). The account then owns it (ListOwnedItems, family BADGE) and
+    // `wallet.v1.events` announces `badge_awarded` to `profile_ids`
+    // (notification). Idempotent: a later call answers the first award.
+    rpc AwardBadge(AwardBadgeRequest) returns (AwardBadgeResponse);
 }

@@ -71,6 +71,19 @@ message ProfileView {
     // bundled art keyed by id (an unknown id draws no frame). No effect on
     // any size, order or ranking.
     string                          avatar_frame_id      = 34;
+    // #912: the badges the profile shows, in order (at most three), each a
+    // wallet badge its account earned; everyone sees them. The owner edits
+    // them with SetBadgeShowcase, picking from the account's badges (wallet
+    // ListOwnedItems, family BADGE).
+    repeated ShowcasedBadge         badges               = 35;
+}
+
+// A badge a profile shows (#912).
+message ShowcasedBadge {
+    // `badge.<name>`, e.g. `badge.continent_eu`; the app's art key.
+    string                    badge_id   = 1;
+    // When the account earned it.
+    google.protobuf.Timestamp awarded_at = 2;
 }
 
 // Which of a profile's tabs others see (#829). post serves the Reposts and
@@ -185,6 +198,13 @@ message EquipAvatarFrameRequest {
     // A `frame.<name>` item the profile's account owns (wallet
     // ListOwnedItems); empty: wear none.
     string frame_id   = 2;
+}
+
+message SetBadgeShowcaseRequest {
+    string          profile_id = 1;
+    // In order, at most three, distinct, each a badge the profile's account
+    // earned; empty: show none.
+    repeated string badge_ids  = 2;
 }
 
 message SetVisibilityRequest {

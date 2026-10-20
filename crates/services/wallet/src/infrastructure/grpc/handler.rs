@@ -37,6 +37,9 @@ pub struct WalletServiceHandler {
 /// and profile (profile slots, #916; paid handle changes, #911).
 const SPEND_GEMS_CALLERS: &[&str] = &["geo-discovery-server", "profile-server"];
 
+/// `AwardBadge`'s callers (#912): the services whose rules earn badges.
+const AWARD_CALLERS: &[&str] = &["geo-discovery-server"];
+
 /// The wallet's export reads' only intended caller: account (the GDPR export).
 const EXPORT_CALLERS: &[&str] = &["account-server"];
 
@@ -203,6 +206,21 @@ impl WalletServiceHandler {
         }))
     }
 
+    /// Mesh only (#912): awards a badge, once.
+    pub async fn award_badge(
+        &self,
+        request: Request<proto::AwardBadgeRequest>,
+    ) -> Result<Response<proto::AwardBadgeResponse>, Status> {
+        self.mesh.require(&request, "AwardBadge", AWARD_CALLERS).await?;
+        let req = request.into_inner();
+        let (newly_awarded, awarded_at) = self
+            .wallets
+            .award_badge(&req.account_id, &req.badge_id, &req.profile_ids, Utc::now())
+            .await
+            .map_err(to_status)?;
+        Ok(Response::new(proto::AwardBadgeResponse { newly_awarded, awarded_at: Some(timestamp(awarded_at)) }))
+    }
+
     /// The gem catalogue (#892). Edge: any member.
     pub async fn list_catalog(
         &self,
@@ -367,6 +385,7 @@ fn family_to_proto(family: ItemFamily) -> proto::ItemFamily {
         ItemFamily::AvatarFrame => proto::ItemFamily::AvatarFrame,
         ItemFamily::AnimatedBanner => proto::ItemFamily::AnimatedBanner,
         ItemFamily::CardStyle => proto::ItemFamily::CardStyle,
+        ItemFamily::Badge => proto::ItemFamily::Badge,
     }
 }
 
