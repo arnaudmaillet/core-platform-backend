@@ -113,7 +113,7 @@ async fn a_place_page_keeps_one_kind_and_the_unknown() {
 
     let h = TestHarness::start().await;
     let (lat, lng) = own_spot();
-    let media = h.index_post_of_kind(lat, lng, PostFormat::Media).await;
+    let media = h.index_post_of_kind(lat, lng, PostFormat::Video).await;
     let text = h.index_post_of_kind(lat, lng, PostFormat::TextOnly).await;
     let legacy = h.index_post_of_kind(lat, lng, PostFormat::Unknown).await;
     let place = Place::around(lat, lng, H3Resolution::R9).unwrap();
@@ -127,5 +127,5 @@ async fn a_place_page_keeps_one_kind_and_the_unknown() {
     assert_eq!(sorted(h.place_posts_of_kind(place, PostKindFilter::TextOnly).await), sorted(vec![text, legacy]));
 
     let (stored, _, _) = h.tiles.get_card_with_visibility(&media.into()).await.unwrap().unwrap();
-    assert_eq!(stored.unwrap().format, PostFormat::Media, "kept on the durable card");
+    assert_eq!(stored.unwrap().format, PostFormat::Video, "kept on the durable card");
 }

@@ -7,8 +7,9 @@ pub enum PostFormat {
     /// Not recorded (a card indexed before it was kept).
     #[default]
     Unknown,
-    /// Photo, carousel or video.
-    Media,
+    /// Photos (a carousel).
+    Photo,
+    Video,
     TextOnly,
 }
 
@@ -17,7 +18,8 @@ impl PostFormat {
     pub fn from_event_kind(kind: &str) -> Self {
         match kind {
             "TextOnly" => Self::TextOnly,
-            "Carousel" | "MainVideo" => Self::Media,
+            "Carousel" => Self::Photo,
+            "MainVideo" => Self::Video,
             _ => Self::Unknown,
         }
     }
@@ -26,14 +28,16 @@ impl PostFormat {
     pub fn code(self) -> Option<&'static str> {
         match self {
             Self::Unknown => None,
-            Self::Media => Some("media"),
+            Self::Photo => Some("photo"),
+            Self::Video => Some("video"),
             Self::TextOnly => Some("text_only"),
         }
     }
 
     pub fn from_code(code: Option<&str>) -> Self {
         match code {
-            Some("media") => Self::Media,
+            Some("photo") => Self::Photo,
+            Some("video") => Self::Video,
             Some("text_only") => Self::TextOnly,
             _ => Self::Unknown,
         }
@@ -56,7 +60,7 @@ impl PostKindFilter {
             (self, format),
             (Self::Any, _)
                 | (_, PostFormat::Unknown)
-                | (Self::Media, PostFormat::Media)
+                | (Self::Media, PostFormat::Photo | PostFormat::Video)
                 | (Self::TextOnly, PostFormat::TextOnly)
         )
     }
@@ -69,13 +73,14 @@ mod tests {
     #[test]
     fn a_published_kind_maps_to_its_format_and_back() {
         assert_eq!(PostFormat::from_event_kind("TextOnly"), PostFormat::TextOnly);
-        assert_eq!(PostFormat::from_event_kind("Carousel"), PostFormat::Media);
-        assert_eq!(PostFormat::from_event_kind("MainVideo"), PostFormat::Media);
+        assert_eq!(PostFormat::from_event_kind("Carousel"), PostFormat::Photo);
+        assert_eq!(PostFormat::from_event_kind("MainVideo"), PostFormat::Video);
         assert_eq!(PostFormat::from_event_kind("text"), PostFormat::Unknown);
-        for format in [PostFormat::Unknown, PostFormat::Media, PostFormat::TextOnly] {
+        for format in [PostFormat::Unknown, PostFormat::Photo, PostFormat::Video, PostFormat::TextOnly] {
             assert_eq!(PostFormat::from_code(format.code()), format);
         }
         assert!(PostKindFilter::Media.keeps(PostFormat::Unknown));
+        assert!(PostKindFilter::Media.keeps(PostFormat::Video));
         assert!(!PostKindFilter::Media.keeps(PostFormat::TextOnly));
         assert!(PostKindFilter::TextOnly.keeps(PostFormat::TextOnly));
     }
