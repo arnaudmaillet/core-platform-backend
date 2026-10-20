@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: a070f34e0e7c2ba471a9b06e4fe4a1f3cd039df07f5410ff019a699d6fe37741
+  source_sha256: e6e36790c16ee20fbe239380e3abadb4ae87366c828f24926705e3aa7da65f4c
   translated_at: 2026-10-20
   status: complete
 ---
@@ -227,7 +227,14 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > ont la leur aussi : c'est de la publicité, donc elle ne porte aucun auteur.
 > - **Champs.** `kind` vaut `MEDIA_IMAGE`, `MEDIA_VIDEO` ou `TEXT`. `poster_url` porte la photo ou
 >   l'affiche de la vidéo. Une couverture texte porte sa `caption`, coupée à 200 caractères.
->   `preview_url` reste vide tant que media ne produit pas de courte boucle d'aperçu.
+> - **Boucles d'aperçu (#963).** Le `preview_url` d'une couverture vidéo est la rendition `PREVIEW` de
+>   media : les 3 premières secondes de la vidéo, sans son, un MP4 d'au plus ~300 Ko. geo-discovery la
+>   tire du premier asset média du post (`PostPublished.cover_asset_id`, gardé sur la carte :
+>   `map_post_cards.cover_asset_id`, migration 0013). Il la résout via `BatchResolveDelivery` de media
+>   (`GEO_MEDIA_GRPC_ENDPOINT`), une fois par classement, pour les seules couvertures vidéo retenues. Il
+>   reste vide pour une vidéo livrée SIGNED (ses cookies ne peuvent pas accompagner une couverture), pour
+>   une vidéo antérieure aux aperçus, quand l'adresse n'est pas définie, ou quand media échoue
+>   (`GEO-6003`, fail-open) : le client peint l'affiche.
 > - **Stockage.** Chaque like compté ajoute aussi au score du post dans le jour de son pays
 >   (`sg:geo:{ctop:CC}:YYYYMMDD`, un ZSET des 100 posts les plus aimés du jour, gardé 40 jours). Cette
 >   écriture est au mieux : un échec ne fait que baisser la chance d'un post.
@@ -316,6 +323,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 | GEO-5001/5002 | 500 | msgpack ser / deser failure |
 | GEO-9001..9003 | 422 | malformed UUIDs / domain violation |
 | GEO-6001 | 503 | audience check (social-graph `CheckAccess`) unavailable; client reads fail closed (`UNAVAILABLE`, retryable) |
+| GEO-6003 | 503 | media unavailable for the Shop covers' preview loops (#963); never surfaced: covers keep their poster |
 | GEO-9004/9005 | 422 | code pays ISO invalide / accès par pays sans principal client (mesh) |
 | GEO-9006 | 422 | clé d'achat de visa invalide (#910) |
 
@@ -417,6 +425,7 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_STANDINGS_CACHE_SECS` | Non | `60` | Durée pendant laquelle un classement calculé est servi. |
 | `GEO_COUNTRY_UNLOCKS_ENABLED` | Non | `false` | Le filtre de la carte des membres (#665) : un membre ne voit que son pays d'origine et ses pays débloqués (et la mer). |
 | `GEO_WALLET_GRPC_ENDPOINT` | Non | `http://localhost:50072` | Adresse mesh du wallet : les gems affichés et dépensés par les déblocages de pays. |
+| `GEO_MEDIA_GRPC_ENDPOINT` | Non | non défini | Adresse mesh de media (#963) : les boucles d'aperçu des couvertures du Shop. Non défini : les couvertures ne peignent que leur affiche. |
 | `GEO_ACCOUNT_GRPC_ENDPOINT` | Non | `http://localhost:50059` | Adresse mesh d'account : le pays de résidence d'un membre (pays d'origine). |
 | `GEO_UNLOCK_RPC_TIMEOUT_MS` · `GEO_UNLOCK_CONNECT_TIMEOUT_MS` | Non | `1000` · `500` | Délais de ces deux appels. |
 
@@ -431,7 +440,8 @@ async fn main() -> anyhow::Result<()> {
   `0003_create_map_post_cards_table.cql` → `0004_add_author_tier_column.cql` →
   `0005_add_caption_column.cql` … → `0010_create_posts_by_country.cql` (#833) →
   `0011_country_visas.cql` (#910 : `country_unlocks.visa_until`, `country_visa_purchases`) →
-  `0012_add_card_post_kind.cql` (#949 : `map_post_cards.post_kind`) sur `geo_discovery`,
+  `0012_add_card_post_kind.cql` (#949 : `map_post_cards.post_kind`) →
+  `0013_add_card_cover_asset.cql` (#963 : `map_post_cards.cover_asset_id`) sur `geo_discovery`,
   appliquées **avant** le premier démarrage. Les posts indexés avant `0010` ne sont pas rangés par pays
   (leur page pays ne les liste qu'une fois réannoncés) ; rien n'était en production à sa sortie.
 - **Pièges liés à l'état :** `GEO_DEFAULT_RETENTION_SECS` doit égaler le TTL de la table Scylla ; la clé de

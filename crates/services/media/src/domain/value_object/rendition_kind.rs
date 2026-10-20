@@ -26,6 +26,8 @@ pub enum RenditionKind {
     SheetSmall,
     /// An animated avatar's sprite sheet with 256 px cells (#945).
     SheetLarge,
+    /// A video's short muted preview loop (#963).
+    Preview,
 }
 
 impl RenditionKind {
@@ -40,6 +42,7 @@ impl RenditionKind {
             Self::Poster => "poster",
             Self::SheetSmall => "sheet_small",
             Self::SheetLarge => "sheet_large",
+            Self::Preview => "preview",
         }
     }
 
@@ -75,6 +78,7 @@ impl TryFrom<&str> for RenditionKind {
             "poster" => Ok(Self::Poster),
             "sheet_small" => Ok(Self::SheetSmall),
             "sheet_large" => Ok(Self::SheetLarge),
+            "preview" => Ok(Self::Preview),
             other => Err(MediaError::DomainViolation {
                 field: "rendition_kind".into(),
                 message: format!("unknown rendition kind: '{other}'"),

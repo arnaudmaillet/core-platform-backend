@@ -45,6 +45,9 @@ pub struct CountryCover {
     pub poster_url: String,
     /// A text cover's caption, at most [`COVER_CAPTION_CHARS`].
     pub caption:    String,
+    /// A video cover's preview loop (#963); empty without one (paint the
+    /// poster).
+    pub preview_url: String,
 }
 
 impl CountryCover {
@@ -67,7 +70,7 @@ impl CountryCover {
             }
             _ => return None,
         };
-        Some(Self { post_id: card.post_id, kind, poster_url, caption })
+        Some(Self { post_id: card.post_id, kind, poster_url, caption, preview_url: String::new() })
     }
 }
 
@@ -178,6 +181,7 @@ mod tests {
             lat:               None,
             lng:               None,
             format,
+            cover_asset_id:    None,
         }
     }
 

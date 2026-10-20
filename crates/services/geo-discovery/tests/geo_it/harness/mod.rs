@@ -184,6 +184,7 @@ impl TestHarness {
             )),
             wallet:    Arc::clone(&wallet) as _,
             residence: Arc::clone(&residence) as _,
+            previews:  None,
         };
 
         let app = App::build(GeoDiscoveryConfig::from_env(), backends)
@@ -243,6 +244,7 @@ impl TestHarness {
             retention_secs:    None,
             author_tier:       0,
             format,
+            cover_asset_id:    None,
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
         post
@@ -264,6 +266,7 @@ impl TestHarness {
             retention_secs:    None,
             author_tier:       0,
             format:            Default::default(),
+            cover_asset_id:    None,
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
     }
@@ -285,6 +288,7 @@ impl TestHarness {
             retention_secs:    Some(retention_secs),
             author_tier:       0,
             format:            Default::default(),
+            cover_asset_id:    None,
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
         post_uuid
@@ -308,6 +312,7 @@ impl TestHarness {
             retention_secs:    None,
             author_tier:       0,
             format:            Default::default(),
+            cover_asset_id:    None,
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
         post_uuid
@@ -331,6 +336,7 @@ impl TestHarness {
             retention_secs:    None,
             author_tier:       0,
             format:            Default::default(),
+            cover_asset_id:    None,
         };
         self.command_bus.dispatch(Envelope::new(Uuid::now_v7(), cmd)).await.expect("index_post");
         post_uuid
@@ -433,6 +439,7 @@ impl TestHarness {
             retention_secs:    None,
             author_tier:       0,
             format:            Default::default(),
+            cover_asset_id:    None,
         };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))

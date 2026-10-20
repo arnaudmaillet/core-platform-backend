@@ -316,6 +316,7 @@ mod tests {
             audio_kind:      None,
             caption:         "hello [@bob](profile:00000000-0000-0000-0000-000000000001)".to_owned(),
             thumbnail_url:   None,
+            cover_asset_id:  None,
             lat:             None,
             lng:             None,
         }));

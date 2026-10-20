@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 40cb23857fc3f9cb2925c97fb720285a31f113a566c6a787d07fa72918fb3729
+  source_sha256: d40ce0e5fe308fb64333c9858c7c0efd3b108915489f3e6bcd663071550de28c
   translated_at: 2026-10-20
   status: complete
 ---
@@ -308,7 +308,7 @@ pendant que le premier appel est encore en attente reçoit `PST-1010` (`ABORTED`
 
 | Topic | Déclencheur | Clé | Consommateurs |
 |---|---|---|---|
-| `post.v1.events` | chaque événement de cycle de vie (`PostPublished` / `PostUpdated` / `PostDeleted`) ; `PostPublished` porte le `author_tier` dénormalisé, plus `caption` / `thumbnail_url` / `lat`/`lng` optionnels pour la projection geo | `post_id` | `search`, `timeline`, `realtime`, `geo-discovery`, `notification` |
+| `post.v1.events` | chaque événement de cycle de vie (`PostPublished` / `PostUpdated` / `PostDeleted`) ; `PostPublished` porte le `author_tier` dénormalisé, plus `caption` / `thumbnail_url` / `lat`/`lng` et `cover_asset_id` (l'asset média de la première pièce jointe, #963) optionnels pour la projection geo | `post_id` | `search`, `timeline`, `realtime`, `geo-discovery`, `notification` |
 | `post.deleted` | `DeletePost` success | `post_id` | `timeline`, `geo-discovery` |
 
 > **Un flux, un topic legacy.** `post.v1.events` est le flux unifié et versionné (la convention de la flotte, comme `moderation.v1.events` / `profile.v1.events`) : le `DomainEvent` entier tagué en interne, clé `post_id`. Les anciens topics par type `post.published` / `post.updated` sont retirés (#487 : geo-discovery et notification sont passés sur `post.v1.events`) ; `post.deleted` (charge utile brute) reste pour les consommateurs de suppression de timeline et de geo-discovery.

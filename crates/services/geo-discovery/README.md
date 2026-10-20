@@ -208,8 +208,14 @@ message MapPostCard { string post_id=1; string author_id=2; string author_handle
 > public location audience. A city-level author's post is never a cover, and the post must have been
 > published in that country. Locked countries get theirs too: it is advertising, so it carries no author.
 > - **Fields.** `kind` is `MEDIA_IMAGE`, `MEDIA_VIDEO` or `TEXT`. `poster_url` holds the photo or the
->   video's poster. A text cover carries its `caption`, cut to 200 characters. `preview_url` stays empty
->   until media makes a short preview loop.
+>   video's poster. A text cover carries its `caption`, cut to 200 characters.
+> - **Preview loops (#963).** A video cover's `preview_url` is media's `PREVIEW` rendition: the video's
+>   first 3 s, muted, an MP4 of at most ~300 KB. geo-discovery gets it from the post's first media asset
+>   (`PostPublished.cover_asset_id`, kept on the card: `map_post_cards.cover_asset_id`, migration 0013).
+>   It resolves it through media's `BatchResolveDelivery` (`GEO_MEDIA_GRPC_ENDPOINT`), once per ladder,
+>   for the chosen video covers only. It stays empty for a video delivered SIGNED (its cookies cannot
+>   ride with a cover), for one made before previews, when the endpoint is unset, or when media fails
+>   (`GEO-6003`, fail-open): the client paints the poster.
 > - **Storage.** Every counted like also adds to the post's score in its country's day
 >   (`sg:geo:{ctop:CC}:YYYYMMDD`, a ZSET of the day's 100 most liked posts, kept 40 days). This write is
 >   best effort: a failure only dims one post's chance.
@@ -289,6 +295,7 @@ pub trait CountryGrantStore: Send + Sync { /* get / set / clear the country gran
 | GEO-5001/5002 | 500 | msgpack ser / deser failure |
 | GEO-9001..9003 | 422 | malformed UUIDs / domain violation |
 | GEO-6001 | 503 | audience check (social-graph `CheckAccess`) unavailable; client reads fail closed (`UNAVAILABLE`, retryable) |
+| GEO-6003 | 503 | media unavailable for the Shop covers' preview loops (#963); never surfaced: covers keep their poster |
 | GEO-9004/9005 | 422 | invalid ISO country code / country access without a client principal (mesh) |
 | GEO-9006 | 422 | invalid visa purchase key (#910) |
 
@@ -387,6 +394,7 @@ async fn main() -> anyhow::Result<()> {
 | `GEO_STANDINGS_CACHE_SECS` | No | `60` | How long a computed ladder is served. |
 | `GEO_COUNTRY_UNLOCKS_ENABLED` | No | `false` | The member map filter (#665): members see only their home and unlocked countries (and the sea). |
 | `GEO_WALLET_GRPC_ENDPOINT` | No | `http://localhost:50072` | wallet's mesh address: the gems shown and spent by country unlocks. |
+| `GEO_MEDIA_GRPC_ENDPOINT` | No | unset | media's mesh address (#963): the Shop covers' preview loops. Unset: covers paint their poster only. |
 | `GEO_ACCOUNT_GRPC_ENDPOINT` | No | `http://localhost:50059` | account's mesh address: a member's country of residence (home country). |
 | `GEO_UNLOCK_RPC_TIMEOUT_MS` · `GEO_UNLOCK_CONNECT_TIMEOUT_MS` | No | `1000` · `500` | Deadlines of those two peers. |
 
@@ -401,7 +409,8 @@ async fn main() -> anyhow::Result<()> {
   `0003_create_map_post_cards_table.cql` → `0004_add_author_tier_column.cql` →
   `0005_add_caption_column.cql` … → `0010_create_posts_by_country.cql` (#833) →
   `0011_country_visas.cql` (#910: `country_unlocks.visa_until`, `country_visa_purchases`) →
-  `0012_add_card_post_kind.cql` (#949: `map_post_cards.post_kind`) against `geo_discovery`,
+  `0012_add_card_post_kind.cql` (#949: `map_post_cards.post_kind`) →
+  `0013_add_card_cover_asset.cql` (#963: `map_post_cards.cover_asset_id`) against `geo_discovery`,
   applied **before** first start. Posts indexed before `0010` are not filed by country (their country
   page lists them only once re-announced); nothing was live when it shipped.
 - **Stateful gotchas:** `GEO_DEFAULT_RETENTION_SECS` must equal the Scylla table TTL; the composite

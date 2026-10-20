@@ -75,6 +75,11 @@ pub enum GeoDiscoveryError {
     /// unlock fails closed.
     #[error("{service} unavailable: {reason}")]
     UnlockDependencyUnavailable { service: &'static str, reason: String },
+
+    /// media could not answer (#963: a Shop cover's preview loop). Fails
+    /// open: the cover keeps its poster.
+    #[error("media unavailable: {reason}")]
+    MediaUnavailable { reason: String },
 }
 
 impl AppError for GeoDiscoveryError {
@@ -103,6 +108,7 @@ impl AppError for GeoDiscoveryError {
             Self::InvalidIdempotencyKey => "GEO-9006",
             Self::AccessCheckUnavailable { .. } => "GEO-6001",
             Self::UnlockDependencyUnavailable { .. } => "GEO-6002",
+            Self::MediaUnavailable { .. } => "GEO-6003",
             Self::GemSpendingRestricted => "GEO-3001",
         }
     }
@@ -129,9 +135,9 @@ impl AppError for GeoDiscoveryError {
             | Self::CardSerializationFailed { .. }
             | Self::CardDeserializationFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
 
-            Self::AccessCheckUnavailable { .. } | Self::UnlockDependencyUnavailable { .. } => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
+            Self::AccessCheckUnavailable { .. }
+            | Self::UnlockDependencyUnavailable { .. }
+            | Self::MediaUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::GemSpendingRestricted => StatusCode::FORBIDDEN,
         }
     }
@@ -159,6 +165,7 @@ impl AppError for GeoDiscoveryError {
             | Self::InvalidIdempotencyKey => Severity::Low,
 
             Self::AccessCheckUnavailable { .. } | Self::UnlockDependencyUnavailable { .. } => Severity::Medium,
+            Self::MediaUnavailable { .. } => Severity::Low,
             Self::GemSpendingRestricted => Severity::Low,
         }
     }
@@ -167,7 +174,9 @@ impl AppError for GeoDiscoveryError {
         match self {
             Self::Scylla(e) => e.is_retryable(),
             Self::Redis(e)  => e.is_retryable(),
-            Self::AccessCheckUnavailable { .. } | Self::UnlockDependencyUnavailable { .. } => true,
+            Self::AccessCheckUnavailable { .. }
+            | Self::UnlockDependencyUnavailable { .. }
+            | Self::MediaUnavailable { .. } => true,
             _               => false,
         }
     }
@@ -214,6 +223,7 @@ impl AppError for GeoDiscoveryError {
                 "The map is temporarily unavailable. Please try again later.",
             Self::UnlockDependencyUnavailable { .. } =>
                 "Countries can't be unlocked right now. Please try again later.",
+            Self::MediaUnavailable { .. } => "Media is temporarily unavailable.",
             Self::GemSpendingRestricted => "Gems can't be spent before 18.",
         }
     }

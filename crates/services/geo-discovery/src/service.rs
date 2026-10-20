@@ -69,6 +69,7 @@ impl Service for GeoDiscoveryService {
                 "GEO_ACCOUNT_GRPC_ENDPOINT",
                 "http://localhost:50059",
             )?)),
+            previews: media_previews_from_env()?,
         };
 
         let app = App::build(cfg, backends)
@@ -124,6 +125,17 @@ pub(crate) fn audience_gate_from_env() -> anyhow::Result<Arc<dyn crate::applicat
 
 /// A lazily-connected mesh channel to `env_key` (default `default`), with the
 /// unlock peers' deadlines (`GEO_UNLOCK_RPC_TIMEOUT_MS`, 1000; connect 500).
+/// media at `GEO_MEDIA_GRPC_ENDPOINT` (#963: the Shop covers' preview
+/// loops); unset ⇒ none, covers paint their poster only.
+pub(crate) fn media_previews_from_env() -> anyhow::Result<Option<Arc<dyn crate::application::port::MediaPreviews>>> {
+    if std::env::var("GEO_MEDIA_GRPC_ENDPOINT").ok().filter(|v| !v.trim().is_empty()).is_none() {
+        tracing::warn!("GEO_MEDIA_GRPC_ENDPOINT unset: Shop covers go without preview loops");
+        return Ok(None);
+    }
+    let channel = mesh_channel("GEO_MEDIA_GRPC_ENDPOINT", "")?;
+    Ok(Some(Arc::new(crate::infrastructure::client::GrpcMediaPreviews::new(channel))))
+}
+
 pub(crate) fn mesh_channel(env_key: &str, default: &str) -> anyhow::Result<tonic::transport::Channel> {
     let ms = |key: &str, default: u64| {
         std::time::Duration::from_millis(std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default))

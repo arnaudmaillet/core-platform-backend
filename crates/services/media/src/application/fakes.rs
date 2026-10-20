@@ -503,8 +503,15 @@ impl VideoTranscoder for StubVideoTranscoder {
             Dimensions::new(1080, 1920).unwrap(),
             40_000,
         );
+        let preview = Rendition::new(
+            RenditionKind::Preview,
+            MimeType::new("video/mp4").unwrap(),
+            root.object("preview.mp4"),
+            Dimensions::new(360, 640).unwrap(),
+            200_000,
+        );
         Ok(TranscodeOutput {
-            renditions: vec![manifest, poster],
+            renditions: vec![manifest, poster, preview],
             blurhash: Blurhash::new("LEHV6nWB2yk8pyo0adR*").unwrap(),
         })
     }

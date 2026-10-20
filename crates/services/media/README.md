@@ -272,6 +272,13 @@ The asset is READY with its large sheet; it is never served as a video. Delivery
 layout to its rendition (`DeliveredRendition.sheet`: frame count, columns, frame duration, gutter, cell
 size), derived from the kind. A 3 s test clip bakes to ~28 KB / ~37 KB sheets and an ~8 KB still.
 
+**Video preview loops (#963).** Beside its HLS ladder and poster, a `VIDEO` gets a **`PREVIEW`**: its
+first 3 s, muted, H.264 (main), its short side at most 360 px (never upscaled), at ~600 kbit/s, a
+progressive MP4 (`+faststart`). A card plays it in place, such as a country's Shop cover. It is best
+effort: a preview that fails, or comes out past 300 KB, is left out and the video is still READY. It is
+delivered like the other renditions, under the asset's visibility (a SIGNED video's needs its cookies).
+Videos transcoded before have none; no backfill.
+
 ### Error contract
 
 Every fault implements `error::AppError` with a stable `MED-XXXX` code, mapped to

@@ -14,9 +14,9 @@ use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use futures::{StreamExt, TryStreamExt};
 use uuid::Uuid;
 
-use crate::application::port::CountryActivityStore;
+use crate::application::port::{CountryActivityStore, MediaPreviews};
 use crate::domain::country_atlas::CountryAtlas;
-use crate::domain::country_standing::{rank, CountryCover, CountryStanding, UnlockPricing};
+use crate::domain::country_standing::{rank, CountryCover, CountryStanding, CoverKind, UnlockPricing};
 use crate::domain::entity::MapPostCard;
 use crate::domain::value_object::CountryCode;
 use crate::error::GeoDiscoveryError;
@@ -57,6 +57,8 @@ pub struct CountryStandings {
     pub cache_for:   Duration,
     /// Where covers come from (#942); none without.
     covers:          Option<Arc<dyn CoverCards>>,
+    /// Where video covers' preview loops come from (#963); none without.
+    previews:        Option<Arc<dyn MediaPreviews>>,
     cached:          Mutex<Option<(Instant, Arc<Ladder>)>>,
     /// The covers, per ladder they were picked for (its `computed_at`).
     cached_covers:   Mutex<Option<(DateTime<Utc>, Arc<Covers>)>>,
@@ -77,6 +79,7 @@ impl CountryStandings {
             window_days: window_days.max(1),
             cache_for,
             covers: None,
+            previews: None,
             cached: Mutex::new(None),
             cached_covers: Mutex::new(None),
         }
@@ -85,6 +88,12 @@ impl CountryStandings {
     /// With each country's Shop cover (#942).
     pub fn with_covers(mut self, covers: Arc<dyn CoverCards>) -> Self {
         self.covers = Some(covers);
+        self
+    }
+
+    /// With video covers' preview loops (#963).
+    pub fn with_previews(mut self, previews: Arc<dyn MediaPreviews>) -> Self {
+        self.previews = Some(previews);
         self
     }
 
@@ -164,7 +173,33 @@ impl CountryStandings {
                 covers.insert(country, cover);
             }
         }
+        self.add_previews(&mut covers, &shown).await;
         Ok(covers)
+    }
+
+    /// Video covers' preview loops (#963). Fails open: a cover without one
+    /// paints its poster.
+    async fn add_previews(&self, covers: &mut Covers, cards: &HashMap<Uuid, MapPostCard>) {
+        let Some(previews) = &self.previews else { return };
+        let assets: Vec<(CountryCode, Uuid)> = covers
+            .iter()
+            .filter(|(_, cover)| cover.kind == CoverKind::Video)
+            .filter_map(|(country, cover)| Some((*country, cards.get(&cover.post_id)?.cover_asset_id?)))
+            .collect();
+        if assets.is_empty() {
+            return;
+        }
+        let ids: Vec<Uuid> = assets.iter().map(|(_, asset)| *asset).collect();
+        match previews.previews(&ids).await {
+            Ok(urls) => {
+                for (country, asset) in assets {
+                    if let (Some(cover), Some(url)) = (covers.get_mut(&country), urls.get(&asset)) {
+                        cover.preview_url = url.clone();
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "country covers: previews unavailable"),
+        }
     }
 }
 
@@ -298,6 +333,7 @@ pub(crate) mod tests {
             lat:               Some(lat),
             lng:               Some(lng),
             format:            crate::domain::value_object::PostFormat::Photo,
+            cover_asset_id:    None,
         }
     }
 
@@ -341,5 +377,54 @@ pub(crate) mod tests {
         let ladder = failing.ladder(Utc::now()).await.unwrap();
         assert!(failing.covers(&ladder).await.is_empty());
         assert_eq!(ladder.standings[0].country, cc("JP"), "the ladder still serves");
+    }
+
+    /// Previews a fake media delivers: those it holds; `down` fails.
+    #[derive(Default)]
+    struct Previews(Mutex<HashMap<Uuid, String>>, Mutex<bool>);
+
+    #[async_trait]
+    impl MediaPreviews for Previews {
+        async fn previews(&self, ids: &[Uuid]) -> Result<HashMap<Uuid, String>, GeoDiscoveryError> {
+            if *self.1.lock().unwrap() {
+                return Err(GeoDiscoveryError::MediaUnavailable { reason: "down".into() });
+            }
+            let held = self.0.lock().unwrap();
+            Ok(ids.iter().filter_map(|id| Some((*id, held.get(id)?.clone()))).collect())
+        }
+    }
+
+    /// #963: a video cover plays its asset's preview loop; a photo cover
+    /// never asks; media down keeps the poster.
+    #[tokio::test]
+    async fn a_video_cover_plays_its_preview_loop_and_media_down_keeps_the_poster() {
+        let activity = Arc::new(MemActivity::default());
+        let shown = Arc::new(Shown::default());
+        let previews = Arc::new(Previews::default());
+        let today = Utc::now().date_naive();
+        let asset = Uuid::now_v7();
+        let mut video = card_at(35.68, 139.69, "v.jpg");
+        video.format = crate::domain::value_object::PostFormat::Video;
+        video.cover_asset_id = Some(asset);
+        shown.0.lock().unwrap().insert(video.post_id, video.clone());
+        activity.add_post_likes(cc("JP"), today, video.post_id, 10).await.unwrap();
+        activity.add(cc("JP"), today, 10, 1, "jp").await.unwrap();
+        previews.0.lock().unwrap().insert(asset, "https://cdn/preview.mp4".into());
+
+        let standings = || {
+            CountryStandings::new(Arc::clone(&activity) as _, CountryAtlas::embedded(), UnlockPricing::default(), 30, Duration::ZERO)
+                .with_covers(Arc::clone(&shown) as _)
+                .with_previews(Arc::clone(&previews) as _)
+        };
+        let with = standings();
+        let ladder = with.ladder(Utc::now()).await.unwrap();
+        let jp = with.covers(&ladder).await.get(&cc("JP")).cloned().unwrap();
+        assert_eq!((jp.kind, jp.poster_url.as_str(), jp.preview_url.as_str()), (CoverKind::Video, "v.jpg", "https://cdn/preview.mp4"));
+
+        *previews.1.lock().unwrap() = true;
+        let down = standings();
+        let ladder = down.ladder(Utc::now()).await.unwrap();
+        let jp = down.covers(&ladder).await.get(&cc("JP")).cloned().unwrap();
+        assert_eq!((jp.poster_url.as_str(), jp.preview_url.as_str()), ("v.jpg", ""), "the poster stays");
     }
 }

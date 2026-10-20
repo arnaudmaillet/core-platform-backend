@@ -41,6 +41,8 @@ pub struct IndexPostCommand {
     pub author_tier:       u8,
     /// Media or text-only, from `PostPublished.kind` (#949).
     pub format:            PostFormat,
+    /// The post's first media asset (#963), from `PostPublished.cover_asset_id`.
+    pub cover_asset_id:    Option<String>,
 }
 
 impl Command for IndexPostCommand {}
@@ -119,6 +121,8 @@ where
             lat:               Some(cmd.lat),
             lng:               Some(cmd.lng),
             format:            cmd.format,
+            // An unreadable id only loses the preview.
+            cover_asset_id:    cmd.cover_asset_id.as_deref().and_then(|id| uuid::Uuid::parse_str(id).ok()),
         };
 
         // A post the map already suppressed (deleted or moderated, possibly

@@ -220,6 +220,7 @@ impl Post {
             thumbnail_url:   self.attachments.first()
                                  .and_then(|a| a.thumbnail_url.as_ref())
                                  .map(|u| u.as_str().to_owned()),
+            cover_asset_id:  self.attachments.first().and_then(|a| a.asset_id.as_ref()).map(|id| id.as_str()),
             lat:             self.location.map(|g| g.lat()),
             lng:             self.location.map(|g| g.lng()),
         })
@@ -439,6 +440,7 @@ mod restore_tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::domain::value_object::{CdnUrl, MediaAssetId, MimeType};
 
     fn post() -> Post {
         Post::create(
@@ -453,6 +455,41 @@ mod restore_tests {
             None,
         )
         .unwrap()
+    }
+
+    /// #963: the publication names the first attachment's media asset, for
+    /// a video cover's preview loop.
+    #[test]
+    fn the_publication_names_the_cover_asset() {
+        let asset = Uuid::now_v7().to_string();
+        let video = MediaAttachment {
+            cdn_url:          CdnUrl::new("https://cdn.example/v.mp4").unwrap(),
+            mime_type:        MimeType::new("video/mp4").unwrap(),
+            width:            1080,
+            height:           1920,
+            thumbnail_url:    Some(CdnUrl::new("https://cdn.example/poster.jpg").unwrap()),
+            duration_seconds: Some(12.0),
+            asset_id:         Some(MediaAssetId::try_from(asset.as_str()).unwrap()),
+        };
+        let mut p = Post::create(
+            PostId::from_uuid(Uuid::now_v7()),
+            ProfileId::try_from(Uuid::now_v7().to_string().as_str()).unwrap(),
+            PostKind::MainVideo,
+            Caption::new("hello").unwrap(),
+            vec![video],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        p.publish().unwrap();
+        let events = p.take_events();
+        assert!(matches!(events.as_slice(),
+            [DomainEvent::PostPublished(e)] if e.cover_asset_id.as_deref() == Some(asset.as_str())), "{events:?}");
+        let mut text = post();
+        text.publish().unwrap();
+        assert!(matches!(text.take_events().as_slice(), [DomainEvent::PostPublished(e)] if e.cover_asset_id.is_none()));
     }
 
     #[test]

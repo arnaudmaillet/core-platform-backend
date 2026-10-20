@@ -510,7 +510,7 @@ fn cover_to_proto(cover: &crate::domain::country_standing::CountryCover) -> prot
             CoverKind::Text => proto::CoverKind::Text,
         } as i32,
         poster_url:  cover.poster_url.clone(),
-        preview_url: String::new(),
+        preview_url: cover.preview_url.clone(),
         caption:     cover.caption.clone(),
     }
 }

@@ -282,6 +282,7 @@ mod tests {
             audio_kind:      None,
             caption:         "Sunset #Paris #paris #golden_hour".into(),
             thumbnail_url:   None,
+            cover_asset_id:  None,
             lat:             None,
             lng:             None,
         })
