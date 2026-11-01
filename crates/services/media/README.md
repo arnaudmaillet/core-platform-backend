@@ -260,17 +260,21 @@ object (never shared).
 
 **Animated avatars (#945, #948).** `MEDIA_KIND_AVATAR_CLIP` (MP4 / QuickTime, ≤ 20 MiB) is a clip the
 `media-worker` **bakes** instead of transcoding (`SheetBaker`, `FfmpegSheetBaker`):
-1. ffmpeg takes its first 3 s, muted, at 12 fps, centre-cropped square (a clip under 2 s fails);
-2. the window of 24 frames whose start best matches the frame right after its end is chosen, and the
-   frames after it are cross-faded into its head, so the last cell flows into the first;
+1. ffmpeg takes its first 5 s, muted, at 12 fps, centre-cropped square (a clip under 2 s fails);
+2. the window of 48 frames (4 s, #974) whose start best matches the frame right after its end is
+   chosen, and the frames after it are cross-faded into its head, so the last cell flows into the
+   first; a shorter clip loops whole rows of 4 of what it has (keeping 4 frames to fade while that
+   leaves at least 24), so a 3 s clip loops 32 frames;
 3. the seam (last cell → first cell, mean luma difference on 32 × 32 thumbnails) must stay under 0.18,
    else the asset **fails** (`CorruptMedia`, not retried) and the app asks for another clip;
-4. two **AVIF** sprite sheets are written — `SHEET_SMALL` (128 px cells, 512 × 768) and `SHEET_LARGE`
-   (256 px cells, 1024 × 1536), 4 columns, each frame inside a 2 px transparent gutter — and a JPEG
+4. two **AVIF** sprite sheets are written — `SHEET_SMALL` (128 px cells, 512 × 1536 for 48 frames) and
+   `SHEET_LARGE` (256 px cells, 1024 × 3072), 4 columns, each frame inside a 2 px transparent gutter — and a JPEG
    **`POSTER`**, the sheets' last frame (256 px), for consumers that cannot play a sheet.
 The asset is READY with its large sheet; it is never served as a video. Delivery adds each sheet's
 layout to its rendition (`DeliveredRendition.sheet`: frame count, columns, frame duration, gutter, cell
-size), derived from the kind. A 3 s test clip bakes to ~28 KB / ~37 KB sheets and an ~8 KB still.
+size): fixed by the kind but for the frame count, read from the stored sheet's height (rows × 4), so a
+24-frame sheet baked before #974 still plays as 24. A 5 s test clip bakes to ~52 KB / ~69 KB sheets
+and an ~9 KB still.
 
 **Video preview loops (#963).** Beside its HLS ladder and poster, a `VIDEO` gets a **`PREVIEW`**: its
 first 3 s, muted, H.264 (main), its short side at most 360 px (never upscaled), at ~600 kbit/s, a

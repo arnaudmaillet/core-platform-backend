@@ -2,11 +2,13 @@
 //! clip becomes two AVIF sprite sheets (128 / 256 px cells) that loop
 //! seamlessly, and a JPEG still of their last frame.
 //!
-//! 1. ffmpeg takes the clip's first 3 s, muted, at [`SHEET_FPS`], centre-cropped
+//! 1. ffmpeg takes the clip's first 5 s, muted, at [`SHEET_FPS`], centre-cropped
 //!    square ([`MAX_FRAMES`] frames at most).
-//! 2. The window of [`SHEET_FRAMES`] frames whose start best matches the frame
-//!    right after its end is chosen, and the frames after it are cross-faded
-//!    into its head, so the last cell flows into the first (#948 §2).
+//! 2. The window of [`SHEET_FRAMES`] frames (4 s, #974) whose start best
+//!    matches the frame right after its end is chosen, and the frames after it
+//!    are cross-faded into its head, so the last cell flows into the first
+//!    (#948 §2). A clip shorter than that loops what it has: whole rows of
+//!    [`SHEET_COLUMNS`], at least [`MIN_SHEET_FRAMES`] (2 s).
 //! 3. The seam (last cell → first cell) is measured; above [`MAX_SEAM`] the
 //!    clip is refused.
 //! 4. The sheets are composed (each frame inside a transparent gutter) and
@@ -20,7 +22,7 @@ use image::{imageops, DynamicImage, GrayImage, ImageEncoder, Rgba, RgbaImage};
 
 use crate::application::port::{SheetBaker, TranscodeOutput};
 use crate::domain::aggregate::Rendition;
-use crate::domain::value_object::sheet_geometry::{SHEET_FPS, SHEET_FRAMES};
+use crate::domain::value_object::sheet_geometry::{MIN_SHEET_FRAMES, SHEET_COLUMNS, SHEET_FPS, SHEET_FRAMES};
 use crate::domain::value_object::{
     Blurhash, ContentHash, Dimensions, MimeType, ObjectRoot, RenditionKind, SheetGeometry, StorageKey,
 };
@@ -28,8 +30,8 @@ use crate::error::MediaError;
 use crate::infrastructure::processor::ffmpeg_video_transcoder::run_ffmpeg;
 use crate::infrastructure::store::S3Client;
 
-/// The clip's seconds used.
-const CLIP_SECS: u32 = 3;
+/// The clip's seconds used: the 4 s window and room to choose and fade it.
+const CLIP_SECS: u32 = 5;
 /// Frames extracted at most: [`CLIP_SECS`] at [`SHEET_FPS`].
 const MAX_FRAMES: usize = (CLIP_SECS * SHEET_FPS) as usize;
 /// Frames after the window cross-faded into its head.
@@ -144,7 +146,8 @@ fn bake_frames(frames: &[RgbaImage]) -> Result<Baked, MediaError> {
     }
     let mut sheets = Vec::new();
     for kind in [RenditionKind::SheetSmall, RenditionKind::SheetLarge] {
-        let geometry = SheetGeometry::of(kind).ok_or_else(|| MediaError::ProcessingFailed { reason: "not a sheet".into() })?;
+        let geometry = SheetGeometry::with_frames(kind, looped.len() as u32)
+            .ok_or_else(|| MediaError::ProcessingFailed { reason: "not a sheet".into() })?;
         let sheet = compose(&looped, &geometry);
         let (w, h) = sheet.dimensions();
         sheets.push(BakedSheet {
@@ -165,18 +168,32 @@ fn bake_frames(frames: &[RgbaImage]) -> Result<Baked, MediaError> {
     Ok(Baked { sheets, still, blurhash })
 }
 
-/// [`SHEET_FRAMES`] frames that loop: the window whose start best matches
+/// The frames a clip of `available` frames loops: [`SHEET_FRAMES`] when it
+/// has them and room to fade; else whole rows of what it has, leaving the
+/// fade room when it can; `None` under [`MIN_SHEET_FRAMES`].
+fn window_frames(available: usize) -> Option<usize> {
+    let (full, min, columns) = (SHEET_FRAMES as usize, MIN_SHEET_FRAMES as usize, SHEET_COLUMNS as usize);
+    if available < min {
+        return None;
+    }
+    if available >= full + CROSSFADE {
+        return Some(full);
+    }
+    let with_fade = available.saturating_sub(CROSSFADE) / columns * columns;
+    Some(if with_fade >= min { with_fade } else { (available / columns * columns).min(full) })
+}
+
+/// The window's frames that loop: the window whose start best matches
 /// the frame after its end, then that frame and the next ones (up to
 /// [`CROSSFADE`]) cross-faded into its head — the head starts as the tail's
 /// continuation and blends back into the clip, so cell N-1 → cell 0 is the
 /// clip's own next step.
 fn seamless_loop(frames: &[RgbaImage]) -> Result<Vec<RgbaImage>, MediaError> {
-    let n = SHEET_FRAMES as usize;
-    if frames.len() < n {
+    let Some(n) = window_frames(frames.len()) else {
         return Err(MediaError::CorruptMedia {
-            reason: format!("the clip is shorter than {} s ({} frames)", n as u32 / SHEET_FPS, frames.len()),
+            reason: format!("the clip is shorter than {} s ({} frames)", MIN_SHEET_FRAMES / SHEET_FPS, frames.len()),
         });
-    }
+    };
     let k = CROSSFADE.min(frames.len() - n);
     let thumbs: Vec<GrayImage> = frames.iter().map(luma_thumb).collect();
     let start = if k == 0 {
@@ -267,6 +284,16 @@ mod tests {
         assert!(matches!(seamless_loop(&ramp(23)), Err(MediaError::CorruptMedia { .. })));
     }
 
+    /// #974: 4 s when the clip has it; a shorter one loops whole rows of
+    /// what it has, keeping the fade room while it stays at 2 s or more.
+    #[test]
+    fn a_clip_loops_four_seconds_or_whole_rows_of_what_it_has() {
+        let cases = [(23, None), (24, Some(24)), (27, Some(24)), (32, Some(28)), (36, Some(32)), (51, Some(44))];
+        for (available, frames) in cases.into_iter().chain([(52, Some(48)), (MAX_FRAMES, Some(48))]) {
+            assert_eq!(window_frames(available), frames, "{available} frames");
+        }
+    }
+
     #[test]
     fn the_tail_is_cross_faded_into_the_head_so_the_seam_is_small() {
         let frames = ramp(MAX_FRAMES);
@@ -280,10 +307,10 @@ mod tests {
 
     #[test]
     fn the_window_whose_end_meets_its_start_is_chosen() {
-        // 36 frames: 4 dark ones, then a 12-frame cycle: only a window
-        // starting in the cycle meets its start again 24 frames later.
+        // 60 frames: 4 dark ones, then a 12-frame cycle: only a window
+        // starting in the cycle meets its start again 48 frames later.
         let frames: Vec<RgbaImage> =
-            (0..36).map(|i| if i < 4 { flat(0) } else { flat(100 + (i % 12) as u8 * 10) }).collect();
+            (0..60).map(|i| if i < 4 { flat(0) } else { flat(100 + (i % 12) as u8 * 10) }).collect();
         let looped = seamless_loop(&frames).unwrap();
         // The chosen window starts in the cycle, not in the dark stretch.
         assert!(looped.iter().all(|f| f.get_pixel(0, 0).0[0] >= 90), "the dark stretch is skipped");
@@ -302,11 +329,21 @@ mod tests {
         let geometry = SheetGeometry::of(RenditionKind::SheetSmall).unwrap();
         let frames: Vec<RgbaImage> = (0..SHEET_FRAMES).map(|_| flat(200)).collect();
         let sheet = compose(&frames, &geometry);
-        assert_eq!(sheet.dimensions(), (512, 768));
+        assert_eq!(sheet.dimensions(), (512, 1536));
         assert_eq!(sheet.get_pixel(0, 0).0[3], 0, "the gutter is transparent");
         assert_eq!(sheet.get_pixel(127, 64).0[3], 0, "on the cell's right edge too");
         assert_eq!(sheet.get_pixel(64, 64).0, [200, 200, 200, 255], "the frame inside");
-        assert_eq!(sheet.get_pixel(128 * 3 + 64, 128 * 5 + 64).0[3], 255, "the 24th cell is filled");
+        assert_eq!(sheet.get_pixel(128 * 3 + 64, 128 * 11 + 64).0[3], 255, "the 48th cell is filled");
+    }
+
+    #[test]
+    fn a_short_clip_bakes_a_sheet_of_fewer_rows() {
+        // 3 s: 36 frames → 32 looped (8 rows), still a whole sheet.
+        let looped = seamless_loop(&(0..36).map(|_| flat(120)).collect::<Vec<_>>()).unwrap();
+        assert_eq!(looped.len(), 32);
+        let geometry = SheetGeometry::with_frames(RenditionKind::SheetLarge, 32).unwrap();
+        assert_eq!(compose(&looped, &geometry).dimensions(), (1024, 2048));
+        assert_eq!(SheetGeometry::of_rendition(RenditionKind::SheetLarge, 2048), Some(geometry));
     }
 
     /// End-to-end over the real ffmpeg binary (and the AVIF encoder). Ignored
@@ -316,7 +353,7 @@ mod tests {
     fn real_ffmpeg_bake_makes_two_sheets_and_a_still() {
         let src = std::env::temp_dir().join("media-sheet-src.mp4");
         let ok = std::process::Command::new("ffmpeg")
-            .args(["-y", "-f", "lavfi", "-i", "testsrc=duration=3:size=720x1280:rate=30"])
+            .args(["-y", "-f", "lavfi", "-i", "testsrc=duration=5:size=720x1280:rate=30"])
             .args(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
             .arg(&src)
             .status()
@@ -334,7 +371,7 @@ mod tests {
                     baked.still.len()
                 );
                 assert_eq!(baked.sheets.len(), 2);
-                assert_eq!(baked.sheets[1].dimensions, Dimensions::new(1024, 1536).unwrap());
+                assert_eq!(baked.sheets[1].dimensions, Dimensions::new(1024, 3072).unwrap());
                 assert!(baked.sheets.iter().all(|s| !s.bytes.is_empty()));
                 assert!(!baked.still.is_empty() && !baked.blurhash.is_empty());
             }
