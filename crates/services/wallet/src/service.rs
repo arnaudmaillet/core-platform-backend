@@ -18,7 +18,7 @@ use transport::kafka::consumer::{KafkaConsumerBuilder, KafkaConsumerHandle};
 use transport::kafka::producer::{KafkaProducerBuilder, KafkaProducerHandle};
 
 use crate::application::port::EventPublisher;
-use crate::infrastructure::client::{GrpcAudienceCheck, GrpcLikePositions, GrpcTargetDirectory};
+use crate::infrastructure::client::{GrpcAudienceCheck, GrpcLikePositions, GrpcLoaderAssets, GrpcTargetDirectory};
 use crate::infrastructure::event::{KafkaEventPublisher, LogEventPublisher};
 
 use crate::app::{App, StakeDeps};
@@ -66,6 +66,10 @@ impl Service for WalletService {
         authenticated("/wallet.v1.WalletService/ListCatalog"),
         authenticated("/wallet.v1.WalletService/PurchaseItem"),
         authenticated("/wallet.v1.WalletService/ListOwnedItems"),
+        // Uploaded loaders (#975): the caller's account.
+        authenticated("/wallet.v1.WalletService/ImportLoader"),
+        authenticated("/wallet.v1.WalletService/ListLoaders"),
+        authenticated("/wallet.v1.WalletService/DeleteLoader"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -87,6 +91,8 @@ impl Service for WalletService {
             audience:  Arc::new(audience),
             publisher: build_publisher()?,
             positions,
+            // Uploaded loaders (#975): their assets in media.
+            loader_assets: loader_assets()?,
         };
         let mut app = App::build(pool.clone(), WalletConfig::from_env(), Some(deps));
         // Its mesh-only RPCs check who calls them, and SpendGems who spends (#852).
@@ -158,6 +164,18 @@ fn like_positions() -> anyhow::Result<Option<Arc<dyn crate::application::port::L
     }
     let channel = mesh_channel("WALLET_ENGAGEMENT_GRPC_ENDPOINT", "")?;
     Ok(Some(Arc::new(GrpcLikePositions::new(channel))))
+}
+
+/// Uploaded loaders (#975) check and delete their assets in media at
+/// `WALLET_MEDIA_GRPC_ENDPOINT`. Unset: imports and deletes answer
+/// `WAL-6001` (until the mesh route exists).
+fn loader_assets() -> anyhow::Result<Option<Arc<dyn crate::application::port::LoaderAssets>>> {
+    if !std::env::var("WALLET_MEDIA_GRPC_ENDPOINT").is_ok_and(|v| !v.trim().is_empty()) {
+        tracing::warn!("WALLET_MEDIA_GRPC_ENDPOINT unset: uploaded loaders are off");
+        return Ok(None);
+    }
+    let channel = mesh_channel("WALLET_MEDIA_GRPC_ENDPOINT", "")?;
+    Ok(Some(Arc::new(GrpcLoaderAssets::new(channel))))
 }
 
 /// Settles the positions due, every `WALLET_SETTLEMENT_SECS` (60), up to
@@ -256,7 +274,7 @@ mod tests {
 
     #[test]
     fn the_edge_exposes_the_callers_own_wallet_only() {
-        assert_eq!(WalletService::EDGE_POLICY.len(), 9);
+        assert_eq!(WalletService::EDGE_POLICY.len(), 12);
         assert!(service_runtime::edge::validate_policy(WalletService::EDGE_POLICY).is_ok());
         // Another service's gem spend, and an account's export, never reach
         // the app.

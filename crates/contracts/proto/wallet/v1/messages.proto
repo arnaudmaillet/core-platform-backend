@@ -201,6 +201,9 @@ message ExportWalletResponse {
     Wallet             wallet      = 1;
     // The catalogue items the account bought (#892); free ones are not listed.
     repeated OwnedItem owned_items = 2;
+    // The loaders the account uploaded (#975); their assets are in media's
+    // export.
+    repeated UploadedLoader uploaded_loaders = 3;
 }
 
 message ListStakePositionsRequest {
@@ -335,6 +338,63 @@ message ListOwnedItemsRequest {
 message ListOwnedItemsResponse {
     // Free items first, then the bought ones, oldest first.
     repeated OwnedItem items = 1;
+}
+
+// A loader the account uploaded (#975).
+message UploadedLoader {
+    string                    loader_id   = 1;
+    // Its media.v1 MEDIA_KIND_LOADER asset.
+    string                    asset_id    = 2;
+    // What its slot cost.
+    int64                     price       = 3;
+    google.protobuf.Timestamp imported_at = 4;
+}
+
+// An account's uploaded loaders and its slots: the app shows `loaders` /
+// `max` and the price before the viewer confirms an import.
+message LoaderSlots {
+    // Oldest first.
+    repeated UploadedLoader loaders         = 1;
+    int32                   max             = 2;
+    // What the next import costs (server policy).
+    int64                   next_slot_price = 3;
+}
+
+message ImportLoaderRequest {
+    string account_id      = 1;
+    // As for ClaimReward: a retry with the same key charges at most once.
+    string idempotency_key = 2;
+    // The caller's media.v1 MEDIA_KIND_LOADER asset.
+    string asset_id        = 3;
+    // The slot price the app showed; another one answers PRICE_CHANGED.
+    int64  expected_price  = 4;
+}
+
+message ImportLoaderResponse {
+    LoaderImportOutcome outcome = 1;
+    // IMPORTED: the loader (absent if a retried key's loader was deleted).
+    UploadedLoader      loader  = 2;
+    LoaderSlots         slots   = 3;
+    // The wallet after the call.
+    Wallet              wallet  = 4;
+}
+
+message ListLoadersRequest {
+    string account_id = 1;
+}
+
+message ListLoadersResponse {
+    LoaderSlots slots = 1;
+}
+
+message DeleteLoaderRequest {
+    string account_id = 1;
+    string loader_id  = 2;
+}
+
+message DeleteLoaderResponse {
+    bool        deleted = 1;
+    LoaderSlots slots   = 2;
 }
 
 message AwardBadgeRequest {

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use postgres_storage::TransactionManager;
 use sqlx::PgPool;
 
-use crate::application::port::{AudienceCheck, EventPublisher, LikePositions, TargetDirectory};
+use crate::application::port::{AudienceCheck, EventPublisher, LikePositions, LoaderAssets, TargetDirectory};
 use crate::application::Wallets;
 use crate::config::WalletConfig;
 use crate::infrastructure::grpc::WalletServiceHandler;
@@ -20,6 +20,9 @@ pub struct StakeDeps {
     /// What the targets came to, for the settlement (part 4); `None`: no
     /// position settles.
     pub positions: Option<Arc<dyn LikePositions>>,
+    /// Uploaded loaders' assets, in media (#975); `None`: imports and
+    /// deletes are `WAL-6001`.
+    pub loader_assets: Option<Arc<dyn LoaderAssets>>,
 }
 
 pub struct App {
@@ -35,7 +38,10 @@ impl App {
         let wallets = Wallets::new(store, config);
         let wallets = Arc::new(match stakes {
             Some(deps) => {
-                let wallets = wallets.with_stakes(deps.targets, deps.audience, deps.publisher);
+                let mut wallets = wallets.with_stakes(deps.targets, deps.audience, deps.publisher);
+                if let Some(assets) = deps.loader_assets {
+                    wallets = wallets.with_loader_assets(assets);
+                }
                 match deps.positions {
                     Some(positions) => wallets.with_settlement(positions),
                     None => wallets,

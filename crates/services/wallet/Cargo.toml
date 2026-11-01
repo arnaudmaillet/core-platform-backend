@@ -15,6 +15,7 @@ post-api    = { workspace = true }
 comment-api = { workspace = true }
 social-graph-api = { workspace = true }   # CheckAccess: a like needs the content visible
 engagement-api   = { workspace = true }   # GetLikePositions: what a stake came to (settlement)
+media-api        = { workspace = true }   # GetAsset / DeleteAsset: uploaded loaders' assets (#975)
 
 # ── Shared platform infrastructure ────────────────────────────────────────────
 error            = { workspace = true }

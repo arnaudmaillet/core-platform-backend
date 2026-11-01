@@ -2,6 +2,7 @@
 //! (`GetComment`), and whether the one who likes may see it (social-graph
 //! `CheckAccess`). Any failure but NOT_FOUND is `WAL-6001` (fail closed).
 //! What they came to, for the settlement: engagement's `GetLikePositions`.
+//! Uploaded loaders' assets (#975): media's `GetAsset` / `DeleteAsset`.
 
 use async_trait::async_trait;
 use tonic::transport::Channel;
@@ -9,10 +10,11 @@ use tonic::Code;
 
 use comment_api::comment_service_client::CommentServiceClient;
 use engagement_api::engagement_service_client::EngagementServiceClient;
+use media_api::media_service_client::MediaServiceClient;
 use post_api::post_service_client::PostServiceClient;
 use social_graph_api::social_graph_service_client::SocialGraphServiceClient;
 
-use crate::application::port::{AudienceCheck, LikePositions, TargetDirectory, TargetInfo};
+use crate::application::port::{AudienceCheck, LikePositions, LoaderAssetStatus, LoaderAssets, TargetDirectory, TargetInfo};
 use crate::domain::{AccountId, Observed, StakeTarget};
 use crate::error::WalletError;
 
@@ -142,9 +144,79 @@ impl LikePositions for GrpcLikePositions {
     }
 }
 
+pub struct GrpcLoaderAssets {
+    media: MediaServiceClient<Channel>,
+}
+
+impl GrpcLoaderAssets {
+    /// `channel` must carry request and connect timeouts.
+    pub fn new(channel: Channel) -> Self {
+        Self { media: MediaServiceClient::new(channel) }
+    }
+}
+
+/// Where a media asset stands as `account`'s loader.
+fn loader_status(asset: &media_api::Asset, account: &AccountId) -> LoaderAssetStatus {
+    use media_api::AssetState;
+    if asset.kind != media_api::MediaKind::Loader as i32 || asset.owner_id != account.as_uuid().to_string() {
+        return LoaderAssetStatus::NotALoader;
+    }
+    match AssetState::try_from(asset.state) {
+        Ok(AssetState::MediaAssetStateReady) => LoaderAssetStatus::Ready,
+        Ok(AssetState::MediaAssetStatePending | AssetState::MediaAssetStateUploaded | AssetState::MediaAssetStateProcessing) => LoaderAssetStatus::NotReady,
+        Ok(AssetState::MediaAssetStateFailed | AssetState::MediaAssetStateQuarantined) => LoaderAssetStatus::Rejected,
+        _ => LoaderAssetStatus::NotALoader,
+    }
+}
+
+#[async_trait]
+impl LoaderAssets for GrpcLoaderAssets {
+    async fn status(&self, account: &AccountId, asset_id: &uuid::Uuid) -> Result<LoaderAssetStatus, WalletError> {
+        let request = media_api::GetAssetRequest { asset_id: asset_id.to_string() };
+        match self.media.clone().get_asset(request).await {
+            Ok(answer) => Ok(answer.into_inner().asset.map_or(LoaderAssetStatus::NotALoader, |a| loader_status(&a, account))),
+            Err(status) if matches!(status.code(), Code::NotFound | Code::InvalidArgument) => Ok(LoaderAssetStatus::NotALoader),
+            Err(status) => Err(unavailable("media")(status)),
+        }
+    }
+
+    async fn delete(&self, account: &AccountId, asset_id: &uuid::Uuid) -> Result<(), WalletError> {
+        let request = media_api::DeleteAssetRequest { asset_id: asset_id.to_string(), owner_id: account.as_uuid().to_string() };
+        match self.media.clone().delete_asset(request).await {
+            // Gone already, or kept as evidence by a legal hold (MED-7003):
+            // the loader goes either way.
+            Ok(_) => Ok(()),
+            Err(status) if matches!(status.code(), Code::NotFound | Code::PermissionDenied) => Ok(()),
+            Err(status) => Err(unavailable("media")(status)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #975: only the account's own LOADER counts; READY imports, the
+    /// pipeline's states wait, a failed or blocked one is rejected.
+    #[test]
+    fn a_media_asset_is_a_loader_of_its_owner_only() {
+        use media_api::{AssetState, MediaKind};
+        let account = AccountId::from_uuid(uuid::Uuid::now_v7());
+        let asset = |kind: MediaKind, state: AssetState, owner: String| media_api::Asset {
+            kind: kind as i32,
+            state: state as i32,
+            owner_id: owner,
+            ..Default::default()
+        };
+        let mine = || account.as_uuid().to_string();
+        assert_eq!(loader_status(&asset(MediaKind::Loader, AssetState::MediaAssetStateReady, mine()), &account), LoaderAssetStatus::Ready);
+        assert_eq!(loader_status(&asset(MediaKind::Loader, AssetState::MediaAssetStateProcessing, mine()), &account), LoaderAssetStatus::NotReady);
+        assert_eq!(loader_status(&asset(MediaKind::Loader, AssetState::MediaAssetStateQuarantined, mine()), &account), LoaderAssetStatus::Rejected);
+        assert_eq!(loader_status(&asset(MediaKind::Loader, AssetState::MediaAssetStateDeleted, mine()), &account), LoaderAssetStatus::NotALoader);
+        assert_eq!(loader_status(&asset(MediaKind::Avatar, AssetState::MediaAssetStateReady, mine()), &account), LoaderAssetStatus::NotALoader);
+        let stranger = uuid::Uuid::now_v7().to_string();
+        assert_eq!(loader_status(&asset(MediaKind::Loader, AssetState::MediaAssetStateReady, stranger), &account), LoaderAssetStatus::NotALoader);
+    }
 
     #[test]
     fn a_stake_target_is_engagements_like_target() {

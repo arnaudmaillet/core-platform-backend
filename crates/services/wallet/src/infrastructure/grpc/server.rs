@@ -76,6 +76,27 @@ impl WalletService for WalletServiceHandler {
         self.list_owned_items(request).await
     }
 
+    async fn import_loader(
+        &self,
+        request: Request<proto::ImportLoaderRequest>,
+    ) -> Result<Response<proto::ImportLoaderResponse>, Status> {
+        self.import_loader(request).await
+    }
+
+    async fn list_loaders(
+        &self,
+        request: Request<proto::ListLoadersRequest>,
+    ) -> Result<Response<proto::ListLoadersResponse>, Status> {
+        self.list_loaders(request).await
+    }
+
+    async fn delete_loader(
+        &self,
+        request: Request<proto::DeleteLoaderRequest>,
+    ) -> Result<Response<proto::DeleteLoaderResponse>, Status> {
+        self.delete_loader(request).await
+    }
+
     async fn list_stake_positions(
         &self,
         request: Request<proto::ListStakePositionsRequest>,

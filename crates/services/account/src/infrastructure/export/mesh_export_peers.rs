@@ -507,6 +507,9 @@ impl ExportPeers for MeshExportPeers {
         let wallet = export.wallet.map(|w| self.wallet_d.json("wallet.v1.Wallet", &w));
         // The catalogue items it bought (#892).
         let owned_items: Vec<_> = export.owned_items.iter().map(|o| self.wallet_d.json("wallet.v1.OwnedItem", o)).collect();
+        // The loaders it uploaded (#975); their bytes are in the media section.
+        let uploaded_loaders: Vec<_> =
+            export.uploaded_loaders.iter().map(|l| self.wallet_d.json("wallet.v1.UploadedLoader", l)).collect();
         let (mut transactions, mut token) = (Vec::new(), String::new());
         loop {
             let page = client
@@ -547,6 +550,7 @@ impl ExportPeers for MeshExportPeers {
         Ok(Some(json!({
             "wallet": wallet,
             "owned_items": owned_items,
+            "uploaded_loaders": uploaded_loaders,
             "transactions": transactions,
             "stake_positions": positions,
         })))

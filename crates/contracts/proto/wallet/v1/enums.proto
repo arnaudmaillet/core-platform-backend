@@ -56,11 +56,17 @@ enum TransactionKind {
     // minting goes live; `ref_id` is the operator's reason. Never in
     // production; analytics exclude it.
     TRANSACTION_KIND_TEST_GRANT      = 16;
+    // A loader style bought (gems; #975); `ref_id` is the item id.
+    TRANSACTION_KIND_LOADER_STYLE    = 17;
+    // A loader slot, taken by an uploaded loader (gems; #975); `ref_id` is
+    // the loader's id. Never refunded, also when the loader is deleted.
+    TRANSACTION_KIND_LOADER_SLOT     = 18;
 }
 
 // What kind of thing a catalogue item is (#892). An item id is
 // `<family>.<name>`: `icon.<name>`, `theme.<name>`, `frame.<name>`,
-// `banner.<name>`, `card.<name>`, `badge.<name>`, `avatar.<name>`.
+// `banner.<name>`, `card.<name>`, `badge.<name>`, `avatar.<name>`,
+// `loader.<name>`.
 enum ItemFamily {
     ITEM_FAMILY_UNSPECIFIED = 0;
     // An alternate app icon; applied on the device, nothing stored server-side.
@@ -82,6 +88,31 @@ enum ItemFamily {
     // The animated avatar (#945): lets the account's profiles set a clip as
     // their avatar (profile.v1 UpdateAvatar), baked into sprite sheets.
     ITEM_FAMILY_ANIMATED_AVATAR = 7;
+    // A loader style (#975): the app's loading animation, drawn by the app;
+    // `loader.wave` is free (the default). Applied on the device, nothing
+    // stored server-side. Loaders the viewer uploads are not items: see
+    // ImportLoader.
+    ITEM_FAMILY_LOADER          = 8;
+}
+
+// The outcome of a loader import (#975): ordinary states the app renders.
+// Only IMPORTED may have charged a slot.
+enum LoaderImportOutcome {
+    LOADER_IMPORT_OUTCOME_UNSPECIFIED       = 0;
+    // A slot charged and the loader recorded — or, for a retried key or an
+    // asset imported already, nothing more charged.
+    LOADER_IMPORT_OUTCOME_IMPORTED          = 1;
+    // The account holds `LoaderSlots.max` loaders already.
+    LOADER_IMPORT_OUTCOME_MAX_REACHED       = 2;
+    LOADER_IMPORT_OUTCOME_INSUFFICIENT_GEMS = 3;
+    // `expected_price` is not the slot's price: `LoaderSlots.next_slot_price`.
+    LOADER_IMPORT_OUTCOME_PRICE_CHANGED     = 4;
+    // The asset is still uploading or processing: retry once READY.
+    LOADER_IMPORT_OUTCOME_ASSET_NOT_READY   = 5;
+    // The asset failed or was blocked (Screen, a takedown): never importable.
+    LOADER_IMPORT_OUTCOME_ASSET_REJECTED    = 6;
+    // No such asset, not the caller's, or not a MEDIA_KIND_LOADER.
+    LOADER_IMPORT_OUTCOME_NOT_A_LOADER      = 7;
 }
 
 // The outcome of a catalogue purchase: ordinary states the app renders.

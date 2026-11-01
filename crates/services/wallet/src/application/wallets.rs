@@ -7,7 +7,8 @@ use chrono::{DateTime, DurationRound, NaiveDate, TimeDelta, Utc};
 use uuid::Uuid;
 
 use crate::application::port::{
-    AudienceCheck, ClaimOutcome, EnvelopeSummary, EventPublisher, GemSpend, LikePositions, MyStakeRecord, OutboxEvent, OwnedItem,
+    AudienceCheck, ClaimOutcome, EnvelopeSummary, EventPublisher, GemSpend, LikePositions, LoaderAssetStatus, LoaderAssets, LoaderImport,
+    LoaderImportOutcome, MyStakeRecord, OutboxEvent, OwnedItem, UploadedLoader,
     PackOutcome, PurchaseOutcome, SpendOutcome, StakeAnnouncement, StakeCursor, StakeOutcome, StakePositionRecord, StakeResult, StakeStatus, TargetDirectory,
     TransactionCursor, WalletStore, WelcomeGiftOutcome,
 };
@@ -58,6 +59,25 @@ pub struct OwnedItemView {
     pub item_id:     String,
     pub family:      ItemFamily,
     pub acquired_at: Option<DateTime<Utc>>,
+}
+
+/// An account's uploaded loaders and its slots (#975): what the app shows as
+/// *n / cap* and the next slot's price.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoaderSlots {
+    pub loaders:         Vec<UploadedLoader>,
+    pub cap:             usize,
+    pub next_price_gems: i64,
+}
+
+/// A loader import's answer (#975).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoaderImportReply {
+    pub outcome: LoaderImportOutcome,
+    /// The loader imported (or imported earlier and still held).
+    pub loader:  Option<UploadedLoader>,
+    pub slots:   LoaderSlots,
+    pub view:    WalletView,
 }
 
 /// A batch of likes' answer.
@@ -171,6 +191,9 @@ pub struct Wallets {
     /// What the targets came to, for the settlement (part 4); `None`: no
     /// position settles.
     positions: Option<Arc<dyn LikePositions>>,
+    /// Uploaded loaders' assets, in media (#975); `None`: imports and
+    /// deletes are `WAL-6001`.
+    loader_assets: Option<Arc<dyn LoaderAssets>>,
 }
 
 /// Targets engagement answers for per call.
@@ -188,7 +211,13 @@ const ENVELOPE_LEASE_SECS: i64 = 600;
 
 impl Wallets {
     pub fn new(store: Arc<dyn WalletStore>, config: WalletConfig) -> Self {
-        Self { store, config, targets: None, audience: None, publisher: None, positions: None }
+        Self { store, config, targets: None, audience: None, publisher: None, positions: None, loader_assets: None }
+    }
+
+    /// Uploaded loaders (#975): their assets, in media.
+    pub fn with_loader_assets(mut self, assets: Arc<dyn LoaderAssets>) -> Self {
+        self.loader_assets = Some(assets);
+        self
     }
 
     /// Stake settlement (#665 part 4): what the targets came to.
@@ -590,6 +619,84 @@ impl Wallets {
         Ok(owned)
     }
 
+    fn media(&self) -> Result<&Arc<dyn LoaderAssets>, WalletError> {
+        self.loader_assets
+            .as_ref()
+            .ok_or_else(|| WalletError::PeerUnavailable { service: "media", reason: "WALLET_MEDIA_GRPC_ENDPOINT is unset".into() })
+    }
+
+    /// The loaders `account` uploaded (#975), oldest first, and its slots.
+    pub async fn loader_slots(&self, account: &str) -> Result<LoaderSlots, WalletError> {
+        let account = AccountId::parse(account)?;
+        self.slots(&account).await
+    }
+
+    async fn slots(&self, account: &AccountId) -> Result<LoaderSlots, WalletError> {
+        let policy = self.config.loader_slots;
+        Ok(LoaderSlots {
+            loaders:         self.store.uploaded_loaders(account).await?,
+            cap:             policy.cap,
+            next_price_gems: policy.price_gems,
+        })
+    }
+
+    /// Imports `asset_id` as a loader (#975): it must be the account's READY
+    /// `LOADER` asset (so it passed `Screen`); then one slot is charged and
+    /// the loader recorded together, once per key (and per asset). Nothing
+    /// is charged for any other outcome. Adult only, like every gem spend.
+    pub async fn import_loader(
+        &self,
+        account: &str,
+        key: &str,
+        asset_id: &str,
+        expected_price: i64,
+        restricted: bool,
+        now: DateTime<Utc>,
+    ) -> Result<LoaderImportReply, WalletError> {
+        let account = AccountId::parse(account)?;
+        let key = IdempotencyKey::for_operation(Operation::LoaderImport, key)?;
+        if restricted {
+            return Err(WalletError::GemSpendingRestricted);
+        }
+        let asset_id = Uuid::parse_str(asset_id)
+            .map_err(|_| WalletError::InvalidSpend { reason: format!("asset_id '{asset_id}' is not a UUID") })?;
+        let now = ledger_time(now);
+        let refused = |outcome| async move {
+            let wallet = self.store.open(&account, self.config.starter_gems, now).await?;
+            Ok::<_, WalletError>((outcome, None, wallet))
+        };
+        let (outcome, loader, wallet) = match self.media()?.status(&account, &asset_id).await? {
+            LoaderAssetStatus::Ready => {
+                let import = LoaderImport { loader_id: Uuid::now_v7(), asset_id, expected_price };
+                let policy = self.config.loader_slots;
+                self.store.import_loader(&account, &key, &import, &policy, self.config.starter_gems, now).await?
+            }
+            LoaderAssetStatus::NotReady => refused(LoaderImportOutcome::AssetNotReady).await?,
+            LoaderAssetStatus::Rejected => refused(LoaderImportOutcome::AssetRejected).await?,
+            LoaderAssetStatus::NotALoader => refused(LoaderImportOutcome::NotALoader).await?,
+        };
+        Ok(LoaderImportReply { outcome, loader, slots: self.slots(&account).await?, view: self.view(wallet, now) })
+    }
+
+    /// Deletes `account`'s loader `loader_id` (#975): its asset, then the
+    /// loader. Its slot is not given back (no refund). `false` when the
+    /// account holds no such loader.
+    pub async fn delete_loader(&self, account: &str, loader_id: &str) -> Result<(bool, LoaderSlots), WalletError> {
+        let account = AccountId::parse(account)?;
+        let loader_id = Uuid::parse_str(loader_id)
+            .map_err(|_| WalletError::InvalidSpend { reason: format!("loader_id '{loader_id}' is not a UUID") })?;
+        let held = self.store.uploaded_loaders(&account).await?.into_iter().find(|l| l.loader_id == loader_id);
+        let deleted = match held {
+            Some(loader) => {
+                // The asset first: a failure leaves the loader to retry.
+                self.media()?.delete(&account, &loader.asset_id).await?;
+                self.store.delete_loader(&account, &loader_id).await?.is_some()
+            }
+            None => false,
+        };
+        Ok((deleted, self.slots(&account).await?))
+    }
+
     /// Awards `badge_id` to `account` (#912; mesh: the service whose rule it
     /// is), once, announcing it to `profile_ids` (notification). Returns
     /// whether this call awarded it, and when it was.
@@ -775,6 +882,8 @@ pub(crate) mod fakes {
         pub welcome: Mutex<HashMap<String, Option<AccountId>>>,
         /// (account, item bought), oldest first (#892)
         owned:   Mutex<Vec<(AccountId, OwnedItem)>>,
+        /// (account, loader, its import key), oldest first (#975)
+        loaders: Mutex<Vec<(AccountId, crate::application::port::UploadedLoader, String)>>,
     }
 
     impl MemoryStore {
@@ -922,6 +1031,62 @@ pub(crate) mod fakes {
 
         async fn owned_items(&self, account: &AccountId) -> Result<Vec<OwnedItem>, WalletError> {
             Ok(self.owned.lock().unwrap().iter().filter(|(a, _)| a == account).map(|(_, o)| o.clone()).collect())
+        }
+
+        async fn import_loader(
+            &self,
+            account: &AccountId,
+            key: &IdempotencyKey,
+            import: &crate::application::port::LoaderImport,
+            policy: &crate::domain::LoaderSlotPolicy,
+            starter_gems: i64,
+            now: DateTime<Utc>,
+        ) -> Result<(LoaderImportOutcome, Option<UploadedLoader>, Wallet), WalletError> {
+            use crate::domain::LoaderImportDecision;
+            let mut wallet = self.open_locked(account, starter_gems, now);
+            let mut loaders = self.loaders.lock().unwrap();
+            let earlier = loaders
+                .iter()
+                .find(|(a, l, k)| a == account && (k == key.as_str() || l.asset_id == import.asset_id))
+                .map(|(_, l, _)| l.clone());
+            if let Some(loader) = earlier {
+                return Ok((LoaderImportOutcome::Imported, Some(loader), wallet));
+            }
+            if self.replayed(account, key).is_some() {
+                return Ok((LoaderImportOutcome::Imported, None, wallet));
+            }
+            let held = loaders.iter().filter(|(a, _, _)| a == account).count();
+            let outcome = match wallet.decide_loader_import(policy, import.expected_price, held) {
+                LoaderImportDecision::Import => {
+                    wallet.spend_gems(policy.price_gems);
+                    let movement =
+                        (Currency::Gems, -policy.price_gems, wallet.gems, TransactionKind::LoaderSlot, Some(import.loader_id.to_string()));
+                    self.record(account, movement, key.as_str(), now);
+                    self.wallets.lock().unwrap().insert(*account, wallet.clone());
+                    let loader = UploadedLoader {
+                        loader_id:   import.loader_id,
+                        asset_id:    import.asset_id,
+                        price_gems:  policy.price_gems,
+                        imported_at: now,
+                    };
+                    loaders.push((*account, loader.clone(), key.as_str().to_owned()));
+                    return Ok((LoaderImportOutcome::Imported, Some(loader), wallet));
+                }
+                LoaderImportDecision::MaxReached => LoaderImportOutcome::MaxReached,
+                LoaderImportDecision::PriceChanged => LoaderImportOutcome::PriceChanged,
+                LoaderImportDecision::InsufficientGems => LoaderImportOutcome::InsufficientGems,
+            };
+            Ok((outcome, None, wallet))
+        }
+
+        async fn uploaded_loaders(&self, account: &AccountId) -> Result<Vec<UploadedLoader>, WalletError> {
+            Ok(self.loaders.lock().unwrap().iter().filter(|(a, _, _)| a == account).map(|(_, l, _)| l.clone()).collect())
+        }
+
+        async fn delete_loader(&self, account: &AccountId, loader_id: &Uuid) -> Result<Option<UploadedLoader>, WalletError> {
+            let mut loaders = self.loaders.lock().unwrap();
+            let at = loaders.iter().position(|(a, l, _)| a == account && l.loader_id == *loader_id);
+            Ok(at.map(|i| loaders.remove(i).1))
         }
 
         async fn spend_gems(
@@ -1133,6 +1298,7 @@ pub(crate) mod fakes {
             self.settlements.lock().unwrap().retain(|(a, _), _| a != account);
             self.ledger.lock().unwrap().retain(|(t, _)| t.account != *account);
             self.owned.lock().unwrap().retain(|(a, _)| a != account);
+            self.loaders.lock().unwrap().retain(|(a, _, _)| a != account);
             Ok(self.wallets.lock().unwrap().remove(account).is_some())
         }
 
@@ -1545,7 +1711,12 @@ mod tests {
         assert_eq!(buy("theme.red", 50, key()).await.outcome, P::AlreadyOwned);
 
         let owned: Vec<_> = w.owned_items(&account).await.unwrap().into_iter().map(|o| (o.item_id, o.acquired_at.is_some())).collect();
-        assert_eq!(owned, [("theme.pink".into(), false), ("theme.violet".into(), true), ("theme.red".into(), true)]);
+        assert_eq!(owned, [
+            ("theme.pink".into(), false),
+            ("loader.wave".into(), false),
+            ("theme.violet".into(), true),
+            ("theme.red".into(), true),
+        ]);
         let history = w.history(&account, Some(Currency::Gems), 10, "").await.unwrap();
         let spent: Vec<_> = history.transactions.iter().map(|t| (t.kind, t.delta, t.ref_id.as_deref())).take(2).collect();
         assert_eq!(spent, [(TransactionKind::Theme, -50, Some("theme.red")), (TransactionKind::Theme, -50, Some("theme.violet"))]);
@@ -1943,5 +2114,128 @@ mod tests {
         assert_eq!(l.wallets.drain_outbox(10, now).await.unwrap(), 1);
         assert_eq!(l.wallets.drain_outbox(10, now).await.unwrap(), 0, "published once");
         assert_eq!(l.publisher.events.lock().unwrap().len(), 1);
+    }
+
+    /// Loaders' assets as media would answer (#975).
+    #[derive(Default)]
+    struct MemLoaderAssets {
+        statuses: std::sync::Mutex<HashMap<Uuid, LoaderAssetStatus>>,
+        deleted:  std::sync::Mutex<Vec<Uuid>>,
+    }
+
+    impl MemLoaderAssets {
+        fn ready(&self) -> Uuid {
+            let id = Uuid::now_v7();
+            self.statuses.lock().unwrap().insert(id, LoaderAssetStatus::Ready);
+            id
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LoaderAssets for MemLoaderAssets {
+        async fn status(&self, _account: &AccountId, asset_id: &Uuid) -> Result<LoaderAssetStatus, WalletError> {
+            Ok(self.statuses.lock().unwrap().get(asset_id).copied().unwrap_or(LoaderAssetStatus::NotALoader))
+        }
+
+        async fn delete(&self, _account: &AccountId, asset_id: &Uuid) -> Result<(), WalletError> {
+            self.deleted.lock().unwrap().push(*asset_id);
+            self.statuses.lock().unwrap().remove(asset_id);
+            Ok(())
+        }
+    }
+
+    fn with_loaders(starter_gems: i64) -> (Wallets, Arc<MemLoaderAssets>, Arc<MemoryStore>) {
+        let media = Arc::new(MemLoaderAssets::default());
+        let store = Arc::new(MemoryStore::default());
+        let config = WalletConfig { starter_gems, ..WalletConfig::default() };
+        let w = Wallets::new(Arc::clone(&store) as _, config).with_loader_assets(Arc::clone(&media) as _);
+        (w, media, store)
+    }
+
+    /// #975: an import charges one slot for a READY loader of the caller,
+    /// once per key and per asset; any other answer charges nothing.
+    #[tokio::test]
+    async fn a_loader_import_charges_one_slot_once() {
+        use LoaderImportOutcome as O;
+        let (w, media, _) = with_loaders(100);
+        let account = Uuid::now_v7().to_string();
+        let asset = media.ready();
+        let k = key();
+        let first = w.import_loader(&account, &k, &asset.to_string(), 50, false, at(8, 10)).await.unwrap();
+        assert_eq!((first.outcome, first.view.wallet.gems), (O::Imported, 50));
+        let loader = first.loader.clone().unwrap();
+        assert_eq!((loader.asset_id, loader.price_gems), (asset, 50));
+        assert_eq!((first.slots.loaders.len(), first.slots.cap, first.slots.next_price_gems), (1, 10, 50));
+        let history = w.history(&account, None, 10, "").await.unwrap();
+        let slot = history.transactions.iter().find(|t| t.kind == TransactionKind::LoaderSlot).expect("a loader_slot row");
+        assert_eq!((slot.delta, slot.ref_id.clone()), (-50, Some(loader.loader_id.to_string())));
+
+        // Retried, or the same asset under another key: nothing more.
+        for k in [k.clone(), key()] {
+            let again = w.import_loader(&account, &k, &asset.to_string(), 50, false, at(8, 11)).await.unwrap();
+            assert_eq!((again.outcome, again.view.wallet.gems, again.loader), (O::Imported, 50, Some(loader.clone())));
+        }
+
+        let not_ready = Uuid::now_v7();
+        media.statuses.lock().unwrap().insert(not_ready, LoaderAssetStatus::NotReady);
+        let blocked = Uuid::now_v7();
+        media.statuses.lock().unwrap().insert(blocked, LoaderAssetStatus::Rejected);
+        for (asset, outcome) in [(not_ready, O::AssetNotReady), (blocked, O::AssetRejected), (Uuid::now_v7(), O::NotALoader)] {
+            let reply = w.import_loader(&account, &key(), &asset.to_string(), 50, false, at(8, 12)).await.unwrap();
+            assert_eq!((reply.outcome, reply.view.wallet.gems, reply.loader), (outcome, 50, None));
+        }
+        let shown_wrong = w.import_loader(&account, &key(), &media.ready().to_string(), 40, false, at(8, 12)).await.unwrap();
+        assert_eq!((shown_wrong.outcome, shown_wrong.view.wallet.gems), (O::PriceChanged, 50));
+        let second = w.import_loader(&account, &key(), &media.ready().to_string(), 50, false, at(8, 12)).await.unwrap();
+        assert_eq!((second.outcome, second.view.wallet.gems), (O::Imported, 0));
+        let broke = w.import_loader(&account, &key(), &media.ready().to_string(), 50, false, at(8, 12)).await.unwrap();
+        assert_eq!((broke.outcome, broke.slots.loaders.len()), (O::InsufficientGems, 2));
+
+        assert!(matches!(
+            w.import_loader(&account, &key(), &media.ready().to_string(), 50, true, at(8, 12)).await,
+            Err(WalletError::GemSpendingRestricted)
+        ));
+    }
+
+    /// #975: at most 10 loaders; deleting one removes its asset and its slot
+    /// (no refund), and only the next import pays again.
+    #[tokio::test]
+    async fn loaders_are_capped_and_a_delete_refunds_nothing() {
+        use LoaderImportOutcome as O;
+        let (w, media, store) = with_loaders(1_000);
+        let account = Uuid::now_v7().to_string();
+        let mut last = None;
+        for _ in 0..10 {
+            let reply = w.import_loader(&account, &key(), &media.ready().to_string(), 50, false, at(8, 10)).await.unwrap();
+            assert_eq!(reply.outcome, O::Imported);
+            last = reply.loader;
+        }
+        let full = w.import_loader(&account, &key(), &media.ready().to_string(), 50, false, at(8, 10)).await.unwrap();
+        assert_eq!((full.outcome, full.view.wallet.gems), (O::MaxReached, 500));
+
+        let last = last.unwrap();
+        let (deleted, slots) = w.delete_loader(&account, &last.loader_id.to_string()).await.unwrap();
+        assert!(deleted);
+        assert_eq!(slots.loaders.len(), 9);
+        assert_eq!(*media.deleted.lock().unwrap(), [last.asset_id], "its asset goes");
+        assert_eq!(w.get(&account, at(8, 10)).await.unwrap().wallet.gems, 500, "no refund");
+        let (again, _) = w.delete_loader(&account, &last.loader_id.to_string()).await.unwrap();
+        assert!(!again, "nothing left to delete");
+        let refill = w.import_loader(&account, &key(), &media.ready().to_string(), 50, false, at(8, 11)).await.unwrap();
+        assert_eq!((refill.outcome, refill.view.wallet.gems), (O::Imported, 450), "a new slot is paid");
+
+        // Erased with the account.
+        let id = AccountId::parse(&account).unwrap();
+        w.erase(&id).await.unwrap();
+        assert!(store.uploaded_loaders(&id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn without_media_loaders_cannot_be_imported() {
+        let w = wallets();
+        let account = Uuid::now_v7().to_string();
+        let reply = w.import_loader(&account, &key(), &Uuid::now_v7().to_string(), 50, false, at(8, 10)).await;
+        assert!(matches!(reply, Err(WalletError::PeerUnavailable { service: "media", .. })), "{reply:?}");
+        assert!(w.loader_slots(&account).await.unwrap().loaders.is_empty());
     }
 }

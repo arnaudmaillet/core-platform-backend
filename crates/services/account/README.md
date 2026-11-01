@@ -265,7 +265,7 @@ likes (engagement's `ListLikesByAccount`, #665: a like is a point, the account's
 (`saves.json`: engagement's mesh-only `ListSavedPostsByAccount`, #872), its viewing history
 (`view_history.json`: engagement's mesh-only `ListViewHistoryByAccount`, #944, the last 90 days), its wallet
 (`wallet.json`: wallet's mesh-only `ExportWallet` — read without opening one, with the catalogue items
-the account bought (`owned_items`, #892) — every page of
+the account bought (`owned_items`, #892) and the loaders it uploaded (`uploaded_loaders`, #975) — every page of
 `ListWalletTransactions`, and `ListStakePositions`, each stake with its settlement; without
 `ACCOUNT_WALLET_GRPC_ENDPOINT` the archive goes without it, logged) and its media
 (`ListAssetsByOwner`, links valid 7 days). The server runs the pass every

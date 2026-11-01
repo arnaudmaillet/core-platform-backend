@@ -92,4 +92,27 @@ service WalletService {
     // `wallet.v1.events` announces `badge_awarded` to `profile_ids`
     // (notification). Idempotent: a later call answers the first award.
     rpc AwardBadge(AwardBadgeRequest) returns (AwardBadgeResponse);
+
+    // Uploaded loaders (#975). A loader is a purely private cosmetic: only its
+    // owner sees it (its asset is a media.v1 MEDIA_KIND_LOADER, resolved with
+    // media's ResolveLoaders). Each import takes one slot, paid then: a
+    // deleted loader frees room under the cap but no slot to reuse, and is
+    // never refunded.
+
+    // Imports the caller's READY MEDIA_KIND_LOADER asset (so it passed
+    // Screen): one transaction charges one slot (`expected_price`, a
+    // `loader_slot` ledger row, `ref_id` = the loader id) and records the
+    // loader. Idempotent per key, and per asset. Answered in-band
+    // (LoaderImportOutcome); nothing charged unless IMPORTED. WAL-3001
+    // (PERMISSION_DENIED) for a caller under 18 or of unknown age; WAL-6001
+    // (UNAVAILABLE) when media cannot be asked. Edge: the caller's account.
+    rpc ImportLoader(ImportLoaderRequest) returns (ImportLoaderResponse);
+
+    // The caller's uploaded loaders, the cap and the next slot's price. Edge:
+    // the caller's account.
+    rpc ListLoaders(ListLoadersRequest) returns (ListLoadersResponse);
+
+    // Deletes one of the caller's loaders and its asset; no refund, its slot
+    // is gone. `deleted` false: no such loader. Edge: the caller's account.
+    rpc DeleteLoader(DeleteLoaderRequest) returns (DeleteLoaderResponse);
 }

@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::domain::event::WalletEvent;
 use crate::domain::{
     AccountId, Allocation, CalibrationRow, CatalogItem, ClaimPolicy, Conviction, Currency, DayPosition, DuePosition, EnvelopeDay,
-    IdempotencyKey, Observed, Settlement, StakeAsk, StakePackOffer, StakePackPolicy,
+    IdempotencyKey, LoaderSlotPolicy, Observed, Settlement, StakeAsk, StakePackOffer, StakePackPolicy,
     StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
@@ -67,6 +67,63 @@ pub enum PurchaseOutcome {
 pub struct OwnedItem {
     pub item_id:     String,
     pub acquired_at: DateTime<Utc>,
+}
+
+/// A loader the account uploaded (#975): one paid slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadedLoader {
+    pub loader_id:   Uuid,
+    /// Its media asset (`MEDIA_KIND_LOADER`, the account's).
+    pub asset_id:    Uuid,
+    /// What its slot cost.
+    pub price_gems:  i64,
+    pub imported_at: DateTime<Utc>,
+}
+
+/// A loader to import (#975): a new loader id for a checked asset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoaderImport {
+    pub loader_id:      Uuid,
+    pub asset_id:       Uuid,
+    pub expected_price: i64,
+}
+
+/// How a loader import ended (#975). Only `Imported` may have charged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoaderImportOutcome {
+    /// Charged a slot now — or earlier, for a replayed key or an asset
+    /// imported already (then nothing more).
+    Imported,
+    MaxReached,
+    InsufficientGems,
+    PriceChanged,
+    /// The asset is still uploading or processing.
+    AssetNotReady,
+    /// The asset failed or was blocked (`Screen`, a takedown).
+    AssetRejected,
+    /// No such asset, not the caller's, or not a loader.
+    NotALoader,
+}
+
+/// Where a loader's asset stands, for its owner (#975).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoaderAssetStatus {
+    Ready,
+    NotReady,
+    Rejected,
+    /// Missing, deleted, another account's, or another kind.
+    NotALoader,
+}
+
+/// Loaders' assets, in media over the mesh (#975).
+#[async_trait]
+pub trait LoaderAssets: Send + Sync + 'static {
+    /// Where `asset_id` stands as `account`'s loader.
+    async fn status(&self, account: &AccountId, asset_id: &Uuid) -> Result<LoaderAssetStatus, WalletError>;
+
+    /// Deletes `account`'s loader asset; one gone already, or kept by a legal
+    /// hold, is fine.
+    async fn delete(&self, account: &AccountId, asset_id: &Uuid) -> Result<(), WalletError>;
 }
 
 /// How a gem spend ended.
@@ -214,6 +271,29 @@ pub trait WalletStore: Send + Sync + 'static {
 
     /// The items `account` bought or earned, oldest first.
     async fn owned_items(&self, account: &AccountId) -> Result<Vec<OwnedItem>, WalletError>;
+
+    /// Imports a loader (#975; the wallet opened if needed, then locked): a
+    /// key already used, or an asset already imported, answers `Imported`
+    /// with that loader (if still held) and charges nothing; otherwise the
+    /// wallet decides under `policy`, and an import charges one slot (its
+    /// ledger row: `loader_slot`, `ref_id` = the loader id) and records the
+    /// loader together.
+    #[allow(clippy::too_many_arguments)]
+    async fn import_loader(
+        &self,
+        account: &AccountId,
+        key: &IdempotencyKey,
+        import: &LoaderImport,
+        policy: &LoaderSlotPolicy,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<(LoaderImportOutcome, Option<UploadedLoader>, Wallet), WalletError>;
+
+    /// The loaders `account` uploaded, oldest first.
+    async fn uploaded_loaders(&self, account: &AccountId) -> Result<Vec<UploadedLoader>, WalletError>;
+
+    /// Forgets `account`'s loader `loader_id`; `None` when it holds none.
+    async fn delete_loader(&self, account: &AccountId, loader_id: &Uuid) -> Result<Option<UploadedLoader>, WalletError>;
 
     /// Awards `badge_id` to `account` (#912), once: a new award records the
     /// owned item with its `badge_awarded` outbox event (returned, for the

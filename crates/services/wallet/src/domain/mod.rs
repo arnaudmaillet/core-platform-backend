@@ -10,7 +10,7 @@ pub mod stake;
 pub mod wallet;
 
 pub use calibration::{CalibrationReport, CalibrationRow, EnvelopeDay};
-pub use catalog::{Catalog, CatalogItem, ItemFamily, PurchaseDecision};
+pub use catalog::{Catalog, CatalogItem, ItemFamily, LoaderImportDecision, LoaderSlotPolicy, PurchaseDecision};
 pub use envelope::{Allocation, DayPosition, EnvelopePolicy};
 pub use settlement::{DuePosition, Observed, Settlement, SettlementPolicy};
 pub use stake::{Conviction, StakeAsk, StakeDecision, StakePolicy, StakeTarget, DEFAULT_CONVICTION_BPS};

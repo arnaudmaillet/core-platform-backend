@@ -748,3 +748,59 @@ async fn a_test_grant_credits_once_and_reconciles() {
     let off = Wallets::new(store(&pool), WalletConfig::default());
     assert!(off.grant_test_gems(&account, "it-grant-0002", 10, "x", now).await.is_err());
 }
+
+/// #975: raced imports (different keys, different assets) never pass the cap
+/// (the wallet row lock, then the count); each import is one `loader_slot`
+/// row naming its loader; the same asset again charges nothing; a delete
+/// refunds nothing; erasure forgets the loaders.
+#[tokio::test]
+async fn concurrent_loader_imports_respect_the_cap_and_charge_a_slot_each() {
+    use wallet::application::port::{LoaderImport, LoaderImportOutcome};
+    use wallet::domain::LoaderSlotPolicy;
+    let pool = pool().await;
+    let store = store(&pool);
+    let account = AccountId::from_uuid(Uuid::now_v7());
+    let policy = LoaderSlotPolicy { cap: 3, price_gems: 20 };
+    let key = || IdempotencyKey::for_operation(Operation::LoaderImport, &Uuid::now_v7().to_string()).unwrap();
+    let import = |asset_id| LoaderImport { loader_id: Uuid::now_v7(), asset_id, expected_price: 20 };
+    let raced = (0..6).map(|_| {
+        let (store, key, import) = (Arc::clone(&store), key(), import(Uuid::now_v7()));
+        tokio::spawn(async move { store.import_loader(&account, &key, &import, &policy, 100, Utc::now()).await.unwrap().0 })
+    });
+    let mut outcomes = Vec::new();
+    for import in raced {
+        outcomes.push(import.await.unwrap());
+    }
+    assert_eq!(outcomes.iter().filter(|o| **o == LoaderImportOutcome::Imported).count(), 3, "{outcomes:?}");
+    assert_eq!(outcomes.iter().filter(|o| **o == LoaderImportOutcome::MaxReached).count(), 3, "{outcomes:?}");
+
+    let loaders = store.uploaded_loaders(&account).await.unwrap();
+    assert_eq!(loaders.len(), 3);
+    let wallet = store.peek(&account).await.unwrap().unwrap();
+    assert_eq!(wallet.gems, 40);
+    let history = store.history(&account, Some(Currency::Gems), None, 10).await.unwrap();
+    let slots: Vec<_> = history.iter().filter(|t| t.kind == TransactionKind::LoaderSlot).collect();
+    assert_eq!(slots.len(), 3);
+    assert!(slots.iter().all(|t| t.delta == -20 && loaders.iter().any(|l| Some(l.loader_id.to_string()) == t.ref_id)));
+
+    // The same asset under a new key: that loader, nothing charged.
+    let (again, loader, wallet) =
+        store.import_loader(&account, &key(), &import(loaders[0].asset_id), &policy, 100, Utc::now()).await.unwrap();
+    assert_eq!((again, loader.as_ref(), wallet.gems), (LoaderImportOutcome::Imported, Some(&loaders[0]), 40));
+
+    // A delete frees room, refunds nothing; the next import pays.
+    assert_eq!(store.delete_loader(&account, &loaders[0].loader_id).await.unwrap().as_ref(), Some(&loaders[0]));
+    assert_eq!(store.delete_loader(&account, &loaders[0].loader_id).await.unwrap(), None);
+    assert_eq!(store.peek(&account).await.unwrap().unwrap().gems, 40);
+    let (next, _, wallet) = store.import_loader(&account, &key(), &import(Uuid::now_v7()), &policy, 100, Utc::now()).await.unwrap();
+    assert_eq!((next, wallet.gems), (LoaderImportOutcome::Imported, 20));
+    let (short, _, _) = store
+        .import_loader(&account, &key(), &import(Uuid::now_v7()), &LoaderSlotPolicy { cap: 10, price_gems: 21 }, 100, Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(short, LoaderImportOutcome::PriceChanged, "the shown price is 20");
+    assert_reconciles(&pool, &account).await;
+
+    assert!(store.erase(&account).await.unwrap());
+    assert!(store.uploaded_loaders(&account).await.unwrap().is_empty());
+}
