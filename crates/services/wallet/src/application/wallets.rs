@@ -149,6 +149,8 @@ fn parse_stake_cursor(token: &str) -> Result<Option<StakeCursor>, WalletError> {
 
 /// Longest `ref_id` a spend may name.
 const MAX_REF_LEN: usize = 64;
+/// The most one test grant credits (#967).
+pub const MAX_TEST_GRANT: i64 = 100_000;
 
 /// One page of history; `next_page_token` is `None` on the last.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -288,6 +290,36 @@ impl Wallets {
         let (outcome, wallet) =
             self.store.spend_gems(&account, &key, &spend, self.config.starter_gems, ledger_time(now)).await?;
         Ok((outcome, wallet.gems))
+    }
+
+    /// Credits `amount` gems to a test account (#967), until minting goes
+    /// live: refused unless the config allows test grants (never in
+    /// production). Once per key; answers whether it credited and the gems.
+    pub async fn grant_test_gems(
+        &self,
+        account: &str,
+        key: &str,
+        amount: i64,
+        reason: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(bool, i64), WalletError> {
+        if let Err(reason) = &self.config.test_grants {
+            return Err(WalletError::TestGrantsDisabled { reason: reason.clone() });
+        }
+        let account = AccountId::parse(account)?;
+        let key = IdempotencyKey::for_operation(Operation::TestGrant, key)?;
+        if !(1..=MAX_TEST_GRANT).contains(&amount) {
+            return Err(WalletError::InvalidSpend { reason: format!("a test grant is 1 to {MAX_TEST_GRANT} gems") });
+        }
+        let reason = reason.trim();
+        if reason.is_empty() || reason.len() > MAX_REF_LEN {
+            return Err(WalletError::InvalidSpend { reason: "a test grant names its reason (at most 64 characters)".into() });
+        }
+        let credit = GemSpend { amount, kind: TransactionKind::TestGrant, ref_id: Some(reason.to_owned()) };
+        let (credited, wallet) =
+            self.store.credit_gems(&account, &key, &credit, self.config.starter_gems, ledger_time(now)).await?;
+        tracing::warn!(account = %account, amount, credited, reason, "test gems granted");
+        Ok((credited, wallet.gems))
     }
 
     /// Commits a batch of likes. `own_profiles`: the caller's profiles (the
@@ -912,6 +944,25 @@ pub(crate) mod fakes {
             self.record(account, movement, key.as_str(), now);
             self.wallets.lock().unwrap().insert(*account, wallet.clone());
             Ok((SpendOutcome::Spent, wallet))
+        }
+
+        async fn credit_gems(
+            &self,
+            account: &AccountId,
+            key: &IdempotencyKey,
+            credit: &GemSpend,
+            starter_gems: i64,
+            now: DateTime<Utc>,
+        ) -> Result<(bool, Wallet), WalletError> {
+            let mut wallet = self.open_locked(account, starter_gems, now);
+            if self.replayed(account, key).is_some() {
+                return Ok((false, wallet));
+            }
+            wallet.gems += credit.amount;
+            let movement = (Currency::Gems, credit.amount, wallet.gems, credit.kind, credit.ref_id.clone());
+            self.record(account, movement, key.as_str(), now);
+            self.wallets.lock().unwrap().insert(*account, wallet.clone());
+            Ok((true, wallet))
         }
 
         async fn stake(
@@ -1735,6 +1786,28 @@ mod tests {
         w.erase(&me).await.unwrap();
         assert_eq!(w.welcome_gift(&you, &device, at).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven, "still welcomed");
         assert_eq!(w.welcome_gift(&you, &"e".repeat(64), at).await.unwrap(), WelcomeGiftOutcome::Credited(50));
+    }
+
+    /// #967: outside production with the flag on, a test grant credits once
+    /// per key with its own kind and reason; anywhere else it is refused.
+    #[tokio::test]
+    async fn a_test_grant_credits_once_outside_production_only() {
+        let on = WalletConfig { test_grants: Ok(()), ..WalletConfig::default() };
+        let w = Wallets::new(Arc::new(MemoryStore::default()), on);
+        let me = AccountId::from_uuid(Uuid::now_v7()).to_string();
+        let at = Utc::now();
+
+        assert_eq!(w.grant_test_gems(&me, "qa-grant-1", 2000, "staging QA", at).await.unwrap(), (true, 2100));
+        assert_eq!(w.grant_test_gems(&me, "qa-grant-1", 2000, "staging QA", at).await.unwrap(), (false, 2100), "a retry credits once");
+        let page = w.history(&me, Some(Currency::Gems), 10, "").await.unwrap();
+        let grant = page.transactions.iter().find(|t| t.kind == TransactionKind::TestGrant).expect("its own kind");
+        assert_eq!((grant.delta, grant.ref_id.as_deref()), (2000, Some("staging QA")));
+        assert!(w.grant_test_gems(&me, "qa-grant-2", 0, "x", at).await.is_err(), "a positive amount");
+        assert!(w.grant_test_gems(&me, "qa-grant-2", 10, " ", at).await.is_err(), "a reason");
+
+        let off = wallets();
+        let err = off.grant_test_gems(&me, "qa-grant-3", 10, "x", at).await.unwrap_err();
+        assert!(matches!(err, WalletError::TestGrantsDisabled { .. }), "{err:?}");
     }
 
     /// #886: the caller's own stakes, newest first, filtered and paged; each

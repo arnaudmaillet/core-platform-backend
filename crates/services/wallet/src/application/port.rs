@@ -238,6 +238,18 @@ pub trait WalletStore: Send + Sync + 'static {
         now: DateTime<Utc>,
     ) -> Result<(SpendOutcome, Wallet), WalletError>;
 
+    /// Credits gems (the wallet opened if needed, then locked) once per key
+    /// (#967: a test grant): a key already used credits nothing and answers
+    /// `false`.
+    async fn credit_gems(
+        &self,
+        account: &AccountId,
+        key: &IdempotencyKey,
+        credit: &GemSpend,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<(bool, Wallet), WalletError>;
+
     /// Stakes a batch (the wallet opened if needed, then locked): a key
     /// already used answers its first result; otherwise the policy decides
     /// from what the account put on the target and staked in the last hour

@@ -65,6 +65,9 @@ pub enum TransactionKind {
     CardStyle,
     /// The animated avatar bought with gems (#945; `ref_id`: the item id).
     AnimatedAvatar,
+    /// Gems credited to a test account outside production (#967; `ref_id`:
+    /// the operator's reason). Never minted, never earned: analytics exclude it.
+    TestGrant,
     /// Written by a newer version of this service.
     Unknown,
 }
@@ -87,6 +90,7 @@ impl TransactionKind {
             Self::AnimatedBanner => "animated_banner",
             Self::CardStyle => "card_style",
             Self::AnimatedAvatar => "animated_avatar",
+            Self::TestGrant => "test_grant",
             Self::Unknown => "unknown",
         }
     }
@@ -108,6 +112,7 @@ impl TransactionKind {
             "animated_banner" => Self::AnimatedBanner,
             "card_style" => Self::CardStyle,
             "animated_avatar" => Self::AnimatedAvatar,
+            "test_grant" => Self::TestGrant,
             _ => Self::Unknown,
         }
     }
@@ -140,6 +145,8 @@ pub enum Operation {
     Stake,
     /// A catalogue purchase (#892).
     Purchase,
+    /// A test grant outside production (#967).
+    TestGrant,
 }
 
 impl Operation {
@@ -150,6 +157,7 @@ impl Operation {
             Self::SpendGems => "spend",
             Self::Stake => "stake",
             Self::Purchase => "item",
+            Self::TestGrant => "grant",
         }
     }
 }
@@ -215,6 +223,7 @@ mod tests {
             TransactionKind::AnimatedBanner,
             TransactionKind::CardStyle,
             TransactionKind::AnimatedAvatar,
+            TransactionKind::TestGrant,
         ] {
             assert_eq!(TransactionKind::parse(k.as_str()), k);
         }

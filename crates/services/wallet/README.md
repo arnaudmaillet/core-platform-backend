@@ -162,6 +162,17 @@ last settlements land), the positions settled that day share a fixed pool —
    0006; on the nil UUID's shard). A day is leased to one replica; recomputing it gives the same
    shares. **Still nothing minted.**
 
+**Test gems (#967), outside production only, until minting goes live.** An operator runs
+`wallet-server grant-test-gems <account_id> <amount> <idempotency_key> <reason…>` inside a wallet pod.
+- **What it does.** It credits `amount` gems (1 to 100 000) to the account as one ledger row of its own
+  kind, `test_grant` (`TRANSACTION_KIND_TEST_GRANT`, `ref_id` = the reason). The grant shows honestly in
+  Activity, and analytics exclude it. Once per key: a retry credits nothing more.
+- **Where it works.** Only where `WALLET_ENVIRONMENT` is `staging`, `development`, `local` or `test`
+  **and** `WALLET_TEST_GRANTS=on`. Anywhere else, unset included, counts as production: the command is
+  refused before it touches the database (`WAL-3002`).
+- **What it is not.** It is not an RPC, so nothing is exposed on the network. It is never minting (#890):
+  no gem is earned.
+
 **Calibration report (#893, the Go / No-Go checks of charter §40–§41).** An operator runs
 `wallet-server calibration-report [YYYY-MM-DD]` inside a wallet pod (default: yesterday, UTC). It reads
 every shard's settlements counted in that day's envelope, writes nothing, and prints JSON:
@@ -312,6 +323,7 @@ ServiceAccount token, `x-mesh-token`. `off` until the infra provides the tokens 
 | Code | Meaning | gRPC |
 |---|---|---|
 | `WAL-3001` | gems cannot be spent (under 18, or age unknown) | `PERMISSION_DENIED` |
+| `WAL-3002` | test grants are off here (production, or `WALLET_TEST_GRANTS` not on; #967) | `PERMISSION_DENIED` |
 | `WAL-5001` | an unreadable ledger row (fail closed) | `INTERNAL` |
 | `WAL-6001` | post, comment or social-graph unavailable: the like is retried | `UNAVAILABLE` |
 | `WAL-6002` | a publish failed (internal: the outbox keeps the event; never returned by `Stake`) | `UNAVAILABLE` |
@@ -387,6 +399,8 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_ENVELOPE_TARGET_CAP_BPS` | `200` | the most one target's positions receive together, in basis points of the pool (≤ 10000) |
 | `WALLET_OUTCOME_TOP_PERCENT` | `15` | a target scores when it ends the day in this top share of the day's targets (1–100) |
 | `WALLET_WELCOME_GIFT` | `50` | the welcome gift (#827, #943): the likes a guest's device gets when it becomes a member |
+| `WALLET_ENVIRONMENT` | unset (= production) | `staging`, `development`, `local` or `test`: where test grants may be switched on (#967). Anything else counts as production |
+| `WALLET_TEST_GRANTS` | off | `on` (with a non-production `WALLET_ENVIRONMENT`) allows `grant-test-gems` (#967). Never set in production |
 | `WALLET_CONVICTION_PROBABILITIES` | `0.25,0.40,0.60,0.80` | the probability each conviction level C1–C4 stands for (#888): four ascending values in (0, 1); anything else keeps the default |
 | `WALLET_ENVELOPE_SECS` | `600` | how often the envelope checks for a finished day |
 | `WALLET_ALLOW_LOG_PUBLISHER` | unset | `true`: start without `KAFKA_BROKERS`, logging events (local only) |
