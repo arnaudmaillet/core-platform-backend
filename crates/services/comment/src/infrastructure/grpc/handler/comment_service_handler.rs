@@ -12,7 +12,8 @@ use crate::application::port::CommentSummary;
 use crate::application::query::{
     get_comment::GetCommentQuery,
     list_by_author::ListCommentsByAuthorQuery,
-    list_replies::{ListRepliesQuery, ReplySort},
+    list_replies::ListRepliesQuery,
+    popularity::CommentSort,
     list_top_level::ListTopLevelQuery,
 };
 use crate::domain::aggregate::Comment;
@@ -178,6 +179,7 @@ where
             post_id:    req.post_id,
             limit:      req.limit,
             page_token: Some(req.page_token).filter(|s| !s.is_empty()),
+            sort:       reply_sort_from_proto(req.sort),
             viewer,
         };
         let (summaries, next): (Vec<CommentSummary>, Option<String>) = self
@@ -343,10 +345,10 @@ fn summary_to_proto(s: CommentSummary) -> proto::CommentView {
 }
 
 /// UNSPECIFIED and unknown values: NEWEST (#832).
-fn reply_sort_from_proto(sort: i32) -> ReplySort {
+fn reply_sort_from_proto(sort: i32) -> CommentSort {
     match proto::ReplySort::try_from(sort) {
-        Ok(proto::ReplySort::Popularity) => ReplySort::Popularity,
-        _ => ReplySort::Newest,
+        Ok(proto::ReplySort::Popularity) => CommentSort::Popularity,
+        _ => CommentSort::Newest,
     }
 }
 

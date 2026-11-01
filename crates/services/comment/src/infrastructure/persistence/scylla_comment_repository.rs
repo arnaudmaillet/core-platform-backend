@@ -537,13 +537,15 @@ impl CommentRepository for ScyllaCommentRepository {
         comment_id: &CommentId,
         max:        i32,
     ) -> Result<Vec<CommentSummary>, CommentError> {
-        let cql = format!(
-            "SELECT {FEED_COLUMNS} FROM comment.comments_by_post WHERE post_id = ? AND parent_id = ? LIMIT ?"
-        );
-        let rows = self
-            .feed_rows(&cql, (post_id.as_uuid(), comment_id.as_uuid(), max.max(1)), "list_reply_window")
-            .await?;
-        rows.into_iter().map(feed_row_to_summary).collect()
+        self.slot_window(post_id, comment_id.as_uuid(), max, "list_reply_window").await
+    }
+
+    async fn list_top_level_window(
+        &self,
+        post_id: &PostId,
+        max:     i32,
+    ) -> Result<Vec<CommentSummary>, CommentError> {
+        self.slot_window(post_id, NIL_UUID, max, "list_top_level_window").await
     }
 
     // ── list_by_author ────────────────────────────────────────────────────────
@@ -651,6 +653,22 @@ impl CommentRepository for ScyllaCommentRepository {
 }
 
 impl ScyllaCommentRepository {
+    /// A slot's `max` newest comments (the top level, or one comment's
+    /// replies), newest first: the window a popularity page ranks.
+    async fn slot_window(
+        &self,
+        post_id: &PostId,
+        parent:  Uuid,
+        max:     i32,
+        ctx:     &'static str,
+    ) -> Result<Vec<CommentSummary>, CommentError> {
+        let cql = format!(
+            "SELECT {FEED_COLUMNS} FROM comment.comments_by_post WHERE post_id = ? AND parent_id = ? LIMIT ?"
+        );
+        let rows = self.feed_rows(&cql, (post_id.as_uuid(), parent, max.max(1)), ctx).await?;
+        rows.into_iter().map(feed_row_to_summary).collect()
+    }
+
     /// One page of a thread slot (the top level, or one comment's replies),
     /// newest first, resuming exactly after the token's row.
     async fn list_slot(

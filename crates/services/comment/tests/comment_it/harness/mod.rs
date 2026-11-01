@@ -25,7 +25,7 @@ use comment::application::port::{
 };
 use comment::domain::comment_filter::TermList;
 use comment::application::query::get_comment::GetCommentQuery;
-use comment::application::query::list_replies::{ListRepliesQuery, ReplySort};
+use comment::application::query::list_replies::{CommentSort as ReplySort, ListRepliesQuery};
 use comment::application::query::list_top_level::ListTopLevelQuery;
 use comment::domain::event::{CommentCreatedEvent, DomainEvent};
 use comment::error::CommentError;
@@ -380,7 +380,14 @@ impl TestHarness {
             .query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
-                ListTopLevelQuery { post_id: post_id.to_owned(), limit: 100, page_token: None, viewer, mature: true },
+                ListTopLevelQuery {
+                    post_id: post_id.to_owned(),
+                    limit: 100,
+                    page_token: None,
+                    sort: ReplySort::Newest,
+                    viewer,
+                    mature: true,
+                },
             ))
             .await?;
         Ok(summaries)
@@ -398,7 +405,14 @@ impl TestHarness {
             .query_bus
             .dispatch(Envelope::new(
                 Uuid::now_v7(),
-                ListTopLevelQuery { post_id: post_id.to_owned(), limit: 100, page_token: None, viewer, mature },
+                ListTopLevelQuery {
+                    post_id: post_id.to_owned(),
+                    limit: 100,
+                    page_token: None,
+                    sort: ReplySort::Newest,
+                    viewer,
+                    mature,
+                },
             ))
             .await?;
         Ok(summaries)
@@ -414,6 +428,7 @@ impl TestHarness {
                     post_id:    post_id.to_owned(),
                     limit:      100,
                     page_token: None,
+                    sort:       ReplySort::Newest,
                     viewer:     Viewer::Internal,
                     mature:     true,
                 },
@@ -468,6 +483,39 @@ impl TestHarness {
             ))
             .await
             .expect("list_replies page")
+    }
+
+    /// One page of a post's top-level comments in `sort` order, as `viewer`
+    /// (#977).
+    pub async fn top_level_page(
+        &self,
+        post_id: &str,
+        sort: ReplySort,
+        limit: i32,
+        page_token: Option<String>,
+        viewer: Viewer,
+    ) -> (Vec<CommentSummary>, Option<String>) {
+        self.query_bus
+            .dispatch(Envelope::new(
+                Uuid::now_v7(),
+                ListTopLevelQuery { post_id: post_id.to_owned(), limit, page_token, sort, viewer, mature: true },
+            ))
+            .await
+            .expect("list_top_level page")
+    }
+
+    /// Every top-level comment of a post, page by page in `sort` order, as
+    /// `viewer` (#977).
+    pub async fn all_top_level(&self, post_id: &str, sort: ReplySort, limit: i32, viewer: Viewer) -> Vec<String> {
+        let (mut ids, mut token) = (Vec::new(), None);
+        loop {
+            let (page, next) = self.top_level_page(post_id, sort, limit, token, viewer.clone()).await;
+            ids.extend(page.into_iter().map(|c| c.comment_id.as_str()));
+            match next {
+                Some(next) => token = Some(next),
+                None => return ids,
+            }
+        }
     }
 
     /// Every reply of `parent`, page by page in `sort` order (#832).

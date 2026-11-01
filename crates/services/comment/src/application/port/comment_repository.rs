@@ -78,8 +78,17 @@ pub trait CommentRepository: Send + Sync + 'static {
         max:        i32,
     ) -> Result<Vec<CommentSummary>, CommentError>;
 
-    /// The `list_replies` page token that resumes right after `last` — how a
-    /// popularity page carries on, newest first, past its ranked window.
+    /// The `max` newest top-level comments of a post, newest first — the
+    /// window a popularity page ranks (#977).
+    async fn list_top_level_window(
+        &self,
+        post_id: &PostId,
+        max:     i32,
+    ) -> Result<Vec<CommentSummary>, CommentError>;
+
+    /// The `list_replies` / `list_top_level` page token that resumes right
+    /// after `last` — how a popularity page carries on, newest first, past
+    /// its ranked window.
     fn page_token_after(&self, last: &CommentSummary) -> String;
 
     /// A profile's own comments, newest first, as `comment.comments` holds

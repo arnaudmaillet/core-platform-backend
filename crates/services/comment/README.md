@@ -87,7 +87,7 @@ navigable) : **Purge** (physical DELETE from both tables). Both paths emit `comm
 |---|---|---|---|
 | ScyllaDB (`comment`) | durable store | reads + writes fail | **Hard** — `CMT-…/Storage` |
 | Kafka | `comment.*` emission | engagement comment counters lag | **Soft** — comments still persist |
-| `engagement` (`BatchGetLikes`) | replies by popularity (#832) | popularity pages rank nothing | **Soft** — they come back newest first |
+| `engagement` (`BatchGetLikes`) | replies and top-level comments by popularity (#832, #977) | popularity pages rank nothing | **Soft** — they come back newest first |
 
 **Upstream (blast radius):**
 
@@ -130,6 +130,10 @@ the newest, then carries on with the older replies newest first. Its pages resum
 by `(likes, created_at, comment_id)`; the ranking is read again per page, so a reply whose likes change
 in between can show twice or be passed over (the client de-duplicates). Engagement unreachable: the
 page comes back newest first (logged, never an error).
+`ListTopLevel { sort: POPULARITY }` (#977) ranks the post's top-level comments the same way: its 500
+newest by likes, then the older ones newest first, with the same cursor and de-duplication rule, reply
+counts filled. The read gate filters each page after the ranking in both orders, so the comments the
+reader may not see never show, and a page can come back short with a token.
 
 **A profile's own comments (#653).** `ListCommentsByAuthor(author_id)` is **mesh only** (never on the
 edge): the GDPR data export reads a profile's comments, newest first, as `comments` holds them now — a

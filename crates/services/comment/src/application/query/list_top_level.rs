@@ -3,7 +3,8 @@ use std::sync::Arc;
 use cqrs::{Envelope, Query, QueryHandler};
 
 use crate::{
-    application::port::{filter_page, CommentRepository, CommentSummary, OwnerFilters, ReadGate},
+    application::port::{filter_page, CommentLikes, CommentRepository, CommentSummary, OwnerFilters, ReadGate},
+    application::query::popularity::{self, CommentSort, Slot},
     domain::value_object::{PostId, Viewer},
     error::CommentError,
 };
@@ -12,6 +13,8 @@ pub struct ListTopLevelQuery {
     pub post_id:    String,
     pub limit:      i32,
     pub page_token: Option<String>,
+    /// Newest first, or by popularity (#977), as replies sort.
+    pub sort:       CommentSort,
     /// Who is reading (see [`ReadGate`]).
     pub viewer:     Viewer,
     /// The reader is cleared for mature content (not a guest, not 13–17):
@@ -27,6 +30,8 @@ pub struct ListTopLevelHandler<R> {
     pub repository: Arc<R>,
     pub gate:       Arc<dyn ReadGate>,
     pub filters:    OwnerFilters,
+    /// Like counts, for the popularity order (#977).
+    pub likes:      Arc<dyn CommentLikes>,
 }
 
 impl<R: CommentRepository> QueryHandler<ListTopLevelQuery> for ListTopLevelHandler<R> {
@@ -38,10 +43,16 @@ impl<R: CommentRepository> QueryHandler<ListTopLevelQuery> for ListTopLevelHandl
     ) -> Result<(Vec<CommentSummary>, Option<String>), CommentError> {
         let q       = &envelope.payload;
         let post_id = PostId::try_from(q.post_id.as_str())?;
-        let page = self
-            .repository
-            .list_top_level(&post_id, q.limit, q.page_token.as_deref())
-            .await?;
+        let page = popularity::page(
+            self.repository.as_ref(),
+            self.likes.as_ref(),
+            &post_id,
+            Slot::TopLevel,
+            q.sort,
+            q.limit,
+            q.page_token.as_deref(),
+        )
+        .await?;
         let (mut comments, next) =
             filter_page(self.gate.as_ref(), &self.filters, &q.viewer, q.mature, &post_id, page).await?;
 
