@@ -40,7 +40,8 @@ async fn interaction_settings_round_trip_and_are_announced() {
         .await
         .expect("set");
 
-    assert_eq!(h.get_by_id(&profile.id).await.unwrap().interaction, quiet);
+    // #973: like counts can no longer be hidden, whatever is sent.
+    assert_eq!(h.get_by_id(&profile.id).await.unwrap().interaction, InteractionSettings { show_like_counts: true, ..quiet });
     assert!(h.publisher.published().iter().any(|t| t == "ProfileInteractionSettingsChanged"));
 }
 

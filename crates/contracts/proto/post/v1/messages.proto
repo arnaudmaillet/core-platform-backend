@@ -82,8 +82,7 @@ message PostView {
     // The author turned downloads off (#809): the reader (anyone but the
     // author) is not offered to save the post's media.
     bool                    downloads_disabled  = 20;
-    // The author hides like counts from this reader (#809): counts are
-    // withheld (engagement, counter); the app shows none.
+    // Deprecated (#973): like counts can no longer be hidden; always false.
     bool                    like_counts_hidden  = 21;
     // #914: the card style its author applied, a wallet catalogue item id
     // (`card.<name>`); empty: the default card. Withheld from every reader but
@@ -102,6 +101,7 @@ message BatchGetLikeVisibilityRequest {
 message PostLikeVisibility {
     string post_id            = 1;
     string author_id          = 2;
+    // Deprecated (#973): like counts can no longer be hidden; always false.
     bool   like_counts_hidden = 3;
 }
 

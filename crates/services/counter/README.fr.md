@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: ff76dc31c3105b3a1bbc7e7d4c5564089ad9cb0982e73da442e6de4669196c4e
-  translated_at: 2026-10-08
+  source_sha256: 819f31afea97d5bb12d2d6fd625a5562b07208de59015f140b96a249c3d61f14
+  translated_at: 2026-11-01
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -118,14 +118,7 @@ Hexagonal / DDD (`domain` → `application` → `infrastructure`), CQRS là où 
 
 La surface synchrone est délibérément **en lecture seule** : `BatchGetCounters` (magnitudes pour un lot de références d'entités + masque de métriques — le chemin chaud d'hydratation de feed), `GetTrending` (top-K pour une portée, servi depuis CMS + un tas borné), et `GetTimeSeries` (buckets historiques — le seul RPC autorisé à toucher le tier froid Scylla, explicitement *non* sous-ms et hors du chemin de feed). **Il n'y a aucun RPC d'écriture/incrément** — l'ingestion est Kafka uniquement.
 
-**Compteurs de likes masqués (#809).** Quand l'auteur d'un post masque ses compteurs de likes, sa valeur
-`LIKE` est retirée de `BatchGetCounters` pour tout autre que l'auteur (un des profils de l'appelant,
-d'après le jeton) — invités compris — et un `GetTrending` `LIKE` retire le post (les rangs se resserrent,
-si bien que sa place ne le trahit pas non plus). Les autres métriques ne changent pas ; le mesh lit tout.
-À qui est le post et le réglage de l'auteur viennent de post (`BatchGetLikeVisibility`, en cache 60 s par
-instance) ; quand post ne peut pas répondre, le `LIKE` de chaque post est retenu et la lecture est marquée
-`degraded` — jamais une erreur. Sans `COUNTER_POST_GRPC_ENDPOINT`, rien n'est retenu (un avertissement au
-démarrage).
+**Compteurs de likes (#973).** Les valeurs `LIKE` ne sont jamais retenues : un auteur ne peut plus les masquer (#809 retiré), donc counter ne demande plus à post qui a écrit un post.
 
 > **Contrat de fil :** les résultats sont des magnitudes attachées à une référence — `(entity_type, id, metric, value)` plus la provenance approximatif-vs-exact. Les appelants DOIVENT hydrater l'entité elle-même (corps du post, profil, URL média) depuis son système de référence. `counter` ne renvoie aucune entité autoritative ni aucune appartenance par-acteur.
 
@@ -239,8 +232,6 @@ async fn main() -> anyhow::Result<()> {
 | `COUNTER_SOCIAL_GRAPH_GRPC_ENDPOINT` | Non | `http://localhost:50053` | endpoint `social-graph` — comptes follower/following autoritaires pour la réconciliation |
 | `COUNTER_SOCIAL_GRAPH_RPC_TIMEOUT_MS` | Non | `5000` | deadline par requête des RPC `social-graph` — un appel suspendu bloquerait sinon la boucle de réconciliation |
 | `COUNTER_SOCIAL_GRAPH_CONNECT_TIMEOUT_MS` | Non | `2000` | deadline de connexion à l'ouverture du canal `social-graph` |
-| `COUNTER_POST_GRPC_ENDPOINT` | Non | non défini | adresse mesh de `post` (p. ex. `http://post:50056`), serveur de lecture seulement : les compteurs de likes masqués sont retenus (#809). Non défini → retenus pour personne |
-| `COUNTER_POST_RPC_TIMEOUT_MS` · `COUNTER_POST_CONNECT_TIMEOUT_MS` | Non | `500` · `1000` | délais de cet appel |
 
 ### Variables d'infrastructure héritées
 

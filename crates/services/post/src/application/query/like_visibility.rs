@@ -1,15 +1,14 @@
-//! Like-count visibility for a batch of posts (#809), for the services that
-//! serve counts (engagement, counter): each post's author and whether that
-//! author hides like counts from others. Mesh only.
+//! Whose posts these are (#809), for engagement's profile tabs. Like counts
+//! are never hidden any more (#973): the answer only names each post's
+//! author. Mesh only.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use cqrs::{Envelope, Query, QueryHandler};
 use futures::future::try_join_all;
 use validate_core::{FieldViolation, Validate};
 
-use crate::application::port::{PostRepository, ReuseRegistry};
+use crate::application::port::PostRepository;
 use crate::domain::value_object::{PostId, ProfileId};
 use crate::error::PostError;
 
@@ -20,12 +19,11 @@ pub struct GetLikeVisibilityQuery {
     pub post_ids: Vec<String>,
 }
 
-/// One post's author and whether they hide like counts from others.
+/// One post's author.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LikeVisibility {
-    pub post_id:            PostId,
-    pub author_id:          ProfileId,
-    pub like_counts_hidden: bool,
+    pub post_id:   PostId,
+    pub author_id: ProfileId,
 }
 
 impl Query for GetLikeVisibilityQuery {
@@ -44,7 +42,6 @@ impl Validate for GetLikeVisibilityQuery {
 
 pub struct GetLikeVisibilityHandler<R> {
     pub repository: Arc<R>,
-    pub authors:    Arc<dyn ReuseRegistry>,
 }
 
 impl<R: PostRepository> QueryHandler<GetLikeVisibilityQuery> for GetLikeVisibilityHandler<R> {
@@ -56,23 +53,10 @@ impl<R: PostRepository> QueryHandler<GetLikeVisibilityQuery> for GetLikeVisibili
         ids.sort_by_key(PostId::as_str);
         ids.dedup();
         let posts = try_join_all(ids.iter().map(|id| self.repository.find_by_id(id))).await?;
-        let authors: Vec<ProfileId> = {
-            let mut a: Vec<ProfileId> = posts.iter().flatten().map(|p| p.profile_id().clone()).collect();
-            a.sort_by_key(ProfileId::as_str);
-            a.dedup();
-            a
-        };
-        let settings = try_join_all(authors.iter().map(|a| self.authors.defaults(a))).await?;
-        let hidden: HashMap<ProfileId, bool> =
-            authors.into_iter().zip(settings).map(|(a, s)| (a, !s.show_like_counts)).collect();
         Ok(posts
             .into_iter()
             .flatten()
-            .map(|post| LikeVisibility {
-                post_id:            post.id().clone(),
-                author_id:          post.profile_id().clone(),
-                like_counts_hidden: hidden.get(post.profile_id()).copied().unwrap_or(false),
-            })
+            .map(|post| LikeVisibility { post_id: post.id().clone(), author_id: post.profile_id().clone() })
             .collect())
     }
 }

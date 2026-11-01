@@ -10,7 +10,7 @@
 > | **Aggregate root(s)** | none — likes are applied totals (`LikeTarget` VO), counters are increments |
 > | **Tier** | **TIER-1** |
 > | **Failure posture** | **Fail-open-ish** — Redis-primary with Lua atomicity, Kafka-fed |
-> | **Upstream contexts** | `wallet` (stakes); `account` (deletions); `profile` (Likes-tab flag); `social-graph` (who may see a profile); end-user clients (views/shares); `comment` (counts); `post` (hidden like counts) |
+> | **Upstream contexts** | `wallet` (stakes); `account` (deletions); `profile` (Likes-tab flag); `social-graph` (who may see a profile); end-user clients (views/shares); `comment` (counts); `post` (whose post it is) |
 > | **Downstream contexts** | `account` (GDPR export, `ListLikesByAccount`); `wallet` (stake settlement, `GetLikePositions`) — via **Open Host Service** (mesh gRPC) |
 > | **Decision log** | [`ADR-0009`](../../../../docs/adr/0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md) |
 
@@ -41,7 +41,7 @@ forward — without a database round-trip on the read path.
 | Like target | The post or comment a like lands on | `LikeTarget` |
 | Total | An account's points on one target; only grows | `apply_total`, `AccountLike::total` |
 | Like count | The sum of the totals on a target | `LikeSummary::count` |
-| Hidden likes | The author hides like counts (#809): count withheld from non-authors | `LikeVisibility` |
+| Hidden likes | **Retired (#973)** — like counts are never hidden; formerly withheld from non-authors (#809) | — |
 
 ---
 
@@ -82,7 +82,7 @@ forward — without a database round-trip on the read path.
 |---|---|---|---|
 | I1 | A target's like count is the sum of its accounts' totals | Lua script (one hash tag per target) | — (atomic) |
 | I2 | An account's total on a target only grows; redeliveries and late events change nothing | Lua script; Scylla write timestamp = stake time | — (ignored) |
-| I3 | Hidden like counts reach only the author and the mesh; when post cannot say, they are withheld | application | `ENG-6001` (fail closed) |
+| I3 | Like counts are never withheld (#973) | application | — |
 | I4 | Only posts and comments can be liked | `LikeTarget::parse` | `ENG-9004` |
 | I5 | A deleted account is no longer known as a liker anywhere; the points it gave stay in the counts | `LikeEraser`; erasure-time Scylla deletes; the stake consumer drops its late stakes | — |
 | I6 | A saved post is listed once, at its first save time, until unsaved; a Saved tab is its owner's unless shown | `saves_by_account` authority; profile-tab rules (`Tab::Saved` hidden by default) | — |
@@ -94,8 +94,8 @@ forward — without a database round-trip on the read path.
 **Like.** The wallet commits a stake and publishes `StakeCommitted` (outbox); engagement's
 `StakeConsumer` applies the account's total in Redis, then writes the durable copy.
 
-**Read.** `GetPostEngagement` / `BatchGetLikes` read counters and likes from Redis, withholding hidden
-counts per post's answer (`BatchGetLikeVisibility`, cached 60 s).
+**Read.** `GetPostEngagement` / `BatchGetLikes` read counters and likes from Redis and return them whole
+to every reader (like counts are never withheld, #973).
 
 **Save (#872).** `SavePost` writes the save to `saves_by_account` (the authority) and the profile's Saved
 tab in one logged batch, unless it is saved already; `UnsavePost` deletes both; `ListSavedPosts` lists
@@ -118,7 +118,7 @@ deleted profile's alone (`ProfileDeleted`).
 | `wallet` | upstream | Conformist | `wallet.v1.events` (`stake_committed`) | like counts break |
 | `account` | upstream | ACL | `account.v1.events` (`account_deleted`) | a deleted account stays known as a liker |
 | `comment` | upstream | ACL | `comment.created` / `comment.deleted` | comment counts break |
-| `post` | upstream | Customer/Supplier | gRPC `BatchGetLikeVisibility` | hidden like counts withheld from everyone but the mesh |
+| `post` | upstream | Customer/Supplier | gRPC `BatchGetLikeVisibility` (whose post it is, profile tabs) | a profile tab of another reader fails closed |
 | `account` | downstream | Open Host Service | gRPC `ListLikesByAccount`, `ListSavedPostsByAccount` | the GDPR export fails (retried) |
 | `profile` | upstream | ACL | `profile.v1.events` (`ProfileTabSettingsChanged`, `ProfileDeleted`) | a hidden Likes tab shows (#829), a shown Saved tab stays hidden (#872), a deleted profile's tabs linger |
 | `social-graph` | upstream | Customer/Supplier | gRPC `CheckAccess` | other readers' Likes and Saved tabs withheld (fail closed) |

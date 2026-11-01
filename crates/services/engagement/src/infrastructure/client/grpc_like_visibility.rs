@@ -51,7 +51,7 @@ impl LikeVisibility for GrpcLikeVisibility {
                 .into_inner()
                 .posts
                 .into_iter()
-                .map(|p| (p.post_id, PostLikeVisibility { author_id: p.author_id, hidden: p.like_counts_hidden }))
+                .map(|p| (p.post_id, PostLikeVisibility { author_id: p.author_id }))
                 .collect();
             if self.cache.len() + missing.len() > CACHE_CAP {
                 self.cache.clear();

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: d40ce0e5fe308fb64333c9858c7c0efd3b108915489f3e6bcd663071550de28c
-  translated_at: 2026-10-20
+  source_sha256: 65393295ddfbb1a23eb1ee1df20f3d43b3702ce05de3ed1db60b8a7879a44dcd
+  translated_at: 2026-11-01
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -125,7 +125,7 @@ service PostService {
   rpc ListRecentlyDeleted (ListRecentlyDeletedRequest) returns (ListRecentlyDeletedResponse); // #663 the author's restorable posts, newest deletion first
   rpc GetPost (GetPostRequest) returns (PostView);                          // point lookup; viewer-aware
   rpc ListPostsByProfile (ListPostsByProfileRequest) returns (ListPostsByProfileResponse); // cursor-paginated; viewer-aware
-  rpc BatchGetLikeVisibility (BatchGetLikeVisibilityRequest) returns (BatchGetLikeVisibilityResponse); // #809 MESH ONLY: author + like counts hidden, ≤ 200 posts
+  rpc BatchGetLikeVisibility (BatchGetLikeVisibilityRequest) returns (BatchGetLikeVisibilityResponse); // #809 MESH ONLY: l'auteur de chaque post (les compteurs de likes ne sont jamais masqués, #973), ≤ 200 posts
 }
 // CreatePostRequest / PostView portent une localisation GeoPoint optionnelle :
 message GeoPoint { double lat = 1; double lng = 2; }  // WGS-84 ; absent → post non géo-indexé
@@ -140,15 +140,15 @@ ados). Un son original appartient au post qui l'a créé (`post.audio_origins`, 
 sons inconnus (pistes de bibliothèque) sont libres. Le remix n'a pas encore de surface serveur : le drapeau
 est stocké pour le client.
 
-**Téléchargements et compteurs de likes (#809).** Les réglages `allow_downloads` / `show_like_counts` de
-l'auteur sont projetés depuis le même événement dans `post.author_reuse_settings` (migration 0013 ; pas
-de ligne ou NULL ⇒ autorisé / affiché ; les ados n'autorisent pas les téléchargements par défaut).
-`GetPost` marque le post pour tout autre lecteur que l'auteur — le mesh compris, si bien qu'un service qui
-sert des clients retient aussi — avec `downloads_disabled` (l'app ne propose pas d'enregistrer ; les
-rendus média nécessaires pour le voir restent servis) et `like_counts_hidden`. Les services qui servent
-des compteurs retiennent les likes pour tout autre que l'auteur grâce à `BatchGetLikeVisibility`, réservé
-au mesh (l'auteur de chaque post et s'il masque ses compteurs de likes ; posts inconnus absents) :
-`GetPostEngagement` d'engagement et `BatchGetCounters` / `GetTrending` (`LIKE`) de counter.
+**Téléchargements (#809) et compteurs de likes (#973).** Le réglage `allow_downloads` de l'auteur est
+projeté depuis le même événement dans `post.author_reuse_settings` (migration 0013 ; pas de ligne ou
+NULL ⇒ autorisé ; les ados n'autorisent pas les téléchargements par défaut). `GetPost` marque le post pour
+tout autre lecteur que l'auteur — le mesh compris, si bien qu'un service qui sert des clients retient
+aussi — avec `downloads_disabled` (l'app ne propose pas d'enregistrer ; les rendus média nécessaires pour
+le voir restent servis). Les compteurs de likes ne peuvent plus être masqués (#973) : `like_counts_hidden`
+vaut toujours false, un `show_like_counts` stocké n'est plus lu, et `BatchGetLikeVisibility`, réservé au
+mesh, ne fait plus que nommer l'auteur de chaque post (posts inconnus absents), pour les onglets de profil
+d'engagement.
 
 **Mentions (#656).** Une légende mentionne un profil par un lien `[@handle](profile:<uuid>)`. `CreatePost` et
 `UpdatePost` interrogent social-graph `CheckInteraction(MENTION)` pour chaque profil mentionné (une fois

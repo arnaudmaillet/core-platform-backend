@@ -53,9 +53,6 @@ pub struct Post {
     /// Read path only (#809): its author turned downloads off, for this
     /// reader (never the author); never stored.
     downloads_disabled: bool,
-    /// Read path only (#809): its author hides like counts from this reader
-    /// (never the author); never stored.
-    like_counts_hidden: bool,
     /// The card style its author applied (#914): a `card.<name>` catalogue
     /// item their account owns; `None`: the default card.
     card_style_id: Option<String>,
@@ -99,7 +96,6 @@ impl Post {
             outside_window: false,
             visible_until: None,
             downloads_disabled: false,
-            like_counts_hidden: false,
             card_style_id: None,
             pending_events: Vec::new(),
         })
@@ -143,7 +139,6 @@ impl Post {
             outside_window: false,
             visible_until: None,
             downloads_disabled: false,
-            like_counts_hidden: false,
             card_style_id: None,
             pending_events: Vec::new(),
         }
@@ -321,11 +316,10 @@ impl Post {
     }
     pub fn outside_window(&self) -> bool { self.outside_window }
 
-    /// Applies its author's downloads and like-count settings (#809) for a
-    /// reader other than the author (read path only).
-    pub fn apply_author_display(&mut self, allow_downloads: bool, show_like_counts: bool) {
+    /// Applies its author's downloads setting (#809) for a reader other than
+    /// the author (read path only). Like counts are never hidden (#973).
+    pub fn apply_author_display(&mut self, allow_downloads: bool) {
         self.downloads_disabled = !allow_downloads;
-        self.like_counts_hidden = !show_like_counts;
     }
     pub fn downloads_disabled(&self) -> bool { self.downloads_disabled }
 
@@ -356,7 +350,6 @@ impl Post {
     pub fn withhold_card_style(&mut self) {
         self.card_style_id = None;
     }
-    pub fn like_counts_hidden(&self) -> bool { self.like_counts_hidden }
 
     /// Records when the post leaves its author's post window (#664), for a
     /// mesh reader (read path only).

@@ -102,7 +102,8 @@ pub struct InteractionSettings {
     pub messages: InteractionAudience,
     /// Whether others may download this profile's posts.
     pub allow_downloads: bool,
-    /// Whether others see like counts on this profile's posts.
+    /// Retired (#973): like counts can no longer be hidden. Written as true;
+    /// a stored false from before is read as true and changes nothing.
     pub show_like_counts: bool,
     /// Whether others may remix this profile's posts (#669; a post may
     /// override it).

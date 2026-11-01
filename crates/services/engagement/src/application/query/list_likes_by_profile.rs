@@ -108,7 +108,7 @@ mod tests {
     impl LikeVisibility for Authors {
         async fn of(&self, post_id: &str) -> Result<Option<PostLikeVisibility>, EngagementError> {
             let author = post_id.strip_prefix("0199-").filter(|p| *p != "c");
-            Ok(author.map(|a| PostLikeVisibility { author_id: format!("author-{a}"), hidden: false }))
+            Ok(author.map(|a| PostLikeVisibility { author_id: format!("author-{a}") }))
         }
     }
 

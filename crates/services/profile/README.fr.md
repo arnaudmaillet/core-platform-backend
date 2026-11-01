@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8e2f2d980cd0590c9589f6702ae728beabc934bdb008ef39675389b802274ae3
-  translated_at: 2026-10-20
+  source_sha256: e42eaf7738f8ef888783017067cf106e05ba306b7a9f7410084da2350e07a650
+  translated_at: 2026-11-01
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -147,7 +147,7 @@ service ProfileService {
   rpc SetVisibility(SetVisibilityRequest) returns (CommandResponse);
   rpc SetInteractionLimit(SetInteractionLimitRequest) returns (CommandResponse); // #669 mettre en attente les commentaires / messages des non-abonnés ou abonnés récents jusqu'à une date (≤ 4 semaines)
   rpc ClearInteractionLimit(ClearInteractionLimitRequest) returns (CommandResponse);
-  rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // qui peut commenter / mentionner / écrire, téléchargements, compteurs de likes, remix et réutilisation du son original (#669 ; absent d'une requête ⇒ inchangé) ; les ados démarrent abonnés uniquement, sans téléchargement / remix / réutilisation du son
+  rpc SetInteractionSettings(SetInteractionSettingsRequest) returns (CommandResponse); // qui peut commenter / mentionner / écrire, téléchargements (les compteurs de likes ne peuvent plus être masqués : `show_like_counts` est ignoré, toujours true, #973), remix et réutilisation du son original (#669 ; absent d'une requête ⇒ inchangé) ; les ados démarrent abonnés uniquement, sans téléchargement / remix / réutilisation du son
   rpc SetLocationSettings(SetLocationSettingsRequest) returns (CommandResponse); // mode fantôme + précis / niveau ville + audience (tout le monde / abonnés / mutuels ; UNSPECIFIED la garde) + on_new_posts (une préférence stockée ; absent la garde), réservé au propriétaire sur la vue ; les ados démarrent fantômes, mutuels, sans localisation sur les nouveaux posts, et sont plafonnés à mutuels (une audience plus large est refusée, PRF-9001) ; geo-discovery et post l'appliquent (#657)
   rpc SetFeedSettings(SetFeedSettingsRequest) returns (CommandResponse); // #662 contenu sensible moins (par défaut) / standard + non_personalized (For You non classé par centres d'intérêt ; activé par défaut pour un titulaire de 13 à 17 ans, qui peut le couper), synchronisés entre appareils ; annoncés par ProfileFeedSettingsChanged (timeline applique la désactivation) ; réservé au propriétaire sur la vue
   rpc SetTabSettings(SetTabSettingsRequest) returns (CommandResponse); // #664 fenêtre de posts (tout / 6 mois / 1 mois / 3 jours ; post masque les posts plus anciens aux visiteurs) + visibilité des onglets j'aime / enregistrés / republications / lieux (#829 : post sert Republications et Lieux, engagement J'aime, chacun vide pour tout autre que le propriétaire quand il est masqué ; Enregistrés n'a pas encore de liste serveur) ; partiel ; les réglages sont réservés au propriétaire sur la vue, mais chaque lecteur reçoit `ProfileView.visible_tabs` (un onglet masqué est omis, pas affiché vide)

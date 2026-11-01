@@ -117,7 +117,8 @@ where
         let mut view = snapshot_to_proto(req.post_id, engagement.snapshot);
         view.like_count = engagement.likes.count;
         view.my_likes = engagement.likes.mine;
-        view.likes_hidden = engagement.likes.hidden;
+        // #973: like counts are never hidden.
+        view.likes_hidden = false;
         Ok(Response::new(view))
     }
 
@@ -146,7 +147,7 @@ where
                 .targets
                 .into_iter()
                 .zip(likes)
-                .map(|(target, l)| proto::LikeView { target: Some(target), count: l.count, mine: l.mine, hidden: l.hidden })
+                .map(|(target, l)| proto::LikeView { target: Some(target), count: l.count, mine: l.mine, hidden: false })
                 .collect(),
         }))
     }

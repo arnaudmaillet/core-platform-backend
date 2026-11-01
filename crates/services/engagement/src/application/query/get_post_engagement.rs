@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cqrs::{Envelope, Query, QueryHandler};
 
-use crate::application::port::{LikeLedger, LikeStore, LikeVisibility, PostEngagementSnapshot, ScoreStore};
+use crate::application::port::{LikeLedger, LikeStore, PostEngagementSnapshot, ScoreStore};
 use crate::domain::value_object::{LikeTarget, PostId};
 use crate::error::EngagementError;
 
@@ -21,15 +21,14 @@ pub struct GetPostEngagementQuery {
     pub account: Option<String>,
 }
 
-/// A post's or comment's likes, as a reader sees them (#665).
+/// A post's or comment's likes, as a reader sees them (#665). Like counts
+/// are never withheld (#973: an author can no longer hide them).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LikeSummary {
-    /// Points staked on it by everyone (0 when withheld).
-    pub count:  i64,
-    /// The reader's own (always shown to them).
-    pub mine:   i64,
-    /// The author hides like counts (#809) and the reader is not the author.
-    pub hidden: bool,
+    /// Points staked on it by everyone.
+    pub count: i64,
+    /// The reader's own.
+    pub mine:  i64,
 }
 
 /// A post's engagement: the counters and its likes.
@@ -45,35 +44,16 @@ impl Query for GetPostEngagementQuery {
 
 pub struct GetPostEngagementHandler<S> {
     pub score_store: Arc<S>,
-    /// Likes withheld from anyone but the author when the author hides them
-    /// (#809). `None`: not wired (no post endpoint) — nothing is withheld.
-    pub likes:       Option<Arc<dyn LikeVisibility>>,
     /// The likes themselves (#665).
     pub like_store:  Arc<dyn LikeStore>,
     /// Their durable copy, for a reader whose likes expired from Redis.
     pub like_ledger: Option<Arc<dyn LikeLedger>>,
 }
 
-/// Whether a post's likes are withheld from `reader` (#809): only the author
-/// and the mesh see hidden likes; an unknown answer withholds (fail closed).
-pub(crate) async fn withheld(likes: Option<&Arc<dyn LikeVisibility>>, reader: &EngagementReader, post_id: &str) -> bool {
-    let (Some(likes), EngagementReader::Profiles(own)) = (likes, reader) else { return false };
-    match likes.of(post_id).await {
-        Ok(Some(post)) => post.hidden && !own.contains(&post.author_id),
-        Ok(None) => false,
-        Err(error) => {
-            tracing::warn!(%error, "like visibility unknown; likes withheld");
-            true
-        }
-    }
-}
-
-/// The likes of `targets` for `reader` (`account`: its own likes).
+/// The likes of `targets` (`account`: its own likes).
 pub(crate) async fn read_likes(
     store: &Arc<dyn LikeStore>,
     ledger: Option<&Arc<dyn LikeLedger>>,
-    visibility: Option<&Arc<dyn LikeVisibility>>,
-    reader: &EngagementReader,
     account: Option<&str>,
     targets: &[LikeTarget],
 ) -> Result<Vec<LikeSummary>, EngagementError> {
@@ -82,16 +62,7 @@ pub(crate) async fn read_likes(
         Some(account) => crate::application::likes::mine(store, ledger, account, targets).await?,
         None => vec![0; targets.len()],
     };
-    let mut out = Vec::with_capacity(targets.len());
-    for ((target, count), mine) in targets.iter().zip(counts).zip(mine) {
-        // Only posts hide their likes (#809).
-        let hidden = match target {
-            LikeTarget::Post(id) => withheld(visibility, reader, id).await,
-            LikeTarget::Comment(_) => false,
-        };
-        out.push(LikeSummary { count: if hidden { 0 } else { count }, mine, hidden });
-    }
-    Ok(out)
+    Ok(counts.into_iter().zip(mine).map(|(count, mine)| LikeSummary { count, mine }).collect())
 }
 
 impl<S: ScoreStore> QueryHandler<GetPostEngagementQuery> for GetPostEngagementHandler<S> {
@@ -105,7 +76,7 @@ impl<S: ScoreStore> QueryHandler<GetPostEngagementQuery> for GetPostEngagementHa
         let post_id = PostId::try_from(query.post_id.as_str())?;
         let snapshot = self.score_store.get_snapshot(&post_id).await?;
         let target = [LikeTarget::Post(query.post_id.clone())];
-        let likes = read_likes(&self.like_store, self.like_ledger.as_ref(), self.likes.as_ref(), &query.reader, query.account.as_deref(), &target)
+        let likes = read_likes(&self.like_store, self.like_ledger.as_ref(), query.account.as_deref(), &target)
             .await?
             .pop()
             .unwrap_or_default();
@@ -115,13 +86,11 @@ impl<S: ScoreStore> QueryHandler<GetPostEngagementQuery> for GetPostEngagementHa
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use async_trait::async_trait;
     use uuid::Uuid;
 
     use super::*;
-    use crate::application::port::{Applied, Position, PostLikeVisibility};
+    use crate::application::port::{Applied, Position};
 
     struct Snapshots;
 
@@ -137,25 +106,6 @@ mod tests {
                 share_count:     2,
                 comment_count:   3,
             })
-        }
-    }
-
-    /// One post, by `author`, hiding likes or not; `down` fails every call.
-    struct Post {
-        author: String,
-        hidden: bool,
-        down:   bool,
-        calls:  Mutex<usize>,
-    }
-
-    #[async_trait]
-    impl LikeVisibility for Post {
-        async fn of(&self, _: &str) -> Result<Option<PostLikeVisibility>, EngagementError> {
-            *self.calls.lock().unwrap() += 1;
-            if self.down {
-                return Err(EngagementError::PostUnavailable { message: "down".into() });
-            }
-            Ok(Some(PostLikeVisibility { author_id: self.author.clone(), hidden: self.hidden }))
         }
     }
 
@@ -185,10 +135,9 @@ mod tests {
         }
     }
 
-    async fn read(likes: Option<Arc<Post>>, reader: EngagementReader) -> PostEngagement {
+    async fn read(reader: EngagementReader) -> PostEngagement {
         let handler = GetPostEngagementHandler {
             score_store: Arc::new(Snapshots),
-            likes:       likes.map(|l| l as Arc<dyn LikeVisibility>),
             like_store:  Arc::new(Likes),
             like_ledger: None,
         };
@@ -196,34 +145,18 @@ mod tests {
         handler.handle(Envelope::new(Uuid::now_v7(), query)).await.unwrap()
     }
 
-    fn post(hidden: bool, down: bool) -> Arc<Post> {
-        Arc::new(Post { author: "author".into(), hidden, down, calls: Mutex::new(0) })
-    }
-
+    /// #973: like counts reach every reader, guests included.
     #[tokio::test]
-    async fn hidden_likes_reach_only_the_author_and_the_mesh() {
-        let stranger = EngagementReader::Profiles(vec!["someone".into()]);
-        let guest = EngagementReader::Profiles(vec![]);
-        let author = EngagementReader::Profiles(vec!["other".into(), "author".into()]);
-
-        let shown = read(Some(post(false, false)), stranger.clone()).await;
-        assert_eq!(shown.likes, LikeSummary { count: 9, mine: 2, hidden: false });
-
-        for reader in [stranger.clone(), guest] {
-            let withheld = read(Some(post(true, false)), reader).await;
-            assert_eq!(withheld.likes, LikeSummary { count: 0, mine: 2, hidden: true }, "one's own likes stay shown");
-            let s = &withheld.snapshot;
-            assert_eq!((s.view_count, s.share_count, s.comment_count), (40, 2, 3), "only likes");
+    async fn like_counts_reach_every_reader() {
+        for reader in [
+            EngagementReader::Profiles(vec!["someone".into()]),
+            EngagementReader::Profiles(vec![]),
+            EngagementReader::Internal,
+        ] {
+            let read = read(reader).await;
+            assert_eq!(read.likes, LikeSummary { count: 9, mine: 2 });
+            let s = &read.snapshot;
+            assert_eq!((s.view_count, s.share_count, s.comment_count), (40, 2, 3));
         }
-        assert_eq!(read(Some(post(true, false)), author).await.likes.count, 9);
-
-        // The mesh is not asked about, and reads everything.
-        let mesh = post(true, false);
-        assert_eq!(read(Some(Arc::clone(&mesh)), EngagementReader::Internal).await.likes.count, 9);
-        assert_eq!(*mesh.calls.lock().unwrap(), 0);
-
-        // post unreachable: withheld (fail closed); not wired: shown.
-        assert!(read(Some(post(false, true)), stranger.clone()).await.likes.hidden);
-        assert_eq!(read(None, stranger).await.likes.count, 9);
     }
 }
