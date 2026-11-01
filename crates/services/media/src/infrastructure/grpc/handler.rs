@@ -566,7 +566,7 @@ fn delivered_to_proto(view: DeliveredMediaView) -> proto::DeliveredMedia {
                 url_expires_at: r.expires_at.map(to_timestamp),
                 width: r.width,
                 height: r.height,
-                sheet: crate::domain::value_object::SheetGeometry::of(r.kind).map(|g| proto::SheetGeometry {
+                sheet: crate::domain::value_object::SheetGeometry::of_rendition(r.kind, r.height).map(|g| proto::SheetGeometry {
                     frame_count:       g.frame_count,
                     columns:           g.columns,
                     frame_duration_ms: g.frame_duration_ms,
