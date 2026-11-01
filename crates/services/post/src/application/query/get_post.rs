@@ -103,7 +103,7 @@ impl<R: PostRepository> QueryHandler<GetPostQuery> for GetPostHandler<R> {
         // else (the mesh included, so a service serving clients withholds too).
         if !as_author {
             let defaults = self.authors.defaults(post.profile_id()).await?;
-            post.apply_author_display(defaults.allow_downloads, defaults.show_like_counts);
+            post.apply_author_display(defaults.allow_downloads);
         }
         Ok(post)
     }

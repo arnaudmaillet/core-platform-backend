@@ -1140,7 +1140,8 @@ fn interaction_to_proto(s: InteractionSettings) -> proto::InteractionSettings {
         mentions: audience_to_proto(s.mentions),
         messages: audience_to_proto(s.messages),
         allow_downloads: s.allow_downloads,
-        show_like_counts: s.show_like_counts,
+        // #973: always shown, whatever was stored before.
+        show_like_counts: true,
         allow_remix: Some(s.allow_remix),
         allow_sound_reuse: Some(s.allow_sound_reuse),
         limit: s.limit.map(|l| proto::InteractionLimit {

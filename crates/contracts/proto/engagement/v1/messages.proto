@@ -42,11 +42,11 @@ message PostEngagementView {
     int64                     view_count           = 4;
     int64                     share_count          = 5;
     int64                     comment_count        = 6;
-    // Likes (#665: a like is a point): the points staked on the post (0 when
-    // `likes_hidden`), and the reader's own.
+    // Likes (#665: a like is a point): the points staked on the post, and
+    // the reader's own.
     int64                     like_count           = 7;
     int64                     my_likes             = 8;
-    // The author hides like counts (#809) and the reader is not the author.
+    // Deprecated (#973): like counts can no longer be hidden; always false.
     bool                      likes_hidden         = 9;
 }
 
@@ -66,10 +66,11 @@ message BatchGetLikesRequest {
 // One target's likes, as the reader sees them.
 message LikeView {
     LikeTarget target   = 1;
-    // Points staked on it (0 when `hidden`).
+    // Points staked on it.
     int64      count    = 2;
     // The reader's own.
     int64      mine     = 3;
+    // Deprecated (#973): like counts can no longer be hidden; always false.
     bool       hidden   = 4;
 }
 

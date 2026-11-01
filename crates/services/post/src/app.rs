@@ -152,7 +152,6 @@ impl App {
                 })?
                 .register::<GetLikeVisibilityQuery, _>(GetLikeVisibilityHandler {
                     repository: Arc::clone(&repository),
-                    authors:    Arc::clone(&reuse_registry),
                 })?
                 .register::<ListRecentlyDeletedQuery, _>(ListRecentlyDeletedHandler {
                     repository:       Arc::clone(&repository),

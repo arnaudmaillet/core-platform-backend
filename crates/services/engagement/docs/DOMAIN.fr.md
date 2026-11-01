@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./DOMAIN.md
-  source_sha256: f59f84e7e4c8f44e29b47ff8a0201f4093b4c2e309700902f345e99d2634b0d7
-  translated_at: 2026-10-10
+  source_sha256: 9bb4988b04672c5f1d17f2e5ea0cdcb1faa1c5b02546bfd98c95b1dec0f279f3
+  translated_at: 2026-11-01
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`DOMAIN.md`](./DOMAIN.md) fait foi.
@@ -21,7 +21,7 @@ i18n:
 > | **Racine(s) d'agrégat** | aucune — les likes sont des totaux appliqués (VO `LikeTarget`), les compteurs des incréments |
 > | **Tier** | **TIER-1** |
 > | **Posture en cas de panne** | **Plutôt fail-open** — Redis-primary avec atomicité Lua, alimenté par Kafka |
-> | **Contextes amont** | `wallet` (mises) ; `account` (suppressions) ; `profile` (flag de l'onglet J'aime) ; `social-graph` (qui peut voir un profil) ; clients finaux (vues/partages) ; `comment` (comptes) ; `post` (compteurs de likes masqués) |
+> | **Contextes amont** | `wallet` (mises) ; `account` (suppressions) ; `profile` (flag de l'onglet J'aime) ; `social-graph` (qui peut voir un profil) ; clients finaux (vues/partages) ; `comment` (comptes) ; `post` (à qui est le post) |
 > | **Contextes aval** | `account` (export RGPD, `ListLikesByAccount`) ; `wallet` (règlement des mises, `GetLikePositions`) — via **Open Host Service** (gRPC mesh) |
 > | **Journal de décisions** | [`ADR-0009`](../../../../docs/adr/0009-engagement-redis-primary-lua-atomic-with-kafka-write-behind.md) |
 
@@ -53,7 +53,7 @@ sur le chemin de lecture.
 | Cible de like | Le post ou le commentaire sur lequel tombe un like | `LikeTarget` |
 | Total | Les points d'un compte sur une cible ; ne fait que croître | `apply_total`, `AccountLike::total` |
 | Compteur de likes | La somme des totaux sur une cible | `LikeSummary::count` |
-| Likes masqués | L'auteur masque ses compteurs de likes (#809) : compteur retenu pour les non-auteurs | `LikeVisibility` |
+| Likes masqués | **Retiré (#973)** — les compteurs de likes ne sont jamais masqués ; autrefois retenus pour les non-auteurs (#809) | — |
 
 ---
 
@@ -96,7 +96,7 @@ export RGPD).
 |---|---|---|---|
 | I1 | Le compteur de likes d'une cible est la somme des totaux de ses comptes | script Lua (un hash tag par cible) | — (atomique) |
 | I2 | Le total d'un compte sur une cible ne fait que croître ; re-livraisons et événements tardifs ne changent rien | script Lua ; horodatage d'écriture Scylla = heure de la mise | — (ignoré) |
-| I3 | Les compteurs masqués n'atteignent que l'auteur et le mesh ; quand post ne peut pas répondre, ils sont retenus | application | `ENG-6001` (mode fermé) |
+| I3 | Les compteurs de likes ne sont jamais retenus (#973) | application | — |
 | I4 | Seuls les posts et les commentaires peuvent être likés | `LikeTarget::parse` | `ENG-9004` |
 | I5 | Un compte supprimé n'est plus connu comme likeur nulle part ; les points qu'il a donnés restent dans les compteurs | `LikeEraser` ; suppressions Scylla à l'heure de l'effacement ; le consommateur des mises ignore ses mises tardives | — |
 | I6 | Un post enregistré est listé une fois, à sa première date d'enregistrement, jusqu'à son retrait ; un onglet Enregistrés n'est visible que de son propriétaire sauf s'il le montre | l'autorité `saves_by_account` ; règles des onglets de profil (`Tab::Saved` masqué par défaut) | — |
@@ -108,8 +108,8 @@ export RGPD).
 **Like.** Le wallet valide une mise et publie `StakeCommitted` (outbox) ; le `StakeConsumer`
 d'engagement applique le total du compte dans Redis, puis écrit la copie durable.
 
-**Lecture.** `GetPostEngagement` / `BatchGetLikes` lisent compteurs et likes dans Redis, en retenant les
-compteurs masqués selon la réponse de post (`BatchGetLikeVisibility`, en cache 60 s).
+**Lecture.** `GetPostEngagement` / `BatchGetLikes` lisent compteurs et likes dans Redis et les renvoient
+entiers à chaque lecteur (les compteurs de likes ne sont jamais retenus, #973).
 
 **Enregistrement (#872).** `SavePost` écrit l'enregistrement dans `saves_by_account` (l'autorité) et
 l'onglet Enregistrés du profil en un seul batch logged, sauf s'il est déjà enregistré ; `UnsavePost`
@@ -133,7 +133,7 @@ partent aussi (ceux de chaque profil), comme ceux d'un profil supprimé seul (`P
 | `wallet` | amont | Conformist | `wallet.v1.events` (`stake_committed`) | les compteurs de likes cassent |
 | `account` | amont | ACL | `account.v1.events` (`account_deleted`) | un compte supprimé reste connu comme likeur |
 | `comment` | amont | ACL | `comment.created` / `comment.deleted` | les compteurs de commentaires cassent |
-| `post` | amont | Customer/Supplier | gRPC `BatchGetLikeVisibility` | compteurs masqués retenus pour tous sauf le mesh |
+| `post` | amont | Customer/Supplier | gRPC `BatchGetLikeVisibility` (à qui est le post, onglets de profil) | un onglet de profil d'un autre lecteur échoue en mode fermé |
 | `account` | aval | Open Host Service | gRPC `ListLikesByAccount`, `ListSavedPostsByAccount` | l'export RGPD échoue (réessayé) |
 | `profile` | amont | ACL | `profile.v1.events` (`ProfileTabSettingsChanged`, `ProfileDeleted`) | un onglet J'aime masqué s'affiche (#829), un onglet Enregistrés montré reste masqué (#872), les onglets d'un profil supprimé subsistent |
 | `social-graph` | amont | Customer/Supplier | gRPC `CheckAccess` | les onglets J'aime et Enregistrés des autres lecteurs sont retenus (mode fermé) |

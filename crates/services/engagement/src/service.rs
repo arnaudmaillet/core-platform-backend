@@ -114,13 +114,13 @@ pub(crate) fn profile_access_from_env() -> anyhow::Result<Option<Arc<dyn crate::
     Ok(Some(Arc::new(crate::infrastructure::client::GrpcProfileAccess::new(channel))))
 }
 
-/// Like counts withheld per their author's setting (#809), asked of post at
+/// Whose post it is, for the profile tabs (#829, #872), asked of post at
 /// `ENGAGEMENT_POST_GRPC_ENDPOINT` (lazily connected; request / connect
 /// deadlines `ENGAGEMENT_POST_RPC_TIMEOUT_MS` / `ENGAGEMENT_POST_CONNECT_TIMEOUT_MS`,
-/// 500 ms / 1 s). Unset: nothing is withheld (until the mesh route exists).
+/// 500 ms / 1 s). Unset: only the owner and the mesh read the tabs.
 pub(crate) fn like_visibility_from_env() -> anyhow::Result<Option<Arc<dyn crate::application::port::LikeVisibility>>> {
     let Some(endpoint) = std::env::var("ENGAGEMENT_POST_GRPC_ENDPOINT").ok().filter(|v| !v.trim().is_empty()) else {
-        tracing::warn!("ENGAGEMENT_POST_GRPC_ENDPOINT unset: hidden like counts are not withheld");
+        tracing::warn!("ENGAGEMENT_POST_GRPC_ENDPOINT unset: profile tabs reach their owner only");
         return Ok(None);
     };
     let ms = |key: &str, default: u64| {

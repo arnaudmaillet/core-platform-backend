@@ -30,8 +30,8 @@ pub enum EngagementError {
     LedgerUnavailable,
 
     // ── ENG-6xxx: Peers ───────────────────────────────────────────────────────
-    /// post could not say whose post it is or whether its author hides like
-    /// counts (#809): likes are withheld (fail closed), never shown.
+    /// post could not say whose post it is (a profile tab's author check,
+    /// #829): the tab fails closed.
     #[error("post is unavailable: {message}")]
     PostUnavailable { message: String },
 

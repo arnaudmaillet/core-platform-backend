@@ -180,7 +180,7 @@ mod tests {
     #[async_trait]
     impl LikeVisibility for World {
         async fn of(&self, post_id: &str) -> Result<Option<PostLikeVisibility>, EngagementError> {
-            Ok(Some(PostLikeVisibility { author_id: format!("author-{post_id}"), hidden: false }))
+            Ok(Some(PostLikeVisibility { author_id: format!("author-{post_id}") }))
         }
     }
 

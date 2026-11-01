@@ -11,7 +11,7 @@
 > | **Datastores** | Redis (authoritative hot path) · ScyllaDB keyspace `engagement` (durable copies) |
 > | **Async** | publishes nothing · consumes `wallet.v1.events` (likes), `account.v1.events` (erasure), `profile.v1.events` (tab flags, deleted profiles) and `comment.created` / `comment.deleted` |
 > | **Upstream callers** | `<TODO: gateway>` |
-> | **Downstream deps** | Redis, ScyllaDB, Kafka, `post` (hidden like counts), `social-graph` (who may see a Likes or Saved tab) |
+> | **Downstream deps** | Redis, ScyllaDB, Kafka, `post` (whose post it is, for the profile tabs), `social-graph` (who may see a Likes or Saved tab) |
 > | **SLO** | snapshot read p99 ~0.3 ms (zero Scylla on the read path) |
 
 ---
@@ -176,7 +176,7 @@ erasure may have listed the targets before it).
 | ScyllaDB | durable copies + counters | stakes retried, flush backs off; `ListLikesByAccount` fails | **Soft** — Redis reads unaffected; copies catch up |
 | Kafka | likes + comment ingest | like and comment counts lag | **Soft** — reads unaffected |
 | `social-graph` (gRPC `CheckAccess`, #829) | whether a reader may see a profile (and a Likes-tab page's authors, #873) | other readers' Likes tabs fail (`ENG-6002`, retried) | **Fail closed** for Likes tabs only |
-| `post` (gRPC `BatchGetLikeVisibility`, #809) | whose post it is and whether its author hides like counts | likes withheld from non-authors | **Fail closed** for likes only (views/shares/comments unaffected); 60 s cache |
+| `post` (gRPC `BatchGetLikeVisibility`, #873) | whose post it is, for the profile tabs | other readers' Likes / Saved tabs fail (`ENG-6001`, retried) | **Fail closed** for profile tabs only (like counts unaffected, #973); 60 s cache |
 
 **Upstream (blast radius):**
 
@@ -215,12 +215,9 @@ service EngagementService {
 }
 ```
 
-**Hidden like counts (#809).** When a post's author hides like counts (profile interaction settings),
-`GetPostEngagement` returns a zero `like_count` and `likes_hidden` to anyone but the
-author (one of the caller's profiles, from the token) — guests included; views, shares and comments stay.
-The mesh reads everything. Whose post it is and the author's setting come from post
-(`BatchGetLikeVisibility`, cached 60 s per instance); when post cannot answer, likes are withheld.
-Without `ENGAGEMENT_POST_GRPC_ENDPOINT` nothing is withheld (a warning at boot).
+**Like counts (#973).** Like counts are never withheld: every reader (guests, members, the mesh) gets
+the real `like_count` / `count`. `likes_hidden` (`GetPostEngagement`) and `hidden` (`LikeView`) stay on
+the wire, always false (the former hiding of #809 is retired).
 
 **Likes are points (#665).** A like is a point staked in the wallet; engagement turns the wallet's
 `StakeCommitted` (`wallet.v1.events`, group `engagement-stakes`) into each post's and comment's like
@@ -229,9 +226,9 @@ account's total and the target's sum under the target's hash tag, `engagement:{p
 no larger than the one held changes nothing, so redeliveries, the wallet outbox's at-least-once and
 out-of-order events are absorbed with no marker. The durable copy is Scylla `likes_by_target` /
 `likes_by_account` (migration 0005), written with the stake's time as the write timestamp.
-`GetPostEngagement` adds `like_count`, `my_likes` (a member: its account's own) and `likes_hidden`;
-`BatchGetLikes` (edge `public_read`, ≤ 100 targets) gives the same for posts and comments. Hidden like
-counts (#809) apply to posts: `count` 0 and `hidden`, the reader's own likes still shown.
+`GetPostEngagement` adds `like_count` and `my_likes` (a member: its account's own); `BatchGetLikes`
+(edge `public_read`, ≤ 100 targets) gives the same for posts and comments. `likes_hidden` / `hidden` are
+always false (#973).
 `PostEngagementView` fields 2 and 3 (`reaction_scores`, `total_weighted_score`) are reserved.
 
 ### Rust ports (hexagonal contract)
@@ -261,7 +258,7 @@ pub trait CounterLedger: Send + Sync + 'static { /* apply_interaction_delta (flu
 | Range | Category |
 |---|---|
 | `ENG-5xxx` | worker / Lua script / ledger unavailable (`ENG-5003`) |
-| `ENG-6xxx` | peers (`ENG-6001`: post unavailable, likes withheld; `ENG-6002`: social-graph unavailable, a Likes tab withheld) |
+| `ENG-6xxx` | peers (`ENG-6001`: post unavailable, a profile tab withheld; `ENG-6002`: social-graph unavailable, a Likes tab withheld) |
 | `ENG-9xxx` | id parsing / domain violation / like target (`ENG-9004`) |
 
 `ENG-1001`, `ENG-2001`/`2002`, `ENG-3001` and `ENG-9002` belonged to the weighted reactions; they are
@@ -340,7 +337,7 @@ async fn main() -> anyhow::Result<()> {
 
 | Variable | Default | Description |
 |---|---|---|
-| `ENGAGEMENT_POST_GRPC_ENDPOINT` | unset | post's mesh address (e.g. `http://post:50056`): hidden like counts are withheld (#809), and whose each post is (other readers' Likes tabs, #873). Unset → withheld from nobody, a Likes tab its owner's only |
+| `ENGAGEMENT_POST_GRPC_ENDPOINT` | unset | post's mesh address (e.g. `http://post:50056`): only to learn whose each post is (other readers' Likes / Saved tabs, #873); like counts never depend on it (#973). Unset → a profile tab is visible to its owner only |
 | `ENGAGEMENT_POST_RPC_TIMEOUT_MS` · `ENGAGEMENT_POST_CONNECT_TIMEOUT_MS` | `500` · `1000` | deadlines of that call |
 | `ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | unset | social-graph's mesh address (e.g. `http://social-graph:50053`): who may see a profile's Likes tab (#829). Unset → the tab is its owner's only |
 

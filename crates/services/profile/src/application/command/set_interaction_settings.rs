@@ -72,6 +72,8 @@ impl CommandHandler<SetInteractionSettingsCommand> for SetInteractionSettingsHan
             allow_sound_reuse: cmd.allow_sound_reuse.unwrap_or(current.allow_sound_reuse),
             // The temporary limit has its own commands.
             limit: current.limit,
+            // Like counts can no longer be hidden (#973): always shown.
+            show_like_counts: true,
             ..cmd.settings
         };
         if let Some(floors) = &self.floors

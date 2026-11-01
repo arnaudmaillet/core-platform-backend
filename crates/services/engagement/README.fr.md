@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: eb896f29feea624e7d0c2c70c87a87005112a6263e823c412714ff346587079a
-  translated_at: 2026-10-20
+  source_sha256: 5bc8d0d60b69d3ce0f1bf0fe23e8061910e1b51a5975a5c56bdc80aae70a90e8
+  translated_at: 2026-11-01
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -23,7 +23,7 @@ i18n:
 > | **Bases de données** | Redis (chemin chaud faisant autorité) · ScyllaDB keyspace `engagement` (copies durables) |
 > | **Asynchrone** | ne publie rien · consomme `wallet.v1.events` (likes), `account.v1.events` (effacement), `profile.v1.events` (réglages des onglets, profils supprimés) et `comment.created` / `comment.deleted` |
 > | **Appelants amont** | `<TODO: passerelle>` |
-> | **Dépendances aval** | Redis, ScyllaDB, Kafka, `post` (compteurs de likes masqués), `social-graph` (qui peut voir un onglet J'aime ou Enregistrés) |
+> | **Dépendances aval** | Redis, ScyllaDB, Kafka, `post` (à qui est le post, pour les onglets de profil), `social-graph` (qui peut voir un onglet J'aime ou Enregistrés) |
 > | **SLO** | lecture de snapshot p99 ~0,3 ms (zéro Scylla sur le chemin de lecture) |
 
 ---
@@ -203,7 +203,7 @@ Le consommateur des mises ignore les mises d'un compte marqué, et revérifie ap
 | ScyllaDB | copies durables + compteurs | mises réessayées, le flush temporise ; `ListLikesByAccount` échoue | **Souple** — lectures Redis non affectées ; les copies rattrapent |
 | Kafka | likes + ingestion de commentaires | comptes de likes et de commentaires retardés | **Souple** — lectures non affectées |
 | `social-graph` (gRPC `CheckAccess`, #829) | si un lecteur peut voir un profil (et les auteurs d'une page d'onglet J'aime, #873) | les onglets J'aime des autres lecteurs échouent (`ENG-6002`, réessayé) | **Mode fermé** pour les onglets J'aime seulement |
-| `post` (gRPC `BatchGetLikeVisibility`, #809) | à qui est le post et si son auteur masque les compteurs de likes | likes retenus pour les non-auteurs | **Mode fermé** pour les likes seulement (vues/partages/commentaires non affectés) ; cache de 60 s |
+| `post` (gRPC `BatchGetLikeVisibility`, #873) | à qui est le post, pour les onglets de profil | les onglets J'aime / Enregistrés des autres lecteurs échouent (`ENG-6001`, réessayable) | **Mode fermé** pour les onglets de profil seulement (compteurs de likes non affectés, #973) ; cache de 60 s |
 
 **Amont (rayon d'impact) :**
 
@@ -243,12 +243,9 @@ service EngagementService {
 }
 ```
 
-**Compteurs de likes masqués (#809).** Quand l'auteur d'un post masque ses compteurs de likes (réglages
-d'interaction du profil), `GetPostEngagement` renvoie un `like_count` nul et `likes_hidden` à tout autre
-que l'auteur (un des profils de l'appelant, d'après le jeton) — invités compris ; vues, partages et
-commentaires restent. Le mesh lit tout. À qui est le post et le réglage de l'auteur viennent de post
-(`BatchGetLikeVisibility`, en cache 60 s par instance) ; quand post ne peut pas répondre, les likes sont
-retenus. Sans `ENGAGEMENT_POST_GRPC_ENDPOINT` rien n'est retenu (un avertissement au démarrage).
+**Compteurs de likes (#973).** Les compteurs de likes ne sont jamais retenus : chaque lecteur (invités,
+membres, le mesh) reçoit le vrai `like_count` / `count`. `likes_hidden` (`GetPostEngagement`) et `hidden`
+(`LikeView`) restent sur le fil, toujours à false (l'ancien masquage de #809 est retiré).
 
 **Les likes sont des points (#665).** Un like est un point misé dans le wallet ; engagement transforme
 les `StakeCommitted` du wallet (`wallet.v1.events`, groupe `engagement-stakes`) en compteur de likes de
@@ -257,11 +254,10 @@ script Lua (le total du compte et la somme de la cible sous le hash tag de la ci
 `engagement:{post:<id>}:…`) : un total non supérieur à celui détenu ne change rien, si bien que les
 re-livraisons, l'at-least-once de l'outbox du wallet et les événements dans le désordre sont absorbés
 sans marqueur. La copie durable est Scylla `likes_by_target` / `likes_by_account` (migration 0005),
-écrite avec l'heure de la mise comme horodatage d'écriture. `GetPostEngagement` ajoute `like_count`,
-`my_likes` (un membre : ceux de son compte) et `likes_hidden` ; `BatchGetLikes` (edge `public_read`,
-≤ 100 cibles) donne la même chose pour les posts et les commentaires. Les compteurs de likes masqués
-(#809) s'appliquent aux posts : `count` 0 et `hidden`, les likes du lecteur restant affichés. Les champs
-2 et 3 de `PostEngagementView` (`reaction_scores`, `total_weighted_score`) sont réservés.
+écrite avec l'heure de la mise comme horodatage d'écriture. `GetPostEngagement` ajoute `like_count` et
+`my_likes` (un membre : ceux de son compte) ; `BatchGetLikes` (edge `public_read`, ≤ 100 cibles) donne la
+même chose pour les posts et les commentaires. `likes_hidden` / `hidden` valent toujours false (#973). Les
+champs 2 et 3 de `PostEngagementView` (`reaction_scores`, `total_weighted_score`) sont réservés.
 
 ### Ports Rust (contrat hexagonal)
 
@@ -290,7 +286,7 @@ pub trait CounterLedger: Send + Sync + 'static { /* apply_interaction_delta (flu
 | Range | Category |
 |---|---|
 | `ENG-5xxx` | worker / script Lua / ledger indisponible (`ENG-5003`) |
-| `ENG-6xxx` | pairs (`ENG-6001` : post indisponible, likes retenus ; `ENG-6002` : social-graph indisponible, un onglet J'aime retenu) |
+| `ENG-6xxx` | pairs (`ENG-6001` : post indisponible, un onglet de profil retenu ; `ENG-6002` : social-graph indisponible, un onglet J'aime retenu) |
 | `ENG-9xxx` | parsing d'id / violation de domaine / cible de like (`ENG-9004`) |
 
 `ENG-1001`, `ENG-2001`/`2002`, `ENG-3001` et `ENG-9002` appartenaient aux réactions pondérées ; ils sont
@@ -370,7 +366,7 @@ async fn main() -> anyhow::Result<()> {
 
 | Variable | Default | Description |
 |---|---|---|
-| `ENGAGEMENT_POST_GRPC_ENDPOINT` | non défini | adresse mesh de post (p. ex. `http://post:50056`) : les compteurs de likes masqués sont retenus (#809), et à qui est chaque post (les onglets J'aime des autres lecteurs, #873). Non défini → retenus pour personne, un onglet J'aime visible de son seul propriétaire |
+| `ENGAGEMENT_POST_GRPC_ENDPOINT` | non défini | adresse mesh de post (p. ex. `http://post:50056`) : seulement pour savoir à qui est chaque post (les onglets J'aime / Enregistrés des autres lecteurs, #873) ; les compteurs de likes n'en dépendent jamais (#973). Non défini → un onglet de profil visible de son seul propriétaire |
 | `ENGAGEMENT_POST_RPC_TIMEOUT_MS` · `ENGAGEMENT_POST_CONNECT_TIMEOUT_MS` | `500` · `1000` | délais de cet appel |
 | `ENGAGEMENT_SOCIAL_GRAPH_GRPC_ENDPOINT` | non défini | adresse mesh de social-graph (p. ex. `http://social-graph:50053`) : qui peut voir l'onglet J'aime d'un profil (#829). Non défini → l'onglet n'est visible que de son propriétaire |
 

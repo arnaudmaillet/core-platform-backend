@@ -271,6 +271,8 @@ message InteractionSettings {
     InteractionAudience mentions         = 2;
     InteractionAudience messages         = 3;
     bool                allow_downloads  = 4;
+    // Deprecated (#973): like counts can no longer be hidden. Ignored on a
+    // set; always true on a view.
     bool                show_like_counts = 5;
     // Whether others may remix this profile's posts / reuse their original
     // sound (#669; a post may override). Always set on a view; on a set

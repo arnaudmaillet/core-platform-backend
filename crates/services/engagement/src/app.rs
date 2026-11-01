@@ -152,11 +152,9 @@ impl App {
                 .register::<BatchGetLikesQuery, _>(BatchGetLikesHandler {
                     like_store:  Arc::clone(&like_store),
                     like_ledger: like_ledger.clone(),
-                    likes:       likes.clone(),
                 })?
                 .register::<GetPostEngagementQuery, _>(GetPostEngagementHandler {
                     score_store: Arc::clone(&score_store),
-                    likes,
                     like_store:  Arc::clone(&like_store),
                     like_ledger,
                 })?

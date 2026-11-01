@@ -320,7 +320,7 @@ where
                 .map(|v| proto::PostLikeVisibility {
                     post_id:            v.post_id.as_str(),
                     author_id:          v.author_id.as_str(),
-                    like_counts_hidden: v.like_counts_hidden,
+                    like_counts_hidden: false,
                 })
                 .collect(),
         }))
@@ -433,7 +433,8 @@ fn post_to_proto(post: Post) -> proto::PostView {
         outside_window:    post.outside_window(),
         visible_until_ms:  post.visible_until().map(|t| t.timestamp_millis()).unwrap_or_default(),
         downloads_disabled: post.downloads_disabled(),
-        like_counts_hidden: post.like_counts_hidden(),
+        // #973: like counts are never hidden.
+        like_counts_hidden: false,
         card_style_id:      post.card_style_id().map(str::to_owned).unwrap_or_default(),
     }
 }
