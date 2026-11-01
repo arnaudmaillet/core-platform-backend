@@ -24,6 +24,11 @@ message RelationStatusView {
     MuteScopes     muted                  = 6;
     // The actor restricts the target.
     bool           restricted             = 7;
+    // The actor has a pending follow request to the target (#972), whatever
+    // the inbound edge: `status` says REQUESTED only when neither follows the
+    // other, so a private target that already follows the actor reads
+    // FOLLOWED_BY with this set.
+    bool           requested              = 8;
 }
 
 // A lightweight summary of one edge in an adjacency list.

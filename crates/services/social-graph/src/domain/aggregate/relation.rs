@@ -300,6 +300,16 @@ impl Relation {
 
     // ── Accessors ─────────────────────────────────────────────────────────────
 
+    /// The actor's follow request to the target is pending (#972): sent, not
+    /// yet accepted, and no block either way. Independent of the inbound edge,
+    /// which [`Self::status`] lets win over REQUESTED.
+    pub fn has_pending_request(&self) -> bool {
+        self.actor_requested_target_at.is_some()
+            && self.actor_follows_target_since.is_none()
+            && !self.actor_blocks_target
+            && !self.target_blocks_actor
+    }
+
     pub fn status(&self) -> RelationStatus {
         if self.actor_blocks_target {
             return RelationStatus::Blocking;
@@ -372,6 +382,35 @@ mod tests {
             "a request announces itself (its owner is told), not a follow"
         );
         assert!(matches!(r.follow(true).unwrap_err(), SocialGraphError::AlreadyRequested { .. }));
+    }
+
+    /// #972: a request to a private profile that already follows the actor
+    /// reads FOLLOWED_BY, and says it is pending on its own; approving,
+    /// withdrawing or a block end it.
+    #[test]
+    fn a_pending_request_shows_whatever_the_inbound_edge() {
+        let mut r = relation(RelationContext { target_follows_actor_since: Some(Utc::now()), ..none() });
+        assert!(!r.has_pending_request());
+        r.follow(true).unwrap();
+        assert_eq!(r.status(), RelationStatus::FollowedBy);
+        assert!(r.has_pending_request(), "the request is pending despite FOLLOWED_BY");
+        r.approve_request().unwrap();
+        assert_eq!(r.status(), RelationStatus::MutualFollow);
+        assert!(!r.has_pending_request(), "accepted");
+
+        let mut alone = relation(none());
+        alone.follow(true).unwrap();
+        assert_eq!(alone.status(), RelationStatus::Requested);
+        assert!(alone.has_pending_request(), "REQUESTED and requested agree");
+        alone.withdraw_request().unwrap();
+        assert!(!alone.has_pending_request());
+
+        let blocked = relation(RelationContext {
+            actor_requested_target_at: Some(Utc::now()),
+            target_blocks_actor: true,
+            ..none()
+        });
+        assert!(!blocked.has_pending_request(), "a block ends it");
     }
 
     #[test]

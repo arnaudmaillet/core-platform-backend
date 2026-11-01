@@ -694,6 +694,7 @@ fn relation_status_view_to_proto(v: RelationStatusView) -> proto::RelationStatus
         target_following_count: v.target_following_count,
         muted:                  Some(mute_scopes_to_proto(v.muted)),
         restricted:             v.restricted,
+        requested:              v.requested,
     }
 }
 

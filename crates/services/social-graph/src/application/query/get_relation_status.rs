@@ -39,6 +39,8 @@ pub struct RelationStatusView {
     pub muted:                  MuteScopes,
     /// The actor restricts the target.
     pub restricted:             bool,
+    /// The actor's follow request to the target is pending (#972).
+    pub requested:              bool,
 }
 
 pub struct GetRelationStatusHandler {
@@ -89,6 +91,7 @@ impl QueryHandler<GetRelationStatusQuery> for GetRelationStatusHandler {
             actor_id,
             target_id,
             status:                 relation.status(),
+            requested:              relation.has_pending_request(),
             target_followers_count: counts.followers,
             target_following_count: counts.following,
             muted,
