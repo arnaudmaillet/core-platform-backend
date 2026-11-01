@@ -49,6 +49,8 @@ impl Service for CommentService {
         authenticated("/comment.v1.CommentService/ReviewHeldComment"),
         public_read("/comment.v1.CommentService/GetComment"),
         public_read("/comment.v1.CommentService/ListTopLevel"),
+        // The first comments of many posts' tiles (#976), as ListTopLevel.
+        public_read("/comment.v1.CommentService/ListPreviews"),
         public_read("/comment.v1.CommentService/ListReplies"),
     ];
 

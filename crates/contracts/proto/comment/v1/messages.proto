@@ -118,3 +118,25 @@ message ListCommentsResponse {
     repeated CommentView comments   = 1;
     string               next_token = 2;
 }
+
+// The first top-level comments of many posts at once (#976).
+message ListPreviewsRequest {
+    // At most 50; duplicates count once.
+    repeated string post_ids = 1;
+    // Comments per post: 0 means 5, at most 10.
+    int32           limit    = 2;
+}
+
+// One readable post's first comments for the caller.
+message CommentPreview {
+    string               post_id  = 1;
+    // The first comments the caller's ListTopLevel lists (newest first, the
+    // same read gate), reply_count filled; empty when it shows none.
+    repeated CommentView comments = 2;
+}
+
+message ListPreviewsResponse {
+    // In the request's order. A post the caller may not read has no entry;
+    // neither has one that failed or was too slow: read it with ListTopLevel.
+    repeated CommentPreview previews = 1;
+}

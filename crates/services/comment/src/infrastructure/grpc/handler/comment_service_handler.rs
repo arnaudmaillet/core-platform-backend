@@ -194,6 +194,36 @@ where
         }))
     }
 
+    /// The first top-level comments of many posts (#976).
+    pub async fn list_previews(
+        &self,
+        request: Request<proto::ListPreviewsRequest>,
+    ) -> Result<Response<proto::ListPreviewsResponse>, Status> {
+        let viewer = viewer_of(&request);
+        let mature = mature_of(&request);
+        let req    = request.into_inner();
+        let query  = crate::application::query::list_previews::ListPreviewsQuery {
+            post_ids: req.post_ids,
+            limit:    req.limit,
+            viewer,
+            mature,
+        };
+        let previews: Vec<crate::application::query::list_previews::CommentPreview> = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+        Ok(Response::new(proto::ListPreviewsResponse {
+            previews: previews
+                .into_iter()
+                .map(|p| proto::CommentPreview {
+                    post_id:  p.post_id.as_str(),
+                    comments: p.comments.into_iter().map(summary_to_proto).collect(),
+                })
+                .collect(),
+        }))
+    }
+
     pub async fn list_replies(
         &self,
         request: Request<proto::ListRepliesRequest>,
@@ -264,6 +294,13 @@ where
         request: Request<proto::ListTopLevelRequest>,
     ) -> Result<Response<proto::ListCommentsResponse>, Status> {
         self.list_top_level(request).await
+    }
+
+    async fn list_previews(
+        &self,
+        request: Request<proto::ListPreviewsRequest>,
+    ) -> Result<Response<proto::ListPreviewsResponse>, Status> {
+        self.list_previews(request).await
     }
 
     async fn list_comments_by_author(

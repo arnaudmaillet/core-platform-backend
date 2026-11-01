@@ -20,6 +20,11 @@ service CommentService {
 
     // Paginates top-level comments for a post, newest-first.
     rpc ListTopLevel  (ListTopLevelRequest)  returns (ListCommentsResponse);
+    // The first top-level comments of many posts (#976), for the tiles a
+    // client opens full screen: per post, up to `limit` comments, the start
+    // of what the caller's ListTopLevel lists, in its order. Best effort per
+    // post; never a comment ListTopLevel would not return.
+    rpc ListPreviews (ListPreviewsRequest) returns (ListPreviewsResponse);
 
     // Paginates direct replies to a top-level comment, newest-first.
     rpc ListReplies   (ListRepliesRequest)   returns (ListCommentsResponse);

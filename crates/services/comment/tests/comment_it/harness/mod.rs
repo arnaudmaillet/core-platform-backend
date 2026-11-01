@@ -546,3 +546,26 @@ pub fn random_author() -> String {
 pub fn summaries_contain(summaries: &[CommentSummary], comment_id: &str) -> bool {
     summaries.iter().any(|s| s.comment_id.as_str() == comment_id)
 }
+
+impl TestHarness {
+    /// The previews of `posts` as `viewer` (#976).
+    pub async fn previews(
+        &self,
+        posts: &[String],
+        limit: i32,
+        viewer: Viewer,
+    ) -> Vec<comment::application::query::list_previews::CommentPreview> {
+        self.query_bus
+            .dispatch(Envelope::new(
+                Uuid::now_v7(),
+                comment::application::query::list_previews::ListPreviewsQuery {
+                    post_ids: posts.to_vec(),
+                    limit,
+                    viewer,
+                    mature: true,
+                },
+            ))
+            .await
+            .expect("list_previews")
+    }
+}

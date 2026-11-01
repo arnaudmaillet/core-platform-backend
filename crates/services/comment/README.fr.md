@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 8854a6ff91170f2671fba8f375b8133c9adc02207c0827ea7004c9f33fc1ef90
+  source_sha256: c1092b9fe712e33315a70449fa9e88434978026f02512ac673db836980d325a2
   translated_at: 2026-11-01
   status: complete
 ---
@@ -125,6 +125,7 @@ service CommentService {
   rpc DeleteComment (DeleteCommentRequest) returns (CommandResponse);
   rpc GetComment    (GetCommentRequest)    returns (CommentView);
   rpc ListTopLevel  (ListTopLevelRequest)  returns (ListCommentsResponse);
+  rpc ListPreviews  (ListPreviewsRequest)  returns (ListPreviewsResponse);  // #976 : les premiers commentaires de plusieurs posts
   rpc ListReplies   (ListRepliesRequest)   returns (ListCommentsResponse);
   rpc ListCommentsByAuthor (ListCommentsByAuthorRequest) returns (ListCommentsResponse); // mesh uniquement
 }
@@ -151,6 +152,20 @@ post : ses 500 plus récents par likes, puis les plus anciens du plus récent au
 curseur et la même règle de dédoublonnage, les nombres de réponses remplis. Le contrôle de lecture filtre
 chaque page après le classement dans les deux ordres : les commentaires que le lecteur ne peut pas voir
 n'apparaissent jamais, et une page peut revenir incomplète avec un jeton.
+
+**Aperçus (#976).** `ListPreviews(post_ids ≤ 50, limit ≤ 10, 5 par défaut)` (edge `public_read`, comme
+`ListTopLevel`) donne, par post, les premiers commentaires de premier niveau que liste le `ListTopLevel`
+de l'appelant : du plus récent au plus ancien, avec le même contrôle de lecture, `reply_count` rempli. Un
+client les dessine pendant qu'il ouvre une tuile en plein écran.
+- **Par post.** Une lecture de partition de `max(3 × limit, 15)` lignes (30 au plus), pour que les
+  commentaires masqués à l'appelant ne vident pas l'aperçu. Le contrôle s'applique ensuite, et les
+  `limit` premiers sont gardés.
+- **Entrées.** Un post lisible sans commentaire visible a une entrée vide. Un post que l'appelant ne peut
+  pas lire n'en a pas, ni celui qui a échoué ou dépassé 800 ms (journalisé) : le client le lit avec
+  `ListTopLevel`.
+- **Concurrence.** Les posts sont lus 16 à la fois, et la réponse garde l'ordre de la requête.
+- **Latence.** Sur le Scylla local, 50 posts × 5 commentaires répondent en environ 10 ms : aucun cache de
+  candidats n'a été nécessaire.
 
 **Les commentaires d'un profil (#653).** `ListCommentsByAuthor(author_id)` est **mesh uniquement**
 (jamais sur l'edge) : l'export de données RGPD lit les commentaires d'un profil, du plus récent au plus
