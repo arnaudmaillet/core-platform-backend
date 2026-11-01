@@ -112,3 +112,30 @@ async fn the_first_page_tells_how_many_requests_are_pending() {
     assert_eq!(second.pending, None);
 }
 
+/// #972: a request to a private profile that already follows the requester
+/// reads FOLLOWED_BY, and `requested` says it is pending.
+#[tokio::test]
+async fn a_pending_request_shows_when_the_target_follows_back() {
+    let h = TestHarness::start().await;
+    let (owner, fan) = (harness::random_profile(), harness::random_profile());
+    h.follow(&owner, &fan).await;
+    h.audience(&owner, AudienceFact::Private(true)).await;
+    h.follow(&fan, &owner).await;
+
+    let query = GetRelationStatusQuery { actor_id: fan.as_str(), target_id: owner.as_str() };
+    let view = h.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.unwrap();
+    assert_eq!(view.status, RelationStatus::FollowedBy);
+    assert!(view.requested, "the request is pending");
+
+    h.command_bus
+        .dispatch(Envelope::new(
+            Uuid::now_v7(),
+            ApproveFollowRequestCommand { owner_id: owner.as_str(), requester_id: fan.as_str() },
+        ))
+        .await
+        .unwrap();
+    let query = GetRelationStatusQuery { actor_id: fan.as_str(), target_id: owner.as_str() };
+    let view = h.query_bus.dispatch(Envelope::new(Uuid::now_v7(), query)).await.unwrap();
+    assert_eq!(view.status, RelationStatus::MutualFollow);
+    assert!(!view.requested, "approved");
+}

@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: fb833839dbed52908ea66355a513a84e8b12d4661d8a96297e003e30839fe74d
-  translated_at: 2026-10-10
+  source_sha256: 781e0dc63030148f9666e45064e343af65349dff9c480a713ff0584a1058b80f
+  translated_at: 2026-11-01
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -140,7 +140,7 @@ service SocialGraphService {
   rpc Restrict(RestrictRequest) returns (CommandResponse);   // acteur : les commentaires de la cible sur ses posts ne sont vus que de la cible et de l'acteur
   rpc Unrestrict(UnrestrictRequest) returns (CommandResponse);
   // Queries
-  rpc GetRelationStatus(GetRelationStatusRequest) returns (RelationStatusView);
+  rpc GetRelationStatus(GetRelationStatusRequest) returns (RelationStatusView); // + `requested` : une demande de suivi en attente, quel que soit le lien entrant (#972)
   rpc ListFollowers(ListFollowersRequest) returns (ListFollowersResponse);
   rpc ListFollowing(ListFollowingRequest) returns (ListFollowingResponse);
   rpc GetListPrivacy(GetListPrivacyRequest) returns (ListPrivacy);   // propriétaire

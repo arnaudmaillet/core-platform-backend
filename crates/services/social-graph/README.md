@@ -123,7 +123,7 @@ service SocialGraphService {
   rpc Restrict(RestrictRequest) returns (CommandResponse);   // actor: its posts' comments by target seen by target + actor only
   rpc Unrestrict(UnrestrictRequest) returns (CommandResponse);
   // Queries
-  rpc GetRelationStatus(GetRelationStatusRequest) returns (RelationStatusView);
+  rpc GetRelationStatus(GetRelationStatusRequest) returns (RelationStatusView); // + `requested`: a pending follow request, whatever the inbound edge (#972)
   rpc ListFollowers(ListFollowersRequest) returns (ListFollowersResponse);
   rpc ListFollowing(ListFollowingRequest) returns (ListFollowingResponse);
   rpc GetListPrivacy(GetListPrivacyRequest) returns (ListPrivacy);   // owner
