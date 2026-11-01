@@ -105,3 +105,43 @@ async fn a_badge_missing_from_redis_is_read_from_scylla() {
     assert_eq!(h.counter.get(&durable).await.unwrap(), 2, "re-cached");
 }
 
+
+/// #971: clear all up to the newest one shown — older ones go, a newer one
+/// survives, the badge counts what is left, and a second clear changes
+/// nothing.
+#[tokio::test]
+async fn clear_all_deletes_up_to_the_bound_and_recounts_the_badge() {
+    let h = TestHarness::start().await;
+    let target = harness::random_profile();
+    for _ in 0..3 {
+        harness::dispatch_create(Arc::clone(&h.command_bus), target.as_str(), harness::random_profile().as_str())
+            .await
+            .expect("create_notification");
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let list = || {
+        h.handler.list_notifications(tonic::Request::new(harness::proto::ListNotificationsRequest {
+            profile_id: target.as_str(),
+            limit:      50,
+            page_token: String::new(),
+        }))
+    };
+    let shown = list().await.expect("list").into_inner().notifications;
+    assert_eq!(shown.len(), 3);
+    // The holder was shown the two older ones only (newest first: index 1).
+    let bound = shown[1].created_at_ms;
+    let clear = |up_to_ms| {
+        h.handler.clear_notifications(tonic::Request::new(harness::proto::ClearNotificationsRequest {
+            profile_id: target.as_str(),
+            up_to_ms,
+        }))
+    };
+    clear(bound).await.expect("clear");
+    let left = list().await.expect("list").into_inner().notifications;
+    assert_eq!(left.iter().map(|n| n.notification_id.clone()).collect::<Vec<_>>(), vec![shown[0].notification_id.clone()]);
+    assert_eq!(h.counter.get(&target).await.expect("unread"), 1, "the one left is unread");
+
+    clear(bound).await.expect("idempotent");
+    assert_eq!(list().await.expect("list").into_inner().notifications.len(), 1);
+    assert!(clear(0).await.is_err(), "a bound is required");
+}

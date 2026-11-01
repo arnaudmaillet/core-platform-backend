@@ -19,6 +19,12 @@ service NotificationService {
     // Resets the unread counter to 0 and sets a read_horizon timestamp.
     // Does not touch individual is_read flags in ScyllaDB.
     rpc MarkAllRead (MarkAllReadRequest) returns (CommandResponse);
+    // Deletes the caller's notifications created at or before `up_to_ms`
+    // (#971: "clear all", up to the newest one the holder was shown, so one
+    // that arrives during the client's Undo window survives). Idempotent;
+    // GetUnreadCount then counts what is left. Other devices see it on their
+    // next ListNotifications.
+    rpc ClearNotifications (ClearNotificationsRequest) returns (CommandResponse);
 
     // Long-lived server-streaming push channel for real-time notifications.
     // The BFF opens this stream per authenticated client session.

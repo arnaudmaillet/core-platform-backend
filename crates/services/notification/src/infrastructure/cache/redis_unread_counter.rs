@@ -175,6 +175,13 @@ impl<R: NotificationRepository> UnreadCounter for RedisUnreadCounter<R> {
         Ok(())
     }
 
+    async fn set(&self, profile_id: &ProfileId, count: i64) -> Result<(), NotificationError> {
+        let key = unread_key(profile_id);
+        let count = count.clamp(0, self.config.unread_cap);
+        let _: () = self.client.inner.set(&key, count.to_string(), None, None, false).await.map_err(Self::redis_err)?;
+        Ok(())
+    }
+
     async fn reset(&self, profile_id: &ProfileId) -> Result<(), NotificationError> {
         let key = unread_key(profile_id);
         let _: () = self.client.inner

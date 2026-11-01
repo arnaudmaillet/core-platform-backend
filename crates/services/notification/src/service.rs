@@ -48,6 +48,8 @@ impl Service for NotificationService {
         authenticated("/notification.v1.NotificationService/GetUnreadCount"),
         authenticated("/notification.v1.NotificationService/MarkRead"),
         authenticated("/notification.v1.NotificationService/MarkAllRead"),
+        // Clear all (#971): the caller's profile.
+        authenticated("/notification.v1.NotificationService/ClearNotifications"),
         authenticated("/notification.v1.NotificationService/StreamNotifications"),
         // Push devices and preferences (#654), bound to profile_id.
         authenticated("/notification.v1.NotificationService/RegisterDevice"),

@@ -81,8 +81,22 @@ pub enum HolderAge {
     Unknown,
 }
 
-/// The longest pause the holder may ask for (the app offers 15 min – 8 h).
-pub const MAX_PAUSE: Duration = Duration::hours(8);
+/// The longest timed pause the holder may ask for (#971: the app offers
+/// 1 h – 1 week, and adds time to a running pause); longer: pause until
+/// resumed ([`NotificationPreferences::paused_indefinitely`]).
+pub const MAX_PAUSE: Duration = Duration::days(30);
+
+/// How the holder changes their pause (#971).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pause {
+    /// No pause from now on (a timed one or one until resumed).
+    Resume,
+    /// Paused until then (at most [`MAX_PAUSE`] ahead); adding time is a
+    /// later `Until`.
+    Until(DateTime<Utc>),
+    /// Paused until the holder resumes.
+    Indefinitely,
+}
 
 /// A holder's preferences. The defaults: every push on, every email off, no
 /// pause, no quiet hours (teens: [`Self::teen`]).
@@ -94,6 +108,8 @@ pub struct NotificationPreferences {
     /// Categories whose email is on.
     pub email_on:     BTreeSet<PushCategory>,
     pub paused_until: Option<DateTime<Utc>>,
+    /// Paused until the holder resumes (#971), whatever `paused_until`.
+    pub paused_indefinitely: bool,
     pub quiet_hours:  Option<QuietHours>,
     /// The quiet hours are the 13–17 default, not the holder's choice: they
     /// lift once the holder is 18 ([`Self::for_age`]).
@@ -121,6 +137,24 @@ impl NotificationPreferences {
             self.teen_quiet_hours = false;
         }
         self
+    }
+
+    /// The holder pauses, resumes or extends their pushes (#971).
+    pub fn set_pause(&mut self, pause: Pause) {
+        match pause {
+            Pause::Resume => {
+                self.paused_until = None;
+                self.paused_indefinitely = false;
+            }
+            Pause::Until(until) => {
+                self.paused_until = Some(until);
+                self.paused_indefinitely = false;
+            }
+            Pause::Indefinitely => {
+                self.paused_until = None;
+                self.paused_indefinitely = true;
+            }
+        }
     }
 
     /// The holder sets their quiet hours (`None`: off); they are theirs now.
@@ -151,7 +185,7 @@ impl NotificationPreferences {
         if !self.push_on(category) {
             return false;
         }
-        if self.paused_until.is_some_and(|until| now < until) {
+        if self.paused_indefinitely || self.paused_until.is_some_and(|until| now < until) {
             return false;
         }
         match self.quiet_hours {
@@ -199,6 +233,26 @@ mod tests {
         assert!(p.push_allowed(PushCategory::Comments, at(12, 0)));
         p.set_push(PushCategory::Likes, true);
         assert!(p.push_allowed(PushCategory::Likes, at(12, 0)));
+    }
+
+    /// #971: a pause until resumed holds every push at any time; resuming
+    /// ends it, and a timed pause replaces it.
+    #[test]
+    fn a_pause_until_resumed_holds_until_resumed() {
+        let mut p = NotificationPreferences::default();
+        p.set_pause(Pause::Indefinitely);
+        assert!(PushCategory::ALL.iter().all(|c| !p.push_allowed(*c, at(12, 0))));
+        assert!(!p.push_allowed(PushCategory::Likes, at(12, 0) + Duration::days(365)));
+        p.set_pause(Pause::Until(at(13, 0)));
+        assert!(!p.paused_indefinitely);
+        assert!(p.push_allowed(PushCategory::Likes, at(13, 1)), "a timed pause replaced it");
+        p.set_pause(Pause::Indefinitely);
+        p.set_pause(Pause::Resume);
+        assert_eq!((p.paused_indefinitely, p.paused_until), (false, None));
+        assert!(p.push_allowed(PushCategory::Likes, at(12, 0)));
+        // Stored before #971 (no field): not paused.
+        let old: NotificationPreferences = serde_json::from_str(r#"{"push_off":[]}"#).unwrap();
+        assert!(!old.paused_indefinitely);
     }
 
     #[test]

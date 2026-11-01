@@ -176,6 +176,12 @@ impl App {
                     repository: Arc::clone(&repository),
                     counter:    Arc::clone(&counter),
                 })?
+                .register::<crate::application::command::mark_read::ClearNotificationsCommand, _>(
+                    crate::application::command::mark_read::ClearNotificationsHandler {
+                        repository: Arc::clone(&repository),
+                        counter:    Arc::clone(&counter),
+                    },
+                )?
                 .register::<RegisterDeviceCommand, _>(RegisterDeviceHandler {
                     devices:     Arc::clone(&devices),
                     preferences: Arc::clone(&preferences),

@@ -246,6 +246,33 @@ impl NotificationRepository for ScyllaNotificationRepository {
         Ok(())
     }
 
+    async fn delete_up_to(&self, profile_id: &ProfileId, up_to_ms: i64) -> Result<(), NotificationError> {
+        let stmt = self.strict_stmt(
+            "DELETE FROM notification.notifications_by_profile \
+             WHERE target_profile_id = ? AND created_at <= ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt, (profile_id.as_uuid(), CqlTimestamp(up_to_ms)))
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
+    }
+
+    async fn add_to_counter(&self, profile_id: &ProfileId, amount: i64) -> Result<(), NotificationError> {
+        let stmt = self.strict_stmt(
+            "UPDATE notification.notification_unread_counters \
+             SET unread_count = unread_count + ? \
+             WHERE target_profile_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(stmt, (scylla::value::Counter(amount), profile_id.as_uuid()))
+            .await
+            .map_err(scylla_err)?;
+        Ok(())
+    }
+
     async fn increment_counter(&self, profile_id: &ProfileId) -> Result<(), NotificationError> {
         let stmt = self.strict_stmt(
             "UPDATE notification.notification_unread_counters \

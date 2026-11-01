@@ -170,6 +170,7 @@ mod tests {
         async fn increment_once(&self, _: &ProfileId, _: &str) -> Result<bool, NotificationError> { unimplemented!() }
         async fn decrement(&self, _: &ProfileId) -> Result<(), NotificationError> { unimplemented!() }
         async fn reset(&self, _: &ProfileId) -> Result<(), NotificationError> { unimplemented!() }
+        async fn set(&self, _: &ProfileId, _: i64) -> Result<(), NotificationError> { unimplemented!() }
         async fn get(&self, _: &ProfileId) -> Result<i64, NotificationError> { Ok(4) }
         async fn set_read_horizon(&self, _: &ProfileId, _: i64) -> Result<(), NotificationError> { unimplemented!() }
         async fn get_read_horizon(&self, _: &ProfileId) -> Result<i64, NotificationError> { unimplemented!() }
