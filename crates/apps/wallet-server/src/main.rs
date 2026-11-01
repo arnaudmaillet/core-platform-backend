@@ -3,6 +3,10 @@
 //! `wallet-server calibration-report [YYYY-MM-DD]` (#893) prints a day's
 //! shadow-mode calibration report as JSON instead of serving (yesterday, UTC,
 //! by default): run it inside a wallet pod.
+//!
+//! `wallet-server grant-test-gems <account_id> <amount> <key> <reason…>`
+//! (#967) credits test gems outside production only (`WALLET_ENVIRONMENT`
+//! non-production and `WALLET_TEST_GRANTS=on`), until minting goes live.
 
 use std::net::SocketAddr;
 
@@ -12,11 +16,13 @@ use wallet::service::WalletService;
 async fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     if let Some(command) = args.next() {
-        anyhow::ensure!(
-            command == "calibration-report",
-            "unknown command {command:?} (only `calibration-report [YYYY-MM-DD]`)"
-        );
-        println!("{}", wallet::report::calibration_report(args.next().as_deref()).await?);
+        match command.as_str() {
+            "calibration-report" => println!("{}", wallet::report::calibration_report(args.next().as_deref()).await?),
+            "grant-test-gems" => println!("{}", wallet::test_grants::grant_test_gems(&args.collect::<Vec<_>>()).await?),
+            _ => anyhow::bail!(
+                "unknown command {command:?} (`calibration-report [YYYY-MM-DD]` or `grant-test-gems <account_id> <amount> <key> <reason…>`)"
+            ),
+        }
         return Ok(());
     }
 

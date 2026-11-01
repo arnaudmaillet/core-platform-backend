@@ -52,6 +52,10 @@ enum TransactionKind {
     TRANSACTION_KIND_CARD_STYLE      = 14;
     // The animated avatar bought (gems; #945); `ref_id` is the item id.
     TRANSACTION_KIND_ANIMATED_AVATAR = 15;
+    // Gems credited to a test account outside production (#967), until
+    // minting goes live; `ref_id` is the operator's reason. Never in
+    // production; analytics exclude it.
+    TRANSACTION_KIND_TEST_GRANT      = 16;
 }
 
 // What kind of thing a catalogue item is (#892). An item id is

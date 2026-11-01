@@ -485,6 +485,36 @@ impl WalletStore for PgWalletStore {
         Ok((outcome, wallet))
     }
 
+    #[instrument(name = "wallet.credit_gems", skip(self, key))]
+    async fn credit_gems(
+        &self,
+        account: &AccountId,
+        key: &IdempotencyKey,
+        credit: &GemSpend,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<(bool, Wallet), WalletError> {
+        let (mut tx, mut wallet) = self.locked(account, starter_gems, now).await?;
+        let credited = if replayed(&mut tx, account, key).await?.is_some() {
+            false
+        } else {
+            wallet.gems += credit.amount;
+            write_gems(&mut tx, &wallet, now).await?;
+            let movement = Movement {
+                currency:      Currency::Gems,
+                delta:         credit.amount,
+                balance_after: wallet.gems,
+                kind:          credit.kind,
+                ref_id:        credit.ref_id.as_deref(),
+                conviction:    None,
+            };
+            record(&mut tx, account, movement, key, now).await?;
+            true
+        };
+        tx.commit().await.map_err(storage)?;
+        Ok((credited, wallet))
+    }
+
     #[instrument(name = "wallet.stake", skip(self, key, announcement, policy, pack))]
     async fn stake(
         &self,

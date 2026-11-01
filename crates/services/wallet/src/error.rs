@@ -15,6 +15,7 @@ use thiserror::Error;
 /// | WAL-9003 | InvalidPageToken      | 422  | No        |
 /// | WAL-9004 | InvalidSpend          | 422  | No        |
 /// | WAL-9005 | UnknownStakePack      | 422  | No        |
+/// | WAL-3002 | TestGrantsDisabled    | 403  | No        |
 /// | DB-*     | Storage (delegated)   | var  | var       |
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -42,6 +43,11 @@ pub enum WalletError {
     #[error("invalid gem spend: {reason}")]
     InvalidSpend { reason: String },
 
+    /// A test grant asked where they are off (#967): production, or the
+    /// flag not set.
+    #[error("test grants are off here: {reason}")]
+    TestGrantsDisabled { reason: String },
+
     /// A `pack_id` no stake pack offer has (#941).
     #[error("unknown stake pack: '{pack_id}'")]
     UnknownStakePack { pack_id: String },
@@ -65,6 +71,7 @@ impl AppError for WalletError {
             WalletError::InvalidIdempotencyKey => "WAL-9002",
             WalletError::InvalidPageToken { .. } => "WAL-9003",
             WalletError::GemSpendingRestricted => "WAL-3001",
+            WalletError::TestGrantsDisabled { .. } => "WAL-3002",
             WalletError::InvalidSpend { .. } => "WAL-9004",
             WalletError::UnknownStakePack { .. } => "WAL-9005",
             WalletError::PeerUnavailable { .. } => "WAL-6001",
@@ -76,7 +83,7 @@ impl AppError for WalletError {
         match self {
             WalletError::Storage(e) => e.http_status(),
             WalletError::LedgerInconsistent { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-            WalletError::GemSpendingRestricted => StatusCode::FORBIDDEN,
+            WalletError::GemSpendingRestricted | WalletError::TestGrantsDisabled { .. } => StatusCode::FORBIDDEN,
             WalletError::PeerUnavailable { .. } | WalletError::EventPublishFailed(_) => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         }
@@ -116,6 +123,7 @@ impl AppError for WalletError {
             WalletError::GemSpendingRestricted => "Gems can't be spent before 18.",
             WalletError::InvalidSpend { .. } => "This purchase is not valid.",
             WalletError::UnknownStakePack { .. } => "This pack is no longer on sale.",
+            WalletError::TestGrantsDisabled { .. } => "Test gems are not available here.",
             WalletError::PeerUnavailable { .. } | WalletError::EventPublishFailed(_) => {
                 "Your likes couldn't be sent right now; they will be retried."
             }

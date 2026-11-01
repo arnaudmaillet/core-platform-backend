@@ -32,6 +32,9 @@ pub struct WalletConfig {
     pub welcome_gift: i64,
     /// The gem catalogue (#892): what gems buy, and at what price.
     pub catalog:      Catalog,
+    /// Test grants (#967): `Ok` only outside production with the flag on;
+    /// `Err` says why they are off.
+    pub test_grants:  Result<(), String>,
 }
 
 impl Default for WalletConfig {
@@ -46,6 +49,7 @@ impl Default for WalletConfig {
             conviction_bps: DEFAULT_CONVICTION_BPS,
             welcome_gift: DEFAULT_WELCOME_GIFT,
             catalog:      Catalog::default(),
+            test_grants:  test_grants(None, None),
         }
     }
 }
@@ -127,7 +131,26 @@ impl WalletConfig {
                 .unwrap_or(defaults.conviction_bps),
             welcome_gift: number("WALLET_WELCOME_GIFT").unwrap_or(defaults.welcome_gift),
             catalog: get("WALLET_CATALOG").and_then(|v| catalog(&v)).unwrap_or_else(|| defaults.catalog.clone()),
+            test_grants: test_grants(get("WALLET_ENVIRONMENT").as_deref(), get("WALLET_TEST_GRANTS").as_deref()),
         }
+    }
+}
+
+/// The environments where test grants (#967) may be switched on. Anything
+/// else, unset included, counts as production: they stay off whatever the
+/// flag says.
+const TEST_GRANT_ENVIRONMENTS: [&str; 4] = ["staging", "development", "local", "test"];
+
+/// Test grants are on only with `WALLET_TEST_GRANTS=on` in a known
+/// non-production `WALLET_ENVIRONMENT`.
+fn test_grants(environment: Option<&str>, flag: Option<&str>) -> Result<(), String> {
+    let environment = environment.map(str::trim).unwrap_or_default().to_ascii_lowercase();
+    if !TEST_GRANT_ENVIRONMENTS.contains(&environment.as_str()) {
+        return Err(format!("WALLET_ENVIRONMENT {environment:?} counts as production"));
+    }
+    match flag.map(str::trim) {
+        Some("on") => Ok(()),
+        _ => Err("WALLET_TEST_GRANTS is not on".to_owned()),
     }
 }
 
@@ -225,5 +248,19 @@ mod tests {
         for bad in ["0.4,0.2,0.6,0.8", "0.25,0.4,0.6", "0.25,0.4,0.6,1.0", "x"] {
             assert_eq!(bps(bad), DEFAULT_CONVICTION_BPS, "{bad:?} keeps the default");
         }
+    }
+
+    /// #967: only a known non-production environment with the flag on; prod,
+    /// an unknown name or no environment refuse whatever the flag.
+    #[test]
+    fn test_grants_need_a_test_environment_and_the_flag() {
+        assert_eq!(test_grants(Some("staging"), Some("on")), Ok(()));
+        assert_eq!(test_grants(Some(" Development "), Some("on")), Ok(()));
+        assert!(test_grants(Some("staging"), None).is_err(), "flag off");
+        assert!(test_grants(Some("staging"), Some("yes")).is_err(), "only `on`");
+        assert!(test_grants(Some("production"), Some("on")).is_err());
+        assert!(test_grants(Some("prod"), Some("on")).is_err());
+        assert!(test_grants(None, Some("on")).is_err(), "unset counts as production");
+        assert!(WalletConfig::default().test_grants.is_err());
     }
 }

@@ -726,3 +726,25 @@ async fn the_welcome_gift_is_credited_once_per_device_over_postgres() {
     assert_eq!(store.welcome_gift(&full, &first, 50, 2_000, 0, now).await.unwrap(), WelcomeGiftOutcome::Credited(0));
     assert_eq!(store.welcome_gift(&full, &second, 50, 2_000, 0, now).await.unwrap(), WelcomeGiftOutcome::AlreadyGiven);
 }
+
+/// #967 over Postgres: a test grant credits once per key, as `test_grant`,
+/// and the balance reconciles with the ledger; with grants off it is refused.
+#[tokio::test]
+async fn a_test_grant_credits_once_and_reconciles() {
+    let pool = pool().await;
+    let on = WalletConfig { test_grants: Ok(()), ..WalletConfig::default() };
+    let wallets = Wallets::new(store(&pool), on);
+    let account = Uuid::now_v7().to_string();
+    let now = Utc::now();
+    assert_eq!(wallets.grant_test_gems(&account, "it-grant-0001", 2000, "staging QA", now).await.unwrap(), (true, 2100));
+    assert_eq!(wallets.grant_test_gems(&account, "it-grant-0001", 2000, "staging QA", now).await.unwrap(), (false, 2100));
+    let page = wallets.history(&account, None, 10, "").await.unwrap();
+    assert!(page
+        .transactions
+        .iter()
+        .any(|t| t.kind == wallet::domain::TransactionKind::TestGrant && t.delta == 2000));
+    assert_reconciles(&pool, &AccountId::parse(&account).unwrap()).await;
+
+    let off = Wallets::new(store(&pool), WalletConfig::default());
+    assert!(off.grant_test_gems(&account, "it-grant-0002", 10, "x", now).await.is_err());
+}

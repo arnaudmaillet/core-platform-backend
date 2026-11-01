@@ -457,6 +457,7 @@ fn transaction_to_proto(t: &Transaction) -> proto::WalletTransaction {
             TransactionKind::AnimatedBanner => proto::TransactionKind::AnimatedBanner,
             TransactionKind::CardStyle => proto::TransactionKind::CardStyle,
             TransactionKind::AnimatedAvatar => proto::TransactionKind::AnimatedAvatar,
+            TransactionKind::TestGrant => proto::TransactionKind::TestGrant,
             TransactionKind::Unknown => proto::TransactionKind::Unspecified,
         } as i32,
         created_at:     Some(timestamp(t.created_at)),

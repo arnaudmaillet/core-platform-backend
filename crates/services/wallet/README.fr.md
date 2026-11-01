@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3f6fc0bbfb51401755b4b4e751d94389ba89d67b8791dc8fb0b1f8757105c5ea
-  translated_at: 2026-10-20
+  source_sha256: bb10091be5860a62f17ce16b9338c65c6b5fea0cd7ed8ce3c638e4226f7355b0
+  translated_at: 2026-11-01
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -184,6 +184,18 @@ un pool fixe — `WALLET_CURATOR_ENVELOPE_DAILY`, 1000 gems (charte économique 
    **`envelope_days`** (migration 0006 ; sur le shard de l'UUID nul). Une journée est prise en bail
    par un seul réplica ; la recalculer donne les mêmes parts. **Toujours aucune gem créée.**
 
+**Gems de test (#967), hors production seulement, en attendant le minting.** Un opérateur lance
+`wallet-server grant-test-gems <account_id> <amount> <idempotency_key> <reason…>` dans un pod wallet.
+- **Ce qu'elle fait.** Elle crédite `amount` gems (1 à 100 000) au compte, en une ligne du registre de
+  sa propre sorte, `test_grant` (`TRANSACTION_KIND_TEST_GRANT`, `ref_id` = la raison). Le crédit apparaît
+  honnêtement dans Activity, et l'analytique l'exclut. Une fois par clé : une nouvelle tentative ne
+  crédite plus rien.
+- **Où elle marche.** Seulement là où `WALLET_ENVIRONMENT` vaut `staging`, `development`, `local` ou
+  `test` **et** `WALLET_TEST_GRANTS=on`. Partout ailleurs, valeur absente comprise, c'est la production :
+  la commande est refusée avant de toucher la base (`WAL-3002`).
+- **Ce qu'elle n'est pas.** Ce n'est pas une RPC, donc rien n'est exposé sur le réseau. Ce n'est jamais
+  du minting (#890) : aucun gem n'est gagné.
+
 **Rapport de calibration (#893, les contrôles Go / No-Go de la charte §40–§41).** Un opérateur lance
 `wallet-server calibration-report [AAAA-MM-JJ]` dans un pod wallet (par défaut : hier, UTC). Il lit sur
 tous les shards les règlements comptés dans l'enveloppe de ce jour, n'écrit rien et affiche du JSON :
@@ -346,6 +358,7 @@ l'infra ne fournit pas les jetons (core-platform-infra#62).
 | Code | Sens | gRPC |
 |---|---|---|
 | `WAL-3001` | les gems ne peuvent pas être dépensés (moins de 18 ans, ou âge inconnu) | `PERMISSION_DENIED` |
+| `WAL-3002` | les crédits de test sont désactivés ici (production, ou `WALLET_TEST_GRANTS` pas à on ; #967) | `PERMISSION_DENIED` |
 | `WAL-5001` | une ligne du registre illisible (fail closed) | `INTERNAL` |
 | `WAL-6001` | post, comment ou social-graph indisponible : le like est renvoyé | `UNAVAILABLE` |
 | `WAL-6002` | une publication a échoué (interne : l'outbox garde l'événement ; jamais renvoyé par `Stake`) | `UNAVAILABLE` |
@@ -421,6 +434,8 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_ENVELOPE_TARGET_CAP_BPS` | `200` | le maximum que les positions d'une cible reçoivent ensemble, en points de base du pool (≤ 10000) |
 | `WALLET_OUTCOME_TOP_PERCENT` | `15` | une cible marque quand elle finit la journée dans cette part du top des cibles du jour (1–100) |
 | `WALLET_WELCOME_GIFT` | `50` | le cadeau de bienvenue (#827, #943) : les likes que reçoit l'appareil d'un invité quand il devient membre |
+| `WALLET_ENVIRONMENT` | non défini (= production) | `staging`, `development`, `local` ou `test` : là où les crédits de test peuvent être activés (#967). Toute autre valeur compte comme la production |
+| `WALLET_TEST_GRANTS` | off | `on` (avec un `WALLET_ENVIRONMENT` hors production) autorise `grant-test-gems` (#967). Jamais défini en production |
 | `WALLET_CONVICTION_PROBABILITIES` | `0.25,0.40,0.60,0.80` | la probabilité que représente chaque niveau de conviction C1–C4 (#888) : quatre valeurs croissantes dans ]0, 1[ ; toute autre valeur garde le défaut |
 | `WALLET_ENVELOPE_SECS` | `600` | fréquence à laquelle l'enveloppe cherche une journée terminée |
 | `WALLET_ALLOW_LOG_PUBLISHER` | non défini | `true` : démarrer sans `KAFKA_BROKERS`, en journalisant les événements (local seulement) |
