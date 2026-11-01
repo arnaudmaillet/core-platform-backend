@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 286dcf47d468ce66ac713f6feab4c0fcc16b14c44e58c8bf799d9dcf190c8a71
-  translated_at: 2026-10-20
+  source_sha256: c9dc5406fcb1a5c382f74a0243a59a2d09223ae007a80c7ee851464ee2fbb5fc
+  translated_at: 2026-11-01
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -293,21 +293,25 @@ un gel légal le conserve. Supprimer le document retire toujours son objet priv�
 
 **Avatars animés (#945, #948).** `MEDIA_KIND_AVATAR_CLIP` (MP4 / QuickTime, ≤ 20 Mio) est un clip que le
 `media-worker` **cuit** au lieu de le transcoder (`SheetBaker`, `FfmpegSheetBaker`) :
-1. ffmpeg en prend les 3 premières secondes, sans le son, à 12 i/s, recadrées au carré au centre (un clip
+1. ffmpeg en prend les 5 premières secondes, sans le son, à 12 i/s, recadrées au carré au centre (un clip
    de moins de 2 s échoue) ;
-2. la fenêtre de 24 images dont le début ressemble le plus à l'image qui suit sa fin est choisie, et les
-   images suivantes sont fondues dans son début, si bien que la dernière cellule enchaîne sur la première ;
+2. la fenêtre de 48 images (4 s, #974) dont le début ressemble le plus à l'image qui suit sa fin est
+   choisie, et les images suivantes sont fondues dans son début, si bien que la dernière cellule enchaîne
+   sur la première ; un clip plus court boucle des rangées entières de 4 de ce qu'il a (en gardant 4 images
+   à fondre tant qu'il en reste au moins 24) : un clip de 3 s boucle 32 images ;
 3. le raccord (dernière cellule → première, différence moyenne de luminance sur des vignettes 32 × 32)
    doit rester sous 0,18, sinon l'asset **échoue** (`CorruptMedia`, sans nouvel essai) et l'app demande un
    autre clip ;
-4. deux planches **AVIF** sont écrites — `SHEET_SMALL` (cellules de 128 px, 512 × 768) et `SHEET_LARGE`
-   (cellules de 256 px, 1024 × 1536), 4 colonnes, chaque image dans une gouttière transparente de 2 px — et
+4. deux planches **AVIF** sont écrites — `SHEET_SMALL` (cellules de 128 px, 512 × 1536 pour 48 images) et
+   `SHEET_LARGE` (cellules de 256 px, 1024 × 3072), 4 colonnes, chaque image dans une gouttière transparente de 2 px — et
    un **`POSTER`** JPEG, la dernière image des planches (256 px), pour les lecteurs qui ne savent pas jouer
    une planche.
 L'asset est READY avec sa grande planche ; il n'est jamais servi comme une vidéo. La livraison ajoute la
 disposition de chaque planche à sa rendition (`DeliveredRendition.sheet` : nombre d'images, colonnes,
-durée d'une image, gouttière, taille de cellule), déduite du type. Un clip de test de 3 s donne des
-planches d'environ 28 Ko / 37 Ko et une image fixe d'environ 8 Ko.
+durée d'une image, gouttière, taille de cellule) : fixée par le type sauf le nombre d'images, lu dans la
+hauteur de la planche stockée (rangées × 4), si bien qu'une planche de 24 images cuite avant #974 se joue
+toujours en 24. Un clip de test de 5 s donne des planches d'environ 52 Ko / 69 Ko et une image fixe
+d'environ 9 Ko.
 
 **Boucles d'aperçu vidéo (#963).** À côté de son échelle HLS et de son affiche, une `VIDEO` reçoit un
 **`PREVIEW`** : ses 3 premières secondes, sans son, en H.264 (main), son petit côté à 360 px au plus

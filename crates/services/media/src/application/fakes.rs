@@ -468,7 +468,7 @@ impl crate::application::port::SheetBaker for StubVideoTranscoder {
             return Err(MediaError::CorruptMedia { reason: "the clip does not loop".into() });
         }
         let sheet = |kind, px: u32, file: &str| {
-            Rendition::new(kind, MimeType::new("image/avif").unwrap(), root.object(file), Dimensions::new(px * 4, px * 6).unwrap(), 30_000)
+            Rendition::new(kind, MimeType::new("image/avif").unwrap(), root.object(file), Dimensions::new(px * 4, px * 12).unwrap(), 30_000)
         };
         Ok(TranscodeOutput {
             renditions: vec![

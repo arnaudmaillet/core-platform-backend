@@ -29,10 +29,11 @@ enum MediaKind {
     // Purged 30 days after the request's decision, and with the account.
     MEDIA_KIND_PRIVATE_DOCUMENT = 4;
     // An animated avatar's clip (#945, #948): MP4 or QuickTime, ≤ 20 MiB, at
-    // least 2 s (its first 3 s are used, muted). The worker bakes it into two
-    // sprite sheets (SHEET_SMALL, SHEET_LARGE: 24 frames at 12 fps, square
+    // least 2 s (its first 5 s are used, muted). The worker bakes it into two
+    // sprite sheets (SHEET_SMALL, SHEET_LARGE: 48 frames — 4 s — at 12 fps,
+    // fewer whole rows for a clip under ~4.3 s, never under 24; square
     // 128 / 256 px cells, 4 columns, a 2 px transparent gutter inside each
-    // cell, AVIF) that loop seamlessly (the last frame flows into the first),
+    // cell, AVIF; #974) that loop seamlessly (the last frame flows into the first),
     // and a POSTER: the sheet's last frame, for consumers that cannot play a
     // sheet (push images, link previews, web). Never served as a video.
     MEDIA_KIND_AVATAR_CLIP      = 5;
