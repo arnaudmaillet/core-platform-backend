@@ -168,4 +168,30 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, MediaError::CorruptMedia { .. }));
     }
+
+    /// #975: a loader that is not one strip of 1–60 square 128 px frames is
+    /// refused at commit, and stays PENDING (nothing to process or charge).
+    #[tokio::test]
+    async fn a_loader_that_is_not_a_frame_strip_is_refused_at_commit() {
+        use crate::application::port::MediaProbeReport;
+        use crate::domain::value_object::{ContentHash, Dimensions, MimeType};
+        let fx = Fixture::new();
+        for (width, height) in [(200, 128), (128 * 61, 128), (128, 256)] {
+            let asset_id = fx.reserve_and_upload(MediaKind::Loader).await;
+            fx.probe.set_report(MediaProbeReport {
+                mime_type:    MimeType::new("image/png").unwrap(),
+                byte_size:    300_000,
+                dimensions:   Some(Dimensions::new(width, height).unwrap()),
+                content_hash: ContentHash::new(TEST_HASH).unwrap(),
+            });
+            let err = fx
+                .commit_handler()
+                .handle(env(CommitUploadCommand { asset_id, etag: None, content_sha256: None }), t0())
+                .await
+                .unwrap_err();
+            assert!(matches!(err, MediaError::CorruptMedia { .. }), "{width} × {height}: {err:?}");
+            let asset = fx.assets.find_by_id(&asset_id).await.unwrap().unwrap();
+            assert_eq!(asset.state(), AssetState::Pending);
+        }
+    }
 }

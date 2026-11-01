@@ -6,4 +6,5 @@ mod pipeline;
 mod validation;
 mod assets_by_owner;
 mod private_documents;
+mod loaders;
 mod upload_keys;

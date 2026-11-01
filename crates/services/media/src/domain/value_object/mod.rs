@@ -25,7 +25,7 @@ pub use content_hash::ContentHash;
 pub use delivery_visibility::DeliveryVisibility;
 pub use dimensions::Dimensions;
 pub use ids::{AssetId, OwnerId};
-pub use media_kind::MediaKind;
+pub use media_kind::{MediaKind, LOADER_FRAME_PX, LOADER_MAX_FRAMES};
 pub use mime_type::MimeType;
 pub use rendition_kind::RenditionKind;
 pub use sheet_geometry::SheetGeometry;

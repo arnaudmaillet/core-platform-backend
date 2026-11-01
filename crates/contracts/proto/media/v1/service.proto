@@ -81,6 +81,13 @@ service MediaService {
     // assets are omitted, not errored.
     rpc BatchResolveDelivery(BatchResolveDeliveryRequest) returns (BatchResolveDeliveryResponse);
 
+    // EDGE (#975): the caller's own loaders (MEDIA_KIND_LOADER), each as a
+    // short-lived signed GET (MEDIA_SIGNED_URL_TTL_SECS) of its strip. An id
+    // that is not the caller's READY loader (another kind or owner, not ready,
+    // quarantined, deleted) is OMITTED. `owner_id` must be the edge token's
+    // account.
+    rpc ResolveLoaders(ResolveLoadersRequest) returns (ResolveLoadersResponse);
+
     // ── Ops ───────────────────────────────────────────────────────────────────
 
     // Regenerate an asset's renditions (e.g. after a rendition-ladder change),

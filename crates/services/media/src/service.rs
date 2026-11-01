@@ -73,6 +73,8 @@ impl Service for MediaService {
         authenticated("/media.v1.MediaService/DeleteAsset"),
         public_read("/media.v1.MediaService/ResolveDelivery"),
         public_read("/media.v1.MediaService/BatchResolveDelivery"),
+        // #975: the caller's own loaders (owner_id bound to the token).
+        authenticated("/media.v1.MediaService/ResolveLoaders"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {

@@ -103,6 +103,7 @@ pub struct Harness {
     /// Private documents (#777): their retention and the staff link.
     pub retention: media::application::command::DocumentRetention,
     pub staff: media::application::query::PrivateDocumentUrlHandler,
+    pub loaders: media::application::query::ResolveLoadersHandler,
     http: reqwest::Client,
     owner: OwnerId,
 }
@@ -220,6 +221,8 @@ impl Harness {
             Arc::new(media::infrastructure::event::LogAccessLog),
             chrono::Duration::minutes(5),
         );
+        let loaders =
+            media::application::query::ResolveLoadersHandler::new(assets.clone(), cdn.clone(), chrono::Duration::minutes(5));
         let moderation =
             ApplyModerationHandler::new(assets.clone(), object_store, cdn.clone(), cache.clone(), publisher);
         let get = GetAssetHandler::new(assets.clone());
@@ -229,6 +232,7 @@ impl Harness {
         Self {
             retention,
             staff,
+            loaders,
             by_owner,
             issue,
             issue_dedup,
@@ -387,16 +391,21 @@ impl Harness {
 
     /// Uploads `bytes` as a private document and commits it (the probe's verdict).
     pub async fn upload_document_raw(&self, bytes: Vec<u8>, mime: &str) -> Result<Asset, MediaError> {
+        self.upload_raw(MediaKind::PrivateDocument, bytes, mime).await
+    }
+
+    /// Reserve → direct PUT → commit, for an upload of `kind`.
+    pub async fn upload_raw(&self, kind: MediaKind, bytes: Vec<u8>, mime: &str) -> Result<Asset, MediaError> {
         let cmd = IssueUploadTicketCommand {
             owner_id: self.owner,
-            kind: MediaKind::PrivateDocument,
+            kind,
             declared_mime: MimeType::new(mime).unwrap(),
             declared_size: bytes.len() as u64,
             content_sha256: None,
             idempotency_key: None,
             delivery_visibility: None,
         };
-        let out = self.issue.handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now()).await.expect("ticket");
+        let out = self.issue.handle(Envelope::new(Uuid::now_v7(), cmd), Utc::now()).await?;
         let url = out.upload.expect("a fresh upload").presigned.url;
         let put = self.http.put(&url).header(reqwest::header::CONTENT_TYPE, mime).body(bytes).send().await.unwrap();
         assert!(put.status().is_success(), "direct upload to MinIO failed: {}", put.status());

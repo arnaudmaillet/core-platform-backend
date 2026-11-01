@@ -29,7 +29,7 @@ use crate::application::port::{
     MediaProbe, ModerationScreen, ObjectStore, VideoTranscoder,
 };
 use crate::application::query::{
-    GetAssetHandler, ListAssetsByOwnerHandler, PrivateDocumentUrlHandler, ResolveDeliveryHandler,
+    GetAssetHandler, ListAssetsByOwnerHandler, PrivateDocumentUrlHandler, ResolveDeliveryHandler, ResolveLoadersHandler,
 };
 use crate::application::MediaPolicy;
 use crate::config::MediaConfig;
@@ -122,6 +122,7 @@ impl App {
             Arc::clone(&deps.access_log),
             deps.policy.signed_url_ttl,
         ));
+        let loaders = Arc::new(ResolveLoadersHandler::new(Arc::clone(&deps.assets), Arc::clone(&deps.cdn), deps.policy.signed_url_ttl));
         let visibility = Arc::new(ChangeVisibilityHandler::new(
             Arc::clone(&deps.assets),
             Arc::clone(&deps.store),
@@ -133,6 +134,7 @@ impl App {
             .with_list_by_owner(by_owner)
             .with_private_documents(private_documents)
             .with_visibility_changes(visibility)
+            .with_loaders(loaders)
     }
 
     /// Builds the process + moderation handlers shared between the gRPC handler and
@@ -462,6 +464,28 @@ mod tests {
         let (public, _) = fx.ready_asset(crate::domain::value_object::MediaKind::PostImage).await;
         let seen = handler.get_asset(get(Some(stranger), public.as_str())).await.unwrap().into_inner().asset.unwrap();
         assert_eq!(keys(&seen), (true, true), "a public asset's are anyone's");
+    }
+
+    /// #975: `ResolveLoaders` answers the edge caller's own loaders only —
+    /// another account's `owner_id` is refused, and an id of theirs left out.
+    #[tokio::test]
+    async fn loaders_resolve_for_their_owner_alone() {
+        let fx = Fixture::new();
+        let handler = handler_from_fakes(&fx);
+        let owner = crate::application::fakes::owner();
+        let loader = fx.ready_loader_of(owner, 30).await;
+        let ask = |owner_id: String| proto::ResolveLoadersRequest { owner_id, asset_ids: vec![loader.as_str()] };
+
+        let mine = handler.resolve_loaders(as_caller(&owner.as_str(), ask(owner.as_str()))).await.unwrap().into_inner();
+        assert_eq!(mine.loaders.len(), 1);
+        assert_eq!((mine.loaders[0].asset_id.clone(), mine.loaders[0].frames), (loader.as_str(), 30));
+        assert!(mine.loaders[0].url.contains("private/loaders/") && mine.loaders[0].expires_at.is_some());
+
+        let stranger = uuid::Uuid::now_v7().to_string();
+        let status = handler.resolve_loaders(as_caller(&stranger, ask(owner.as_str()))).await.unwrap_err();
+        assert_eq!(status.code(), Code::PermissionDenied);
+        let theirs = handler.resolve_loaders(as_caller(&stranger, ask(stranger.clone()))).await.unwrap().into_inner();
+        assert!(theirs.loaders.is_empty(), "someone else's loader does not resolve");
     }
 
     /// Bearer tokens as staff tooling sends them on the mesh (#837).

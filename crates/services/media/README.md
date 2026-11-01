@@ -156,6 +156,7 @@ service MediaService {
   // Plane C — delivery resolution (hot read; CDN / signed URLs)
   rpc ResolveDelivery      (ResolveDeliveryRequest)      returns (ResolveDeliveryResponse);
   rpc BatchResolveDelivery (BatchResolveDeliveryRequest) returns (BatchResolveDeliveryResponse);
+  rpc ResolveLoaders       (ResolveLoadersRequest)       returns (ResolveLoadersResponse); // the caller's own (#975)
   // Ops
   rpc Reprocess         (ReprocessRequest)         returns (ReprocessResponse);
 }
@@ -257,6 +258,21 @@ signed download. **Retention:** READY sets a backstop purge 90 days out; `Profil
 (30), only for the requester's own documents; a sweeper (every `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS`)
 deletes what is due, like an owner's delete; a legal hold keeps it. Deleting it always removes its private
 object (never shared).
+
+**Loaders (#975).** `MEDIA_KIND_LOADER` is a loading animation its owner uploads, a purely private
+cosmetic: **one horizontal strip of square 128 × 128 px frames** (width = 128 × frames, 1–60 frames,
+height 128), PNG or HEIC, ≤ 1 MiB — the app normalises it before upload. Gated like private documents
+(`MEDIA_PRIVATE_DOCUMENTS_ENABLED`, `MED-1006`): they share the private home. The strip's dimensions are
+verified at **commit** (a PNG decoded by the image probe; a HEIC's read from its header, the largest
+`ispe`); anything else is refused there (`MED-6002`) and stays PENDING. Processing runs the same malware
+scan, takedown check and **`Screen`** (a blocked one never becomes READY), then moves the bytes to
+**`private/loaders/{asset_id}`** and marks it READY with **no rendition**; no review beyond `Screen` while
+nobody else sees it. Never delivered (`ResolveDelivery` / `BatchResolveDelivery` / `GetPrivateDocumentUrl`
+do not resolve it), never purged on schedule: it stays until its owner deletes it (the wallet's
+`DeleteLoader` deletes the asset) or the account goes. Its owner gets it through **`ResolveLoaders(owner_id,
+asset_ids ≤ 20)`** (edge, `owner_id` bound to the token's account): each of the caller's READY loaders as a
+signed GET valid `MEDIA_SIGNED_URL_TTL_SECS`, with its frame count; any other id is omitted. The GDPR
+export lists it with a signed download.
 
 **Animated avatars (#945, #948).** `MEDIA_KIND_AVATAR_CLIP` (MP4 / QuickTime, ≤ 20 MiB) is a clip the
 `media-worker` **bakes** instead of transcoding (`SheetBaker`, `FfmpegSheetBaker`):

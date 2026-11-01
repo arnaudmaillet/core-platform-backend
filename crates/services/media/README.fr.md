@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 286dcf47d468ce66ac713f6feab4c0fcc16b14c44e58c8bf799d9dcf190c8a71
-  translated_at: 2026-10-20
+  source_sha256: 90e8a3631c09bcee405a4d0adcb96399f37ae3179fde5281effb7b8b53602563
+  translated_at: 2026-11-01
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -178,6 +178,7 @@ service MediaService {
   // Plan C — résolution de diffusion (lecture chaude ; URLs CDN / signées)
   rpc ResolveDelivery      (ResolveDeliveryRequest)      returns (ResolveDeliveryResponse);
   rpc BatchResolveDelivery (BatchResolveDeliveryRequest) returns (BatchResolveDeliveryResponse);
+  rpc ResolveLoaders       (ResolveLoadersRequest)       returns (ResolveLoadersResponse); // ceux de l'appelant (#975)
   // Ops
   rpc Reprocess         (ReprocessRequest)         returns (ReprocessResponse);
 }
@@ -290,6 +291,22 @@ RGPD le liste avec un téléchargement signé. **Conservation :** READY fixe une
 `MEDIA_DOCUMENT_RETENTION_DAYS` (30), uniquement pour les documents du demandeur ; un balayage (toutes les
 `MEDIA_DOCUMENT_SWEEP_INTERVAL_SECS`) supprime ce qui est échu, comme une suppression par le propriétaire ;
 un gel légal le conserve. Supprimer le document retire toujours son objet privé (jamais partagé).
+
+**Loaders (#975).** `MEDIA_KIND_LOADER` est une animation de chargement que son propriétaire importe, un
+cosmétique purement privé : **une bande horizontale d'images carrées de 128 × 128 px** (largeur = 128 ×
+images, 1 à 60 images, hauteur 128), PNG ou HEIC, ≤ 1 Mio — l'app la normalise avant l'upload. Soumis au
+même interrupteur que les documents privés (`MEDIA_PRIVATE_DOCUMENTS_ENABLED`, `MED-1006`) : ils partagent
+le même espace privé. Les dimensions de la bande sont vérifiées au **commit** (un PNG décodé par la sonde
+d'images ; un HEIC lu dans son en-tête, le plus grand `ispe`) ; tout le reste y est refusé (`MED-6002`) et
+reste PENDING. Le traitement passe le même scan anti-malware, la même vérification de retrait et le même
+**`Screen`** (un loader bloqué ne devient jamais READY), puis déplace les octets vers
+**`private/loaders/{asset_id}`** et le marque READY **sans aucun rendu** ; aucune revue au-delà de `Screen`
+tant que personne d'autre ne le voit. Jamais diffusé (`ResolveDelivery` / `BatchResolveDelivery` /
+`GetPrivateDocumentUrl` ne le résolvent pas), jamais purgé à échéance : il reste jusqu'à ce que son
+propriétaire le supprime (le `DeleteLoader` du wallet supprime l'asset) ou que le compte disparaisse. Son
+propriétaire l'obtient par **`ResolveLoaders(owner_id, asset_ids ≤ 20)`** (edge, `owner_id` lié au compte
+du jeton) : chacun de ses loaders READY en GET signé valide `MEDIA_SIGNED_URL_TTL_SECS`, avec son nombre
+d'images ; tout autre id est omis. L'export RGPD le liste avec un téléchargement signé.
 
 **Avatars animés (#945, #948).** `MEDIA_KIND_AVATAR_CLIP` (MP4 / QuickTime, ≤ 20 Mio) est un clip que le
 `media-worker` **cuit** au lieu de le transcoder (`SheetBaker`, `FfmpegSheetBaker`) :

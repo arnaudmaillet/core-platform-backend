@@ -118,12 +118,12 @@ impl ProcessAssetHandler {
             return Ok(ProcessOutcome::Quarantined);
         }
 
-        // 3'. A private document (#777): no renditions, never on the CDN. Its
-        //     checked bytes move under `private/` (not granted to the CDN's
-        //     origin access); it is ready as is.
+        // 3'. A private document (#777) or loader (#975): no renditions, never
+        //     on the CDN. Its checked bytes move under `private/` (not granted
+        //     to the CDN's origin access); it is ready as is.
         if asset.kind().is_private() {
             asset.begin_processing(now)?;
-            self.store.relocate(&staging, &StorageKey::private_document(asset.id())).await?;
+            self.store.relocate(&staging, &StorageKey::private(asset.kind(), asset.id())).await?;
             asset.mark_ready(now)?;
             self.persist_and_publish(&mut asset).await?;
             return Ok(ProcessOutcome::Ready);

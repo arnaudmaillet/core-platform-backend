@@ -72,9 +72,9 @@ impl DeleteAssetHandler {
             (Vec::new(), Vec::new())
         };
         objects.push(StorageKey::staging(asset.id()));
-        // A private document's object (#777) is keyed by the asset, never
-        // shared with another asset's bytes: it always goes.
-        let private = StorageKey::private_document(asset.id());
+        // A private document's (#777) or loader's (#975) object is keyed by
+        // the asset, never shared with another asset's bytes: it always goes.
+        let private = StorageKey::private(asset.kind(), asset.id());
         objects.push(private.quarantined());
         objects.push(private);
         for key in &objects {
