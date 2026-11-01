@@ -66,6 +66,16 @@ impl StorageKey {
         Self(format!("{PRIVATE_PREFIX}documents/{asset_id}"))
     }
 
+    /// Where an asset of a private kind lives once checked: a loader (#975)
+    /// under `private/loaders/`, a document (and, for the deletes that sweep
+    /// every possible object, any other kind) under `private/documents/`.
+    pub fn private(kind: MediaKind, asset_id: AssetId) -> Self {
+        match kind {
+            MediaKind::Loader => Self(format!("{PRIVATE_PREFIX}loaders/{asset_id}")),
+            _ => Self::private_document(asset_id),
+        }
+    }
+
     /// Wraps a key read back from storage.
     pub fn from_raw(value: impl Into<String>) -> Self {
         Self(value.into())

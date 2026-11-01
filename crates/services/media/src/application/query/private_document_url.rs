@@ -7,7 +7,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
 
 use crate::application::port::{AccessLog, AssetRepository, CdnGateway, DocumentView, ResolvedUrl};
-use crate::domain::value_object::{AssetId, StorageKey};
+use crate::domain::value_object::{AssetId, MediaKind, StorageKey};
 use crate::error::MediaError;
 
 pub struct PrivateDocumentUrlHandler {
@@ -37,7 +37,7 @@ impl PrivateDocumentUrlHandler {
             .assets
             .find_by_id(&asset_id)
             .await?
-            .filter(|a| a.kind().is_private() && a.is_deliverable())
+            .filter(|a| a.kind() == MediaKind::PrivateDocument && a.is_deliverable())
             .ok_or_else(|| MediaError::AssetNotFound { id: asset_id.as_str() })?;
         let link = self.cdn.signed_download(&StorageKey::private_document(asset.id()), self.ttl, now).await?;
         let view = DocumentView {

@@ -21,7 +21,7 @@ use crate::application::command::{
 };
 use crate::application::query::{
     DeliveredMediaView, GetAssetHandler, GetAssetQuery, ListAssetsByOwnerHandler, ListAssetsByOwnerQuery,
-    PrivateDocumentUrlHandler, ResolveDeliveryHandler, ResolveDeliveryQuery,
+    PrivateDocumentUrlHandler, ResolveDeliveryHandler, ResolveDeliveryQuery, ResolveLoadersHandler,
 };
 use crate::domain::aggregate::{Asset, Rendition};
 use crate::domain::value_object::{
@@ -47,6 +47,8 @@ pub struct MediaServiceHandler {
     private_documents: Option<Arc<PrivateDocumentUrlHandler>>,
     /// Delivery-visibility changes (#919); `None` answers UNIMPLEMENTED.
     visibility: Option<Arc<ChangeVisibilityHandler>>,
+    /// An owner's loader links (#975); `None` answers UNIMPLEMENTED.
+    loaders: Option<Arc<ResolveLoadersHandler>>,
     /// Verifies the staff token on staff calls (#837); denies all by default.
     staff: edge::StaffGate,
     /// Which service calls a sensitive mesh RPC (#852); off by default.
@@ -78,6 +80,7 @@ impl MediaServiceHandler {
             by_owner: None,
             private_documents: None,
             visibility: None,
+            loaders: None,
             staff: edge::StaffGate::deny_all(),
             mesh: MeshCallerGate::off(),
         }
@@ -109,6 +112,37 @@ impl MediaServiceHandler {
     pub fn with_visibility_changes(mut self, handler: Arc<ChangeVisibilityHandler>) -> Self {
         self.visibility = Some(handler);
         self
+    }
+
+    /// Enables `ResolveLoaders` (#975).
+    pub fn with_loaders(mut self, handler: Arc<ResolveLoadersHandler>) -> Self {
+        self.loaders = Some(handler);
+        self
+    }
+
+    /// The caller's own loaders (#975), on the edge: `owner_id` is bound to
+    /// the token's account.
+    pub async fn resolve_loaders(
+        &self,
+        request: Request<proto::ResolveLoadersRequest>,
+    ) -> Result<Response<proto::ResolveLoadersResponse>, Status> {
+        let handler = self.loaders.as_ref().ok_or_else(|| Status::unimplemented("loaders are not enabled"))?;
+        edge::require_account(&request, &request.get_ref().owner_id)?;
+        let req = request.into_inner();
+        let owner = OwnerId::try_from(req.owner_id.as_str()).map_err(to_status)?;
+        let ids = req.asset_ids.iter().map(|id| AssetId::try_from(id.as_str())).collect::<Result<Vec<_>, _>>().map_err(to_status)?;
+        let loaders = handler.handle_at(owner, &ids, Utc::now()).await.map_err(to_status)?;
+        Ok(Response::new(proto::ResolveLoadersResponse {
+            loaders: loaders
+                .into_iter()
+                .map(|l| proto::ResolvedLoader {
+                    asset_id:   l.asset_id.as_str(),
+                    url:        l.link.url,
+                    expires_at: l.link.expires_at.map(to_timestamp),
+                    frames:     l.frames,
+                })
+                .collect(),
+        }))
     }
 
     /// A staff link to a private document (#777). Mesh only, and staff only
@@ -377,6 +411,7 @@ fn kind_from_proto(value: i32) -> Result<MediaKind, Status> {
         4 => Ok(MediaKind::PrivateDocument),
         // An animated avatar's clip (#945): baked into sprite sheets.
         5 => Ok(MediaKind::AvatarClip),
+        6 => Ok(MediaKind::Loader),
         other => Err(Status::invalid_argument(format!("unsupported media kind: {other}"))),
     }
 }
@@ -416,6 +451,7 @@ fn kind_to_proto(kind: MediaKind) -> i32 {
         MediaKind::Video => 3,
         MediaKind::PrivateDocument => 4,
         MediaKind::AvatarClip => 5,
+        MediaKind::Loader => 6,
     }
 }
 

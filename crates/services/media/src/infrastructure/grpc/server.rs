@@ -44,6 +44,13 @@ impl MediaService for MediaServiceHandler {
         self.list_assets_by_owner(request).await
     }
 
+    async fn resolve_loaders(
+        &self,
+        request: Request<proto::ResolveLoadersRequest>,
+    ) -> Result<Response<proto::ResolveLoadersResponse>, Status> {
+        self.resolve_loaders(request).await
+    }
+
     async fn get_private_document_url(
         &self,
         request: Request<proto::GetPrivateDocumentUrlRequest>,

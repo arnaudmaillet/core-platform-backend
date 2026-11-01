@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::application::command::{DeleteAssetCommand, DeleteAssetHandler};
 use crate::application::port::AssetRepository;
-use crate::domain::value_object::{AssetId, OwnerId};
+use crate::domain::value_object::{AssetId, MediaKind, OwnerId};
 use crate::error::MediaError;
 
 /// Documents purged per sweep.
@@ -43,7 +43,7 @@ impl DocumentRetention {
         let mut scheduled = 0;
         for id in documents {
             let Some(mut asset) = self.assets.find_by_id(id).await? else { continue };
-            if !asset.kind().is_private() || asset.owner_id() != *owner {
+            if asset.kind() != MediaKind::PrivateDocument || asset.owner_id() != *owner {
                 tracing::warn!(asset.id = %id.as_str(), "a decided request names a document that is not the requester's");
                 continue;
             }

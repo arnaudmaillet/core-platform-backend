@@ -10,7 +10,8 @@ async fn an_accounts_assets_list_by_id_with_working_downloads() {
     let first = h.upload_and_process().await;
     let second = h.upload_and_process().await;
 
-    let listed = h.list_by_owner(10, None, chrono::Duration::days(30)).await.expect("list");
+    // The harness owner is shared: list them all, not the first page.
+    let listed = h.list_by_owner(500, None, chrono::Duration::days(30)).await.expect("list");
     let mine: Vec<_> = listed.iter().map(|o| o.asset.id()).filter(|id| [first, second].contains(id)).collect();
     let mut expected = vec![first, second];
     expected.sort_by_key(|id| id.as_uuid());
@@ -35,6 +36,6 @@ async fn an_accounts_assets_list_by_id_with_working_downloads() {
     };
     assert_eq!(next, expected[1]);
     h.delete(first).await.expect("delete");
-    let after = h.list_by_owner(10, None, chrono::Duration::hours(1)).await.unwrap();
+    let after = h.list_by_owner(500, None, chrono::Duration::hours(1)).await.unwrap();
     assert!(after.iter().all(|o| o.asset.id() != first));
 }

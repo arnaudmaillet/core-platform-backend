@@ -106,10 +106,10 @@ pub enum MediaError {
     #[error("upload has not been finalized: the object is not present in the store")]
     UploadNotFinalized,
 
-    /// Private documents (#777) are not enabled on this deployment
-    /// (`MEDIA_PRIVATE_DOCUMENTS_ENABLED`): their bytes would have no private
-    /// home yet.
-    #[error("private documents are not enabled")]
+    /// Private uploads — documents (#777), loaders (#975) — are not enabled
+    /// on this deployment (`MEDIA_PRIVATE_DOCUMENTS_ENABLED`): their bytes
+    /// would have no private home yet.
+    #[error("private uploads are not enabled")]
     PrivateDocumentsDisabled,
 
     /// The upload's idempotency key already reserved an asset of another kind,

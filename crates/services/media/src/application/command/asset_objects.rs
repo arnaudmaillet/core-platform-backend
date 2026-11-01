@@ -52,8 +52,9 @@ pub(crate) async fn quarantine(store: &dyn ObjectStore, asset: &Asset) -> Result
     // The original upload too (never handed out, but kept at the origin).
     let staging = StorageKey::staging(asset.id());
     store.relocate(&staging, &staging.quarantined()).await?;
-    // A private document (#777), never public: nothing for the CDN to purge.
-    let private = StorageKey::private_document(asset.id());
+    // A private document (#777) or loader (#975), never public: nothing for
+    // the CDN to purge.
+    let private = StorageKey::private(asset.kind(), asset.id());
     store.relocate(&private, &private.quarantined()).await?;
     for tree in trees(asset) {
         for key in store.list(&tree).await? {
@@ -72,7 +73,7 @@ pub(crate) async fn quarantine(store: &dyn ObjectStore, asset: &Asset) -> Result
 pub(crate) async fn release(store: &dyn ObjectStore, asset: &Asset) -> Result<(), MediaError> {
     let staging = StorageKey::staging(asset.id());
     store.relocate(&staging.quarantined(), &staging).await?;
-    let private = StorageKey::private_document(asset.id());
+    let private = StorageKey::private(asset.kind(), asset.id());
     store.relocate(&private.quarantined(), &private).await?;
     for tree in trees(asset) {
         for key in store.list(&format!("{QUARANTINE_PREFIX}{tree}")).await? {
@@ -91,8 +92,8 @@ pub(crate) async fn all(
     let mut objects: BTreeSet<String> =
         asset.renditions().iter().map(|r| r.storage_key().as_str().to_owned()).collect();
     objects.insert(StorageKey::staging(asset.id()).quarantined().as_str().to_owned());
-    // A private document's object (#777), wherever it is.
-    let private = StorageKey::private_document(asset.id());
+    // A private document's (#777) or loader's (#975) object, wherever it is.
+    let private = StorageKey::private(asset.kind(), asset.id());
     objects.insert(private.quarantined().as_str().to_owned());
     objects.insert(private.as_str().to_owned());
     for tree in trees(asset) {

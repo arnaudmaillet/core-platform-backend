@@ -49,11 +49,12 @@ impl ListAssetsByOwnerHandler {
         let assets = self.assets.list_by_owner(&query.owner_id, query.limit, query.after.as_ref()).await?;
         let mut owned = Vec::with_capacity(assets.len());
         for asset in assets {
-            // A private document (#777) is the holder's too: its own key.
+            // A private document (#777) or loader (#975) is the holder's too:
+            // its own key.
             let original = if !asset.is_deliverable() {
                 None
             } else if asset.kind().is_private() {
-                Some(StorageKey::private_document(asset.id()))
+                Some(StorageKey::private(asset.kind(), asset.id()))
             } else {
                 asset
                     .renditions()

@@ -382,7 +382,7 @@ impl Asset {
     /// A private document's verification request was decided (#777): it is
     /// purged at `at` (the decision + the retention). Other kinds refuse.
     pub fn schedule_purge(&mut self, at: DateTime<Utc>, now: DateTime<Utc>) -> Result<(), MediaError> {
-        if !self.kind.is_private() {
+        if self.kind != MediaKind::PrivateDocument {
             return Err(MediaError::DomainViolation {
                 field:   "purge_after".into(),
                 message: "only a private document is purged on schedule".into(),
@@ -404,6 +404,7 @@ impl Asset {
     ) -> Result<(), MediaError> {
         self.ensure_state(AssetState::Pending, AssetState::Uploaded)?;
         constraints.validate(&params.mime_type, params.byte_size)?;
+        self.kind.check_dimensions(params.dimensions)?;
 
         self.mime_type = Some(params.mime_type);
         self.byte_size = Some(params.byte_size);
@@ -487,7 +488,7 @@ impl Asset {
             MediaKind::Video => Some(RenditionKind::Manifest),
             // An animated avatar is its sheets (#945).
             MediaKind::AvatarClip => Some(RenditionKind::SheetLarge),
-            MediaKind::PrivateDocument => None,
+            MediaKind::PrivateDocument | MediaKind::Loader => None,
             _ => Some(RenditionKind::Original),
         };
         if let Some(master) = master
@@ -499,8 +500,9 @@ impl Asset {
             });
         }
         self.transition(AssetState::Ready, now);
-        if self.kind.is_private() {
-            // An orphan (never attached, or never decided) still goes.
+        if self.kind == MediaKind::PrivateDocument {
+            // An orphan (never attached, or never decided) still goes. A
+            // loader (#975) stays until its owner deletes it.
             self.purge_after = Some(now + PRIVATE_DOCUMENT_BACKSTOP);
         }
         self.emit(DomainEvent::AssetReady(AssetReady {

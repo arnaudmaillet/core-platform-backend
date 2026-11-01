@@ -291,6 +291,26 @@ message BatchResolveDeliveryResponse {
     repeated DeliveredMedia  media = 1;
 }
 
+message ResolveLoadersRequest {
+    // The caller's account (bound to the edge token).
+    string          owner_id  = 1;
+    // At most 20 (the wallet caps an account at 10 uploaded loaders).
+    repeated string asset_ids = 2;
+}
+
+message ResolvedLoader {
+    string                    asset_id   = 1;
+    string                    url        = 2;
+    google.protobuf.Timestamp expires_at = 3;
+    // The strip's frame count (width / 128).
+    uint32                    frames     = 4;
+}
+
+message ResolveLoadersResponse {
+    // In request order; ids that do not resolve are omitted.
+    repeated ResolvedLoader loaders = 1;
+}
+
 // ── Ops ───────────────────────────────────────────────────────────────────────
 
 message ReprocessRequest {

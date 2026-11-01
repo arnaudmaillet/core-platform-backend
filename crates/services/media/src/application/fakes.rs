@@ -56,6 +56,7 @@ fn jpeg() -> MimeType {
 fn mime_for_kind(kind: MediaKind) -> MimeType {
     match kind {
         MediaKind::Video | MediaKind::AvatarClip => MimeType::new("video/mp4").unwrap(),
+        MediaKind::Loader => MimeType::new("image/png").unwrap(),
         _ => jpeg(),
     }
 }
@@ -790,7 +791,7 @@ impl Fixture {
             owner_id: owner(),
             kind,
             declared_mime: mime_for_kind(kind),
-            declared_size: 2_000_000,
+            declared_size: kind.max_bytes().min(2_000_000),
             content_sha256: None,
             idempotency_key: None,
             delivery_visibility,
@@ -806,6 +807,37 @@ impl Fixture {
     pub async fn reserve_and_upload(&self, kind: MediaKind) -> AssetId {
         let id = self.reserve_only(kind).await;
         self.store.put_object(&StorageKey::staging(id), 2_000_000, "etag-1");
+        id
+    }
+
+    /// A READY loader (#975) of `owner`: a PNG strip of `frames` 128 px frames.
+    pub async fn ready_loader_of(&self, owner: OwnerId, frames: u32) -> AssetId {
+        let png = MimeType::new("image/png").unwrap();
+        let cmd = IssueUploadTicketCommand {
+            owner_id: owner,
+            kind: MediaKind::Loader,
+            declared_mime: png.clone(),
+            declared_size: 200_000,
+            content_sha256: None,
+            idempotency_key: None,
+            delivery_visibility: None,
+        };
+        let id = self.issue_ticket_handler().handle(Envelope::new(Uuid::now_v7(), cmd), t0()).await.unwrap().asset_id;
+        self.store.put_object(&StorageKey::staging(id), 200_000, "etag-1");
+        self.probe.set_report(MediaProbeReport {
+            mime_type: png,
+            byte_size: 200_000,
+            dimensions: Some(Dimensions::new(128 * frames, 128).unwrap()),
+            content_hash: ContentHash::new(TEST_HASH).unwrap(),
+        });
+        self.commit_handler()
+            .handle(Envelope::new(Uuid::now_v7(), CommitUploadCommand { asset_id: id, etag: None, content_sha256: None }), t0())
+            .await
+            .unwrap();
+        self.process_handler()
+            .handle(Envelope::new(Uuid::now_v7(), ProcessAssetCommand { asset_id: id }), t0())
+            .await
+            .unwrap();
         id
     }
 

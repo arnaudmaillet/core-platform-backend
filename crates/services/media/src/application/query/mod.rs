@@ -7,10 +7,12 @@ pub mod get_asset;
 pub mod list_assets_by_owner;
 pub mod private_document_url;
 pub mod resolve_delivery;
+pub mod resolve_loaders;
 
 pub use get_asset::{GetAssetHandler, GetAssetQuery};
 pub use private_document_url::PrivateDocumentUrlHandler;
 pub use list_assets_by_owner::{ListAssetsByOwnerHandler, ListAssetsByOwnerQuery, OwnedAsset, MAX_DOWNLOAD_TTL_SECS};
+pub use resolve_loaders::{ResolveLoadersHandler, ResolvedLoader, MAX_LOADERS_PER_CALL};
 pub use resolve_delivery::{
     DeliveredMediaView, DeliveredRenditionView, ResolveDeliveryHandler, ResolveDeliveryQuery,
 };

@@ -37,6 +37,17 @@ enum MediaKind {
     // and a POSTER: the sheet's last frame, for consumers that cannot play a
     // sheet (push images, link previews, web). Never served as a video.
     MEDIA_KIND_AVATAR_CLIP      = 5;
+    // A loader its owner uploaded (#975): the app's loading animation, one
+    // horizontal strip of square 128 × 128 px frames (width = 128 × frames, 1
+    // to 60 frames; height 128), PNG or HEIC, ≤ 1 MiB — normalised by the
+    // client; anything else is refused at CommitUpload (MED-6002). PRIVATE to
+    // its owner: no renditions, never on the CDN, never resolved by
+    // ResolveDelivery; only its owner gets a short-lived signed link
+    // (ResolveLoaders). Screened at upload like every kind (a blocked one never
+    // becomes READY); no review while nobody else sees it. Uploads are refused
+    // while private uploads are off (MED-1006, as for documents). Deleted with
+    // its loader (wallet DeleteLoader) and with the account.
+    MEDIA_KIND_LOADER           = 6;
 }
 
 // The asset lifecycle state machine. An asset is created PENDING at ticket time,
