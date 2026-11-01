@@ -76,7 +76,8 @@ async fn a_category_turned_off_stops_its_push_and_tokens_follow_their_device() {
     h.handler.register_device(register(&profile, "phone", &fresh)).await.expect("re-register");
     assert_eq!(targets(&h, &profile, proto::PushCategory::Comments).await, (true, vec![fresh.clone()]));
 
-    // A pause beyond 8 h is refused; a pause holds every push.
+    // A timed pause holds every push, up to 30 days (#971); longer is
+    // refused; 0 resumes.
     let pause = |ms: i64| {
         Request::new(proto::UpdateNotificationPreferencesRequest {
             profile_id: profile.clone(),
@@ -85,10 +86,33 @@ async fn a_category_turned_off_stops_its_push_and_tokens_follow_their_device() {
         })
     };
     let now = chrono::Utc::now().timestamp_millis();
-    assert!(h.handler.update_notification_preferences(pause(now + 9 * 3_600_000)).await.is_err());
-    h.handler.update_notification_preferences(pause(now + 3_600_000)).await.expect("pause");
+    let day = 24 * 3_600_000;
+    assert!(h.handler.update_notification_preferences(pause(now + 31 * day)).await.is_err());
+    let week = h.handler.update_notification_preferences(pause(now + 7 * day)).await.expect("a week").into_inner();
+    assert_eq!(week.paused_until_ms, now + 7 * day);
     assert_eq!(targets(&h, &profile, proto::PushCategory::Comments).await, (false, vec![]));
     h.handler.update_notification_preferences(pause(0)).await.expect("resume");
+    assert!(targets(&h, &profile, proto::PushCategory::Comments).await.0);
+
+    // Until resumed (#971): held, read back, and ended by 0.
+    let until_resumed = Request::new(proto::UpdateNotificationPreferencesRequest {
+        profile_id: profile.clone(),
+        paused_indefinitely: Some(true),
+        ..Default::default()
+    });
+    let held = h.handler.update_notification_preferences(until_resumed).await.expect("until resumed").into_inner();
+    assert!(held.paused_indefinitely);
+    assert_eq!(held.paused_until_ms, 0);
+    assert_eq!(targets(&h, &profile, proto::PushCategory::Comments).await, (false, vec![]));
+    let read = h
+        .handler
+        .get_notification_preferences(Request::new(proto::GetNotificationPreferencesRequest { profile_id: profile.clone() }))
+        .await
+        .expect("get")
+        .into_inner();
+    assert!(read.paused_indefinitely, "read back");
+    let resumed = h.handler.update_notification_preferences(pause(0)).await.expect("resume").into_inner();
+    assert!(!resumed.paused_indefinitely);
     assert!(targets(&h, &profile, proto::PushCategory::Comments).await.0);
 
     // Unregistered: nowhere to send.

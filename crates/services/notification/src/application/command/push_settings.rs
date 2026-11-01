@@ -2,13 +2,13 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use cqrs::{Command, CommandHandler, Envelope};
 use validate_core::{FieldViolation, Validate};
 
 use crate::application::port::{DeviceRegistry, PreferenceStore};
 use crate::domain::device::{Device, DevicePlatform, PushEnvironment, MAX_DEVICE_ID_LEN, MAX_TOKEN_LEN};
-use crate::domain::preferences::{is_time_zone, HolderAge, NotificationPreferences, PushCategory, QuietHours, MAX_PAUSE};
+use crate::domain::preferences::{is_time_zone, HolderAge, NotificationPreferences, Pause, PushCategory, QuietHours, MAX_PAUSE};
 use crate::domain::value_object::ProfileId;
 use crate::error::NotificationError;
 
@@ -172,8 +172,9 @@ pub struct UpdatePreferencesCommand {
     pub age:         HolderAge,
     pub push:        Vec<(PushCategory, bool)>,
     pub email:       Vec<(PushCategory, bool)>,
-    /// `Some(None)` resumes; `Some(Some(t))` pauses until `t` (≤ 8 h ahead).
-    pub pause:       Option<Option<DateTime<Utc>>>,
+    /// A pause change (#971): resume, until `t` (≤ [`MAX_PAUSE`] ahead), or
+    /// until resumed.
+    pub pause:       Option<Pause>,
     /// `Some(None)` turns quiet hours off.
     pub quiet_hours: Option<Option<QuietHours>>,
     pub timezone:    Option<String>,
@@ -201,10 +202,10 @@ impl CommandHandler<UpdatePreferencesCommand> for UpdatePreferencesHandler {
         let cmd = &envelope.payload;
         let profile = ProfileId::try_from(cmd.profile_id.as_str())?;
         check_time_zone(cmd.timezone.as_deref())?;
-        if let Some(Some(until)) = cmd.pause {
+        if let Some(Pause::Until(until)) = cmd.pause {
             // A minute of slack for the client's clock.
             if until > Utc::now() + MAX_PAUSE + Duration::minutes(1) {
-                return Err(violation("paused_until", "a pause lasts at most 8 hours"));
+                return Err(violation("paused_until", "a timed pause lasts at most 30 days; pause until resumed instead"));
             }
         }
 
@@ -216,7 +217,7 @@ impl CommandHandler<UpdatePreferencesCommand> for UpdatePreferencesHandler {
             preferences.set_email(*category, *on);
         }
         if let Some(pause) = cmd.pause {
-            preferences.paused_until = pause;
+            preferences.set_pause(pause);
         }
         if let Some(quiet) = cmd.quiet_hours {
             preferences.set_quiet_hours(quiet);

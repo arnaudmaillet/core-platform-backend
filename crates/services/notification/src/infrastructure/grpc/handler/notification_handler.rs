@@ -10,7 +10,7 @@ use uuid::Uuid;
 use cqrs::{CommandBus, Envelope, QueryBus};
 
 use transport::grpc::edge;
-use crate::application::command::mark_read::{MarkAllReadCommand, MarkReadCommand};
+use crate::application::command::mark_read::{ClearNotificationsCommand, MarkAllReadCommand, MarkReadCommand};
 use crate::application::port::{NotificationSummary, StreamRegistry};
 use crate::application::query::{
     get_unread_count::GetUnreadCountQuery,
@@ -21,7 +21,7 @@ use crate::application::command::push_settings::{
 };
 use crate::application::query::push_settings::{GetPreferencesQuery, PushTargets, ResolvePushTargetsQuery};
 use crate::domain::device::{DevicePlatform, PushEnvironment};
-use crate::domain::preferences::{HolderAge, NotificationPreferences, PushCategory, QuietHours};
+use crate::domain::preferences::{HolderAge, NotificationPreferences, Pause, PushCategory, QuietHours};
 use crate::domain::value_object::ProfileId;
 
 // ── Proto inclusion ───────────────────────────────────────────────────────────
@@ -127,6 +127,21 @@ where
     ) -> Result<Response<proto::CommandResponse>, Status> {
         edge::require_profile(&request, &request.get_ref().profile_id)?;
         let cmd = MarkAllReadCommand { profile_id: request.into_inner().profile_id };
+        self.command_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), cmd))
+            .await
+            .map(|_| ok_response())
+            .map_err(cqrs_to_status)
+    }
+
+    /// Clears the caller's notifications up to what they were shown (#971).
+    pub async fn clear_notifications(
+        &self,
+        request: Request<proto::ClearNotificationsRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        edge::require_profile(&request, &request.get_ref().profile_id)?;
+        let req = request.into_inner();
+        let cmd = ClearNotificationsCommand { profile_id: req.profile_id, up_to_ms: req.up_to_ms };
         self.command_bus
             .dispatch(Envelope::new(Uuid::now_v7(), cmd))
             .await
@@ -253,10 +268,12 @@ where
             push.push((category, c.push));
             email.push((category, c.email));
         }
-        let pause = match req.paused_until_ms {
-            None => None,
-            Some(0) => Some(None),
-            Some(ms) => Some(Some(
+        // #971: until resumed wins; then 0 resumes, a time pauses until then.
+        let pause = match (req.paused_indefinitely, req.paused_until_ms) {
+            (Some(true), _) => Some(Pause::Indefinitely),
+            (_, None) => None,
+            (_, Some(0)) => Some(Pause::Resume),
+            (_, Some(ms)) => Some(Pause::Until(
                 chrono::DateTime::from_timestamp_millis(ms)
                     .ok_or_else(|| Status::invalid_argument("paused_until_ms out of range"))?,
             )),
@@ -414,6 +431,7 @@ fn preferences_to_proto(p: &NotificationPreferences) -> proto::NotificationPrefe
             })
             .collect(),
         paused_until_ms: p.paused_until.map(|t| t.timestamp_millis()).unwrap_or_default(),
+        paused_indefinitely: p.paused_indefinitely,
         quiet_hours: Some(match p.quiet_hours {
             Some(q) => proto::QuietHours {
                 enabled:      true,
@@ -465,6 +483,13 @@ where
         request: Request<proto::MarkAllReadRequest>,
     ) -> Result<Response<proto::CommandResponse>, Status> {
         self.mark_all_read(request).await
+    }
+
+    async fn clear_notifications(
+        &self,
+        request: Request<proto::ClearNotificationsRequest>,
+    ) -> Result<Response<proto::CommandResponse>, Status> {
+        self.clear_notifications(request).await
     }
 
     async fn stream_notifications(

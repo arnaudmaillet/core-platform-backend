@@ -32,6 +32,9 @@ pub trait UnreadCounter: Send + Sync + 'static {
     /// Resets the counter to 0 (mark-all-read path).
     async fn reset(&self, profile_id: &ProfileId) -> Result<(), NotificationError>;
 
+    /// Sets the counter to `count` (#971: the unread left after a clear).
+    async fn set(&self, profile_id: &ProfileId, count: i64) -> Result<(), NotificationError>;
+
     /// Returns the current unread count. Populates Redis from ScyllaDB on miss.
     async fn get(&self, profile_id: &ProfileId) -> Result<i64, NotificationError>;
 

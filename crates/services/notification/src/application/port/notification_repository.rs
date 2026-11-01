@@ -60,6 +60,15 @@ pub trait NotificationRepository: Send + Sync + 'static {
         created_at_ms:   i64,
     ) -> Result<(), NotificationError>;
 
+    /// Deletes every notification of `profile_id` created at or before
+    /// `up_to_ms` (#971: clear all, up to what the holder was shown): one
+    /// range delete; idempotent.
+    async fn delete_up_to(&self, profile_id: &ProfileId, up_to_ms: i64) -> Result<(), NotificationError>;
+
+    /// Adds `amount` to the ScyllaDB unread counter (#971: the unread left
+    /// after a clear, on a counter just reset).
+    async fn add_to_counter(&self, profile_id: &ProfileId, amount: i64) -> Result<(), NotificationError>;
+
     /// Increments the ScyllaDB unread counter for `profile_id` by 1.
     async fn increment_counter(&self, profile_id: &ProfileId) -> Result<(), NotificationError>;
 

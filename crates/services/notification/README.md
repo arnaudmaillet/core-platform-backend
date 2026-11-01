@@ -57,7 +57,11 @@ ReactionNotificationWorker  CommentNotificationWorker  MentionNotificationWorker
 
 > **Invariants:** `NotificationView` carries only UUIDs + enum ints (no PII/content). `MarkRead`
 > requires both `notification_id` AND `created_at_ms` (the full Scylla clustering key for a point
-> UPDATE). `read_horizon_ms` (set by `MarkAllRead`) renders everything `created_at_ms ≤ horizon` as read
+> UPDATE). **Clear all (#971):** `ClearNotifications(profile_id, up_to_ms)` deletes the holder's
+> notifications created at or before `up_to_ms` (the newest one they were shown), so one that arrives
+> during the client's Undo window survives. It is one range delete, idempotent; the unread badge is then
+> recounted from what is left (newer, unread, after the read horizon) and set on both counters.
+> `read_horizon_ms` (set by `MarkAllRead`) renders everything `created_at_ms ≤ horizon` as read
 > regardless of the per-row `is_read` flag. Idempotency: dedupe claim keys
 > (`notification:dedupe:{profile}:…`) prevent a redelivered event from double-incrementing the counter.
 
@@ -112,6 +116,7 @@ service NotificationService {
   rpc GetUnreadCount      (GetUnreadCountRequest)       returns (GetUnreadCountResponse);
   rpc MarkRead            (MarkReadRequest)             returns (CommandResponse);  // needs notification_id + created_at_ms
   rpc MarkAllRead         (MarkAllReadRequest)          returns (CommandResponse);  // sets read_horizon_ms
+  rpc ClearNotifications  (ClearNotificationsRequest)   returns (CommandResponse);  // #971: deletes up to up_to_ms, recounts the badge
   rpc StreamNotifications (StreamNotificationsRequest)  returns (stream StreamNotificationsResponse);
   // Push devices and preferences (#654)
   rpc RegisterDevice                (RegisterDeviceRequest)                returns (CommandResponse);
@@ -136,7 +141,8 @@ and bound to `profile_id`.
   pulled into someone else's account. The mesh, and holders with no device recorded, keep the old rule.
 - Preferences (`notification_preferences`, one JSON document per profile): push and email per category
   (likes, comments, mentions, new followers, follow requests, messages, posts from followed accounts,
-  places nearby, wallet), a pause (≤ 8 h), quiet hours read in the holder's IANA zone. Defaults: every
+  places nearby, wallet), a pause (timed, ≤ 30 days, or until resumed: `paused_indefinitely`, #971;
+  `paused_until_ms = 0` ends either), quiet hours read in the holder's IANA zone. Defaults: every
   push on, every email off; **13–17: quiet hours 22:00–07:00** (from the token's `age` on reads, and
   written at a teen's first `RegisterDevice` so the sender applies them). Stored as the teen default,
   they lift once the token says `18+`: at the next edge `RegisterDevice` (the app refreshes its device at

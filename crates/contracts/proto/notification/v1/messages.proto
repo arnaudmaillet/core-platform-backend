@@ -24,6 +24,13 @@ message MarkAllReadRequest {
     string profile_id = 1;
 }
 
+message ClearNotificationsRequest {
+    string profile_id = 1;
+    // The created_at_ms of the newest notification the holder was shown;
+    // later ones survive. Must be > 0.
+    int64  up_to_ms   = 2;
+}
+
 // ── Queries ───────────────────────────────────────────────────────────────────
 
 // Fetches the paginated notification feed for a profile.
@@ -143,10 +150,12 @@ message QuietHours {
 message NotificationPreferences {
     // One entry per category.
     repeated CategoryChannels categories      = 1;
-    // Unix ms; 0 when not paused.
+    // Unix ms; 0 when no timed pause runs.
     int64                     paused_until_ms = 2;
     QuietHours                quiet_hours     = 3;
     string                    timezone        = 4;
+    // Every push is held until the holder resumes (#971).
+    bool                      paused_indefinitely = 5;
 }
 
 message GetNotificationPreferencesRequest {
@@ -158,12 +167,17 @@ message GetNotificationPreferencesRequest {
 message UpdateNotificationPreferencesRequest {
     string                    profile_id      = 1;
     repeated CategoryChannels categories      = 2;
-    // Absent: unchanged; 0: resume; else pause until (≤ 8 h ahead).
+    // Absent: unchanged; 0: resume (a timed pause or one until resumed);
+    // else pause until then, at most 30 days ahead (#971). Adding time to a
+    // running pause is sending a later time.
     optional int64            paused_until_ms = 3;
     // Absent: unchanged.
     QuietHours                quiet_hours     = 4;
     // Empty: unchanged.
     string                    timezone        = 5;
+    // true: pause every push until resumed (#971), whatever paused_until_ms.
+    // Resume with paused_until_ms = 0. Absent or false: unchanged.
+    optional bool             paused_indefinitely = 6;
 }
 
 // MESH-ONLY: where a push about `category` goes now.

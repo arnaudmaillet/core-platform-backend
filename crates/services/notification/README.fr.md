@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: ca1db23a0adcc7fb2299ac9c5fca656c2113d7c2b80c05075d1be19957e154f7
-  translated_at: 2026-10-20
+  source_sha256: 84a4065c9a34074e7ef4d189690dc81eb79c718ebb12479794dd199191796ec4
+  translated_at: 2026-11-01
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -70,7 +70,12 @@ ReactionNotificationWorker  CommentNotificationWorker  MentionNotificationWorker
 
 > **Invariants :** `NotificationView` ne porte que des UUID + ints d'enum (ni PII ni contenu). `MarkRead`
 > exige à la fois `notification_id` ET `created_at_ms` (la clé de clustering Scylla complète pour un
-> UPDATE par point). `read_horizon_ms` (positionné par `MarkAllRead`) affiche comme lu tout
+> UPDATE par point). **Tout effacer (#971) :** `ClearNotifications(profile_id, up_to_ms)` supprime les
+> notifications du titulaire créées au plus tard à `up_to_ms` (la plus récente qu'on lui a montrée) :
+> celle qui arrive pendant la fenêtre d'annulation du client survit. C'est une suppression par plage,
+> idempotente ; le badge des non-lus est ensuite recompté sur ce qui reste (plus récent, non lu, après
+> l'horizon de lecture) et posé sur les deux compteurs.
+> `read_horizon_ms` (positionné par `MarkAllRead`) affiche comme lu tout
 > `created_at_ms ≤ horizon` indépendamment du flag par ligne `is_read`. Idempotence : les clés de claim de
 > dédup (`notification:dedupe:{profile}:…`) empêchent un événement re-livré de double-incrémenter le
 > compteur.
@@ -127,6 +132,7 @@ service NotificationService {
   rpc GetUnreadCount      (GetUnreadCountRequest)       returns (GetUnreadCountResponse);
   rpc MarkRead            (MarkReadRequest)             returns (CommandResponse);  // needs notification_id + created_at_ms
   rpc MarkAllRead         (MarkAllReadRequest)          returns (CommandResponse);  // sets read_horizon_ms
+  rpc ClearNotifications  (ClearNotificationsRequest)   returns (CommandResponse);  // #971: deletes up to up_to_ms, recounts the badge
   rpc StreamNotifications (StreamNotificationsRequest)  returns (stream StreamNotificationsResponse);
   // Appareils push et préférences (#654)
   rpc RegisterDevice                (RegisterDeviceRequest)                returns (CommandResponse);
@@ -152,7 +158,8 @@ sur l'edge et liées à `profile_id`.
   les détenteurs sans appareil enregistré, gardent l'ancienne règle.
 - Préférences (`notification_preferences`, un document JSON par profil) : push et e-mail par catégorie
   (j'aime, commentaires, mentions, nouveaux abonnés, demandes d'abonnement, messages, posts des comptes
-  suivis, lieux à proximité, portefeuille), une pause (≤ 8 h), des heures calmes lues dans le fuseau IANA du
+  suivis, lieux à proximité, portefeuille), une pause (minutée, ≤ 30 jours, ou jusqu'à reprise :
+  `paused_indefinitely`, #971 ; `paused_until_ms = 0` met fin aux deux), des heures calmes lues dans le fuseau IANA du
   titulaire. Par défaut : tous les push activés, tous les e-mails désactivés ; **13–17 ans : heures calmes
   22:00–07:00** (d'après l'`age` du jeton en lecture, et écrites au premier `RegisterDevice` d'un adolescent
   pour que l'émetteur les applique). Enregistrées comme le défaut adolescent, elles se lèvent dès que le
