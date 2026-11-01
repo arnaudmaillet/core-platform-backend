@@ -101,6 +101,8 @@ impl TestHarness {
             kafka_group_sg_unfollowed:  "timeline-it-sg-unfollowed".to_owned(),
             discovery_window_secs:      259_200,
             discovery_pool_cap:         10_000,
+            discovery_archive_secs:     2_592_000,
+            discovery_archive_cap:      10_000,
             discovery_hot_gravity_secs: 45_000.0,
             nearby_candidates:          300,
             kafka_group_discovery:      "timeline-it-discovery".to_owned(),

@@ -62,6 +62,7 @@ pub enum ContentLevel {
 
 /// The pool's indices. A post is in `Recent` for as long as it is pooled, and
 /// in exactly one of `Fresh` (no popularity yet) or `Hot` (some popularity).
+/// The archive (#970) keeps every post to the horizon, newest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DiscoveryStream {
     Recent,
@@ -69,6 +70,9 @@ pub enum DiscoveryStream {
     Hot,
     /// NEARBY's candidate list (computed per request, not stored).
     Nearby,
+    /// The archive, newest first (#970): what back-fills a page once the
+    /// window is exhausted.
+    Archive,
 }
 
 impl DiscoveryStream {
@@ -78,6 +82,7 @@ impl DiscoveryStream {
             Self::Fresh  => 'f',
             Self::Hot    => 'h',
             Self::Nearby => 'n',
+            Self::Archive => 'a',
         }
     }
 
@@ -87,6 +92,7 @@ impl DiscoveryStream {
             'f' => Self::Fresh,
             'h' => Self::Hot,
             'n' => Self::Nearby,
+            'a' => Self::Archive,
             _ => return None,
         })
     }
@@ -263,14 +269,20 @@ impl StreamPosition {
 }
 
 /// The discovery page cursor: the ranking it belongs to and, per stream, the
-/// last position consumed.
+/// last position consumed — plus, since #970, the window's lower bound fixed
+/// by the first page (`since_ms`: the window serves posts published at or
+/// after it, the archive those before it, so none is served twice) and
+/// whether the window is done (`backfill`).
 ///
-/// Encoding: `base64url("d1|<ranking>|<stream>=<score>,<member>|…")`, where the
-/// score is the shortest decimal that round-trips the `f64` (what Redis parses
-/// back to the exact same double).
+/// Encoding: `base64url("d1|<ranking>|<stream>=<score>,<member>|…|w=<ms>|b")`,
+/// where the score is the shortest decimal that round-trips the `f64` (what
+/// Redis parses back to the exact same double). A token without `w` (minted
+/// before #970) gets the bound from the request's time.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct DiscoveryCursor {
     pub positions: Vec<(DiscoveryStream, StreamPosition)>,
+    pub since_ms:  Option<i64>,
+    pub backfill:  bool,
 }
 
 impl DiscoveryCursor {
@@ -282,6 +294,12 @@ impl DiscoveryCursor {
         let mut raw = format!("d1|{}", ranking.code());
         for (stream, p) in &self.positions {
             raw.push_str(&format!("|{}={},{}", stream.code(), p.score, p.member));
+        }
+        if let Some(since) = self.since_ms {
+            raw.push_str(&format!("|w={since}"));
+        }
+        if self.backfill {
+            raw.push_str("|b");
         }
         URL_SAFE_NO_PAD.encode(raw.as_bytes())
     }
@@ -299,8 +317,16 @@ impl DiscoveryCursor {
         if ranking_code != ranking.code() {
             return Err(invalid());
         }
-        let mut positions = Vec::new();
+        let mut cursor = Self::default();
         for part in parts {
+            if part == "b" {
+                cursor.backfill = true;
+                continue;
+            }
+            if let Some(since) = part.strip_prefix("w=") {
+                cursor.since_ms = Some(since.parse().map_err(|_| invalid())?);
+                continue;
+            }
             let (stream, rest) = part.split_once('=').ok_or_else(invalid)?;
             let stream = stream
                 .chars()
@@ -312,9 +338,9 @@ impl DiscoveryCursor {
             if !score.is_finite() || member.is_empty() {
                 return Err(invalid());
             }
-            positions.push((stream, StreamPosition { score, member: member.to_owned() }));
+            cursor.positions.push((stream, StreamPosition { score, member: member.to_owned() }));
         }
-        Ok(Self { positions })
+        Ok(cursor)
     }
 }
 
@@ -343,6 +369,7 @@ mod tests {
                 (DiscoveryStream::Hot, StreamPosition { score: 1_234.567_890_123_4, member: "p:a".into() }),
                 (DiscoveryStream::Fresh, StreamPosition { score: 1_760_000_000_123.0, member: "q:b".into() }),
             ],
+            ..Default::default()
         };
         let token = cursor.encode(DiscoveryRanking::ForYou);
         assert_eq!(DiscoveryCursor::decode(&token, DiscoveryRanking::ForYou).unwrap(), cursor);
@@ -387,5 +414,22 @@ mod tests {
             assert!(!hidden.shown_at(ContentLevel::Standard));
         }
         assert_eq!(Restriction::from_code(9), Restriction::Removed);
+    }
+
+    /// #970: the window's bound and the back-fill switch round-trip, with
+    /// the archive's position; a token minted before them still decodes.
+    #[test]
+    fn the_cursor_carries_the_window_bound_and_the_backfill_switch() {
+        let cursor = DiscoveryCursor {
+            positions: vec![(DiscoveryStream::Archive, StreamPosition { score: 1_759_000_000_000.0, member: "q:b".into() })],
+            since_ms:  Some(1_760_000_000_000),
+            backfill:  true,
+        };
+        let token = cursor.encode(DiscoveryRanking::ForYou);
+        assert_eq!(DiscoveryCursor::decode(&token, DiscoveryRanking::ForYou).unwrap(), cursor);
+        let old = URL_SAFE_NO_PAD.encode("d1|y|h=1.5,p:a");
+        let decoded = DiscoveryCursor::decode(&old, DiscoveryRanking::ForYou).unwrap();
+        assert_eq!((decoded.positions.len(), decoded.since_ms, decoded.backfill), (1, None, false));
+        assert!(DiscoveryCursor::decode(&URL_SAFE_NO_PAD.encode("d1|y|w=soon"), DiscoveryRanking::ForYou).is_err());
     }
 }

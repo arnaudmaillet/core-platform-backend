@@ -88,6 +88,8 @@ impl Service for TimelineService {
             kafka_group_sg_unfollowed:  cfg.kafka_group_sg_unfollowed.clone(),
             discovery_window_secs:      cfg.discovery_window_secs,
             discovery_pool_cap:         cfg.discovery_pool_cap,
+            discovery_archive_secs:     cfg.discovery_archive_secs,
+            discovery_archive_cap:      cfg.discovery_archive_cap,
             discovery_hot_gravity_secs: cfg.discovery_hot_gravity_secs,
             nearby_candidates:          cfg.nearby_candidates,
             kafka_group_discovery:      cfg.kafka_group_discovery.clone(),

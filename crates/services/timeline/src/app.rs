@@ -96,10 +96,13 @@ pub struct AppConfig {
     pub kafka_group_post_deleted:   String,
     pub kafka_group_sg_followed:     String,
     pub kafka_group_sg_unfollowed:   String,
-    /// Discovery pool: window, cap, hot-score gravity; NEARBY candidate cap;
-    /// the discovery worker's consumer group.
+    /// Discovery pool: window, cap, hot-score gravity; its archive's horizon
+    /// and cap (#970); NEARBY candidate cap; the discovery worker's consumer
+    /// group.
     pub discovery_window_secs:      u64,
     pub discovery_pool_cap:         usize,
+    pub discovery_archive_secs:     u64,
+    pub discovery_archive_cap:      usize,
     pub discovery_hot_gravity_secs: f64,
     pub nearby_candidates:          usize,
     pub kafka_group_discovery:      String,
@@ -151,12 +154,15 @@ impl App {
         let tier_cache = Arc::new(RedisTierCache::new(redis_client.clone()));
         let following_store = Arc::new(RedisFollowingStore::new(redis_client.clone()));
         let audio_feed_store = Arc::new(RedisAudioFeedStore::new(redis_client.clone()));
-        let discovery_pool: Arc<dyn DiscoveryPool> = Arc::new(RedisDiscoveryPool::new(
-            redis_client.clone(),
-            config.discovery_window_secs,
-            config.discovery_pool_cap,
-            config.discovery_hot_gravity_secs,
-        ));
+        let discovery_pool: Arc<dyn DiscoveryPool> = Arc::new(
+            RedisDiscoveryPool::new(
+                redis_client.clone(),
+                config.discovery_window_secs,
+                config.discovery_pool_cap,
+                config.discovery_hot_gravity_secs,
+            )
+            .with_archive(config.discovery_archive_secs, config.discovery_archive_cap),
+        );
         let interests: Arc<dyn InterestStore> = Arc::new(RedisInterestStore::new(redis_client.clone()));
 
         // ── Persistence adapters ─────────────────────────────────────────────
@@ -253,6 +259,8 @@ impl App {
                     nearby_candidates: config.nearby_candidates,
                     hot_gravity_secs:  config.discovery_hot_gravity_secs,
                     interests:         Arc::clone(&interests),
+                    window_secs:       config.discovery_window_secs,
+                    backfill:          config.discovery_archive_secs > config.discovery_window_secs,
                 })?
                 .register::<ListInterestsQuery, _>(ListInterestsHandler { interests: Arc::clone(&interests) })?
                 .build(),

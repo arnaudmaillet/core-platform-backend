@@ -63,6 +63,14 @@ pub struct TimelineConfig {
     /// Most posts the discovery pool holds (oldest evicted first).
     pub discovery_pool_cap: usize,
 
+    /// How far back the discovery archive reaches, in seconds (#970): what a
+    /// feed carries on with once the window is exhausted. Not past the
+    /// window: no archive, the feed ends with the window.
+    pub discovery_archive_secs: u64,
+
+    /// Most posts the discovery archive holds (oldest evicted first).
+    pub discovery_archive_cap: usize,
+
     /// Hot-score gravity, in seconds: a post this much newer ranks like one ten
     /// times more popular.
     pub discovery_hot_gravity_secs: f64,
@@ -114,6 +122,8 @@ impl TimelineConfig {
             ),
             discovery_window_secs:      env_u64("TIMELINE_DISCOVERY_WINDOW_SECS",     259_200),
             discovery_pool_cap:         env_usize("TIMELINE_DISCOVERY_POOL_CAP",      10_000),
+            discovery_archive_secs:     env_u64("TIMELINE_DISCOVERY_ARCHIVE_SECS",    2_592_000),
+            discovery_archive_cap:      env_usize("TIMELINE_DISCOVERY_ARCHIVE_CAP",   200_000),
             discovery_hot_gravity_secs: env_f64("TIMELINE_DISCOVERY_HOT_GRAVITY_SECS", 45_000.0),
             nearby_radius_km:           env_f64("TIMELINE_NEARBY_RADIUS_KM",          25.0),
             nearby_close_radius_km:     env_f64("TIMELINE_NEARBY_CLOSE_RADIUS_KM",    2.0),

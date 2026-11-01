@@ -85,6 +85,33 @@ pub struct GetDiscoveryFeedHandler<SG> {
     pub nearby_candidates: usize,
     pub hot_gravity_secs:  f64,
     pub interests:         Arc<dyn InterestStore>,
+    /// The pool's window (#970): the first page fixes its lower bound.
+    pub window_secs:       u64,
+    /// Whether a page carries on with the archive once the window is
+    /// exhausted (#970); without one the feed ends with the window.
+    pub backfill:          bool,
+}
+
+/// Which posts a phase of the feed serves (#970), by publication time: the
+/// window's (at or after the bound the first page fixed) or the archive's
+/// (before it) — so none is served twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Bound {
+    Since(i64),
+    Before(i64),
+}
+
+impl Bound {
+    fn keeps(self, published_at_ms: i64) -> bool {
+        match self {
+            Self::Since(bound) => published_at_ms >= bound,
+            Self::Before(bound) => published_at_ms < bound,
+        }
+    }
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or_default()
 }
 
 /// What a page shows: the reader's level, and the authors it may see (`None` =
@@ -100,6 +127,11 @@ struct Filter<'a, SG: ?Sized> {
     tags:         HashMap<PostId, Vec<String>>,
     /// The kind of post a page keeps (#949).
     post_kind:    PostKindFilter,
+    /// The phase being read (#970).
+    bound:        Bound,
+    /// The hot score of every post read, to rank back-filled posts (#970).
+    hot:          HashMap<PostId, f64>,
+    gravity_secs: f64,
 }
 
 impl<SG: SocialGraphClient + ?Sized> Filter<'_, SG> {
@@ -111,13 +143,19 @@ impl<SG: SocialGraphClient + ?Sized> Filter<'_, SG> {
     ) -> Result<Vec<(StreamPosition, Option<FeedEntry>)>, TimelineError> {
         let ids: Vec<PostId> = entries.iter().map(|e| e.post_id).collect();
         let meta = pool.meta(&ids).await?;
-        for m in meta.values().filter(|m| !m.tags.is_empty()) {
-            self.tags.insert(m.post_id, m.tags.clone());
+        for m in meta.values() {
+            if !m.tags.is_empty() {
+                self.tags.insert(m.post_id, m.tags.clone());
+            }
+            if let Some(published_at_ms) = m.published_at_ms {
+                self.hot.insert(m.post_id, hot_score(m.popularity, published_at_ms, self.gravity_secs));
+            }
         }
-        let muted = &self.muted;
+        let (muted, bound) = (&self.muted, self.bound);
         let shown = |e: &PoolEntry| {
             meta.get(&e.post_id)
                 .filter(|m| m.shown_at(self.level) && m.author_id == Some(e.author_id))
+                .filter(|m| m.published_at_ms.is_some_and(|t| bound.keeps(t)))
                 .filter(|m| self.post_kind.keeps(m.format))
                 .filter(|_| !muted.contains(&e.author_id))
         };
@@ -161,7 +199,10 @@ struct StreamReader {
 
 impl StreamReader {
     fn new(stream: DiscoveryStream, tag: Option<String>, cursor: &DiscoveryCursor) -> Self {
-        let start = cursor.position(stream).cloned();
+        Self::at(stream, tag, cursor.position(stream).cloned())
+    }
+
+    fn at(stream: DiscoveryStream, tag: Option<String>, start: Option<StreamPosition>) -> Self {
         Self { stream, tag, fetched: start.clone(), consumed: start, buffer: VecDeque::new(), drained: false, refills: 0 }
     }
 
@@ -205,33 +246,18 @@ impl<SG: SocialGraphClient> GetDiscoveryFeedHandler<SG> {
         }
     }
 
-    /// TRENDING, RECENT and FOR_YOU: read the pool's streams in the ranking's
-    /// pattern (FOR_YOU: three hot, one fresh; one stream running dry hands
-    /// over to the other).
-    async fn pool_page(
+    /// Fills `items` (up to `size`) from `readers` in `pattern` (one stream
+    /// running dry hands over to the next), skipping posts already `seen`.
+    async fn read_pattern(
         &self,
-        ranking: DiscoveryRanking,
-        hashtag: Option<&str>,
-        cursor:  &DiscoveryCursor,
+        pattern: &[DiscoveryStream],
+        readers: &mut [StreamReader],
         filter:  &mut Filter<'_, SG>,
         size:    usize,
-    ) -> Result<DiscoveryPage, TimelineError> {
-        let pattern: &[DiscoveryStream] = match ranking {
-            DiscoveryRanking::Trending => &[DiscoveryStream::Hot],
-            DiscoveryRanking::Recent => &[DiscoveryStream::Recent],
-            _ => &[DiscoveryStream::Hot, DiscoveryStream::Hot, DiscoveryStream::Hot, DiscoveryStream::Fresh],
-        };
-        debug_assert!(ranking != DiscoveryRanking::ForYou || pattern.len() == TRENDING_PER_FRESH + 1);
-        let mut readers: Vec<StreamReader> = Vec::new();
-        for stream in pattern {
-            if !readers.iter().any(|r| r.stream == *stream) {
-                readers.push(StreamReader::new(*stream, hashtag.map(str::to_owned), cursor));
-            }
-        }
+        items:   &mut Vec<FeedEntry>,
+        seen:    &mut HashSet<PostId>,
+    ) -> Result<(), TimelineError> {
         let batch = (size * 2).max(DEFAULT_PAGE_SIZE);
-
-        let mut items = Vec::with_capacity(size);
-        let mut seen = HashSet::new();
         let mut slot = 0;
         while items.len() < size {
             let preferred = readers.iter().position(|r| r.stream == pattern[slot % pattern.len()]).unwrap_or(0);
@@ -253,16 +279,88 @@ impl<SG: SocialGraphClient> GetDiscoveryFeedHandler<SG> {
                 None => break, // every stream is dry or out of reads for this page
             }
         }
+        Ok(())
+    }
 
-        let next_page_token = if readers.iter().all(StreamReader::exhausted) {
-            None
-        } else {
+    /// TRENDING, RECENT and FOR_YOU: read the pool's streams in the ranking's
+    /// pattern (FOR_YOU: three hot, one fresh; one stream running dry hands
+    /// over to the other) — the posts published since the window's bound —
+    /// then, once they are all exhausted, the archive (#970).
+    async fn pool_page(
+        &self,
+        ranking: DiscoveryRanking,
+        hashtag: Option<&str>,
+        cursor:  &DiscoveryCursor,
+        since:   i64,
+        filter:  &mut Filter<'_, SG>,
+        size:    usize,
+    ) -> Result<DiscoveryPage, TimelineError> {
+        let pattern: &[DiscoveryStream] = match ranking {
+            DiscoveryRanking::Trending => &[DiscoveryStream::Hot],
+            DiscoveryRanking::Recent => &[DiscoveryStream::Recent],
+            _ => &[DiscoveryStream::Hot, DiscoveryStream::Hot, DiscoveryStream::Hot, DiscoveryStream::Fresh],
+        };
+        debug_assert!(ranking != DiscoveryRanking::ForYou || pattern.len() == TRENDING_PER_FRESH + 1);
+        let mut readers: Vec<StreamReader> = Vec::new();
+        for stream in pattern {
+            if !readers.iter().any(|r| r.stream == *stream) {
+                readers.push(StreamReader::new(*stream, hashtag.map(str::to_owned), cursor));
+            }
+        }
+        filter.bound = Bound::Since(since);
+        let (mut items, mut seen) = (Vec::with_capacity(size), HashSet::new());
+        self.read_pattern(pattern, &mut readers, filter, size, &mut items, &mut seen).await?;
+
+        if !readers.iter().all(StreamReader::exhausted) {
             let positions = readers
                 .into_iter()
                 .filter_map(|r| r.consumed.map(|p| (r.stream, p)))
                 .collect();
-            Some(DiscoveryCursor { positions }.encode(ranking))
-        };
+            let token = DiscoveryCursor { positions, since_ms: Some(since), backfill: false }.encode(ranking);
+            return Ok(DiscoveryPage { items, next_page_token: Some(token), personalized: false });
+        }
+        self.archive_page(ranking, hashtag, None, since, filter, size, items).await
+    }
+
+    /// The archive (#970): the posts published before the window's bound,
+    /// newest first from `start` (the bound itself when `None`), appended to
+    /// `items`. TRENDING, FOR_YOU and NEARBY rank what it adds by hot score;
+    /// RECENT keeps it newest first. Without an archive, the feed ends here.
+    #[allow(clippy::too_many_arguments)]
+    async fn archive_page(
+        &self,
+        ranking:   DiscoveryRanking,
+        hashtag:   Option<&str>,
+        start:     Option<StreamPosition>,
+        since:     i64,
+        filter:    &mut Filter<'_, SG>,
+        size:      usize,
+        mut items: Vec<FeedEntry>,
+    ) -> Result<DiscoveryPage, TimelineError> {
+        if !self.backfill {
+            return Ok(DiscoveryPage { items, next_page_token: None, personalized: false });
+        }
+        // Nothing at or after the bound: a position at the bound itself.
+        let start = start.unwrap_or(StreamPosition { score: since as f64, member: String::new() });
+        let mut readers = [StreamReader::at(DiscoveryStream::Archive, hashtag.map(str::to_owned), Some(start))];
+        filter.bound = Bound::Before(since);
+        let from = items.len();
+        let mut seen: HashSet<PostId> = items.iter().map(|e| e.post_id).collect();
+        self.read_pattern(&[DiscoveryStream::Archive], &mut readers, filter, size, &mut items, &mut seen).await?;
+        if ranking != DiscoveryRanking::Recent {
+            let hot = |e: &FeedEntry| filter.hot.get(&e.post_id).copied().unwrap_or(f64::MIN);
+            items[from..].sort_by(|a, b| hot(b).total_cmp(&hot(a)));
+        }
+        let [reader] = readers;
+        let next_page_token = (!reader.exhausted()).then(|| {
+            // Nothing consumed yet: the bound is the start again (no position).
+            let positions = reader
+                .consumed
+                .filter(|p| !p.member.is_empty())
+                .map(|p| vec![(DiscoveryStream::Archive, p)])
+                .unwrap_or_default();
+            DiscoveryCursor { positions, since_ms: Some(since), backfill: true }.encode(ranking)
+        });
         Ok(DiscoveryPage { items, next_page_token, personalized: false })
     }
 
@@ -272,6 +370,7 @@ impl<SG: SocialGraphClient> GetDiscoveryFeedHandler<SG> {
         &self,
         query:  &GetDiscoveryFeedQuery,
         cursor: &DiscoveryCursor,
+        since:  i64,
         filter: &mut Filter<'_, SG>,
         size:   usize,
     ) -> Result<DiscoveryPage, TimelineError> {
@@ -282,9 +381,10 @@ impl<SG: SocialGraphClient> GetDiscoveryFeedHandler<SG> {
         ids.truncate(self.nearby_candidates);
         let meta = self.pool.meta(&ids).await?;
         let after = cursor.position(DiscoveryStream::Nearby);
+        filter.bound = Bound::Since(since);
         let mut ranked: Vec<PoolEntry> = meta
             .values()
-            .filter(|m| m.shown_at(filter.level))
+            .filter(|m| m.shown_at(filter.level) && m.published_at_ms.is_some_and(|t| filter.bound.keeps(t)))
             .filter_map(|m| {
                 let (author_id, published_at_ms) = (m.author_id?, m.published_at_ms?);
                 let score = hot_score(m.popularity, published_at_ms, self.hot_gravity_secs);
@@ -314,10 +414,13 @@ impl<SG: SocialGraphClient> GetDiscoveryFeedHandler<SG> {
             more = checked.next().is_some();
         }
         more |= rest.peek().is_some();
-        let next_page_token = last.filter(|_| more).map(|position| {
-            DiscoveryCursor { positions: vec![(DiscoveryStream::Nearby, position)] }.encode(DiscoveryRanking::Nearby)
-        });
-        Ok(DiscoveryPage { items, next_page_token, personalized: false })
+        if more {
+            let positions = last.map(|p| vec![(DiscoveryStream::Nearby, p)]).unwrap_or_default();
+            let token = DiscoveryCursor { positions, since_ms: Some(since), backfill: false }.encode(DiscoveryRanking::Nearby);
+            return Ok(DiscoveryPage { items, next_page_token: Some(token), personalized: false });
+        }
+        // geo keeps its pins a short while: past them, the archive (#970).
+        self.archive_page(DiscoveryRanking::Nearby, None, None, since, filter, size, items).await
     }
 
     /// The reader's heaviest interest tags, for a FOR_YOU page only. Fails
@@ -326,8 +429,7 @@ impl<SG: SocialGraphClient> GetDiscoveryFeedHandler<SG> {
         let (Some(profile), DiscoveryRanking::ForYou) = (&query.personalize_for, query.ranking) else {
             return HashMap::new();
         };
-        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or_default();
-        match self.interests.top(profile, now_ms, BOOST_INTERESTS).await {
+        match self.interests.top(profile, now_ms(), BOOST_INTERESTS).await {
             Ok(top) => top.into_iter().map(|i| (i.tag, i.weight)).collect(),
             Err(e) => {
                 tracing::warn!(error = %e, "interest tags unavailable; For You page served unranked");
@@ -379,10 +481,21 @@ impl<SG: SocialGraphClient> QueryHandler<GetDiscoveryFeedQuery> for GetDiscovery
             muted,
             tags:         HashMap::new(),
             post_kind:    query.post_kind,
+            bound:        Bound::Since(i64::MIN),
+            hot:          HashMap::new(),
+            gravity_secs: self.hot_gravity_secs,
         };
+        // The window's bound, fixed by the first page (#970); a token minted
+        // before it takes the request's time.
+        let since = cursor.since_ms.unwrap_or_else(|| now_ms() - (self.window_secs as i64) * 1000);
+        let hashtag = query.hashtag.as_deref();
         let mut page = match query.ranking {
-            DiscoveryRanking::Nearby => self.nearby_page(query, &cursor, &mut filter, size).await?,
-            ranking => self.pool_page(ranking, query.hashtag.as_deref(), &cursor, &mut filter, size).await?,
+            ranking if cursor.backfill => {
+                let start = cursor.position(DiscoveryStream::Archive).cloned();
+                self.archive_page(ranking, hashtag, start, since, &mut filter, size, Vec::new()).await?
+            }
+            DiscoveryRanking::Nearby => self.nearby_page(query, &cursor, since, &mut filter, size).await?,
+            ranking => self.pool_page(ranking, hashtag, &cursor, since, &mut filter, size).await?,
         };
         if !interests.is_empty() {
             rank_by_interest(&mut page.items, &filter.tags, &interests);
@@ -421,9 +534,33 @@ mod tests {
             self.meta.lock().unwrap().insert(post_id, DiscoveryMeta {
                 post_id,
                 author_id: Some(author),
-                published_at_ms: Some(1_760_000_000_000),
+                // In the window, unless archived (below).
+                published_at_ms: Some(now_ms() - 60_000),
                 popularity: score,
                 restriction,
+                deleted: false,
+                tags: Vec::new(),
+                format: PostFormat::Unknown,
+            });
+            post_id
+        }
+
+        /// A post in the archive only (#970), published `days_ago`, with its
+        /// popularity.
+        fn archived(&self, author: AuthorId, days_ago: i64, popularity: f64) -> PostId {
+            let post_id = PostId::from_uuid(Uuid::now_v7());
+            let published = now_ms() - days_ago * 86_400_000;
+            self.streams.lock().unwrap().entry(DiscoveryStream::Archive).or_default().push(PoolEntry {
+                post_id,
+                author_id: author,
+                position: StreamPosition { score: published as f64, member: format!("{post_id}:{author}") },
+            });
+            self.meta.lock().unwrap().insert(post_id, DiscoveryMeta {
+                post_id,
+                author_id: Some(author),
+                published_at_ms: Some(published),
+                popularity,
+                restriction: Restriction::None,
                 deleted: false,
                 tags: Vec::new(),
                 format: PostFormat::Unknown,
@@ -546,7 +683,29 @@ mod tests {
             nearby_candidates: 300,
             hot_gravity_secs: 45_000.0,
             interests: Arc::new(Interests::default()),
+            window_secs: 259_200,
+            backfill: false,
         }
+    }
+
+    fn with_backfill(pool: Arc<MemPool>, graph: Arc<Graph>, around: Vec<PostId>) -> GetDiscoveryFeedHandler<Graph> {
+        GetDiscoveryFeedHandler { backfill: true, ..handler(pool, graph, around) }
+    }
+
+    /// Pages `ranking` to its end, `limit` at a time: every page's ids.
+    async fn page_all(h: &GetDiscoveryFeedHandler<Graph>, ranking: DiscoveryRanking, limit: i32) -> Vec<Vec<PostId>> {
+        let (mut pages, mut token) = (Vec::new(), None);
+        for _ in 0..50 {
+            let mut ask = query(ranking, limit, token);
+            ask.payload.viewer = Viewer::Profiles(vec![Uuid::from_u128(1).to_string()]);
+            let page = h.handle(ask).await.unwrap();
+            pages.push(page.items.iter().map(|e| e.post_id).collect());
+            match page.next_page_token {
+                Some(next) => token = Some(next),
+                None => return pages,
+            }
+        }
+        panic!("never ended");
     }
 
     fn query(ranking: DiscoveryRanking, limit: i32, page_token: Option<String>) -> Envelope<GetDiscoveryFeedQuery> {
@@ -805,5 +964,60 @@ mod tests {
             q.payload.hashtag = Some("rust".to_owned());
             assert!(matches!(h.handle(q).await, Err(TimelineError::DomainViolation { .. })));
         }
+    }
+
+    /// #970: once the window is exhausted, every ranking carries on with the
+    /// archive — never a post twice, filtered like the window — and ends only
+    /// with it. RECENT back-fills newest first; the others rank each
+    /// back-filled page by hot score.
+    #[tokio::test]
+    async fn every_ranking_carries_on_with_the_archive_then_ends() {
+        let pool = Arc::new(MemPool::default());
+        let (a, hidden, muted) = (author(), author(), author());
+        let window: Vec<PostId> = (0..3).map(|i| pool.put(DiscoveryStream::Hot, a, 10.0 - i as f64, Restriction::None)).collect();
+        for w in &window {
+            pool.streams.lock().unwrap().entry(DiscoveryStream::Recent).or_default().push(PoolEntry {
+                post_id: *w,
+                author_id: a,
+                position: StreamPosition { score: now_ms() as f64, member: format!("{w}:{a}") },
+            });
+        }
+        // Four days back (newest first: 4, 5, 6, 7); 6 days ago is the most popular.
+        let old: Vec<PostId> = [(4, 1.0), (5, 2.0), (6, 500.0), (7, 3.0)].iter().map(|(d, p)| pool.archived(a, *d, *p)).collect();
+        let removed = pool.archived(a, 8, 1.0);
+        pool.meta.lock().unwrap().get_mut(&removed).unwrap().restriction = Restriction::Removed;
+        pool.archived(hidden, 9, 1.0);
+        pool.archived(muted, 9, 1.0);
+        // An archive entry still in the window is the window's, not served twice.
+        let recent_in_archive = window[0];
+        pool.streams.lock().unwrap().entry(DiscoveryStream::Archive).or_default().push(PoolEntry {
+            post_id: recent_in_archive,
+            author_id: a,
+            position: StreamPosition { score: now_ms() as f64, member: format!("{recent_in_archive}:{a}") },
+        });
+        let graph = Arc::new(Graph::default());
+        graph.hidden.lock().unwrap().insert(hidden);
+        graph.muted.lock().unwrap().insert(muted);
+        let h = with_backfill(Arc::clone(&pool), graph, window.clone());
+
+        for ranking in [DiscoveryRanking::ForYou, DiscoveryRanking::Trending, DiscoveryRanking::Recent, DiscoveryRanking::Nearby] {
+            let pages = page_all(&h, ranking, 2).await;
+            let served: Vec<PostId> = pages.concat();
+            let distinct: HashSet<PostId> = served.iter().copied().collect();
+            assert_eq!(distinct.len(), served.len(), "{ranking:?}: no repeats {pages:?}");
+            assert_eq!(distinct, window.iter().chain(&old).copied().collect(), "{ranking:?}");
+            let archived: Vec<PostId> = served.iter().filter(|p| old.contains(p)).copied().collect();
+            if ranking == DiscoveryRanking::Recent {
+                assert_eq!(archived, old, "newest first");
+            } else {
+                // The page holding the 6-days-old popular post shows it first.
+                let page = pages.iter().find(|p| p.contains(&old[2])).unwrap();
+                assert_eq!(page.iter().find(|p| old.contains(p)), Some(&old[2]), "{ranking:?}: {pages:?}");
+            }
+        }
+
+        // Without an archive the feed ends with the window.
+        let h = handler(Arc::clone(&pool), Arc::new(Graph::default()), vec![]);
+        assert_eq!(page_all(&h, DiscoveryRanking::Trending, 10).await.concat().len(), 3);
     }
 }

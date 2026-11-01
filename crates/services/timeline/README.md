@@ -152,7 +152,7 @@ interest tags unless it opted out (#662).
   fails `FAILED_PRECONDITION`. The pool keeps per-tag streams `timeline:{disc}:tag:<tag>:recent|hot` on
   the pool's slot, written by the same scripts (publication, popularity, restriction, deletion), trimmed
   to the window and expiring a window after the tag's last post. Same filters and paging as the rest of
-  the feed; a tag unused for 3 days pages empty.
+  the feed; past the window, the tag's older posts follow from its archive (#970, below).
 - **One kind of post (#949).** `post_kind` (`MEDIA`: photo, carousel, video; `TEXT_ONLY`) keeps one kind,
   on every ranking. The pool keeps a post's kind in its meta (`k`, from `PostPublished.kind`). A post
   published before that has no kind and passes every filter: the client filters too. A page can come back
@@ -163,6 +163,19 @@ interest tags unless it opted out (#662).
   deleted), `counter.v1.popularity` (all-time popularity) and `moderation.v1.events` (version-guarded
   restriction, recorded even before the publication is seen). Cache-like: if Redis loses it, it refills
   within one window.
+- **Archive — the feed carries on (#970).** So that a quiet catalogue never ends the feed after a few dozen
+  posts, the pool keeps every shown post past the window: its meta lives `TIMELINE_DISCOVERY_ARCHIVE_SECS`
+  (30 days; the window when not past it — no archive) and it is in `timeline:{disc}:archive` (newest first,
+  capped at `TIMELINE_DISCOVERY_ARCHIVE_CAP`) and each of its hashtags' `timeline:{disc}:tag:<tag>:archive`
+  (expiring 30 days after the tag's last post), written at publication, taken out by a deletion or a
+  hiding restriction, put back when it is lifted. The **first page fixes the window's lower bound** in the
+  cursor (`w`): the window serves the posts published at or after it, the archive those before it, so no
+  post is served twice. When every stream of the ranking is exhausted, the same page goes on with the
+  archive (`b` in the cursor): `RECENT` newest first; `TRENDING`, `FOR_YOU` and `NEARBY` newest first too,
+  each back-filled page ranked by hot score; a hashtag reads its own archive. Same filters (audience,
+  moderation, content level, mutes, `post_kind`). `NEARBY` reaches older posts through the archive, not by
+  distance: geo-discovery keeps its pins `GEO_DEFAULT_RETENTION_SECS` (2 days). The token is empty only
+  when the archive is exhausted too.
 - **Rankings.** `TRENDING` = the hot score `log10(max(popularity, 1)) + (published_s − epoch) / gravity`
   (`TIMELINE_DISCOVERY_HOT_GRAVITY_SECS`, 12.5 h: a post that much newer ranks like one ten times more
   popular), posts with some popularity only; `RECENT` = newest first; `FOR_YOU` = three hot for one *fresh*
@@ -179,7 +192,7 @@ interest tags unless it opted out (#662).
   discovery feed, and posts by authors the feed's profile muted out of the **following feed** (a muted VIP is
   not even read; the cursor moves past skipped posts). One `ListMutedProfiles` call per request, failing open.
 - **Interest tags (#662).** The same consumer reads `wallet.v1.events` (#665: a like is a point): a
-  profile's *first* batch of likes on a pooled post (`stake_committed` with `first`; later batches, likes
+  profile's *first* batch of likes on a pooled (or archived, #970) post (`stake_committed` with `first`; later batches, likes
   on comments, and a post taken down or deleted teach nothing) adds
   weight to the post's hashtags in the profile's interests (Redis, `timeline:int:{<profile>}` ZSET, plus
   `:seen` — a post counts once per 30 days — `:muted`, the removed tags, and `:off`, the opt-out). Weights decay with a 30-day
@@ -196,7 +209,8 @@ interest tags unless it opted out (#662).
   `ListInterests` / `RemoveInterest` (the tag stays out: later reactions no longer teach it) /
   `ResetInterests` (everything, removed tags included; the opt-out stays) are owner-only. `ProfileDeleted`
   on `profile.v1.events` erases the profile's four keys (GDPR Art. 17).
-- **Paging.** The cursor carries one position per stream and is bound to its ranking. A page can be short
+- **Paging.** The cursor carries one position per stream (the archive's once back-filling), the window's
+  bound and the back-fill switch, and is bound to its ranking. A page can be short
   (even empty) with a non-empty token when its candidates were filtered out; a post moving from fresh to hot
   can come back on a later page — clients de-duplicate by `post_id`.
 - **Region.** Accepted, not applied yet: v1 ranks one global pool (`region_applied` is empty).
@@ -316,6 +330,8 @@ async fn main() -> anyhow::Result<()> {
 | `TIMELINE_SOCIAL_GRAPH_ENDPOINT` | `http://social-graph:50051` | social-graph gRPC endpoint. |
 | `TIMELINE_DISCOVERY_WINDOW_SECS` | `259200` | How long a post stays in the discovery pool (72 h). |
 | `TIMELINE_DISCOVERY_POOL_CAP` | `10000` | Max posts in the discovery pool. |
+| `TIMELINE_DISCOVERY_ARCHIVE_SECS` | `2592000` | How far back the feed carries on past the window (#970, 30 days). Not past the window: no archive, the feed ends with the window. |
+| `TIMELINE_DISCOVERY_ARCHIVE_CAP` | `200000` | Max posts in the discovery archive (oldest evicted first). |
 | `TIMELINE_DISCOVERY_HOT_GRAVITY_SECS` | `45000` | Hot-score gravity (12.5 h per 10× popularity). |
 | `TIMELINE_GEO_DISCOVERY_ENDPOINT` | `http://localhost:50054` | geo-discovery gRPC endpoint (NEARBY). |
 | `TIMELINE_NEARBY_RADIUS_KM` · `TIMELINE_NEARBY_CLOSE_RADIUS_KM` | `25` · `2` | NEARBY wide / close ring radius. |
