@@ -99,8 +99,9 @@ message GetDiscoveryFeedRequest {
     // Only the posts whose caption carries this hashtag (#830), with or
     // without its `#`, matched as captions are indexed (case-insensitive).
     // TRENDING ranks them by the same time-decayed hot score, RECENT newest
-    // first; another ranking fails FAILED_PRECONDITION. The pool keeps the
-    // last TIMELINE_DISCOVERY_WINDOW_SECS (3 days): an older tag pages empty.
+    // first; another ranking fails FAILED_PRECONDITION. Past the pool's last
+    // TIMELINE_DISCOVERY_WINDOW_SECS (3 days), the tag's older posts follow,
+    // newest first, as far as the archive reaches (#970).
     string           hashtag          = 10;
     // Only posts of this kind (#949); UNSPECIFIED keeps all. A page can come
     // back short with a token: keep paging.
@@ -112,8 +113,9 @@ message GetDiscoveryFeedResponse {
     // post.GetPost. A post can come back on a later page when it moves between
     // rankings (a fresh post gaining popularity): de-duplicate by post_id.
     repeated FeedItem items                 = 1;
-    // Empty when the pool is exhausted. A page can hold fewer items than asked
-    // (even none) with a non-empty token: keep paging.
+    // Empty only when the pool and then the archive of older posts (#970) are
+    // both exhausted. A page can hold fewer items than asked (even none) with
+    // a non-empty token: keep paging.
     string            next_page_token       = 2;
     // The region the ranking was computed for; empty = global (v1 always).
     string            region_applied        = 3;

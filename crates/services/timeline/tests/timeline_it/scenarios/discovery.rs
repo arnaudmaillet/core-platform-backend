@@ -103,7 +103,8 @@ async fn the_discovery_pool_ranks_filters_and_pages() {
     let deleted = publish(&h, &author, t + 4_000).await;
     let hidden = publish(&h, &private, t + 5_000).await;
     let newest = publish(&h, &author, t + 6_000).await;
-    // Out of the window: never pooled.
+    // Out of the window: never pooled, but archived (#970) — served once the
+    // window is exhausted.
     let ancient = publish(&h, &author, t - 4 * 86_400_000).await;
     // A takedown that arrives before the publication (a tombstone).
     let early = Uuid::now_v7().to_string();
@@ -125,23 +126,26 @@ async fn the_discovery_pool_ranks_filters_and_pages() {
     signal(&h, DiscoverySignal::Deleted { post_id: deleted.clone() }).await;
 
     let r = ContentLevel::Restricted;
-    assert_eq!(all_of(&h, DiscoveryRanking::Recent, r, &mine).await, vec![newest.clone(), popular.clone(), old.clone()]);
+    assert_eq!(
+        all_of(&h, DiscoveryRanking::Recent, r, &mine).await,
+        vec![newest.clone(), popular.clone(), old.clone(), ancient.clone()]
+    );
     assert_eq!(
         all_of(&h, DiscoveryRanking::Recent, ContentLevel::Standard, &mine).await,
-        vec![newest.clone(), gated.clone(), popular.clone(), old.clone()]
+        vec![newest.clone(), gated.clone(), popular.clone(), old.clone(), ancient.clone()]
     );
-    // Hot: only posts with popularity, the more popular first.
-    assert_eq!(all_of(&h, DiscoveryRanking::Trending, r, &mine).await, vec![popular.clone(), old.clone()]);
+    // Hot: only posts with popularity, the more popular first; then the archive.
+    assert_eq!(all_of(&h, DiscoveryRanking::Trending, r, &mine).await, vec![popular.clone(), old.clone(), ancient.clone()]);
     // For You: hot and fresh together, each once.
     let for_you = all_of(&h, DiscoveryRanking::ForYou, r, &mine).await;
-    assert_eq!(for_you.iter().collect::<HashSet<_>>(), [&popular, &old, &newest].into_iter().collect::<HashSet<_>>());
-    assert_eq!(for_you.len(), 3);
+    assert_eq!(for_you.iter().collect::<HashSet<_>>(), [&popular, &old, &newest, &ancient].into_iter().collect::<HashSet<_>>());
+    assert_eq!(for_you.len(), 4);
 
     // A newer reversal brings the removed post back.
     signal(&h, DiscoverySignal::Restricted { post_id: removed.clone(), restriction: Restriction::None, version: 3 }).await;
     assert_eq!(
         all_of(&h, DiscoveryRanking::Recent, r, &mine).await,
-        vec![newest.clone(), removed.clone(), popular.clone(), old.clone()]
+        vec![newest.clone(), removed.clone(), popular.clone(), old.clone(), ancient.clone()]
     );
 
     // Nearby: geo's candidates, ranked by hot score, same filters.
@@ -149,7 +153,92 @@ async fn the_discovery_pool_ranks_filters_and_pages() {
         .into_iter()
         .map(|id| PostId::try_from(id.as_str()).unwrap())
         .collect();
-    assert_eq!(all_of(&h, DiscoveryRanking::Nearby, r, &mine).await, vec![popular, old]);
+    // Past geo's candidates, the archive (#970).
+    assert_eq!(all_of(&h, DiscoveryRanking::Nearby, r, &mine).await, vec![popular, old, ancient]);
+}
+
+/// #970 over live Redis: with a window smaller than a page, every ranking —
+/// and a hashtag — carries on with older posts (the archive), filtered like
+/// the window (moderation, audience, deletion), never serving a post twice,
+/// and ends only when the archive is exhausted too.
+#[tokio::test]
+async fn the_feed_carries_on_past_the_window_then_ends() {
+    let h = TestHarness::start(HarnessOptions::default()).await;
+    let (author, private) = (harness::random_author(), harness::random_author());
+    h.social_graph.make_private(private);
+    let tag = format!("t{}", Uuid::now_v7().simple());
+    let day = 86_400_000;
+    let t = now_ms() - 60_000;
+    let publish_at = |author: harness::AuthorId, at: i64| {
+        let (h, tag) = (&h, tag.clone());
+        async move {
+            let post_id = Uuid::now_v7().to_string();
+            signal(h, DiscoverySignal::Published {
+                post_id: post_id.clone(),
+                author_id: author.as_uuid().to_string(),
+                published_at_ms: at,
+                tags: vec![tag],
+                format: Default::default(),
+            })
+            .await;
+            post_id
+        }
+    };
+    let fresh = publish_at(author, t).await;
+    let liked = publish_at(author, t - 1_000).await;
+    let four = publish_at(author, t - 4 * day).await;
+    let five = publish_at(author, t - 5 * day).await;
+    let six = publish_at(author, t - 6 * day).await;
+    let removed = publish_at(author, t - 7 * day).await;
+    let deleted = publish_at(author, t - 8 * day).await;
+    let hidden = publish_at(private, t - 9 * day).await;
+    // Past the horizon (30 days): gone.
+    let forgotten = publish_at(author, t - 31 * day).await;
+    signal(&h, DiscoverySignal::Popularity { post_id: liked.clone(), score: 10.0 }).await;
+    // The six-days-old post is the archive's most popular.
+    signal(&h, DiscoverySignal::Popularity { post_id: six.clone(), score: 5_000.0 }).await;
+    signal(&h, DiscoverySignal::Restricted { post_id: removed.clone(), restriction: Restriction::Removed, version: 1 }).await;
+    signal(&h, DiscoverySignal::Deleted { post_id: deleted.clone() }).await;
+    let mine: HashSet<String> =
+        [&fresh, &liked, &four, &five, &six, &removed, &deleted, &hidden, &forgotten].into_iter().cloned().collect();
+    let archived: HashSet<String> = [&four, &five, &six].into_iter().cloned().collect();
+
+    // Paged two at a time: every page of `mine`.
+    let pages = |ranking, hashtag: Option<String>| {
+        let (h, mine) = (&h, &mine);
+        async move {
+            let (mut token, mut out) = (None, Vec::new());
+            for _ in 0..1_000 {
+                let p = tagged_page(h, ranking, ContentLevel::Restricted, token, hashtag.as_deref(), 2).await;
+                out.extend(p.items.iter().map(|e| e.post_id.to_string()).filter(|id| mine.contains(id)));
+                match p.next_page_token {
+                    Some(next) => token = Some(next),
+                    None => return out,
+                }
+            }
+            panic!("never ended");
+        }
+    };
+    let check = |served: Vec<String>, window: Vec<&String>, label: &str| {
+        let distinct: HashSet<&String> = served.iter().collect();
+        assert_eq!(distinct.len(), served.len(), "{label}: no repeats {served:?}");
+        assert_eq!(served[..window.len()].iter().collect::<Vec<_>>(), window, "{label}: the window first");
+        let rest: HashSet<String> = served[window.len()..].iter().cloned().collect();
+        assert_eq!(rest, archived, "{label}: then the archive, filtered");
+        served
+    };
+
+    let recent = check(pages(DiscoveryRanking::Recent, None).await, vec![&fresh, &liked], "recent");
+    assert_eq!(recent[2..], [four.clone(), five.clone(), six.clone()], "newest first");
+    check(pages(DiscoveryRanking::Trending, None).await, vec![&liked], "trending");
+    let for_you = pages(DiscoveryRanking::ForYou, None).await;
+    assert_eq!(for_you.iter().cloned().collect::<HashSet<_>>(), [&fresh, &liked, &four, &five, &six].into_iter().cloned().collect());
+    assert_eq!(for_you.len(), 5, "no repeats: {for_you:?}");
+    let tagged = check(pages(DiscoveryRanking::Recent, Some(tag.clone())).await, vec![&fresh, &liked], "hashtag recent");
+    assert_eq!(tagged[2..], [four.clone(), five.clone(), six.clone()]);
+    check(pages(DiscoveryRanking::Trending, Some(tag.clone())).await, vec![&liked], "hashtag trending");
+    *h.nearby.posts.lock().unwrap() = [&fresh].into_iter().map(|id| PostId::try_from(id.as_str()).unwrap()).collect();
+    check(pages(DiscoveryRanking::Nearby, None).await, vec![&fresh], "nearby");
 }
 
 /// #830 over live Redis: a hashtag's posts, trending (the time-decayed hot

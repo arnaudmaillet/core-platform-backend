@@ -85,8 +85,9 @@ impl CommandHandler<ApplyDiscoverySignalCommand> for ApplyDiscoverySignalHandler
             DiscoverySignal::Reacted { post_id, profile_id, at_ms } => {
                 let post_id = PostId::try_from(post_id.as_str())?;
                 let profile_id = ProfileId::try_from(profile_id.as_str())?;
-                // Only what the pool knows (posts of the window) and could
-                // show teaches anything: not a post taken down or deleted.
+                // Only what the pool knows (posts of the window or, #970, of
+                // its archive) and could show teaches anything: not a post
+                // taken down or deleted.
                 let Some(meta) = self.pool.meta(std::slice::from_ref(&post_id)).await?.remove(&post_id) else {
                     return Ok(());
                 };

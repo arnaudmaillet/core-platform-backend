@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 3e759dc83d024196be081bbdc0c23f7efe26556d4449a4db5238db945855fb62
-  translated_at: 2026-10-20
+  source_sha256: f42fcb4fb101af7a4595682d9ee82ca9bdcd14156856353f78b17a587b793f9a
+  translated_at: 2026-11-01
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -168,7 +168,8 @@ pour un membre selon ses centres d'intérêt, sauf s'il l'a désactivé (#662).
   échoue en `FAILED_PRECONDITION`. Le pool tient des flux par tag `timeline:{disc}:tag:<tag>:recent|hot`
   sur le slot du pool, écrits par les mêmes scripts (publication, popularité, restriction, suppression),
   taillés à la fenêtre et expirant une fenêtre après le dernier post du tag. Mêmes filtres et même
-  pagination que le reste du fil ; un tag inutilisé depuis 3 jours renvoie des pages vides.
+  pagination que le reste du fil ; au-delà de la fenêtre, les posts plus anciens du tag suivent depuis son
+  archive (#970, ci-dessous).
 - **Un seul type de post (#949).** `post_kind` (`MEDIA` : photo, carrousel, vidéo ; `TEXT_ONLY`) garde un
   type, sur tous les classements. Le pool garde le type d'un post dans sa meta (`k`, depuis
   `PostPublished.kind`). Un post publié avant n'a pas de type et passe tous les filtres : le client filtre
@@ -180,6 +181,21 @@ pour un membre selon ses centres d'intérêt, sauf s'il l'a désactivé (#662).
   `counter.v1.popularity` (popularité cumulée) et `moderation.v1.events` (restriction gardée par version,
   enregistrée même avant que la publication soit vue). Comportement de cache : si Redis le perd, il se
   remplit à nouveau en une fenêtre.
+- **Archive — le fil continue (#970).** Pour qu'un catalogue calme ne termine jamais le fil après quelques
+  dizaines de posts, le pool garde chaque post montrable au-delà de la fenêtre : sa méta vit
+  `TIMELINE_DISCOVERY_ARCHIVE_SECS` (30 jours ; la fenêtre quand ce n'est pas au-delà — pas d'archive) et il
+  est dans `timeline:{disc}:archive` (du plus récent au plus ancien, plafonnée à
+  `TIMELINE_DISCOVERY_ARCHIVE_CAP`) et dans `timeline:{disc}:tag:<tag>:archive` pour chacun de ses hashtags
+  (expirant 30 jours après le dernier post du tag), écrit à la publication, retiré par une suppression ou
+  une restriction qui masque, remis quand elle est levée. **La première page fixe la borne basse de la
+  fenêtre** dans le curseur (`w`) : la fenêtre sert les posts publiés à partir d'elle, l'archive ceux d'avant,
+  si bien qu'aucun post n'est servi deux fois. Quand tous les flux du classement sont épuisés, la même page
+  continue avec l'archive (`b` dans le curseur) : `RECENT` du plus récent au plus ancien ; `TRENDING`,
+  `FOR_YOU` et `NEARBY` dans le même ordre, chaque page de complément classée par score hot ; un hashtag lit
+  sa propre archive. Mêmes filtres (audience, modération, niveau de contenu, sourdines, `post_kind`).
+  `NEARBY` atteint les posts plus anciens par l'archive, pas par la distance : geo-discovery garde ses
+  épingles `GEO_DEFAULT_RETENTION_SECS` (2 jours). Le jeton n'est vide que quand l'archive est épuisée elle
+  aussi.
 - **Classements.** `TRENDING` = le score hot `log10(max(popularity, 1)) + (published_s − epoch) / gravity`
   (`TIMELINE_DISCOVERY_HOT_GRAVITY_SECS`, 12,5 h : un post plus récent d'autant se classe comme un post dix
   fois plus populaire), uniquement les posts ayant de la popularité ; `RECENT` = du plus récent au plus
@@ -199,7 +215,7 @@ pour un membre selon ses centres d'intérêt, sauf s'il l'a désactivé (#662).
   exclus du **fil des abonnements** (un VIP en sourdine n'est même pas lu ; le curseur passe les posts
   écartés). Un appel `ListMutedProfiles` par requête, en échec ouvert.
 - **Centres d'intérêt (#662).** Le même consumer lit `wallet.v1.events` (#665 : un like est un point) :
-  le *premier* lot de likes d'un profil sur un post du pool (`stake_committed` avec `first` ; les lots
+  le *premier* lot de likes d'un profil sur un post du pool (ou de son archive, #970) (`stake_committed` avec `first` ; les lots
   suivants, les likes sur les commentaires, et un post retiré ou supprimé n'apprennent rien) ajoute
   du poids aux hashtags du post dans les centres d'intérêt du profil (Redis, ZSET
   `timeline:int:{<profile>}`, plus `:seen` — un post compte une fois par 30 jours — `:muted`, les tags
@@ -218,7 +234,8 @@ pour un membre selon ses centres d'intérêt, sauf s'il l'a désactivé (#662).
   suivantes ne l'apprennent plus) / `ResetInterests` (tout, tags supprimés compris ; la désactivation reste)
   sont réservés au propriétaire. `ProfileDeleted` sur `profile.v1.events` efface les quatre clés du profil
   (RGPD art. 17).
-- **Pagination.** Le curseur porte une position par flux et est lié à son classement. Une page peut être
+- **Pagination.** Le curseur porte une position par flux (celle de l'archive une fois en complément), la
+  borne de la fenêtre et le passage au complément, et est lié à son classement. Une page peut être
   courte (voire vide) avec un jeton non vide quand ses candidats ont été filtrés ; un post qui passe de
   frais à hot peut revenir sur une page suivante — les clients dédupliquent par `post_id`.
 - **Région.** Acceptée, pas encore appliquée : v1 classe un seul pool global (`region_applied` est vide).
@@ -338,6 +355,8 @@ async fn main() -> anyhow::Result<()> {
 | `TIMELINE_SOCIAL_GRAPH_ENDPOINT` | `http://social-graph:50051` | social-graph gRPC endpoint. |
 | `TIMELINE_DISCOVERY_WINDOW_SECS` | `259200` | Durée de présence d'un post dans le pool de découverte (72 h). |
 | `TIMELINE_DISCOVERY_POOL_CAP` | `10000` | Nombre max de posts dans le pool de découverte. |
+| `TIMELINE_DISCOVERY_ARCHIVE_SECS` | `2592000` | Jusqu'où le fil continue au-delà de la fenêtre (#970, 30 jours). Pas au-delà de la fenêtre : pas d'archive, le fil s'arrête avec la fenêtre. |
+| `TIMELINE_DISCOVERY_ARCHIVE_CAP` | `200000` | Nombre max de posts dans l'archive de découverte (les plus anciens évincés d'abord). |
 | `TIMELINE_DISCOVERY_HOT_GRAVITY_SECS` | `45000` | Gravité du score hot (12,5 h pour une popularité ×10). |
 | `TIMELINE_GEO_DISCOVERY_ENDPOINT` | `http://localhost:50054` | Endpoint gRPC de geo-discovery (NEARBY). |
 | `TIMELINE_NEARBY_RADIUS_KM` · `TIMELINE_NEARBY_CLOSE_RADIUS_KM` | `25` · `2` | Rayon des anneaux large / proche de NEARBY. |

@@ -8,11 +8,18 @@
 //!   posts carrying one hashtag (#830), on the same slot so the scripts that
 //!   move a post keep them in step; trimmed to the window and expiring a window
 //!   after the tag's last post.
+//! - `timeline:{disc}:archive` and `timeline:{disc}:tag:<tag>:archive` — the
+//!   archive (#970): every post (and each hashtag's) newest first (score =
+//!   `published_at_ms`) to the horizon, what back-fills a page once the window
+//!   is exhausted. Trimmed to the horizon (the global one to its cap too); a
+//!   tag's expires a horizon after its last post. Off when the horizon is not
+//!   past the window.
 //! - `timeline:disc:post:<post_id>` — a HASH per post: `a` author, `t`
 //!   published_at_ms, `g` hashtags (space-separated), `p` popularity, `r`
 //!   restriction code, `v` moderation version, `x` deleted, `k` kind (`m`
-//!   media, `t` text-only, #949). It expires with the window (a decision recorded
-//!   before the publication — a tombstone — lives a full window).
+//!   media, `t` text-only, #949). It expires with the horizon (the window
+//!   without an archive; a decision recorded before the publication — a
+//!   tombstone — lives as long).
 //!
 //! The pool is a cache-like read model: if Redis loses it, it refills from new
 //! events within one window. The index writes follow the meta write (two slots,
@@ -35,6 +42,7 @@ use crate::error::TimelineError;
 const RECENT_KEY: &str = "timeline:{disc}:recent";
 const FRESH_KEY: &str = "timeline:{disc}:fresh";
 const HOT_KEY: &str = "timeline:{disc}:hot";
+const ARCHIVE_KEY: &str = "timeline:{disc}:archive";
 
 /// Most aged-out or over-cap entries one write evicts (bounds the script).
 const TRIM_BATCH: usize = 200;
@@ -55,11 +63,24 @@ fn tag_keys(tag: &str) -> [String; 2] {
     [format!("timeline:{{disc}}:tag:{tag}:recent"), format!("timeline:{{disc}}:tag:{tag}:hot")]
 }
 
+/// A hashtag's archive (#970).
+fn tag_archive_key(tag: &str) -> String {
+    format!("timeline:{{disc}}:tag:{tag}:archive")
+}
+
+/// The archive, then each tag's.
+fn archive_keys(tags: &[String]) -> Vec<String> {
+    let mut keys = vec![ARCHIVE_KEY.to_owned()];
+    keys.extend(tags.iter().map(|t| tag_archive_key(t)));
+    keys
+}
+
 fn tag_stream_key(tag: &str, stream: DiscoveryStream) -> Option<String> {
     let [recent, hot] = tag_keys(tag);
     match stream {
         DiscoveryStream::Recent => Some(recent),
         DiscoveryStream::Hot => Some(hot),
+        DiscoveryStream::Archive => Some(tag_archive_key(tag)),
         DiscoveryStream::Fresh | DiscoveryStream::Nearby => None,
     }
 }
@@ -76,6 +97,7 @@ fn stream_key(stream: DiscoveryStream) -> Option<&'static str> {
         DiscoveryStream::Recent => Some(RECENT_KEY),
         DiscoveryStream::Fresh  => Some(FRESH_KEY),
         DiscoveryStream::Hot    => Some(HOT_KEY),
+        DiscoveryStream::Archive => Some(ARCHIVE_KEY),
         DiscoveryStream::Nearby => None,
     }
 }
@@ -207,7 +229,34 @@ end
 return 1
 "#;
 
-/// KEYS = recent, fresh, hot, then the hashtags' streams · ARGV = member
+/// Archives a post (#970), then evicts what aged past the horizon (and, from
+/// the global archive, what overflows its cap). Each hashtag's archive gets it
+/// too and expires a horizon after its last post.
+///
+/// KEYS = archive, then each tag's archive
+/// ARGV = member, published_at_ms, cutoff_ms, cap, trim batch, horizon_secs
+const ARCHIVE_ADD: &str = r#"
+local m, batch = ARGV[1], tonumber(ARGV[5])
+for i = 2, #KEYS do
+    redis.call('ZADD', KEYS[i], ARGV[2], m)
+    local aged = redis.call('ZRANGEBYSCORE', KEYS[i], '-inf', '(' .. ARGV[3], 'LIMIT', 0, batch)
+    for _, e in ipairs(aged) do redis.call('ZREM', KEYS[i], e) end
+    redis.call('EXPIRE', KEYS[i], ARGV[6])
+end
+redis.call('ZADD', KEYS[1], ARGV[2], m)
+local evict = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', '(' .. ARGV[3], 'LIMIT', 0, batch)
+local over = redis.call('ZCARD', KEYS[1]) - #evict - tonumber(ARGV[4])
+if over > 0 then
+    local extra = redis.call('ZRANGE', KEYS[1], #evict, #evict + math.min(over, batch) - 1)
+    for _, e in ipairs(extra) do evict[#evict + 1] = e end
+end
+for _, e in ipairs(evict) do redis.call('ZREM', KEYS[1], e) end
+return #evict
+"#;
+
+/// Takes a member out of every key given (the pool's streams, the archives).
+///
+/// KEYS = streams · ARGV = member
 const POOL_REMOVE: &str = r#"
 for i = 1, #KEYS do redis.call('ZREM', KEYS[i], ARGV[1]) end
 return 1
@@ -227,11 +276,31 @@ pub struct RedisDiscoveryPool {
     window_secs:  u64,
     cap:          usize,
     gravity_secs: f64,
+    /// How far back the archive reaches (#970); not past the window: none.
+    horizon_secs: u64,
+    archive_cap:  usize,
 }
 
 impl RedisDiscoveryPool {
     pub fn new(client: RedisClient, window_secs: u64, cap: usize, gravity_secs: f64) -> Self {
-        Self { client, window_secs: window_secs.max(1), cap: cap.max(1), gravity_secs }
+        Self { client, window_secs: window_secs.max(1), cap: cap.max(1), gravity_secs, horizon_secs: 0, archive_cap: 0 }
+    }
+
+    /// Keeps an archive (#970) reaching `horizon_secs` back, at most `cap`
+    /// posts; a horizon not past the window keeps none.
+    pub fn with_archive(mut self, horizon_secs: u64, cap: usize) -> Self {
+        self.horizon_secs = horizon_secs;
+        self.archive_cap = cap.max(1);
+        self
+    }
+
+    fn archives(&self) -> bool {
+        self.horizon_secs > self.window_secs
+    }
+
+    /// How long a post's meta lives: the archive's horizon, else the window.
+    fn kept_secs(&self) -> u64 {
+        self.window_secs.max(self.horizon_secs)
     }
 
     /// Seconds left before a post published at `published_at_ms` leaves the
@@ -239,6 +308,49 @@ impl RedisDiscoveryPool {
     fn remaining_secs(&self, published_at_ms: i64) -> Option<u64> {
         let age_secs = (now_ms() - published_at_ms).max(0) as u64 / 1000;
         self.window_secs.checked_sub(age_secs).filter(|s| *s > 0)
+    }
+
+    /// Seconds left before its meta goes (the horizon, or the window), or
+    /// `None` once it has.
+    fn kept_remaining_secs(&self, published_at_ms: i64) -> Option<u64> {
+        let age_secs = (now_ms() - published_at_ms).max(0) as u64 / 1000;
+        self.kept_secs().checked_sub(age_secs).filter(|s| *s > 0)
+    }
+
+    /// Puts a shown post back where it belongs: the pool while in the
+    /// window, the archive while within the horizon.
+    async fn place(
+        &self,
+        post_id:         &PostId,
+        author_id:       &AuthorId,
+        published_at_ms: i64,
+        popularity:      f64,
+        tags:            &[String],
+    ) -> Result<(), TimelineError> {
+        if self.remaining_secs(published_at_ms).is_some() {
+            self.index(post_id, author_id, published_at_ms, popularity, tags).await?;
+        }
+        if self.archives() && self.kept_remaining_secs(published_at_ms).is_some() {
+            let cutoff = now_ms() - (self.horizon_secs as i64) * 1000;
+            let _: i64 = self
+                .client
+                .inner
+                .eval(
+                    ARCHIVE_ADD,
+                    archive_keys(tags),
+                    vec![
+                        member(post_id, author_id),
+                        published_at_ms.to_string(),
+                        cutoff.to_string(),
+                        self.archive_cap.to_string(),
+                        TRIM_BATCH.to_string(),
+                        self.horizon_secs.to_string(),
+                    ],
+                )
+                .await
+                .map_err(fred_err)?;
+        }
+        Ok(())
     }
 
     async fn index(
@@ -276,11 +388,14 @@ impl RedisDiscoveryPool {
         Ok(())
     }
 
+    /// Out of the pool and the archive.
     async fn unindex(&self, post_id: &PostId, author_id: &AuthorId, tags: &[String]) -> Result<(), TimelineError> {
+        let mut keys = keys_with_tags(tags);
+        keys.extend(archive_keys(tags));
         let _: i64 = self
             .client
             .inner
-            .eval(POOL_REMOVE, keys_with_tags(tags), vec![member(post_id, author_id)])
+            .eval(POOL_REMOVE, keys, vec![member(post_id, author_id)])
             .await
             .map_err(fred_err)?;
         Ok(())
@@ -316,8 +431,8 @@ impl DiscoveryPool for RedisDiscoveryPool {
         tags:            &[String],
         format:          PostFormat,
     ) -> Result<(), TimelineError> {
-        let Some(ttl) = self.remaining_secs(published_at_ms) else {
-            return Ok(()); // already out of the window
+        let Some(ttl) = self.kept_remaining_secs(published_at_ms) else {
+            return Ok(()); // already past the horizon (or the window)
         };
         let state: Vec<String> = self
             .client
@@ -342,7 +457,7 @@ impl DiscoveryPool for RedisDiscoveryPool {
         if !x.is_empty() || restriction.hides() {
             return Ok(());
         }
-        self.index(post_id, author_id, published_at_ms, p.parse().unwrap_or(0.0), tags).await
+        self.place(post_id, author_id, published_at_ms, p.parse().unwrap_or(0.0), tags).await
     }
 
     async fn record_popularity(&self, post_id: &PostId, popularity: f64) -> Result<(), TimelineError> {
@@ -393,7 +508,7 @@ impl DiscoveryPool for RedisDiscoveryPool {
             .eval(
                 META_RESTRICTION,
                 vec![meta_key(post_id)],
-                vec![restriction.code().to_string(), version.to_string(), self.window_secs.to_string()],
+                vec![restriction.code().to_string(), version.to_string(), self.kept_secs().to_string()],
             )
             .await
             .map_err(fred_err)?;
@@ -407,19 +522,19 @@ impl DiscoveryPool for RedisDiscoveryPool {
         if restriction.hides() {
             return self.unindex(post_id, &author_id, &tags).await;
         }
-        if deleted || self.remaining_secs(published_at_ms).is_none() {
+        if deleted {
             return Ok(());
         }
         // Lifted (or age-gated, which stays pooled and is filtered at read):
         // back in the indices.
-        self.index(post_id, &author_id, published_at_ms, popularity, &tags).await
+        self.place(post_id, &author_id, published_at_ms, popularity, &tags).await
     }
 
     async fn record_deleted(&self, post_id: &PostId) -> Result<(), TimelineError> {
         let state: Vec<String> = self
             .client
             .inner
-            .eval(META_DELETED, vec![meta_key(post_id)], vec![self.window_secs.to_string()])
+            .eval(META_DELETED, vec![meta_key(post_id)], vec![self.kept_secs().to_string()])
             .await
             .map_err(fred_err)?;
         let [author, tags] = state.as_slice() else {
