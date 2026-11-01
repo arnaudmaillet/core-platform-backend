@@ -4,7 +4,7 @@
 use chrono::TimeDelta;
 
 use crate::domain::{
-    Catalog, CatalogItem, ClaimPolicy, ItemFamily, EnvelopePolicy, SettlementPolicy, StakePackOffer, StakePackPolicy, StakePolicy, DEFAULT_CONVICTION_BPS,
+    Catalog, CatalogItem, ClaimPolicy, ItemFamily, EnvelopePolicy, LoaderSlotPolicy, SettlementPolicy, StakePackOffer, StakePackPolicy, StakePolicy, DEFAULT_CONVICTION_BPS,
 };
 
 /// Gems every wallet opens with.
@@ -35,6 +35,8 @@ pub struct WalletConfig {
     /// Test grants (#967): `Ok` only outside production with the flag on;
     /// `Err` says why they are off.
     pub test_grants:  Result<(), String>,
+    /// Uploaded loaders (#975): the cap and a slot's price.
+    pub loader_slots: LoaderSlotPolicy,
 }
 
 impl Default for WalletConfig {
@@ -50,6 +52,7 @@ impl Default for WalletConfig {
             welcome_gift: DEFAULT_WELCOME_GIFT,
             catalog:      Catalog::default(),
             test_grants:  test_grants(None, None),
+            loader_slots: LoaderSlotPolicy::default(),
         }
     }
 }
@@ -68,12 +71,13 @@ impl WalletConfig {
     /// (1000 gems), `WALLET_CURATOR_DAILY_CAP` (40 gems per account),
     /// `WALLET_ENVELOPE_TARGET_CAP_BPS` (200 = 2 % of the pool per target),
     /// `WALLET_OUTCOME_TOP_PERCENT` (15), `WALLET_CATALOG`
-    /// (`theme.pink:0,theme.violet:50,theme.red:50,frame.gold:60,frame.neon:60,frame.aurora:60,banner.animated:500,card.paper:80,card.night:80,card.mint:80,avatar.animated:500`:
+    /// (`theme.pink:0,theme.violet:50,theme.red:50,frame.gold:60,frame.neon:60,frame.aurora:60,banner.animated:500,card.paper:80,card.night:80,card.mint:80,avatar.animated:500,loader.wave:0`:
     /// each item's `id:gems`, a
     /// bad list keeps the default), `WALLET_CONVICTION_PROBABILITIES`
     /// (`0.25,0.40,0.60,0.80`: four ascending probabilities in (0, 1), C1
-    /// first), `WALLET_WELCOME_GIFT` (50). An unparsable or negative value keeps
-    /// the default.
+    /// first), `WALLET_WELCOME_GIFT` (50), `WALLET_LOADER_SLOT_PRICE` (50 gems
+    /// an uploaded loader, #975). An unparsable or negative value keeps the
+    /// default.
     pub fn from_env() -> Self {
         Self::from_lookup(|name| std::env::var(name).ok())
     }
@@ -132,6 +136,10 @@ impl WalletConfig {
             welcome_gift: number("WALLET_WELCOME_GIFT").unwrap_or(defaults.welcome_gift),
             catalog: get("WALLET_CATALOG").and_then(|v| catalog(&v)).unwrap_or_else(|| defaults.catalog.clone()),
             test_grants: test_grants(get("WALLET_ENVIRONMENT").as_deref(), get("WALLET_TEST_GRANTS").as_deref()),
+            loader_slots: LoaderSlotPolicy {
+                price_gems: number("WALLET_LOADER_SLOT_PRICE").unwrap_or(defaults.loader_slots.price_gems),
+                ..defaults.loader_slots
+            },
         }
     }
 }

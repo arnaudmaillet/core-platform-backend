@@ -13,6 +13,8 @@ use crate::application::port::{
     ClaimOutcome, PackOutcome, PurchaseOutcome, SettlementRecord, SpendOutcome, StakeOutcome, StakePositionRecord, StakeStatus,
 };
 use crate::application::wallets::StakeBatch;
+use crate::application::port::{LoaderImportOutcome, UploadedLoader};
+use crate::application::wallets::LoaderSlots;
 use crate::application::{MyStake, OwnedItemView, StakeVerdict, Wallets, WalletView};
 use crate::domain::{Conviction, StakeAsk, StakeTarget};
 use crate::config::WalletConfig;
@@ -200,9 +202,11 @@ impl WalletServiceHandler {
         let req = request.into_inner();
         let view = self.wallets.export(&req.account_id, Utc::now()).await.map_err(to_status)?;
         let owned_items = self.wallets.bought_items(&req.account_id).await.map_err(to_status)?;
+        let loaders = self.wallets.loader_slots(&req.account_id).await.map_err(to_status)?.loaders;
         Ok(Response::new(proto::ExportWalletResponse {
             wallet:      view.map(|v| self.wallet_to_proto(&v, false)),
             owned_items: owned_items.into_iter().map(owned_to_proto).collect(),
+            uploaded_loaders: loaders.iter().map(loader_to_proto).collect(),
         }))
     }
 
@@ -367,6 +371,58 @@ impl WalletServiceHandler {
 }
 
 impl WalletServiceHandler {
+    /// Imports an uploaded loader (#975). On the edge, a caller under 18 (or
+    /// of unknown age) is refused: `WAL-3001`.
+    pub async fn import_loader(
+        &self,
+        request: Request<proto::ImportLoaderRequest>,
+    ) -> Result<Response<proto::ImportLoaderResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let restricted = spending_restricted(&request);
+        let req = request.into_inner();
+        let reply = self
+            .wallets
+            .import_loader(&req.account_id, &req.idempotency_key, &req.asset_id, req.expected_price, restricted, Utc::now())
+            .await
+            .map_err(to_status)?;
+        Ok(Response::new(proto::ImportLoaderResponse {
+            outcome: match reply.outcome {
+                LoaderImportOutcome::Imported => proto::LoaderImportOutcome::Imported,
+                LoaderImportOutcome::MaxReached => proto::LoaderImportOutcome::MaxReached,
+                LoaderImportOutcome::InsufficientGems => proto::LoaderImportOutcome::InsufficientGems,
+                LoaderImportOutcome::PriceChanged => proto::LoaderImportOutcome::PriceChanged,
+                LoaderImportOutcome::AssetNotReady => proto::LoaderImportOutcome::AssetNotReady,
+                LoaderImportOutcome::AssetRejected => proto::LoaderImportOutcome::AssetRejected,
+                LoaderImportOutcome::NotALoader => proto::LoaderImportOutcome::NotALoader,
+            } as i32,
+            loader:  reply.loader.as_ref().map(loader_to_proto),
+            slots:   Some(slots_to_proto(&reply.slots)),
+            wallet:  Some(self.wallet_to_proto(&reply.view, restricted)),
+        }))
+    }
+
+    /// The caller's uploaded loaders and slots (#975). Edge: its account.
+    pub async fn list_loaders(
+        &self,
+        request: Request<proto::ListLoadersRequest>,
+    ) -> Result<Response<proto::ListLoadersResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let slots = self.wallets.loader_slots(&request.get_ref().account_id).await.map_err(to_status)?;
+        Ok(Response::new(proto::ListLoadersResponse { slots: Some(slots_to_proto(&slots)) }))
+    }
+
+    /// Deletes one of the caller's loaders and its asset (#975); no refund.
+    /// Edge: its account.
+    pub async fn delete_loader(
+        &self,
+        request: Request<proto::DeleteLoaderRequest>,
+    ) -> Result<Response<proto::DeleteLoaderResponse>, Status> {
+        edge::require_account(&request, &request.get_ref().account_id)?;
+        let req = request.into_inner();
+        let (deleted, slots) = self.wallets.delete_loader(&req.account_id, &req.loader_id).await.map_err(to_status)?;
+        Ok(Response::new(proto::DeleteLoaderResponse { deleted, slots: Some(slots_to_proto(&slots)) }))
+    }
+
     fn wallet_to_proto(&self, view: &WalletView, restricted: bool) -> proto::Wallet {
         wallet_to_proto(view, self.wallets.config(), restricted)
     }
@@ -387,6 +443,24 @@ fn family_to_proto(family: ItemFamily) -> proto::ItemFamily {
         ItemFamily::CardStyle => proto::ItemFamily::CardStyle,
         ItemFamily::Badge => proto::ItemFamily::Badge,
         ItemFamily::AnimatedAvatar => proto::ItemFamily::AnimatedAvatar,
+        ItemFamily::Loader => proto::ItemFamily::Loader,
+    }
+}
+
+fn loader_to_proto(loader: &UploadedLoader) -> proto::UploadedLoader {
+    proto::UploadedLoader {
+        loader_id:   loader.loader_id.to_string(),
+        asset_id:    loader.asset_id.to_string(),
+        price:       loader.price_gems,
+        imported_at: Some(timestamp(loader.imported_at)),
+    }
+}
+
+fn slots_to_proto(slots: &LoaderSlots) -> proto::LoaderSlots {
+    proto::LoaderSlots {
+        loaders:         slots.loaders.iter().map(loader_to_proto).collect(),
+        max:             i32::try_from(slots.cap).unwrap_or(i32::MAX),
+        next_slot_price: slots.next_price_gems,
     }
 }
 
@@ -458,6 +532,8 @@ fn transaction_to_proto(t: &Transaction) -> proto::WalletTransaction {
             TransactionKind::CardStyle => proto::TransactionKind::CardStyle,
             TransactionKind::AnimatedAvatar => proto::TransactionKind::AnimatedAvatar,
             TransactionKind::TestGrant => proto::TransactionKind::TestGrant,
+            TransactionKind::LoaderStyle => proto::TransactionKind::LoaderStyle,
+            TransactionKind::LoaderSlot => proto::TransactionKind::LoaderSlot,
             TransactionKind::Unknown => proto::TransactionKind::Unspecified,
         } as i32,
         created_at:     Some(timestamp(t.created_at)),
@@ -643,6 +719,7 @@ mod tests {
             ("card.night", proto::ItemFamily::CardStyle as i32, 80),
             ("card.mint", proto::ItemFamily::CardStyle as i32, 80),
             ("avatar.animated", proto::ItemFamily::AnimatedAvatar as i32, 500),
+            ("loader.wave", proto::ItemFamily::Loader as i32, 0),
         ]);
 
         let purchase = |account: &str| proto::PurchaseItemRequest {
@@ -662,11 +739,40 @@ mod tests {
         assert_eq!((bought.outcome, bought.wallet.unwrap().gems), (proto::PurchaseOutcome::Purchased as i32, 50));
         let owned = h.list_owned_items(as_caller(&me, proto::ListOwnedItemsRequest { account_id: me.clone() })).await.unwrap().into_inner();
         let owned: Vec<_> = owned.items.iter().map(|o| (o.item_id.as_str(), o.acquired_at.is_some())).collect();
-        assert_eq!(owned, [("theme.pink", false), ("theme.violet", true)]);
+        assert_eq!(owned, [("theme.pink", false), ("loader.wave", false), ("theme.violet", true)]);
         assert!(h.list_owned_items(as_caller(&me, proto::ListOwnedItemsRequest { account_id: other })).await.is_err());
 
         let export = h.export_wallet(Request::new(proto::ExportWalletRequest { account_id: me.clone() })).await.unwrap().into_inner();
         assert_eq!(export.owned_items.iter().map(|o| o.item_id.as_str()).collect::<Vec<_>>(), ["theme.violet"], "bought ones only");
+    }
+
+    /// #975: loaders are the caller's own account's; an import is adult
+    /// only, and needs media (WAL-6001 without it); the slots say the cap
+    /// and the price.
+    #[tokio::test]
+    async fn loaders_are_the_callers_own_and_imports_need_an_adult_and_media() {
+        let h = handler();
+        let me = Uuid::now_v7().to_string();
+        let other = Uuid::now_v7().to_string();
+        let list = |account: &str| proto::ListLoadersRequest { account_id: account.to_owned() };
+        let slots = h.list_loaders(as_caller(&me, list(&me))).await.unwrap().into_inner().slots.unwrap();
+        assert_eq!((slots.loaders.len(), slots.max, slots.next_slot_price), (0, 10, 50));
+        assert_eq!(h.list_loaders(as_caller(&me, list(&other))).await.unwrap_err().code(), Code::PermissionDenied);
+        let delete = proto::DeleteLoaderRequest { account_id: other.clone(), loader_id: Uuid::now_v7().to_string() };
+        assert_eq!(h.delete_loader(as_caller(&me, delete)).await.unwrap_err().code(), Code::PermissionDenied);
+
+        let import = |account: &str| proto::ImportLoaderRequest {
+            account_id:      account.to_owned(),
+            idempotency_key: Uuid::now_v7().to_string(),
+            asset_id:        Uuid::now_v7().to_string(),
+            expected_price:  50,
+        };
+        assert_eq!(h.import_loader(as_caller(&me, import(&other))).await.unwrap_err().code(), Code::PermissionDenied);
+        let mut teen = Request::new(import(&me));
+        teen.extensions_mut().insert(principal_aged(&me, Some("13-15")));
+        assert_eq!(h.import_loader(teen).await.unwrap_err().metadata().get(ERROR_CODE_METADATA).unwrap(), "WAL-3001");
+        let no_media = h.import_loader(as_caller(&me, import(&me))).await.unwrap_err();
+        assert_eq!(no_media.metadata().get(ERROR_CODE_METADATA).unwrap(), "WAL-6001");
     }
 
     /// #665: gems are not spent under 18 or with an unknown age.

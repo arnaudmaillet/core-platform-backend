@@ -11,14 +11,14 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::application::port::{
-    ClaimOutcome, ClaimResult, EnvelopeSummary, GemSpend, MyStakeRecord, SettlementRecord, StakePositionRecord, OutboxEvent, OwnedItem,
+    ClaimOutcome, ClaimResult, EnvelopeSummary, GemSpend, LoaderImport, LoaderImportOutcome, MyStakeRecord, UploadedLoader, SettlementRecord, StakePositionRecord, OutboxEvent, OwnedItem,
     PackOutcome, PurchaseOutcome, SpendOutcome, StakeAnnouncement, StakeCursor, StakeOutcome, StakeResult, StakeStatus, TransactionCursor, WalletStore,
     WelcomeGiftOutcome,
 };
 use crate::domain::event::{BadgeAwarded, StakeCommitted, WalletEvent};
 use crate::domain::{
     AccountId, Allocation, CalibrationRow, CatalogItem, ClaimDecision, ClaimPolicy, Conviction, Currency, DayPosition, DuePosition, EnvelopeDay,
-    IdempotencyKey, PackDecision, PurchaseDecision, Settlement, StakeAsk,
+    IdempotencyKey, LoaderImportDecision, LoaderSlotPolicy, PackDecision, PurchaseDecision, Settlement, StakeAsk,
     StakeDecision, StakePackOffer, StakePackPolicy, StakePolicy, StakeTarget, Transaction, TransactionKind, Wallet,
 };
 use crate::error::WalletError;
@@ -115,6 +115,14 @@ async fn on_target(
 }
 
 /// A movement for the ledger.
+type LoaderRow = (Uuid, Uuid, i64, DateTime<Utc>);
+
+const LOADER_COLUMNS: &str = "loader_id, asset_id, price_gems, imported_at";
+
+fn loader_from_row((loader_id, asset_id, price_gems, imported_at): LoaderRow) -> UploadedLoader {
+    UploadedLoader { loader_id, asset_id, price_gems, imported_at }
+}
+
 struct Movement<'a> {
     currency:      Currency,
     delta:         i64,
@@ -453,6 +461,103 @@ impl WalletStore for PgWalletStore {
         Ok(rows.into_iter().map(|(item_id, acquired_at)| OwnedItem { item_id, acquired_at }).collect())
     }
 
+    #[instrument(name = "wallet.import_loader", skip(self, key))]
+    async fn import_loader(
+        &self,
+        account: &AccountId,
+        key: &IdempotencyKey,
+        import: &LoaderImport,
+        policy: &LoaderSlotPolicy,
+        starter_gems: i64,
+        now: DateTime<Utc>,
+    ) -> Result<(LoaderImportOutcome, Option<UploadedLoader>, Wallet), WalletError> {
+        let (mut tx, mut wallet) = self.locked(account, starter_gems, now).await?;
+        // The same import again (its key, or its asset under another key):
+        // the loader it made, nothing charged.
+        let earlier: Option<LoaderRow> = sqlx::query_as(&format!(
+            "SELECT {LOADER_COLUMNS} FROM uploaded_loaders WHERE account_id = $1 AND (import_key = $2 OR asset_id = $3)"
+        ))
+        .bind(account.as_uuid())
+        .bind(key.as_str())
+        .bind(import.asset_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage)?;
+        if let Some(row) = earlier {
+            tx.commit().await.map_err(storage)?;
+            return Ok((LoaderImportOutcome::Imported, Some(loader_from_row(row)), wallet));
+        }
+        // Its key charged a loader deleted since.
+        if replayed(&mut tx, account, key).await?.is_some() {
+            tx.commit().await.map_err(storage)?;
+            return Ok((LoaderImportOutcome::Imported, None, wallet));
+        }
+        let (held,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM uploaded_loaders WHERE account_id = $1")
+            .bind(account.as_uuid())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(storage)?;
+        let outcome = match wallet.decide_loader_import(policy, import.expected_price, usize::try_from(held).unwrap_or(usize::MAX)) {
+            LoaderImportDecision::Import => {
+                wallet.spend_gems(policy.price_gems);
+                write_gems(&mut tx, &wallet, now).await?;
+                let loader_ref = import.loader_id.to_string();
+                let movement = Movement {
+                    currency:      Currency::Gems,
+                    delta:         -policy.price_gems,
+                    balance_after: wallet.gems,
+                    kind:          TransactionKind::LoaderSlot,
+                    ref_id:        Some(&loader_ref),
+                    conviction:    None,
+                };
+                record(&mut tx, account, movement, key, now).await?;
+                let row: LoaderRow = sqlx::query_as(&format!(
+                    "INSERT INTO uploaded_loaders (account_id, loader_id, asset_id, price_gems, import_key, imported_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6) RETURNING {LOADER_COLUMNS}"
+                ))
+                .bind(account.as_uuid())
+                .bind(import.loader_id)
+                .bind(import.asset_id)
+                .bind(policy.price_gems)
+                .bind(key.as_str())
+                .bind(now)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(storage)?;
+                tx.commit().await.map_err(storage)?;
+                return Ok((LoaderImportOutcome::Imported, Some(loader_from_row(row)), wallet));
+            }
+            LoaderImportDecision::MaxReached => LoaderImportOutcome::MaxReached,
+            LoaderImportDecision::PriceChanged => LoaderImportOutcome::PriceChanged,
+            LoaderImportDecision::InsufficientGems => LoaderImportOutcome::InsufficientGems,
+        };
+        tx.commit().await.map_err(storage)?;
+        Ok((outcome, None, wallet))
+    }
+
+    async fn uploaded_loaders(&self, account: &AccountId) -> Result<Vec<UploadedLoader>, WalletError> {
+        let rows: Vec<LoaderRow> = sqlx::query_as(&format!(
+            "SELECT {LOADER_COLUMNS} FROM uploaded_loaders WHERE account_id = $1 ORDER BY imported_at, loader_id"
+        ))
+        .bind(account.as_uuid())
+        .fetch_all(self.pool(account)?)
+        .await
+        .map_err(storage)?;
+        Ok(rows.into_iter().map(loader_from_row).collect())
+    }
+
+    async fn delete_loader(&self, account: &AccountId, loader_id: &Uuid) -> Result<Option<UploadedLoader>, WalletError> {
+        let row: Option<LoaderRow> = sqlx::query_as(&format!(
+            "DELETE FROM uploaded_loaders WHERE account_id = $1 AND loader_id = $2 RETURNING {LOADER_COLUMNS}"
+        ))
+        .bind(account.as_uuid())
+        .bind(loader_id)
+        .fetch_optional(self.pool(account)?)
+        .await
+        .map_err(storage)?;
+        Ok(row.map(loader_from_row))
+    }
+
     #[instrument(name = "wallet.spend_gems", skip(self, key))]
     async fn spend_gems(
         &self,
@@ -764,6 +869,12 @@ impl WalletStore for PgWalletStore {
             .await
             .map_err(storage)?;
         sqlx::query("DELETE FROM owned_items WHERE account_id = $1")
+            .bind(account.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(storage)?;
+        // Their assets go with the account in media (#975).
+        sqlx::query("DELETE FROM uploaded_loaders WHERE account_id = $1")
             .bind(account.as_uuid())
             .execute(&mut *tx)
             .await

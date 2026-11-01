@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 4bee09929b7bbb2cea5e8e15842e66802c39db1380c58ca4c4a1afb1954a09cb
-  translated_at: 2026-10-20
+  source_sha256: 762f596ac32068f79d4ec205f1714bc40d6c093ca1aa129f05cedb1ce5bf3e22
+  translated_at: 2026-11-01
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -291,7 +291,7 @@ enregistrés (`saves.json` : `ListSavedPostsByAccount` d'engagement, mesh unique
 de vues (`view_history.json` : `ListViewHistoryByAccount` d'engagement, mesh uniquement, #944, les 90 derniers
 jours), son wallet
 (`wallet.json` : `ExportWallet` du wallet, mesh uniquement — lu sans en ouvrir un, avec les articles du
-catalogue achetés par le compte (`owned_items`, #892) —, toutes les pages
+catalogue achetés par le compte (`owned_items`, #892) et les loaders qu'il a importés (`uploaded_loaders`, #975) —, toutes les pages
 de `ListWalletTransactions`, et `ListStakePositions`, chaque mise avec son règlement ; sans
 `ACCOUNT_WALLET_GRPC_ENDPOINT` l'archive part sans lui, avec un log) et ses médias
 (`ListAssetsByOwner`, liens valables 7 jours). Le serveur lance la passe toutes les

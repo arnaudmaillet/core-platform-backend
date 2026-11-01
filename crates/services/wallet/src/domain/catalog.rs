@@ -27,11 +27,23 @@ pub enum ItemFamily {
     /// The animated avatar (`avatar.<name>`, #945): unlocks setting a clip as
     /// the avatar.
     AnimatedAvatar,
+    /// A loader style (`loader.<name>`, #975): the app's loading animation,
+    /// applied on the device. Loaders the viewer uploads are not items: they
+    /// take a slot each ([`LoaderSlotPolicy`]).
+    Loader,
 }
 
 impl ItemFamily {
-    pub const ALL: [Self; 7] =
-        [Self::AppIcon, Self::Theme, Self::AvatarFrame, Self::AnimatedBanner, Self::CardStyle, Self::Badge, Self::AnimatedAvatar];
+    pub const ALL: [Self; 8] = [
+        Self::AppIcon,
+        Self::Theme,
+        Self::AvatarFrame,
+        Self::AnimatedBanner,
+        Self::CardStyle,
+        Self::Badge,
+        Self::AnimatedAvatar,
+        Self::Loader,
+    ];
 
     fn prefix(self) -> &'static str {
         match self {
@@ -42,6 +54,7 @@ impl ItemFamily {
             Self::CardStyle => "card",
             Self::Badge => "badge",
             Self::AnimatedAvatar => "avatar",
+            Self::Loader => "loader",
         }
     }
 
@@ -69,6 +82,7 @@ impl ItemFamily {
             // Never bought: no ledger row.
             Self::Badge => TransactionKind::Unknown,
             Self::AnimatedAvatar => TransactionKind::AnimatedAvatar,
+            Self::Loader => TransactionKind::LoaderStyle,
         }
     }
 }
@@ -97,8 +111,9 @@ pub struct Catalog {
 impl Default for Catalog {
     /// The accent themes (#946): pink free, violet and red bought; three
     /// avatar frames (#913); the animated banner (#915, 500 gems); three post
-    /// card styles (#914); the animated avatar (#945, 500 gems). No alternate icon until the app bundles one
-    /// (`WALLET_CATALOG` adds them).
+    /// card styles (#914); the animated avatar (#945, 500 gems); the default
+    /// loader, `loader.wave` (#975, free: the paid styles are not picked yet).
+    /// No alternate icon until the app bundles one (`WALLET_CATALOG` adds them).
     fn default() -> Self {
         let item = |family, id: &str, price_gems| CatalogItem { id: id.to_owned(), family, price_gems };
         Self {
@@ -114,6 +129,7 @@ impl Default for Catalog {
                 item(ItemFamily::CardStyle, "card.night", 80),
                 item(ItemFamily::CardStyle, "card.mint", 80),
                 item(ItemFamily::AnimatedAvatar, "avatar.animated", 500),
+                item(ItemFamily::Loader, "loader.wave", 0),
             ],
         }
     }
@@ -128,6 +144,35 @@ impl Catalog {
     pub fn free_items(&self) -> impl Iterator<Item = &CatalogItem> {
         self.items.iter().filter(|item| item.free())
     }
+}
+
+/// Loaders a viewer uploads (#975): each import takes a slot, paid then and
+/// never given back — deleting a loader frees no slot to reuse, only room
+/// under the cap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoaderSlotPolicy {
+    /// The most uploaded loaders an account holds at once.
+    pub cap:        usize,
+    /// What one import costs.
+    pub price_gems: i64,
+}
+
+impl Default for LoaderSlotPolicy {
+    /// 10 loaders, 50 gems a slot (a placeholder until the owner prices it).
+    fn default() -> Self {
+        Self { cap: 10, price_gems: 50 }
+    }
+}
+
+/// What importing a loader would do now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoaderImportDecision {
+    Import,
+    /// The account holds [`LoaderSlotPolicy::cap`] loaders already.
+    MaxReached,
+    /// The app showed another price.
+    PriceChanged,
+    InsufficientGems,
 }
 
 /// What buying an item would do now.
@@ -153,6 +198,22 @@ impl Wallet {
             PurchaseDecision::InsufficientGems
         } else {
             PurchaseDecision::Buy
+        }
+    }
+}
+
+impl Wallet {
+    /// What importing a loader, its slot shown at `expected_price`, would do
+    /// while the account holds `held` uploaded loaders.
+    pub fn decide_loader_import(&self, policy: &LoaderSlotPolicy, expected_price: i64, held: usize) -> LoaderImportDecision {
+        if held >= policy.cap {
+            LoaderImportDecision::MaxReached
+        } else if expected_price != policy.price_gems {
+            LoaderImportDecision::PriceChanged
+        } else if !self.can_spend_gems(policy.price_gems) {
+            LoaderImportDecision::InsufficientGems
+        } else {
+            LoaderImportDecision::Import
         }
     }
 }
@@ -185,6 +246,21 @@ mod tests {
         assert_eq!(wallet.decide_purchase(catalog.item("theme.pink").unwrap(), 0, false), PurchaseDecision::AlreadyOwned, "free");
         wallet.gems = 49;
         assert_eq!(wallet.decide_purchase(violet, 50, false), PurchaseDecision::InsufficientGems);
-        assert_eq!(catalog.free_items().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["theme.pink"]);
+        assert_eq!(catalog.free_items().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["theme.pink", "loader.wave"]);
+    }
+
+    /// #975: loader styles are items; an uploaded loader takes a slot, under
+    /// a cap, at the shown price.
+    #[test]
+    fn a_loader_import_needs_room_the_shown_price_and_the_gems() {
+        assert_eq!(ItemFamily::of("loader.wave"), Some(ItemFamily::Loader));
+        assert_eq!(ItemFamily::Loader.transaction_kind(), TransactionKind::LoaderStyle);
+        let policy = LoaderSlotPolicy::default();
+        let mut wallet = Wallet::opened(AccountId::from_uuid(Uuid::now_v7()), 100);
+        assert_eq!(wallet.decide_loader_import(&policy, 50, 9), LoaderImportDecision::Import);
+        assert_eq!(wallet.decide_loader_import(&policy, 50, 10), LoaderImportDecision::MaxReached);
+        assert_eq!(wallet.decide_loader_import(&policy, 40, 0), LoaderImportDecision::PriceChanged);
+        wallet.gems = 49;
+        assert_eq!(wallet.decide_loader_import(&policy, 50, 0), LoaderImportDecision::InsufficientGems);
     }
 }

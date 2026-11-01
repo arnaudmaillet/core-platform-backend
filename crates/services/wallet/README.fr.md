@@ -1,7 +1,7 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: bb10091be5860a62f17ce16b9338c65c6b5fea0cd7ed8ce3c638e4226f7355b0
+  source_sha256: 223915cdd1ca2d08b95bbe1756a3c4292ba5b1ef196d0623ec0fc0494cd20edf
   translated_at: 2026-11-01
   status: complete
 ---
@@ -98,6 +98,7 @@ seule fois.
 | Emplacement de profil (`SpendGems`, mesh ; #916) | profile fixe le prix de l'emplacement, vérifie que l'acheteur est adulte et demande les gems avec la clé `profile-slot-<n>` (`PROFILE_SLOT`) ; `ref_id` = le numéro de l'emplacement |
 | Changement de handle payant (`SpendGems`, mesh ; #911) | profile fixe le prix du changement (le premier est gratuit), vérifie que le payeur est adulte et demande les gems avec la clé `handle-change-<n>` une fois le handle réservé (`HANDLE_CHANGE`) ; `ref_id` = le profil |
 | Article du catalogue (`PurchaseItem`, edge ; #892) | voir le catalogue ci-dessous |
+| Emplacement de loader (`ImportLoader`, edge ; #975) | voir les loaders importés ci-dessous |
 
 **Le catalogue de gems (#892).** Ce que les gems achètent, en politique serveur (`WALLET_CATALOG`),
 jamais d'influence, de classement ni de visibilité (charte V5.3 §35). L'id d'un article est
@@ -109,7 +110,8 @@ post, #914 : `SetPostCardStyle` de post en applique un aux propres posts de l'au
 défaut : `theme.pink` (gratuit), `theme.violet` (50), `theme.red` (50), `frame.gold`, `frame.neon` et
 `frame.aurora` (60 chacun), `banner.animated` (500), `card.paper`, `card.night` et `card.mint` (80
 chacun), `avatar.animated` (500 ; famille `avatar`, #945 : `UpdateAvatar` de profile n'accepte un clip que pour
-son propriétaire) ; aucune icône tant que l'app n'en embarque pas.
+son propriétaire), `loader.wave` (gratuit, le loader par défaut ; famille `loader`, #975 : les styles
+payants ne sont pas encore choisis) ; aucune icône tant que l'app n'en embarque pas.
 - `ListCatalog` liste les articles et leurs prix ; l'app embarque le visuel de chaque article, indexé
   par son id, et masque un id qu'elle ne connaît pas.
 - `PurchaseItem` est idempotent par clé, au prix `expected_price` (sinon `PRICE_CHANGED`), et répond
@@ -276,6 +278,9 @@ service WalletService {
   rpc PurchaseItem      (PurchaseItemRequest)      returns (PurchaseItemResponse);      // edge : le compte de l'appelant
   rpc ListOwnedItems    (ListOwnedItemsRequest)    returns (ListOwnedItemsResponse);    // edge : le compte de l'appelant
   rpc AwardBadge        (AwardBadgeRequest)        returns (AwardBadgeResponse);        // mesh seulement (#912) : geo-discovery
+  rpc ImportLoader      (ImportLoaderRequest)      returns (ImportLoaderResponse);      // edge : le compte de l'appelant (#975)
+  rpc ListLoaders       (ListLoadersRequest)       returns (ListLoadersResponse);       // edge : le compte de l'appelant
+  rpc DeleteLoader      (DeleteLoaderRequest)      returns (DeleteLoaderResponse);      // edge : le compte de l'appelant
 }
 ```
 
@@ -308,6 +313,28 @@ cadeau en points (`WELCOME_GIFT`), **une fois par appareil, quel que soit le com
 - **Plafond :** le crédit est borné sous `points_cap`.
 - **Effacement :** effacer le compte détache l'appareil mais le garde comme déjà accueilli.
 - **Réglage :** `WALLET_WELCOME_GIFT`.
+
+**Loaders importés (#975).** Un loader est un cosmétique purement privé (l'animation de chargement de
+l'app) : seul son propriétaire le voit, rien n'atteint le classement ni la visibilité. Les **styles** de
+loader dessinés par l'app sont des articles du catalogue (`loader.<nom>`, `PurchaseItem`) ; un loader que
+le viewer **importe** est un asset media `MEDIA_KIND_LOADER` (vérifié au commit, passé par `Screen`, privé,
+résolu par `ResolveLoaders` de media) qui prend **un emplacement, payé à son import** :
+- `ImportLoader(asset_id, expected_price, idempotency_key)` demande à media (`GetAsset`, mesh) où en est
+  l'asset : seul un loader **READY** de l'appelant s'importe (`ASSET_NOT_READY` tant qu'il s'envoie ou se
+  traite, `ASSET_REJECTED` une fois en échec ou bloqué, `NOT_A_LOADER` pour tout le reste — rien n'est
+  débité). Puis une transaction, la ligne du wallet verrouillée, débite l'emplacement
+  (`WALLET_LOADER_SLOT_PRICE`, 50 gems, provisoire ; une ligne `LOADER_SLOT` au registre, `ref_id` = l'id
+  du nouveau loader) et enregistre le loader (`uploaded_loaders`) ; sinon `MAX_REACHED` à 10 loaders
+  détenus, `PRICE_CHANGED`, `INSUFFICIENT_GEMS`. Idempotent par clé et par asset (le même asset répond
+  son loader sans rien débiter). Réservé aux adultes (`WAL-3001`).
+- `ListLoaders` répond les loaders (les plus anciens d'abord), le plafond et le prix du prochain
+  emplacement (`LoaderSlots`).
+- `DeleteLoader(loader_id)` supprime son asset dans media (`DeleteAsset` ; déjà parti ou sous gel légal,
+  c'est bon), puis le loader. **Ni remboursement ni réemploi** : l'emplacement est perdu, seule la place
+  sous le plafond revient.
+- Sans `WALLET_MEDIA_GRPC_ENDPOINT`, imports et suppressions répondent `WAL-6001`. L'export liste les
+  loaders (`ExportWalletResponse.uploaded_loaders` ; leurs octets sont dans celui de media) ; l'effacement
+  les supprime (media efface les assets sur son propre `account_deleted`).
 
 **Badges (#912).** Gagnés, jamais vendus : la famille `badge` (`badge.<nom>`) est refusée dans
 `WALLET_CATALOG` et absente de `ListCatalog`. Le service dont la règle en fait gagner un appelle
@@ -417,7 +444,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points réclamables par jour UTC |
 | `WALLET_POINTS_CAP` | `2000` | le solde de points qu'un claim ne dépasse jamais (`BALANCE_FULL` à ce niveau) ; 0 garde la valeur par défaut |
 | `WALLET_STARTER_GEMS` | `100` | gems à l'ouverture d'un portefeuille |
-| `WALLET_CATALOG` | `theme.pink:0,theme.violet:50,theme.red:50,frame.gold:60,frame.neon:60,frame.aurora:60,banner.animated:500,card.paper:80,card.night:80,card.mint:80,avatar.animated:500` | le catalogue de gems (#892) : `id d'article:gems`, dans l'ordre d'affichage, des ids `<famille>.<nom>` d'une famille connue (`theme`, `icon`) et distincts ; 0 = gratuit, possédé par tous les comptes ; une liste invalide garde la valeur par défaut |
+| `WALLET_CATALOG` | `theme.pink:0,theme.violet:50,theme.red:50,frame.gold:60,frame.neon:60,frame.aurora:60,banner.animated:500,card.paper:80,card.night:80,card.mint:80,avatar.animated:500,loader.wave:0` | le catalogue de gems (#892) : `id d'article:gems`, dans l'ordre d'affichage, des ids `<famille>.<nom>` d'une famille connue (`theme`, `icon`, `frame`, `banner`, `card`, `avatar`, `loader`) et distincts ; 0 = gratuit, possédé par tous les comptes ; une liste invalide garde la valeur par défaut |
 | `WALLET_STAKE_PACKS` | `3:50,10:150,25:325` | les packs de mises en vente (#941) : `tirs:gems`, le pack par défaut en premier, des nombres de tirs distincts (l'id d'un pack est `shots_<tirs>`) ; une liste invalide garde la valeur par défaut |
 | `WALLET_POINTS_PER_SHOT` | `100` | points misés par tir |
 | `WALLET_STAKE_TARGET_CAP` | `250` | points qu'un compte peut mettre sur une cible, à vie |
@@ -427,6 +454,8 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_SOCIAL_GRAPH_GRPC_ENDPOINT` | `http://localhost:50053` | adresse mesh de social-graph (le lecteur peut-il voir le contenu) |
 | `WALLET_OUTBOX_DRAIN_SECS` | `5` | fréquence du drainer de l'outbox |
 | `WALLET_ENGAGEMENT_GRPC_ENDPOINT` | non défini | adresse mesh d'engagement (p. ex. `http://engagement:50058`) : le règlement des mises. Non défini → rien ne se règle |
+| `WALLET_MEDIA_GRPC_ENDPOINT` | non défini | adresse mesh de media (p. ex. `http://media:50063`) : les assets des loaders importés (#975). Non défini → `ImportLoader` / `DeleteLoader` répondent `WAL-6001` |
+| `WALLET_LOADER_SLOT_PRICE` | `50` | gems que coûte l'emplacement d'un loader importé (#975 ; 10 loaders au plus) |
 | `WALLET_SETTLEMENT_DELAY_SECS` | `86400` | délai entre la première mise d'une position et son règlement |
 | `WALLET_SETTLEMENT_SECS` · `WALLET_SETTLEMENT_BATCH` | `60` · `500` | fréquence du settler, et positions par passage |
 | `WALLET_CURATOR_ENVELOPE_DAILY` | `1000` | gems que les curateurs se partagent par jour (provisoires, mode shadow) |

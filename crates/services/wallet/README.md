@@ -82,6 +82,7 @@ service's own start with `sys:` (e.g. `sys:starter-gems`). No caller key holds a
 | Profile slot (`SpendGems`, mesh; #916) | profile prices the slot, checks the buyer is an adult, and asks for the gems keyed `profile-slot-<n>` (`PROFILE_SLOT`); `ref_id` = the slot number |
 | Paid handle change (`SpendGems`, mesh; #911) | profile prices the change (the first is free), checks the payer is an adult, and asks for the gems keyed `handle-change-<n>` once the handle is claimed (`HANDLE_CHANGE`); `ref_id` = the profile |
 | Catalogue item (`PurchaseItem`, edge; #892) | see the catalogue below |
+| Loader slot (`ImportLoader`, edge; #975) | see uploaded loaders below |
 
 **The gem catalogue (#892).** What gems buy, as server policy (`WALLET_CATALOG`), never influence,
 ranking or visibility (charter V5.3 §35). An item id is `<family>.<name>`; the families are
@@ -92,7 +93,8 @@ and `card` (post card styles, #914: post's `SetPostCardStyle` applies one to the
 On sale by default: `theme.pink` (free), `theme.violet` (50), `theme.red` (50), `frame.gold`,
 `frame.neon` and `frame.aurora` (60 each), `banner.animated` (500), `card.paper`, `card.night` and
 `card.mint` (80 each), `avatar.animated` (500; family `avatar`, #945: profile's `UpdateAvatar` takes a clip only
-for its owner); no icon until the app bundles one.
+for its owner), `loader.wave` (free, the default loader; family `loader`, #975: the paid styles are
+not picked yet); no icon until the app bundles one.
 - `ListCatalog` lists the items and prices; the app bundles each item's art keyed by its id and hides
   an id it does not know.
 - `PurchaseItem` is idempotent per key, at `expected_price` (`PRICE_CHANGED` otherwise), and answers
@@ -250,6 +252,9 @@ service WalletService {
   rpc PurchaseItem      (PurchaseItemRequest)      returns (PurchaseItemResponse);      // edge: the caller's account
   rpc ListOwnedItems    (ListOwnedItemsRequest)    returns (ListOwnedItemsResponse);    // edge: the caller's account
   rpc AwardBadge        (AwardBadgeRequest)        returns (AwardBadgeResponse);        // mesh only (#912): geo-discovery
+  rpc ImportLoader      (ImportLoaderRequest)      returns (ImportLoaderResponse);      // edge: the caller's account (#975)
+  rpc ListLoaders       (ListLoadersRequest)       returns (ListLoadersResponse);       // edge: the caller's account
+  rpc DeleteLoader      (DeleteLoaderRequest)      returns (DeleteLoaderResponse);      // edge: the caller's account
 }
 ```
 
@@ -279,6 +284,27 @@ in**:
 - **Cap:** the credit is clamped under `points_cap`.
 - **Erasure:** erasing the account unlinks the device but keeps it welcomed.
 - **Knob:** `WALLET_WELCOME_GIFT`.
+
+**Uploaded loaders (#975).** A loader is a purely private cosmetic (the app's loading animation): only
+its owner sees it, nothing reaches ranking or visibility. Loader **styles** drawn by the app are
+catalogue items (`loader.<name>`, `PurchaseItem`); a loader the viewer **uploads** is a media
+`MEDIA_KIND_LOADER` asset (checked at commit, `Screen`ed, private, resolved by media's `ResolveLoaders`)
+that takes **one slot, paid at its import**:
+- `ImportLoader(asset_id, expected_price, idempotency_key)` asks media (`GetAsset`, mesh) where the asset
+  stands: only the caller's **READY** loader imports (`ASSET_NOT_READY` while it uploads or processes,
+  `ASSET_REJECTED` once failed or blocked, `NOT_A_LOADER` for anything else — nothing charged). Then
+  one transaction, the wallet row locked, charges the slot (`WALLET_LOADER_SLOT_PRICE`, 50 gems, a
+  placeholder; a `LOADER_SLOT` ledger row, `ref_id` = the new loader id) and records the loader
+  (`uploaded_loaders`); `MAX_REACHED` at 10 loaders held, `PRICE_CHANGED`, `INSUFFICIENT_GEMS`
+  otherwise. Idempotent per key and per asset (the same asset again answers its loader, charging
+  nothing). Adult only (`WAL-3001`).
+- `ListLoaders` answers the loaders (oldest first), the cap and the next slot's price (`LoaderSlots`).
+- `DeleteLoader(loader_id)` deletes its asset in media (`DeleteAsset`; gone already or under a legal
+  hold is fine), then the loader. **No refund, no reuse**: the slot is gone, only room under the cap
+  comes back.
+- Without `WALLET_MEDIA_GRPC_ENDPOINT`, imports and deletes answer `WAL-6001`. The export lists the
+  loaders (`ExportWalletResponse.uploaded_loaders`; their bytes are in media's); erasure deletes them
+  (media erases the assets on its own `account_deleted`).
 
 **Badges (#912).** Earned, never sold: family `badge` (`badge.<name>`) is refused in `WALLET_CATALOG`
 and absent from `ListCatalog`. The service whose rule earns one calls the mesh-only `AwardBadge`
@@ -382,7 +408,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points claimable per UTC day |
 | `WALLET_POINTS_CAP` | `2000` | the points balance a claim never takes past (`BALANCE_FULL` at it); 0 keeps the default |
 | `WALLET_STARTER_GEMS` | `100` | gems a wallet opens with |
-| `WALLET_CATALOG` | `theme.pink:0,theme.violet:50,theme.red:50,frame.gold:60,frame.neon:60,frame.aurora:60,banner.animated:500,card.paper:80,card.night:80,card.mint:80,avatar.animated:500` | the gem catalogue (#892): `item id:gems`, display order, ids `<family>.<name>` of a known family (`theme`, `icon`) and distinct; 0 = free, owned by every account; a bad list keeps the default |
+| `WALLET_CATALOG` | `theme.pink:0,theme.violet:50,theme.red:50,frame.gold:60,frame.neon:60,frame.aurora:60,banner.animated:500,card.paper:80,card.night:80,card.mint:80,avatar.animated:500,loader.wave:0` | the gem catalogue (#892): `item id:gems`, display order, ids `<family>.<name>` of a known family (`theme`, `icon`, `frame`, `banner`, `card`, `avatar`, `loader`) and distinct; 0 = free, owned by every account; a bad list keeps the default |
 | `WALLET_STAKE_PACKS` | `3:50,10:150,25:325` | the stake packs on sale (#941): `shots:gems`, the default pack first, distinct shots (a pack's id is `shots_<shots>`); a bad list keeps the default |
 | `WALLET_POINTS_PER_SHOT` | `100` | points one shot stakes |
 | `WALLET_STAKE_TARGET_CAP` | `250` | points one account may put on one target, ever |
@@ -392,6 +418,8 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_SOCIAL_GRAPH_GRPC_ENDPOINT` | `http://localhost:50053` | social-graph's mesh address (may the reader see the content) |
 | `WALLET_OUTBOX_DRAIN_SECS` | `5` | how often the outbox drainer runs |
 | `WALLET_ENGAGEMENT_GRPC_ENDPOINT` | unset | engagement's mesh address (e.g. `http://engagement:50058`): stake settlement. Unset → nothing settles |
+| `WALLET_MEDIA_GRPC_ENDPOINT` | unset | media's mesh address (e.g. `http://media:50063`): uploaded loaders' assets (#975). Unset → `ImportLoader` / `DeleteLoader` answer `WAL-6001` |
+| `WALLET_LOADER_SLOT_PRICE` | `50` | gems an uploaded loader's slot costs (#975; 10 loaders at most) |
 | `WALLET_SETTLEMENT_DELAY_SECS` | `86400` | how long after its first stake a position settles |
 | `WALLET_SETTLEMENT_SECS` · `WALLET_SETTLEMENT_BATCH` | `60` · `500` | how often the settler runs, and how many positions a pass |
 | `WALLET_CURATOR_ENVELOPE_DAILY` | `1000` | gems the curators share per day (provisional, shadow mode) |

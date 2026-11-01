@@ -68,6 +68,11 @@ pub enum TransactionKind {
     /// Gems credited to a test account outside production (#967; `ref_id`:
     /// the operator's reason). Never minted, never earned: analytics exclude it.
     TestGrant,
+    /// A loader style bought with gems (#975; `ref_id`: the item id).
+    LoaderStyle,
+    /// A loader slot, consumed by an uploaded loader (#975; `ref_id`: the
+    /// loader's id).
+    LoaderSlot,
     /// Written by a newer version of this service.
     Unknown,
 }
@@ -91,6 +96,8 @@ impl TransactionKind {
             Self::CardStyle => "card_style",
             Self::AnimatedAvatar => "animated_avatar",
             Self::TestGrant => "test_grant",
+            Self::LoaderStyle => "loader_style",
+            Self::LoaderSlot => "loader_slot",
             Self::Unknown => "unknown",
         }
     }
@@ -113,6 +120,8 @@ impl TransactionKind {
             "card_style" => Self::CardStyle,
             "animated_avatar" => Self::AnimatedAvatar,
             "test_grant" => Self::TestGrant,
+            "loader_style" => Self::LoaderStyle,
+            "loader_slot" => Self::LoaderSlot,
             _ => Self::Unknown,
         }
     }
@@ -147,6 +156,8 @@ pub enum Operation {
     Purchase,
     /// A test grant outside production (#967).
     TestGrant,
+    /// An uploaded loader's import (#975).
+    LoaderImport,
 }
 
 impl Operation {
@@ -158,6 +169,7 @@ impl Operation {
             Self::Stake => "stake",
             Self::Purchase => "item",
             Self::TestGrant => "grant",
+            Self::LoaderImport => "loader",
         }
     }
 }

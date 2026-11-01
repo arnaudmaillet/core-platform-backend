@@ -7339,6 +7339,7 @@ dependencies = [
  "engagement-api",
  "error",
  "http",
+ "media-api",
  "post-api",
  "postgres",
  "prost-types",
