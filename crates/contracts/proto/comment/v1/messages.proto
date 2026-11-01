@@ -40,11 +40,17 @@ message GetCommentRequest {
     string comment_id = 1;
 }
 
-// Lists top-level (non-reply) comments for a post, newest-first.
+// Lists top-level (non-reply) comments for a post, newest-first by default.
 message ListTopLevelRequest {
-    string post_id    = 1;
-    int32  limit      = 2;
-    string page_token = 3;
+    string    post_id    = 1;
+    int32     limit      = 2;
+    string    page_token = 3;
+    // NEWEST by default. POPULARITY (#977), as replies sort: the post's 500
+    // newest top-level comments ranked by likes, ties to the newest, then the
+    // older ones newest first. The ranking is read again per page, so a
+    // comment whose likes changed between pages can come back: de-duplicate
+    // by comment_id. With engagement unavailable, the newest order.
+    ReplySort sort       = 4;
 }
 
 // Lists direct replies to a single top-level comment, newest-first.

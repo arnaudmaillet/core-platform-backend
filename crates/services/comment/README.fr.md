@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 2c24ba73feffd1291cd3fe98a894f85a365becd7731355443ab707cdf13693ec
-  translated_at: 2026-10-10
+  source_sha256: 8854a6ff91170f2671fba8f375b8133c9adc02207c0827ea7004c9f33fc1ef90
+  translated_at: 2026-11-01
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -101,7 +101,7 @@ que le fil reste navigable) : **Purge** (DELETE physique des deux tables). Les d
 |---|---|---|---|
 | ScyllaDB (`comment`) | store durable | lectures + écritures échouent | **Dur** — `CMT-…/Storage` |
 | Kafka | émission de `comment.*` | les compteurs de commentaires d'engagement retardent | **Souple** — les commentaires persistent quand même |
-| `engagement` (`BatchGetLikes`) | réponses par popularité (#832) | les pages par popularité ne classent rien | **Souple** — elles reviennent de la plus récente à la plus ancienne |
+| `engagement` (`BatchGetLikes`) | réponses et commentaires de premier niveau par popularité (#832, #977) | les pages par popularité ne classent rien | **Souple** — elles reviennent de la plus récente à la plus ancienne |
 
 **Amont (rayon d'impact) :**
 
@@ -146,6 +146,11 @@ les réponses plus anciennes de la plus récente à la plus ancienne. Ses pages 
 réponse par `(likes, created_at, comment_id)` ; le classement est relu à chaque page, donc une réponse dont
 les likes changent entre-temps peut apparaître deux fois ou être sautée (le client dédoublonne). Engagement
 injoignable : la page revient de la plus récente à la plus ancienne (journalisé, jamais une erreur).
+`ListTopLevel { sort: POPULARITY }` (#977) classe de la même façon les commentaires de premier niveau du
+post : ses 500 plus récents par likes, puis les plus anciens du plus récent au plus ancien, avec le même
+curseur et la même règle de dédoublonnage, les nombres de réponses remplis. Le contrôle de lecture filtre
+chaque page après le classement dans les deux ordres : les commentaires que le lecteur ne peut pas voir
+n'apparaissent jamais, et une page peut revenir incomplète avec un jeton.
 
 **Les commentaires d'un profil (#653).** `ListCommentsByAuthor(author_id)` est **mesh uniquement**
 (jamais sur l'edge) : l'export de données RGPD lit les commentaires d'un profil, du plus récent au plus

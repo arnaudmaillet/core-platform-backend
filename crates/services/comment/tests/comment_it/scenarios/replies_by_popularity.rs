@@ -4,7 +4,7 @@
 //! the newest order when engagement does not answer, and carrying on past the
 //! ranked window newest first.
 
-use comment::application::query::list_replies::{ReplySort, POPULARITY_WINDOW};
+use comment::application::query::popularity::{CommentSort as ReplySort, POPULARITY_WINDOW};
 
 use crate::comment_it::harness::{self, TestHarness};
 

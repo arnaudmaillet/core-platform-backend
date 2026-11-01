@@ -99,6 +99,7 @@ impl App {
                     repository: Arc::clone(&repository),
                     gate:       Arc::clone(&gate),
                     filters:    filters.clone(),
+                    likes:      Arc::clone(&likes),
                 })?
                 .register::<ListRepliesQuery, _>(ListRepliesHandler {
                     repository: Arc::clone(&repository),

@@ -10,7 +10,8 @@ enum CommentStatus {
     COMMENT_STATUS_DELETED     = 2;
 }
 
-// The order of a thread's replies (#832).
+// The order of a thread's replies (#832), and of a post's top-level
+// comments (#977).
 enum ReplySort {
     // NEWEST.
     REPLY_SORT_UNSPECIFIED = 0;
