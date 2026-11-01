@@ -128,20 +128,33 @@ pub async fn filter_page(
     viewer: &Viewer,
     mature: bool,
     post_id: &PostId,
-    (mut page, next): (Vec<CommentSummary>, Option<String>),
+    page: (Vec<CommentSummary>, Option<String>),
 ) -> Result<(Vec<CommentSummary>, Option<String>), CommentError> {
+    Ok(gate_page(gate, filters, viewer, mature, post_id, page).await?.unwrap_or((Vec::new(), None)))
+}
+
+/// [`filter_page`], saying whether the post is readable at all: `None` when
+/// it is not (#976: a preview has no entry for it), else the filtered page.
+pub async fn gate_page(
+    gate: &dyn ReadGate,
+    filters: &OwnerFilters,
+    viewer: &Viewer,
+    mature: bool,
+    post_id: &PostId,
+    (mut page, next): (Vec<CommentSummary>, Option<String>),
+) -> Result<Option<(Vec<CommentSummary>, Option<String>)>, CommentError> {
     if *viewer == Viewer::Internal {
-        return Ok((page, next));
+        return Ok(Some((page, next)));
     }
     let mut authors: Vec<ProfileId> = page.iter().map(|c| c.author_id.clone()).collect();
     authors.sort_by_key(|a| a.as_str());
     authors.dedup();
     match gate.check(viewer, mature, post_id, &authors).await? {
-        None => Ok((Vec::new(), None)),
+        None => Ok(None),
         Some(decision) => {
             let filter = filters.of(decision.post_author.as_ref()).await?;
             page.retain(|c| filters.shows(viewer, &decision, filter.as_ref(), &c.author_id, c.body.as_deref(), c.held));
-            Ok((page, next))
+            Ok(Some((page, next)))
         }
     }
 }

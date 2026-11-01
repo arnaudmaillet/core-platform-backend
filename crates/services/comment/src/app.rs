@@ -95,6 +95,13 @@ impl App {
                     gate:       Arc::clone(&gate),
                     filters:    filters.clone(),
                 })?
+                .register::<crate::application::query::list_previews::ListPreviewsQuery, _>(
+                    crate::application::query::list_previews::ListPreviewsHandler {
+                        repository: Arc::clone(&repository),
+                        gate:       Arc::clone(&gate),
+                        filters:    filters.clone(),
+                    },
+                )?
                 .register::<ListTopLevelQuery, _>(ListTopLevelHandler {
                     repository: Arc::clone(&repository),
                     gate:       Arc::clone(&gate),

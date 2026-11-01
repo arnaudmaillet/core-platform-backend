@@ -986,6 +986,7 @@ dependencies = [
  "cqrs",
  "engagement-api",
  "error",
+ "futures",
  "http",
  "post-api",
  "profile",

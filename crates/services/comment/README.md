@@ -111,6 +111,7 @@ service CommentService {
   rpc DeleteComment (DeleteCommentRequest) returns (CommandResponse);
   rpc GetComment    (GetCommentRequest)    returns (CommentView);
   rpc ListTopLevel  (ListTopLevelRequest)  returns (ListCommentsResponse);
+  rpc ListPreviews  (ListPreviewsRequest)  returns (ListPreviewsResponse);  // #976: many posts' first comments
   rpc ListReplies   (ListRepliesRequest)   returns (ListCommentsResponse);
   rpc ListCommentsByAuthor (ListCommentsByAuthorRequest) returns (ListCommentsResponse); // mesh only
 }
@@ -134,6 +135,19 @@ page comes back newest first (logged, never an error).
 newest by likes, then the older ones newest first, with the same cursor and de-duplication rule, reply
 counts filled. The read gate filters each page after the ranking in both orders, so the comments the
 reader may not see never show, and a page can come back short with a token.
+
+**Previews (#976).** `ListPreviews(post_ids ≤ 50, limit ≤ 10, default 5)` (edge `public_read`, as
+`ListTopLevel`) gives, per post, the first top-level comments the caller's `ListTopLevel` lists: newest
+first, through the same read gate, `reply_count` filled. A client draws them while it opens a tile full
+screen.
+- **Per post.** One partition read of `max(3 × limit, 15)` rows (at most 30), so that comments hidden
+  from the caller do not empty the preview. The gate then applies, and the first `limit` are kept.
+- **Entries.** A readable post without visible comments has an empty entry. A post the caller may not
+  read has none, and neither has one that failed or took longer than 800 ms (logged): the client reads
+  it with `ListTopLevel`.
+- **Concurrency.** Posts are read 16 at a time, and the response keeps the request's order.
+- **Latency.** On the local Scylla, 50 posts × 5 comments answer in about 10 ms, so no candidate cache
+  was needed.
 
 **A profile's own comments (#653).** `ListCommentsByAuthor(author_id)` is **mesh only** (never on the
 edge): the GDPR data export reads a profile's comments, newest first, as `comments` holds them now — a

@@ -8,4 +8,4 @@ pub use comment_filter_store::CommentFilterStore;
 pub use comment_likes::CommentLikes;
 pub use comment_repository::{CommentRepository, CommentSummary};
 pub use event_publisher::CommentEventPublisher;
-pub use read_gate::{filter_page, CommentAdmission, OwnerFilters, ReadDecision, ReadGate};
+pub use read_gate::{filter_page, gate_page, CommentAdmission, OwnerFilters, ReadDecision, ReadGate};
