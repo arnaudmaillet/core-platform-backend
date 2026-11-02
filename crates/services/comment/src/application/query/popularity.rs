@@ -206,6 +206,7 @@ mod tests {
         CommentSummary {
             comment_id:  CommentId::from_uuid(Uuid::from_u128(n)),
             author_id:   ProfileId::from_uuid(Uuid::from_u128(1000)),
+            parent_id:   None,
             status:      CommentStatus::Published,
             body:        Some("hi".to_owned()),
             gif_url:     None,

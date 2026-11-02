@@ -19,6 +19,8 @@ use crate::{
 pub struct CommentSummary {
     pub comment_id: CommentId,
     pub author_id:  ProfileId,
+    /// The comment a reply answers; `None` for a top-level comment.
+    pub parent_id:  Option<CommentId>,
     pub status:     CommentStatus,
     pub body:       Option<String>,
     pub gif_url:    Option<String>,
@@ -33,9 +35,9 @@ pub struct CommentSummary {
 
 #[async_trait]
 pub trait CommentRepository: Send + Sync + 'static {
-    /// Inserts a new comment into both `comment.comments` and
-    /// `comment.comments_by_post`. Both writes must succeed atomically from the
-    /// caller's perspective — failure leaves retry responsibility with the caller.
+    /// Inserts a new comment into `comment.comments`, `comment.comments_by_post`
+    /// and the post's timeline (#988). The writes must succeed atomically from
+    /// the caller's perspective — failure leaves retry responsibility with the caller.
     /// A reply also counts on its parent (#832).
     async fn insert(&self, comment: &Comment) -> Result<(), CommentError>;
 
@@ -105,6 +107,22 @@ pub trait CommentRepository: Send + Sync + 'static {
     /// written before `comments_by_author` existed). Idempotent; returns the
     /// rows written.
     async fn backfill_author_index(&self) -> Result<u64, CommentError>;
+
+    /// Puts every comment in `comment.comments` on its post's timeline
+    /// (comments written before `comments_timeline` existed, #988).
+    /// Idempotent, and never undoes a tombstone, a review or a purge that
+    /// lands meanwhile; returns the rows written.
+    async fn backfill_timeline(&self) -> Result<u64, CommentError>;
+
+    /// Paginates a post's comments, top-level and replies alike, from
+    /// `comments_timeline` (#988), ordered by `created_at DESC`. Returns
+    /// `(summaries, next_page_token)`.
+    async fn list_timeline(
+        &self,
+        post_id:    &PostId,
+        limit:      i32,
+        page_token: Option<&str>,
+    ) -> Result<(Vec<CommentSummary>, Option<String>), CommentError>;
 
     /// Paginates top-level comments for a post from `comments_by_post`,
     /// ordered by `created_at DESC`. Returns `(summaries, next_page_token)`.

@@ -42,6 +42,7 @@ gRPC CommentService ─► CommandBus ─► CreateComment ─► Comment::creat
                     │             └─► DeleteComment ─► has_active_replies? ─► Tombstone | Purge ─► comment.deleted
                     └─► QueryBus  ─► GetComment (comments, point read, LCS)
                                   ─► ListTopLevel / ListReplies (comments_by_post)
+                                  ─► ListTimeline (comments_timeline, #988)
 ```
 
 **ScyllaDB wide-column flat-tree:**
@@ -52,6 +53,7 @@ gRPC CommentService ─► CommandBus ─► CreateComment ─► Comment::creat
 | `comment.comments_by_post` | `post_id` | `parent_id, created_at DESC, comment_id` | feed pagination, no ALLOW FILTERING (TWCS) |
 | `comment.comments_by_author` | `author_id` | `created_at DESC, comment_id DESC` | a profile's own comments (pointers into `comments`), for the GDPR export (#653); written and purged with `comments` and `comments_by_post` in one LOGGED BATCH |
 | `comment.reply_counts` | `post_id` | `parent_id` | a top-level comment's replies (#832): a counter, +1 with each reply, −1 with its purge |
+| `comment.comments_timeline` | `post_id` | `created_at DESC, comment_id` | a post's comments, replies included, as one timeline (#988); denormalised like `comments_by_post`, written and purged in the same LOGGED BATCH, nulled with a tombstone, its held flag set with it (TWCS) |
 
 **Nil-UUID sentinel:** top-level comments store `parent_id = 0000…0000` (lexicographically smallest),
 making the top-level scan a valid clustering prefix; replies use their actual parent `comment_id`.
@@ -113,6 +115,7 @@ service CommentService {
   rpc ListTopLevel  (ListTopLevelRequest)  returns (ListCommentsResponse);
   rpc ListPreviews  (ListPreviewsRequest)  returns (ListPreviewsResponse);  // #976: many posts' first comments
   rpc ListReplies   (ListRepliesRequest)   returns (ListCommentsResponse);
+  rpc ListTimeline  (ListTimelineRequest)  returns (ListCommentsResponse);  // #988: comments + replies, newest first
   rpc ListCommentsByAuthor (ListCommentsByAuthorRequest) returns (ListCommentsResponse); // mesh only
 }
 ```
@@ -149,6 +152,22 @@ screen.
 - **Latency.** On the local Scylla, 50 posts × 5 comments answer in about 10 ms, so no candidate cache
   was needed.
 
+**A post's timeline (#988).** `ListTimeline(post_id, limit ≤ 100, page_token)` (edge `public_read`, as
+`ListTopLevel`) lists a post's comments, top-level and replies alike, newest first, for a client that
+reads them as a conversation (oldest above, newest by the composer, replies flat). It pages through
+`comments_timeline` with the `(created_at, comment_id)` cursor of the threads.
+- **Replies.** Each one carries `parent_id` and `reply_to` (`ReplyContext`): the parent's author, the
+  first 120 characters of its body and whether it has a GIF, for the quote drawn above the reply. The
+  parent comes from the page when it is there, else from one point read per distinct parent.
+- **Read rules.** Those of `ListTopLevel`, with one gate check for the page's authors and the quoted
+  ones. A comment the reader may not see is not listed, and is not quoted either: `reply_to.unavailable`,
+  as for a deleted parent (the two are not told apart). A tombstone stays on the timeline.
+- **Older comments.** Comments written before the table existed are put on it by an opt-in, idempotent
+  backfill at startup (`COMMENT_BACKFILL_TIMELINE=true`: a paged scan of `comments`; turn it off once it
+  logged `comments_timeline backfill done`). Each row is written at its source's own write time, so a
+  tombstone, a review or a purge landing meanwhile is newer and wins. Until then a tombstone or a review
+  of an older comment leaves an incomplete row, which is not listed.
+
 **A profile's own comments (#653).** `ListCommentsByAuthor(author_id)` is **mesh only** (never on the
 edge): the GDPR data export reads a profile's comments, newest first, as `comments` holds them now — a
 tombstone as a tombstone, a purged comment gone. It pages through `comments_by_author` (written with
@@ -156,7 +175,7 @@ every comment, deleted with a purge) and point-reads each comment. Comments writ
 existed are indexed by an opt-in, idempotent backfill at startup (`COMMENT_BACKFILL_AUTHOR_INDEX=true`:
 a paged scan of `comments`; turn it off once it logged `comments_by_author backfill done`).
 
-**Viewer-aware reads.** `GetComment` / `ListTopLevel` / `ListReplies` take the reader from the
+**Viewer-aware reads.** `GetComment` / `ListTopLevel` / `ListReplies` / `ListTimeline` take the reader from the
 transport (`edge::viewer`). For anyone but a mesh caller, a **read gate** decides with one post
 `GetPost` and one social-graph `CheckAccess` per call (post author + every comment author on the page):
 - the **post** must be readable: published, not removed by moderation and within its author's post
@@ -281,6 +300,7 @@ async fn main() -> anyhow::Result<()> {
 | `COMMENT_ENGAGEMENT_GRPC_ENDPOINT` | No | `http://localhost:50058` | engagement's mesh endpoint (`BatchGetLikes`) for replies by popularity (#832). Unreachable: those pages come back newest first. |
 | `COMMENT_GATE_RPC_TIMEOUT_MS` / `COMMENT_GATE_CONNECT_TIMEOUT_MS` | No | `1000` / `1000` | Deadlines for those calls. |
 | `COMMENT_BACKFILL_AUTHOR_INDEX` | No | unset | `true`: index every existing comment by author at startup (once; idempotent) — #653. |
+| `COMMENT_BACKFILL_TIMELINE` | No | unset | `true`: put every existing comment on its post's timeline at startup (once; idempotent) — #988. |
 
 > Full `SCYLLA_*` / `KAFKA_*` tuning lives in the shared storage/transport crates.
 

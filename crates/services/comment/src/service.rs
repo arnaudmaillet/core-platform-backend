@@ -52,6 +52,8 @@ impl Service for CommentService {
         // The first comments of many posts' tiles (#976), as ListTopLevel.
         public_read("/comment.v1.CommentService/ListPreviews"),
         public_read("/comment.v1.CommentService/ListReplies"),
+        // A post's comments as one timeline (#988), as ListTopLevel.
+        public_read("/comment.v1.CommentService/ListTimeline"),
     ];
 
     async fn build(_infra: Arc<InfraRegistry>) -> anyhow::Result<Self> {
@@ -80,13 +82,25 @@ impl Service for CommentService {
 
         // Comments written before `comments_by_author` existed (#653): opt-in,
         // once, idempotent (`COMMENT_BACKFILL_AUTHOR_INDEX=true`).
-        if std::env::var("COMMENT_BACKFILL_AUTHOR_INDEX").is_ok_and(|v| matches!(v.trim(), "1" | "true" | "yes")) {
+        if flag_on("COMMENT_BACKFILL_AUTHOR_INDEX") {
             let repository = Arc::clone(&app.repository);
             tokio::spawn(async move {
                 use crate::application::port::CommentRepository;
                 match repository.backfill_author_index().await {
                     Ok(written) => tracing::info!(written, "comments_by_author backfill done"),
                     Err(error) => tracing::error!(%error, "comments_by_author backfill failed"),
+                }
+            });
+        }
+        // Comments written before `comments_timeline` existed (#988): opt-in,
+        // once, idempotent (`COMMENT_BACKFILL_TIMELINE=true`).
+        if flag_on("COMMENT_BACKFILL_TIMELINE") {
+            let repository = Arc::clone(&app.repository);
+            tokio::spawn(async move {
+                use crate::application::port::CommentRepository;
+                match repository.backfill_timeline().await {
+                    Ok(written) => tracing::info!(written, "comments_timeline backfill done"),
+                    Err(error) => tracing::error!(%error, "comments_timeline backfill failed"),
                 }
             });
         }
@@ -111,6 +125,11 @@ impl Service for CommentService {
         routes.add_service(CommentServiceServer::new(handler));
         Ok(())
     }
+}
+
+/// Whether the env flag `key` is on (`1`, `true` or `yes`).
+fn flag_on(key: &str) -> bool {
+    std::env::var(key).is_ok_and(|v| matches!(v.trim(), "1" | "true" | "yes"))
 }
 
 /// Consumer group of the comment-filters projection.

@@ -13,6 +13,7 @@ use crate::application::query::{
     get_comment::GetCommentQuery,
     list_by_author::ListCommentsByAuthorQuery,
     list_replies::ListRepliesQuery,
+    list_timeline::{ListTimelineQuery, TimelineComment},
     popularity::CommentSort,
     list_top_level::ListTopLevelQuery,
 };
@@ -253,6 +254,39 @@ where
     }
 }
 
+impl<CB, QB> CommentServiceHandler<CB, QB>
+where
+    CB: CommandBus + Send + Sync + 'static,
+    QB: QueryBus + Send + Sync + 'static,
+{
+    /// A post's comments as one timeline, replies quoting their parent (#988).
+    pub async fn list_timeline(
+        &self,
+        request: Request<proto::ListTimelineRequest>,
+    ) -> Result<Response<proto::ListCommentsResponse>, Status> {
+        let viewer = viewer_of(&request);
+        let mature = mature_of(&request);
+        let req    = request.into_inner();
+        let query  = ListTimelineQuery {
+            post_id:    req.post_id,
+            limit:      req.limit,
+            page_token: Some(req.page_token).filter(|s| !s.is_empty()),
+            viewer,
+            mature,
+        };
+        let (timeline, next): (Vec<TimelineComment>, Option<String>) = self
+            .query_bus
+            .dispatch(Envelope::new(Uuid::now_v7(), query))
+            .await
+            .map_err(cqrs_to_status)?;
+
+        Ok(Response::new(proto::ListCommentsResponse {
+            comments:   timeline.into_iter().map(timeline_to_proto).collect(),
+            next_token: next.unwrap_or_default(),
+        }))
+    }
+}
+
 // ── Proto trait implementation ────────────────────────────────────────────────
 
 #[tonic::async_trait]
@@ -316,6 +350,13 @@ where
     ) -> Result<Response<proto::ListCommentsResponse>, Status> {
         self.list_replies(request).await
     }
+
+    async fn list_timeline(
+        &self,
+        request: Request<proto::ListTimelineRequest>,
+    ) -> Result<Response<proto::ListCommentsResponse>, Status> {
+        self.list_timeline(request).await
+    }
 }
 
 // ── Conversion helpers ────────────────────────────────────────────────────────
@@ -362,6 +403,7 @@ fn comment_to_proto(c: Comment) -> proto::CommentView {
         updated_at_ms: c.updated_at().timestamp_millis(),
         held:          c.held(),
         reply_count:   0,
+        reply_to:      None,
     }
 }
 
@@ -370,7 +412,7 @@ fn summary_to_proto(s: CommentSummary) -> proto::CommentView {
         comment_id:    s.comment_id.as_str(),
         post_id:       String::new(),
         author_id:     s.author_id.as_str(),
-        parent_id:     String::new(),
+        parent_id:     s.parent_id.map(|p| p.as_str()).unwrap_or_default(),
         status:        status_to_proto(s.status),
         body:          s.body.unwrap_or_default(),
         gif:           build_gif_proto(s.gif_url, s.gif_width, s.gif_height),
@@ -378,7 +420,26 @@ fn summary_to_proto(s: CommentSummary) -> proto::CommentView {
         updated_at_ms: 0,
         held:          s.held,
         reply_count:   s.reply_count,
+        reply_to:      None,
     }
+}
+
+fn timeline_to_proto(t: TimelineComment) -> proto::CommentView {
+    let reply_to = t.reply_to.map(|quote| match quote.quoted {
+        Some(q) => proto::ReplyContext {
+            comment_id:  quote.comment_id.as_str(),
+            unavailable: false,
+            author_id:   q.author_id.as_str(),
+            excerpt:     q.excerpt,
+            has_gif:     q.has_gif,
+        },
+        None => proto::ReplyContext {
+            comment_id:  quote.comment_id.as_str(),
+            unavailable: true,
+            ..Default::default()
+        },
+    });
+    proto::CommentView { reply_to, ..summary_to_proto(t.comment) }
 }
 
 /// UNSPECIFIED and unknown values: NEWEST (#832).

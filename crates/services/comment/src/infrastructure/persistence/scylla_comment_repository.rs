@@ -8,7 +8,7 @@ use scylla::observability::history::HistoryListener;
 use scylla::response::PagingState;
 use scylla::statement::batch::{Batch, BatchType};
 use scylla::statement::unprepared::Statement;
-use scylla::value::CqlTimestamp;
+use scylla::value::{CqlTimestamp, CqlValue};
 use scylla_storage::{ProfileKind as ScyllaProfileKind, ScyllaClient, ScyllaStorageError};
 use uuid::Uuid;
 
@@ -38,7 +38,36 @@ struct FeedPageToken {
 }
 
 /// The columns `CommentFeedRow` reads, in its order.
-const FEED_COLUMNS: &str = "created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height, held";
+const FEED_COLUMNS: &str =
+    "created_at, comment_id, author_id, status, body, gif_url, gif_width, gif_height, held, parent_id";
+
+/// What a feed page reads: one thread slot of `comments_by_post` (the top
+/// level, or one comment's replies), or a post's whole timeline (#988). Both
+/// cluster by `created_at DESC, comment_id ASC` under their key.
+enum Feed {
+    Slot { post: Uuid, parent: Uuid },
+    Timeline { post: Uuid },
+}
+
+impl Feed {
+    /// `FROM … WHERE <key>`, to which a page adds its bounds.
+    fn source(&self) -> &'static str {
+        match self {
+            Self::Slot { .. } => "comment.comments_by_post WHERE post_id = ? AND parent_id = ?",
+            Self::Timeline { .. } => "comment.comments_timeline WHERE post_id = ?",
+        }
+    }
+
+    /// The key's values, then `bounds`.
+    fn values(&self, bounds: impl IntoIterator<Item = CqlValue>) -> Vec<CqlValue> {
+        let mut values = match self {
+            Self::Slot { post, parent } => vec![CqlValue::Uuid(*post), CqlValue::Uuid(*parent)],
+            Self::Timeline { post } => vec![CqlValue::Uuid(*post)],
+        };
+        values.extend(bounds);
+        values
+    }
+}
 
 // ── Error helpers ─────────────────────────────────────────────────────────────
 
@@ -99,12 +128,17 @@ fn row_to_comment(row: CommentRow) -> Result<Comment, CommentError> {
     ).with_held(row.held.unwrap_or(false)))
 }
 
-fn feed_row_to_summary(row: CommentFeedRow) -> Result<CommentSummary, CommentError> {
-    let status     = CommentStatus::try_from(row.status)?;
+/// `None` for an incomplete row (see [`CommentFeedRow`]).
+fn feed_row_to_summary(row: CommentFeedRow) -> Result<Option<CommentSummary>, CommentError> {
+    let (Some(author_id), Some(status), Some(parent_id)) = (row.author_id, row.status, row.parent_id) else {
+        return Ok(None);
+    };
+    let status     = CommentStatus::try_from(status)?;
     let created_at = ms_to_dt(row.created_at.0, "created_at")?;
-    Ok(CommentSummary {
+    Ok(Some(CommentSummary {
         comment_id: CommentId::from_uuid(row.comment_id),
-        author_id:  ProfileId::from_uuid(row.author_id),
+        author_id:  ProfileId::from_uuid(author_id),
+        parent_id:  (parent_id != NIL_UUID).then(|| CommentId::from_uuid(parent_id)),
         status,
         body:       row.body,
         gif_url:    row.gif_url,
@@ -113,7 +147,7 @@ fn feed_row_to_summary(row: CommentFeedRow) -> Result<CommentSummary, CommentErr
         created_at,
         held:       row.held.unwrap_or(false),
         reply_count: 0,
-    })
+    }))
 }
 
 fn build_gif(
@@ -153,8 +187,25 @@ fn encode_page_token(created_at_ms: i64, comment_id: Uuid) -> String {
     URL_SAFE_NO_PAD.encode(json)
 }
 
-/// Rows per page when scanning `comment.comments` to backfill the author index.
+/// Rows per page when scanning `comment.comments` to backfill an index.
 const BACKFILL_PAGE_SIZE: i32 = 500;
+
+/// A `comment.comments` row as the timeline backfill reads it (#988): the
+/// timeline's columns in its insert order, then `WRITETIME(status)`.
+type TimelineSourceRow = (
+    Uuid,
+    CqlTimestamp,
+    Uuid,
+    Uuid,
+    Uuid,
+    i8,
+    Option<String>,
+    Option<String>,
+    Option<i32>,
+    Option<i32>,
+    Option<bool>,
+    i64,
+);
 
 /// `(created_at_ms, comment_id)` of the last comment of a by-author page.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -269,9 +320,9 @@ impl CommentRepository for ScyllaCommentRepository {
         let gif_width  = comment.gif().map(|g| g.gif_width as i32);
         let gif_height = comment.gif().map(|g| g.gif_height as i32);
 
-        // The comment, its feed row and its author-index row: one logged batch,
-        // so a comment never exists without the rows that list it (#653 — the
-        // GDPR export reads the author index).
+        // The comment, its feed row, its timeline row (#988) and its
+        // author-index row: one logged batch, so a comment never exists without
+        // the rows that list it (#653 — the GDPR export reads the author index).
         let mut batch = self.strict_batch();
         batch.append_statement(
             "INSERT INTO comment.comments \
@@ -287,6 +338,12 @@ impl CommentRepository for ScyllaCommentRepository {
         );
         batch.append_statement(
             "INSERT INTO comment.comments_by_author (author_id, created_at, comment_id, post_id) VALUES (?, ?, ?, ?)",
+        );
+        batch.append_statement(
+            "INSERT INTO comment.comments_timeline \
+             (post_id, created_at, comment_id, parent_id, author_id, status, \
+              body, gif_url, gif_width, gif_height) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         );
         let values = (
             (
@@ -321,6 +378,18 @@ impl CommentRepository for ScyllaCommentRepository {
                 dt_ms(comment.created_at()),
                 comment.id().as_uuid(),
                 comment.post_id().as_uuid(),
+            ),
+            (
+                comment.post_id().as_uuid(),
+                dt_ms(comment.created_at()),
+                comment.id().as_uuid(),
+                parent_uuid,
+                comment.author_id().as_uuid(),
+                comment.status().as_tinyint(),
+                comment.body().map(CommentBody::as_str),
+                gif_url,
+                gif_width,
+                gif_height,
             ),
         );
         self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
@@ -434,6 +503,21 @@ impl CommentRepository for ScyllaCommentRepository {
             .await
             .map_err(scylla_err)?;
 
+        // And on the post's timeline (#988).
+        let stmt_timeline = self.strict_stmt(
+            "UPDATE comment.comments_timeline SET \
+             status = ?, body = null, gif_url = null, gif_width = null, gif_height = null \
+             WHERE post_id = ? AND created_at = ? AND comment_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(
+                stmt_timeline,
+                (status, comment.post_id().as_uuid(), dt_ms(comment.created_at()), comment.id().as_uuid()),
+            )
+            .await
+            .map_err(scylla_err)?;
+
         Ok(())
     }
 
@@ -459,6 +543,17 @@ impl CommentRepository for ScyllaCommentRepository {
             )
             .await
             .map_err(scylla_err)?;
+        let stmt_timeline = self.strict_stmt(
+            "UPDATE comment.comments_timeline SET held = ? WHERE post_id = ? AND created_at = ? AND comment_id = ?",
+        );
+        self.client
+            .session
+            .execute_unpaged(
+                stmt_timeline,
+                (held, comment.post_id().as_uuid(), dt_ms(comment.created_at()), comment.id().as_uuid()),
+            )
+            .await
+            .map_err(scylla_err)?;
         Ok(())
     }
 
@@ -470,7 +565,7 @@ impl CommentRepository for ScyllaCommentRepository {
             .map(CommentId::as_uuid)
             .unwrap_or(NIL_UUID);
 
-        // All three rows or none (a logged batch).
+        // All four rows or none (a logged batch).
         let mut batch = self.strict_batch();
         batch.append_statement("DELETE FROM comment.comments WHERE comment_id = ?");
         batch.append_statement(
@@ -480,10 +575,14 @@ impl CommentRepository for ScyllaCommentRepository {
         batch.append_statement(
             "DELETE FROM comment.comments_by_author WHERE author_id = ? AND created_at = ? AND comment_id = ?",
         );
+        batch.append_statement(
+            "DELETE FROM comment.comments_timeline WHERE post_id = ? AND created_at = ? AND comment_id = ?",
+        );
         let values = (
             (comment.id().as_uuid(),),
             (comment.post_id().as_uuid(), parent_uuid, dt_ms(comment.created_at()), comment.id().as_uuid()),
             (comment.author_id().as_uuid(), dt_ms(comment.created_at()), comment.id().as_uuid()),
+            (comment.post_id().as_uuid(), dt_ms(comment.created_at()), comment.id().as_uuid()),
         );
         self.client.session.batch(&batch, values).await.map_err(scylla_err)?;
         if comment.parent_id().is_some() {
@@ -636,7 +735,8 @@ impl CommentRepository for ScyllaCommentRepository {
         limit:      i32,
         page_token: Option<&str>,
     ) -> Result<(Vec<CommentSummary>, Option<String>), CommentError> {
-        self.list_slot(post_id, NIL_UUID, limit, page_token, "list_top_level").await
+        let feed = Feed::Slot { post: post_id.as_uuid(), parent: NIL_UUID };
+        self.list_feed(feed, limit, page_token, "list_top_level").await
     }
 
     // ── list_replies ──────────────────────────────────────────────────────────
@@ -648,7 +748,60 @@ impl CommentRepository for ScyllaCommentRepository {
         limit:      i32,
         page_token: Option<&str>,
     ) -> Result<(Vec<CommentSummary>, Option<String>), CommentError> {
-        self.list_slot(post_id, comment_id.as_uuid(), limit, page_token, "list_replies").await
+        let feed = Feed::Slot { post: post_id.as_uuid(), parent: comment_id.as_uuid() };
+        self.list_feed(feed, limit, page_token, "list_replies").await
+    }
+
+    // ── list_timeline (#988) ──────────────────────────────────────────────────
+
+    async fn list_timeline(
+        &self,
+        post_id:    &PostId,
+        limit:      i32,
+        page_token: Option<&str>,
+    ) -> Result<(Vec<CommentSummary>, Option<String>), CommentError> {
+        self.list_feed(Feed::Timeline { post: post_id.as_uuid() }, limit, page_token, "list_timeline").await
+    }
+
+    async fn backfill_timeline(&self) -> Result<u64, CommentError> {
+        // Each row is written at its source's own write time: a tombstone, a
+        // review or a purge of the comment that lands between this read and
+        // the write is newer, and wins.
+        let mut stmt = self.fast_stmt(
+            "SELECT post_id, created_at, comment_id, parent_id, author_id, status, \
+             body, gif_url, gif_width, gif_height, held, WRITETIME(status) FROM comment.comments",
+        );
+        stmt.set_page_size(BACKFILL_PAGE_SIZE);
+        let insert = "INSERT INTO comment.comments_timeline \
+             (post_id, created_at, comment_id, parent_id, author_id, status, \
+              body, gif_url, gif_width, gif_height, held) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) USING TIMESTAMP ?";
+        let mut paging = PagingState::start();
+        let mut written = 0u64;
+        loop {
+            let (result, next) = self
+                .client
+                .session
+                .execute_single_page(stmt.clone(), (), paging)
+                .await
+                .map_err(scylla_err)?;
+            let rows = result
+                .into_rows_result()
+                .map_err(|e| row_err("backfill_timeline:rows", e))?
+                .rows::<TimelineSourceRow>()
+                .map_err(|e| row_err("backfill_timeline:iter", e))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| row_err("backfill_timeline:deser", e))?;
+            for row in rows {
+                // The columns, in the insert's order, then the write time.
+                self.client.session.execute_unpaged(self.strict_stmt(insert), row).await.map_err(scylla_err)?;
+                written += 1;
+            }
+            match next.into_paging_control_flow() {
+                std::ops::ControlFlow::Continue(state) => paging = state,
+                std::ops::ControlFlow::Break(()) => return Ok(written),
+            }
+        }
     }
 }
 
@@ -666,15 +819,14 @@ impl ScyllaCommentRepository {
             "SELECT {FEED_COLUMNS} FROM comment.comments_by_post WHERE post_id = ? AND parent_id = ? LIMIT ?"
         );
         let rows = self.feed_rows(&cql, (post_id.as_uuid(), parent, max.max(1)), ctx).await?;
-        rows.into_iter().map(feed_row_to_summary).collect()
+        rows.into_iter().filter_map(|row| feed_row_to_summary(row).transpose()).collect()
     }
 
-    /// One page of a thread slot (the top level, or one comment's replies),
-    /// newest first, resuming exactly after the token's row.
-    async fn list_slot(
+    /// One page of a feed (a thread slot, or a post's timeline), newest
+    /// first, resuming exactly after the token's row.
+    async fn list_feed(
         &self,
-        post_id:    &PostId,
-        parent:     Uuid,
+        feed:       Feed,
         limit:      i32,
         page_token: Option<&str>,
         ctx:        &'static str,
@@ -684,33 +836,26 @@ impl ScyllaCommentRepository {
         // never swept here (these list paths had no live traffic until the suites
         // ran in CI).
         let limit = limit.clamp(1, 100);
-        let post  = post_id.as_uuid();
+        let from  = feed.source();
         let mut rows = Vec::new();
         match decode_page_token(page_token)? {
             None => {
-                let cql = format!(
-                    "SELECT {FEED_COLUMNS} FROM comment.comments_by_post WHERE post_id = ? AND parent_id = ? LIMIT ?"
-                );
-                rows = self.feed_rows(&cql, (post, parent, limit), ctx).await?;
+                let cql = format!("SELECT {FEED_COLUMNS} FROM {from} LIMIT ?");
+                rows = self.feed_rows(&cql, feed.values([CqlValue::Int(limit)]), ctx).await?;
             }
             Some(token) => {
-                let at = CqlTimestamp(token.created_at_ms);
+                let at = CqlValue::Timestamp(CqlTimestamp(token.created_at_ms));
                 // The rest of the token's millisecond first (ids ascend within
                 // it), then the older ones.
                 if let Some(after) = token.comment_id {
-                    let cql = format!(
-                        "SELECT {FEED_COLUMNS} FROM comment.comments_by_post \
-                         WHERE post_id = ? AND parent_id = ? AND created_at = ? AND comment_id > ? LIMIT ?"
-                    );
-                    rows = self.feed_rows(&cql, (post, parent, at, after, limit), ctx).await?;
+                    let cql = format!("SELECT {FEED_COLUMNS} FROM {from} AND created_at = ? AND comment_id > ? LIMIT ?");
+                    let values = feed.values([at.clone(), CqlValue::Uuid(after), CqlValue::Int(limit)]);
+                    rows = self.feed_rows(&cql, values, ctx).await?;
                 }
                 let left = limit - rows.len() as i32;
                 if left > 0 {
-                    let cql = format!(
-                        "SELECT {FEED_COLUMNS} FROM comment.comments_by_post \
-                         WHERE post_id = ? AND parent_id = ? AND created_at < ? LIMIT ?"
-                    );
-                    rows.extend(self.feed_rows(&cql, (post, parent, at, left), ctx).await?);
+                    let cql = format!("SELECT {FEED_COLUMNS} FROM {from} AND created_at < ? LIMIT ?");
+                    rows.extend(self.feed_rows(&cql, feed.values([at, CqlValue::Int(left)]), ctx).await?);
                 }
             }
         }
@@ -763,6 +908,6 @@ fn build_page(
     } else {
         None
     };
-    let summaries = rows.into_iter().map(feed_row_to_summary).collect::<Result<Vec<_>, _>>()?;
+    let summaries = rows.into_iter().filter_map(|row| feed_row_to_summary(row).transpose()).collect::<Result<Vec<_>, _>>()?;
     Ok((summaries, next_token))
 }
