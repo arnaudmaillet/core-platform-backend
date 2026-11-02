@@ -295,7 +295,7 @@ message ListMyStakesResponse {
 
 // One item of the gem catalogue (#892).
 message CatalogItem {
-    // `<family>.<name>`, e.g. `theme.violet`; stable, the app's art key.
+    // `<family>.<name>`, e.g. `frame.gold`; stable, the app's art key.
     string     item_id = 1;
     ItemFamily family  = 2;
     // In gems; 0 = free, owned by every account.

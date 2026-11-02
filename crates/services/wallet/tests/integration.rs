@@ -206,11 +206,11 @@ async fn concurrent_purchases_of_an_item_charge_once() {
     let pool = pool().await;
     let store = store(&pool);
     let account = AccountId::from_uuid(Uuid::now_v7());
-    let violet = Catalog::default().item("theme.violet").unwrap().clone();
+    let gold = Catalog::default().item("frame.gold").unwrap().clone();
     let key = || IdempotencyKey::for_operation(Operation::Purchase, &Uuid::now_v7().to_string()).unwrap();
     let buys = (0..6).map(|_| {
-        let (store, violet, key) = (Arc::clone(&store), violet.clone(), key());
-        tokio::spawn(async move { store.purchase_item(&account, &key, &violet, 50, 100, Utc::now()).await.unwrap().0 })
+        let (store, gold, key) = (Arc::clone(&store), gold.clone(), key());
+        tokio::spawn(async move { store.purchase_item(&account, &key, &gold, 60, 120, Utc::now()).await.unwrap().0 })
     });
     let mut outcomes = Vec::new();
     for buy in buys {
@@ -219,22 +219,22 @@ async fn concurrent_purchases_of_an_item_charge_once() {
     assert_eq!(outcomes.iter().filter(|o| **o == PurchaseOutcome::Purchased).count(), 1, "{outcomes:?}");
     assert!(outcomes.iter().all(|o| matches!(o, PurchaseOutcome::Purchased | PurchaseOutcome::AlreadyOwned)));
 
-    let red = Catalog::default().item("theme.red").unwrap().clone();
+    let neon = Catalog::default().item("frame.neon").unwrap().clone();
     let k = key();
-    assert_eq!(store.purchase_item(&account, &k, &red, 40, 100, Utc::now()).await.unwrap().0, PurchaseOutcome::PriceChanged);
-    let (first, wallet) = store.purchase_item(&account, &k, &red, 50, 100, Utc::now()).await.unwrap();
-    let (replay, again) = store.purchase_item(&account, &k, &red, 50, 100, Utc::now()).await.unwrap();
+    assert_eq!(store.purchase_item(&account, &k, &neon, 50, 120, Utc::now()).await.unwrap().0, PurchaseOutcome::PriceChanged);
+    let (first, wallet) = store.purchase_item(&account, &k, &neon, 60, 120, Utc::now()).await.unwrap();
+    let (replay, again) = store.purchase_item(&account, &k, &neon, 60, 120, Utc::now()).await.unwrap();
     assert_eq!((first, wallet.gems), (PurchaseOutcome::Purchased, 0));
     assert_eq!((replay, again.gems), (PurchaseOutcome::Purchased, 0), "charged once");
 
     let owned: Vec<_> = store.owned_items(&account).await.unwrap().into_iter().map(|o| o.item_id).collect();
-    assert_eq!(owned, ["theme.violet", "theme.red"]);
+    assert_eq!(owned, ["frame.gold", "frame.neon"]);
     let history = store.history(&account, Some(Currency::Gems), None, 10).await.unwrap();
     let kinds: Vec<_> = history.iter().map(|t| (t.kind, t.delta, t.ref_id.as_deref())).collect();
     assert_eq!(kinds, vec![
-        (TransactionKind::Theme, -50, Some("theme.red")),
-        (TransactionKind::Theme, -50, Some("theme.violet")),
-        (TransactionKind::StarterGift, 100, None),
+        (TransactionKind::AvatarFrame, -60, Some("frame.neon")),
+        (TransactionKind::AvatarFrame, -60, Some("frame.gold")),
+        (TransactionKind::StarterGift, 120, None),
     ]);
     assert_reconciles(&pool, &account).await;
 

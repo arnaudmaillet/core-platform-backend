@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: 223915cdd1ca2d08b95bbe1756a3c4292ba5b1ef196d0623ec0fc0494cd20edf
-  translated_at: 2026-11-01
+  source_sha256: f3378920cdbb38bab7ad6ba76e1834acf2d6f2971920e45592bc096f3b387713
+  translated_at: 2026-11-02
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -34,7 +34,7 @@ compte et chacun de leurs mouvements.
 | Monnaie | Affichée comme | Gagnée par | Dépensée pour |
 |---|---|---|---|
 | **Points** | likes (le cœur) | la réclamation horaire | les likes sur posts et commentaires (`Stake`) |
-| **Gems** | le diamant | le don de départ ; les mises réglées (plus tard) | les packs de mises ; les articles du catalogue (thèmes, icônes) ; le déblocage de pays (geo-discovery) |
+| **Gems** | le diamant | le don de départ ; les mises réglées (plus tard) | les packs de mises ; les articles du catalogue (cadres, styles de carte, bannières) ; le déblocage de pays (geo-discovery) |
 
 Rien n'est vendu contre de l'argent réel : ni StoreKit, ni reçus, ni restauration. Aucune monnaie
 ne se convertit en l'autre, en argent ou vers un autre utilisateur. Un portefeuille par **compte**
@@ -102,13 +102,12 @@ seule fois.
 
 **Le catalogue de gems (#892).** Ce que les gems achètent, en politique serveur (`WALLET_CATALOG`),
 jamais d'influence, de classement ni de visibilité (charte V5.3 §35). L'id d'un article est
-`<famille>.<nom>` ; les familles sont `theme` (thèmes d'accent de l'app, #946), `icon` (icônes
+`<famille>.<nom>` ; les familles sont `theme` (thèmes d'accent de l'app, #946 ; aucun en vente depuis que l'app n'a plus qu'un thème, #990), `icon` (icônes
 alternatives de l'app) et `frame` (cadres d'avatar, #913, portés par profil via `EquipAvatarFrame` de
 profile, qui lit `ListOwnedItems` sur le mesh) et `banner` (la bannière de profil animée, #915 :
 `UpdateBanner` de profile n'accepte une vidéo que pour son propriétaire) et `card` (styles de carte de
 post, #914 : `SetPostCardStyle` de post en applique un aux propres posts de l'auteur). En vente par
-défaut : `theme.pink` (gratuit), `theme.violet` (50), `theme.red` (50), `frame.gold`, `frame.neon` et
-`frame.aurora` (60 chacun), `banner.animated` (500), `card.paper`, `card.night` et `card.mint` (80
+défaut : `frame.gold`, `frame.neon` et `frame.aurora` (60 chacun), `banner.animated` (500), `card.paper`, `card.night` et `card.mint` (80
 chacun), `avatar.animated` (500 ; famille `avatar`, #945 : `UpdateAvatar` de profile n'accepte un clip que pour
 son propriétaire), `loader.wave` (gratuit, le loader par défaut ; famille `loader`, #975 : les styles
 payants ne sont pas encore choisis) ; aucune icône tant que l'app n'en embarque pas.
@@ -444,7 +443,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points réclamables par jour UTC |
 | `WALLET_POINTS_CAP` | `2000` | le solde de points qu'un claim ne dépasse jamais (`BALANCE_FULL` à ce niveau) ; 0 garde la valeur par défaut |
 | `WALLET_STARTER_GEMS` | `100` | gems à l'ouverture d'un portefeuille |
-| `WALLET_CATALOG` | `theme.pink:0,theme.violet:50,theme.red:50,frame.gold:60,frame.neon:60,frame.aurora:60,banner.animated:500,card.paper:80,card.night:80,card.mint:80,avatar.animated:500,loader.wave:0` | le catalogue de gems (#892) : `id d'article:gems`, dans l'ordre d'affichage, des ids `<famille>.<nom>` d'une famille connue (`theme`, `icon`, `frame`, `banner`, `card`, `avatar`, `loader`) et distincts ; 0 = gratuit, possédé par tous les comptes ; une liste invalide garde la valeur par défaut |
+| `WALLET_CATALOG` | `frame.gold:60,frame.neon:60,frame.aurora:60,banner.animated:500,card.paper:80,card.night:80,card.mint:80,avatar.animated:500,loader.wave:0` | le catalogue de gems (#892) : `id d'article:gems`, dans l'ordre d'affichage, des ids `<famille>.<nom>` d'une famille connue (`theme`, `icon`, `frame`, `banner`, `card`, `avatar`, `loader`) et distincts ; 0 = gratuit, possédé par tous les comptes ; une liste invalide garde la valeur par défaut |
 | `WALLET_STAKE_PACKS` | `3:50,10:150,25:325` | les packs de mises en vente (#941) : `tirs:gems`, le pack par défaut en premier, des nombres de tirs distincts (l'id d'un pack est `shots_<tirs>`) ; une liste invalide garde la valeur par défaut |
 | `WALLET_POINTS_PER_SHOT` | `100` | points misés par tir |
 | `WALLET_STAKE_TARGET_CAP` | `250` | points qu'un compte peut mettre sur une cible, à vie |

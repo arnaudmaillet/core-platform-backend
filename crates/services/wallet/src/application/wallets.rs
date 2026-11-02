@@ -1681,45 +1681,45 @@ mod tests {
         assert_eq!(history.transactions[0].ref_id.as_deref(), Some("shots_10"), "the ledger names the pack");
     }
 
-    /// #892, #946: a theme is bought once, at the price shown, adult only,
-    /// idempotent per key; pink is free and owned by every account; an
-    /// unknown id charges nothing; erasure forgets what was bought.
+    /// #892, #913: a frame is bought once, at the price shown, adult only,
+    /// idempotent per key; the default loader is free and owned by every
+    /// account; an unknown id (a retired theme, #990) charges nothing;
+    /// erasure forgets what was bought.
     #[tokio::test]
     async fn a_catalogue_item_is_bought_once_at_the_price_shown() {
         use crate::application::port::PurchaseOutcome as P;
-        let w = wallets();
+        let w = Wallets::new(Arc::new(MemoryStore::default()), WalletConfig { starter_gems: 120, ..WalletConfig::default() });
         let account = Uuid::now_v7().to_string();
         let buy = |item: &'static str, price: i64, k: String| {
             let (w, account) = (&w, account.clone());
             async move { w.purchase_item(&account, &k, item, price, false, at(8, 10)).await.unwrap() }
         };
         assert!(matches!(
-            w.purchase_item(&account, &key(), "theme.violet", 50, true, at(8, 10)).await,
+            w.purchase_item(&account, &key(), "frame.gold", 60, true, at(8, 10)).await,
             Err(WalletError::GemSpendingRestricted)
         ));
-        assert_eq!(buy("theme.violet", 40, key()).await.outcome, P::PriceChanged);
-        assert_eq!(buy("theme.gold", 50, key()).await.outcome, P::UnknownItem);
-        assert_eq!(buy("theme.pink", 0, key()).await.outcome, P::AlreadyOwned, "free");
+        assert_eq!(buy("frame.gold", 50, key()).await.outcome, P::PriceChanged);
+        assert_eq!(buy("theme.violet", 50, key()).await.outcome, P::UnknownItem, "retired (#990)");
+        assert_eq!(buy("loader.wave", 0, key()).await.outcome, P::AlreadyOwned, "free");
 
         let k = key();
-        let bought = buy("theme.violet", 50, k.clone()).await;
-        assert_eq!((bought.outcome, bought.view.wallet.gems), (P::Purchased, 50));
-        assert_eq!(buy("theme.violet", 50, k).await.outcome, P::Purchased, "a retry answers the same");
-        assert_eq!(buy("theme.violet", 50, key()).await.outcome, P::AlreadyOwned, "charged once");
-        let short = buy("theme.red", 50, key()).await;
+        let bought = buy("frame.gold", 60, k.clone()).await;
+        assert_eq!((bought.outcome, bought.view.wallet.gems), (P::Purchased, 60));
+        assert_eq!(buy("frame.gold", 60, k).await.outcome, P::Purchased, "a retry answers the same");
+        assert_eq!(buy("frame.gold", 60, key()).await.outcome, P::AlreadyOwned, "charged once");
+        let short = buy("frame.neon", 60, key()).await;
         assert_eq!((short.outcome, short.view.wallet.gems), (P::Purchased, 0));
-        assert_eq!(buy("theme.red", 50, key()).await.outcome, P::AlreadyOwned);
+        assert_eq!(buy("frame.neon", 60, key()).await.outcome, P::AlreadyOwned);
 
         let owned: Vec<_> = w.owned_items(&account).await.unwrap().into_iter().map(|o| (o.item_id, o.acquired_at.is_some())).collect();
         assert_eq!(owned, [
-            ("theme.pink".into(), false),
             ("loader.wave".into(), false),
-            ("theme.violet".into(), true),
-            ("theme.red".into(), true),
+            ("frame.gold".into(), true),
+            ("frame.neon".into(), true),
         ]);
         let history = w.history(&account, Some(Currency::Gems), 10, "").await.unwrap();
         let spent: Vec<_> = history.transactions.iter().map(|t| (t.kind, t.delta, t.ref_id.as_deref())).take(2).collect();
-        assert_eq!(spent, [(TransactionKind::Theme, -50, Some("theme.red")), (TransactionKind::Theme, -50, Some("theme.violet"))]);
+        assert_eq!(spent, [(TransactionKind::AvatarFrame, -60, Some("frame.neon")), (TransactionKind::AvatarFrame, -60, Some("frame.gold"))]);
 
         w.erase(&AccountId::parse(&account).unwrap()).await.unwrap();
         assert_eq!(w.bought_items(&account).await.unwrap(), [], "erased with the account");
@@ -1740,7 +1740,7 @@ mod tests {
         assert_eq!(store.outbox.lock().unwrap().len(), 1, "announced once");
         let owned = w.owned_items(&account).await.unwrap();
         assert!(owned.iter().any(|o| o.item_id == "badge.continent_eu" && o.family == ItemFamily::Badge));
-        assert!(w.award_badge(&account, "theme.red", &pids, at(8, 10)).await.is_err(), "only badges");
+        assert!(w.award_badge(&account, "frame.gold", &pids, at(8, 10)).await.is_err(), "only badges");
         let bought = w.purchase_item(&account, &key(), "badge.continent_eu", 0, false, at(8, 10)).await.unwrap();
         assert_eq!(bought.outcome, crate::application::port::PurchaseOutcome::UnknownItem, "never sold");
     }
@@ -1748,10 +1748,10 @@ mod tests {
     #[tokio::test]
     async fn without_gems_nothing_is_bought() {
         use crate::application::port::PurchaseOutcome as P;
-        let w = Wallets::new(Arc::new(MemoryStore::default()), WalletConfig { starter_gems: 49, ..WalletConfig::default() });
+        let w = Wallets::new(Arc::new(MemoryStore::default()), WalletConfig { starter_gems: 59, ..WalletConfig::default() });
         let account = Uuid::now_v7().to_string();
-        let reply = w.purchase_item(&account, &key(), "theme.violet", 50, false, at(8, 10)).await.unwrap();
-        assert_eq!((reply.outcome, reply.view.wallet.gems), (P::InsufficientGems, 49));
+        let reply = w.purchase_item(&account, &key(), "frame.gold", 60, false, at(8, 10)).await.unwrap();
+        assert_eq!((reply.outcome, reply.view.wallet.gems), (P::InsufficientGems, 59));
         assert_eq!(w.bought_items(&account).await.unwrap(), []);
     }
 
