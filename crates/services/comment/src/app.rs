@@ -23,6 +23,7 @@ use crate::application::port::{CommentEventPublisher, CommentFilterStore, Commen
 use crate::application::query::get_comment::{GetCommentHandler, GetCommentQuery};
 use crate::application::query::list_by_author::{ListCommentsByAuthorHandler, ListCommentsByAuthorQuery};
 use crate::application::query::list_replies::{ListRepliesHandler, ListRepliesQuery};
+use crate::application::query::list_timeline::{ListTimelineHandler, ListTimelineQuery};
 use crate::application::query::list_top_level::{ListTopLevelHandler, ListTopLevelQuery};
 use crate::domain::comment_filter::TermList;
 use crate::infrastructure::persistence::{ScyllaCommentFilterStore, ScyllaCommentRepository};
@@ -46,7 +47,7 @@ pub struct App {
     /// The post owners' comment filters, exposed so the serving binary can
     /// wire its `profile.v1.events` consumer against the same instance.
     pub filter_store: Arc<dyn CommentFilterStore>,
-    /// The repository, for the opt-in author-index backfill (#653).
+    /// The repository, for the opt-in backfills (#653, #988).
     pub repository:  Arc<ScyllaCommentRepository>,
 }
 
@@ -107,6 +108,11 @@ impl App {
                     gate:       Arc::clone(&gate),
                     filters:    filters.clone(),
                     likes:      Arc::clone(&likes),
+                })?
+                .register::<ListTimelineQuery, _>(ListTimelineHandler {
+                    repository: Arc::clone(&repository),
+                    gate:       Arc::clone(&gate),
+                    filters:    filters.clone(),
                 })?
                 .register::<ListRepliesQuery, _>(ListRepliesHandler {
                     repository: Arc::clone(&repository),

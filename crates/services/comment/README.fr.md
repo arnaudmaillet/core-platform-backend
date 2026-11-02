@@ -1,8 +1,8 @@
 ---
 i18n:
   source: ./README.md
-  source_sha256: c1092b9fe712e33315a70449fa9e88434978026f02512ac673db836980d325a2
-  translated_at: 2026-11-01
+  source_sha256: 35bcec4053f5cdfbe92ef07bb58e8fb34bc1f5845e04870ac8ad30501b4e9f87
+  translated_at: 2026-11-02
   status: complete
 ---
 > 🇫🇷 Traduction française — la version **anglaise** [`README.md`](./README.md) fait foi.
@@ -54,6 +54,7 @@ gRPC CommentService ─► CommandBus ─► CreateComment ─► Comment::creat
                     │             └─► DeleteComment ─► has_active_replies? ─► Tombstone | Purge ─► comment.deleted
                     └─► QueryBus  ─► GetComment (comments, point read, LCS)
                                   ─► ListTopLevel / ListReplies (comments_by_post)
+                                  ─► ListTimeline (comments_timeline, #988)
 ```
 
 **Flat-tree wide-column ScyllaDB :**
@@ -64,6 +65,7 @@ gRPC CommentService ─► CommandBus ─► CreateComment ─► Comment::creat
 | `comment.comments_by_post` | `post_id` | `parent_id, created_at DESC, comment_id` | feed pagination, no ALLOW FILTERING (TWCS) |
 | `comment.comments_by_author` | `author_id` | `created_at DESC, comment_id DESC` | les commentaires d'un profil (pointeurs vers `comments`), pour l'export RGPD (#653) ; écrite et purgée avec `comments` et `comments_by_post` dans un même LOGGED BATCH |
 | `comment.reply_counts` | `post_id` | `parent_id` | les réponses d'un commentaire de premier niveau (#832) : un compteur, +1 à chaque réponse, −1 à sa purge |
+| `comment.comments_timeline` | `post_id` | `created_at DESC, comment_id` | les commentaires d'un post, réponses comprises, en une seule timeline (#988) ; dénormalisée comme `comments_by_post`, écrite et purgée dans le même LOGGED BATCH, vidée avec un tombstone, son drapeau « retenu » mis à jour avec elle (TWCS) |
 
 **Sentinelle nil-UUID :** les commentaires de premier niveau stockent `parent_id = 0000…0000`
 (lexicographiquement le plus petit), faisant du scan de premier niveau un préfixe de clustering valide ;
@@ -127,6 +129,7 @@ service CommentService {
   rpc ListTopLevel  (ListTopLevelRequest)  returns (ListCommentsResponse);
   rpc ListPreviews  (ListPreviewsRequest)  returns (ListPreviewsResponse);  // #976 : les premiers commentaires de plusieurs posts
   rpc ListReplies   (ListRepliesRequest)   returns (ListCommentsResponse);
+  rpc ListTimeline  (ListTimelineRequest)  returns (ListCommentsResponse);  // #988 : commentaires + réponses, du plus récent au plus ancien
   rpc ListCommentsByAuthor (ListCommentsByAuthorRequest) returns (ListCommentsResponse); // mesh uniquement
 }
 ```
@@ -167,6 +170,25 @@ client les dessine pendant qu'il ouvre une tuile en plein écran.
 - **Latence.** Sur le Scylla local, 50 posts × 5 commentaires répondent en environ 10 ms : aucun cache de
   candidats n'a été nécessaire.
 
+**La timeline d'un post (#988).** `ListTimeline(post_id, limit ≤ 100, page_token)` (edge `public_read`,
+comme `ListTopLevel`) liste les commentaires d'un post, premier niveau et réponses confondus, du plus
+récent au plus ancien, pour un client qui les lit comme une conversation (les plus anciens en haut, le
+plus récent près du champ de saisie, les réponses à plat). Elle pagine `comments_timeline` avec le curseur
+`(created_at, comment_id)` des fils.
+- **Réponses.** Chacune porte `parent_id` et `reply_to` (`ReplyContext`) : l'auteur du parent, les 120
+  premiers caractères de son texte et s'il a un GIF, pour la citation dessinée au-dessus de la réponse. Le
+  parent vient de la page quand il y est, sinon d'une lecture ponctuelle par parent distinct.
+- **Règles de lecture.** Celles de `ListTopLevel`, avec une seule vérification du gate pour les auteurs de
+  la page et ceux des citations. Un commentaire que le lecteur ne peut pas voir n'est pas listé, ni cité :
+  `reply_to.unavailable`, comme pour un parent supprimé (les deux cas ne se distinguent pas). Un tombstone
+  reste dans la timeline.
+- **Commentaires plus anciens.** Les commentaires écrits avant cette table y sont mis par un backfill
+  optionnel et idempotent au démarrage (`COMMENT_BACKFILL_TIMELINE=true` : un parcours paginé de
+  `comments` ; le désactiver une fois `comments_timeline backfill done` journalisé). Chaque ligne est écrite
+  à l'horodatage d'écriture de sa source : un tombstone, une revue ou une purge survenus entre-temps sont
+  plus récents et l'emportent. D'ici là, un tombstone ou une revue d'un commentaire plus ancien laisse une
+  ligne incomplète, qui n'est pas listée.
+
 **Les commentaires d'un profil (#653).** `ListCommentsByAuthor(author_id)` est **mesh uniquement**
 (jamais sur l'edge) : l'export de données RGPD lit les commentaires d'un profil, du plus récent au plus
 ancien, tels que `comments` les contient — un tombstone comme tombstone, un commentaire purgé absent. Elle
@@ -175,7 +197,7 @@ commentaire. Les commentaires écrits avant cette table sont indexés par un bac
 idempotent au démarrage (`COMMENT_BACKFILL_AUTHOR_INDEX=true` : un parcours paginé de `comments` ; le
 désactiver une fois `comments_by_author backfill done` journalisé).
 
-**Lectures selon le lecteur.** `GetComment` / `ListTopLevel` / `ListReplies` prennent le lecteur du
+**Lectures selon le lecteur.** `GetComment` / `ListTopLevel` / `ListReplies` / `ListTimeline` prennent le lecteur du
 transport (`edge::viewer`). Pour tout appelant hors mesh, un **read gate** décide avec un `GetPost`
 (post) et un `CheckAccess` (social-graph) par appel (auteur du post + chaque auteur de commentaire de
 la page) :
@@ -305,6 +327,7 @@ async fn main() -> anyhow::Result<()> {
 | `COMMENT_ENGAGEMENT_GRPC_ENDPOINT` | Non | `http://localhost:50058` | Endpoint mesh d'engagement (`BatchGetLikes`) pour les réponses par popularité (#832). Injoignable : ces pages reviennent de la plus récente à la plus ancienne. |
 | `COMMENT_GATE_RPC_TIMEOUT_MS` / `COMMENT_GATE_CONNECT_TIMEOUT_MS` | Non | `1000` / `1000` | Délais de ces appels. |
 | `COMMENT_BACKFILL_AUTHOR_INDEX` | Non | non défini | `true` : indexe chaque commentaire existant par auteur au démarrage (une fois ; idempotent) — #653. |
+| `COMMENT_BACKFILL_TIMELINE` | Non | non défini | `true` : met chaque commentaire existant dans la timeline de son post au démarrage (une fois ; idempotent) — #988. |
 
 > Le réglage complet `SCYLLA_*` / `KAFKA_*` vit dans les crates partagés storage/transport.
 

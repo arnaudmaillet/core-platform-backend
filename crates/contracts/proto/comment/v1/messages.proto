@@ -69,6 +69,16 @@ message ListRepliesRequest {
     ReplySort sort       = 5;
 }
 
+// A post's comments, replies included, newest first (#988). Pages resume
+// exactly after the previous one's last comment, by (created_at, comment_id):
+// a comment written meanwhile is on no later page — it is on a fresh first one.
+message ListTimelineRequest {
+    string post_id    = 1;
+    // 1 to 100.
+    int32  limit      = 2;
+    string page_token = 3;
+}
+
 message ListCommentsByAuthorRequest {
     string author_id  = 1;
     int32  limit      = 2;
@@ -112,6 +122,22 @@ message CommentView {
     // A top-level comment's replies, held ones included (#832). Filled by
     // ListTopLevel; 0 elsewhere. A comment's likes: engagement BatchGetLikes.
     uint64        reply_count   = 11;
+    // The comment a reply answers, as a quote (#988). Filled by ListTimeline
+    // on a reply; absent elsewhere.
+    ReplyContext  reply_to      = 12;
+}
+
+// The comment a reply answers, for the quote drawn above the reply (#988).
+message ReplyContext {
+    string comment_id = 1;
+    // Nothing to quote: the comment is deleted, or one the reader may not
+    // see (not told apart). The fields below are empty then.
+    bool   unavailable = 2;
+    string author_id  = 3;
+    // The start of its body: at most 120 characters, cut without an
+    // ellipsis; empty for a GIF-only comment.
+    string excerpt    = 4;
+    bool   has_gif    = 5;
 }
 
 message ListCommentsResponse {

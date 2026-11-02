@@ -548,6 +548,42 @@ pub fn summaries_contain(summaries: &[CommentSummary], comment_id: &str) -> bool
 }
 
 impl TestHarness {
+    /// One page of a post's timeline as `viewer` (#988).
+    pub async fn timeline_page(
+        &self,
+        post_id: &str,
+        limit: i32,
+        page_token: Option<String>,
+        viewer: Viewer,
+    ) -> (Vec<comment::application::query::list_timeline::TimelineComment>, Option<String>) {
+        self.query_bus
+            .dispatch(Envelope::new(
+                Uuid::now_v7(),
+                comment::application::query::list_timeline::ListTimelineQuery {
+                    post_id: post_id.to_owned(),
+                    limit,
+                    page_token,
+                    viewer,
+                    mature: true,
+                },
+            ))
+            .await
+            .expect("list_timeline page")
+    }
+
+    /// Every comment of a post's timeline, page by page, as `viewer` (#988).
+    pub async fn all_timeline(&self, post_id: &str, limit: i32, viewer: Viewer) -> Vec<String> {
+        let (mut ids, mut token) = (Vec::new(), None);
+        loop {
+            let (page, next) = self.timeline_page(post_id, limit, token, viewer.clone()).await;
+            ids.extend(page.into_iter().map(|t| t.comment.comment_id.as_str()));
+            match next {
+                Some(next) => token = Some(next),
+                None => return ids,
+            }
+        }
+    }
+
     /// The previews of `posts` as `viewer` (#976).
     pub async fn previews(
         &self,
