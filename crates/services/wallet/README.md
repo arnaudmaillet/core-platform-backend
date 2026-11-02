@@ -23,7 +23,7 @@ movement of them.
 | Currency | Shown as | Earned by | Spent on |
 |---|---|---|---|
 | **Points** | likes (the heart) | the hourly claim | likes on posts and comments (`Stake`) |
-| **Gems** | the diamond | the starter gift; settled stakes (later) | stake packs; catalogue items (themes, icons); country unlocks (geo-discovery) |
+| **Gems** | the diamond | the starter gift; settled stakes (later) | stake packs; catalogue items (frames, card styles, banners); country unlocks (geo-discovery) |
 
 Nothing is sold for real money: no StoreKit, no receipts, no restore. Neither currency converts to
 the other, to money, or to another user. One wallet per **account** (all its profiles).
@@ -86,12 +86,11 @@ service's own start with `sys:` (e.g. `sys:starter-gems`). No caller key holds a
 
 **The gem catalogue (#892).** What gems buy, as server policy (`WALLET_CATALOG`), never influence,
 ranking or visibility (charter V5.3 §35). An item id is `<family>.<name>`; the families are
-`theme` (app accent themes, #946), `icon` (alternate app icons) and `frame` (avatar frames, #913,
+`theme` (app accent themes, #946; none on sale since the app draws in one theme, #990), `icon` (alternate app icons) and `frame` (avatar frames, #913,
 equipped per profile by profile's `EquipAvatarFrame`, which reads `ListOwnedItems` over the mesh) and
 `banner` (the animated profile banner, #915: profile's `UpdateBanner` takes a video only for its owner)
 and `card` (post card styles, #914: post's `SetPostCardStyle` applies one to the author's own posts).
-On sale by default: `theme.pink` (free), `theme.violet` (50), `theme.red` (50), `frame.gold`,
-`frame.neon` and `frame.aurora` (60 each), `banner.animated` (500), `card.paper`, `card.night` and
+On sale by default: `frame.gold`, `frame.neon` and `frame.aurora` (60 each), `banner.animated` (500), `card.paper`, `card.night` and
 `card.mint` (80 each), `avatar.animated` (500; family `avatar`, #945: profile's `UpdateAvatar` takes a clip only
 for its owner), `loader.wave` (free, the default loader; family `loader`, #975: the paid styles are
 not picked yet); no icon until the app bundles one.
@@ -408,7 +407,7 @@ let view = app.wallets.get(&account_id, chrono::Utc::now()).await?;
 | `WALLET_DAILY_CLAIM_CAP` | `200` | points claimable per UTC day |
 | `WALLET_POINTS_CAP` | `2000` | the points balance a claim never takes past (`BALANCE_FULL` at it); 0 keeps the default |
 | `WALLET_STARTER_GEMS` | `100` | gems a wallet opens with |
-| `WALLET_CATALOG` | `theme.pink:0,theme.violet:50,theme.red:50,frame.gold:60,frame.neon:60,frame.aurora:60,banner.animated:500,card.paper:80,card.night:80,card.mint:80,avatar.animated:500,loader.wave:0` | the gem catalogue (#892): `item id:gems`, display order, ids `<family>.<name>` of a known family (`theme`, `icon`, `frame`, `banner`, `card`, `avatar`, `loader`) and distinct; 0 = free, owned by every account; a bad list keeps the default |
+| `WALLET_CATALOG` | `frame.gold:60,frame.neon:60,frame.aurora:60,banner.animated:500,card.paper:80,card.night:80,card.mint:80,avatar.animated:500,loader.wave:0` | the gem catalogue (#892): `item id:gems`, display order, ids `<family>.<name>` of a known family (`theme`, `icon`, `frame`, `banner`, `card`, `avatar`, `loader`) and distinct; 0 = free, owned by every account; a bad list keeps the default |
 | `WALLET_STAKE_PACKS` | `3:50,10:150,25:325` | the stake packs on sale (#941): `shots:gems`, the default pack first, distinct shots (a pack's id is `shots_<shots>`); a bad list keeps the default |
 | `WALLET_POINTS_PER_SHOT` | `100` | points one shot stakes |
 | `WALLET_STAKE_TARGET_CAP` | `250` | points one account may put on one target, ever |

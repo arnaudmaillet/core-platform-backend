@@ -88,7 +88,7 @@ impl ItemFamily {
 }
 
 /// One item on sale. A free item (price 0) is owned by every account and
-/// never bought (`theme.pink`, the default accent).
+/// never bought (`loader.wave`, the default loader).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogItem {
     pub id:         String,
@@ -109,18 +109,15 @@ pub struct Catalog {
 }
 
 impl Default for Catalog {
-    /// The accent themes (#946): pink free, violet and red bought; three
-    /// avatar frames (#913); the animated banner (#915, 500 gems); three post
+    /// Three avatar frames (#913); the animated banner (#915, 500 gems); three post
     /// card styles (#914); the animated avatar (#945, 500 gems); the default
     /// loader, `loader.wave` (#975, free: the paid styles are not picked yet).
-    /// No alternate icon until the app bundles one (`WALLET_CATALOG` adds them).
+    /// No alternate icon until the app bundles one, and no accent theme since
+    /// the app draws in one theme only (#990); `WALLET_CATALOG` can add either.
     fn default() -> Self {
         let item = |family, id: &str, price_gems| CatalogItem { id: id.to_owned(), family, price_gems };
         Self {
             items: vec![
-                item(ItemFamily::Theme, "theme.pink", 0),
-                item(ItemFamily::Theme, "theme.violet", 50),
-                item(ItemFamily::Theme, "theme.red", 50),
                 item(ItemFamily::AvatarFrame, "frame.gold", 60),
                 item(ItemFamily::AvatarFrame, "frame.neon", 60),
                 item(ItemFamily::AvatarFrame, "frame.aurora", 60),
@@ -238,15 +235,16 @@ mod tests {
     #[test]
     fn a_purchase_needs_the_shown_price_the_gems_and_an_item_not_owned() {
         let catalog = Catalog::default();
-        let violet = catalog.item("theme.violet").unwrap();
+        let gold = catalog.item("frame.gold").unwrap();
         let mut wallet = Wallet::opened(AccountId::from_uuid(Uuid::now_v7()), 100);
-        assert_eq!(wallet.decide_purchase(violet, 50, false), PurchaseDecision::Buy);
-        assert_eq!(wallet.decide_purchase(violet, 40, false), PurchaseDecision::PriceChanged);
-        assert_eq!(wallet.decide_purchase(violet, 50, true), PurchaseDecision::AlreadyOwned);
-        assert_eq!(wallet.decide_purchase(catalog.item("theme.pink").unwrap(), 0, false), PurchaseDecision::AlreadyOwned, "free");
-        wallet.gems = 49;
-        assert_eq!(wallet.decide_purchase(violet, 50, false), PurchaseDecision::InsufficientGems);
-        assert_eq!(catalog.free_items().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["theme.pink", "loader.wave"]);
+        assert_eq!(wallet.decide_purchase(gold, 60, false), PurchaseDecision::Buy);
+        assert_eq!(wallet.decide_purchase(gold, 50, false), PurchaseDecision::PriceChanged);
+        assert_eq!(wallet.decide_purchase(gold, 60, true), PurchaseDecision::AlreadyOwned);
+        assert_eq!(wallet.decide_purchase(catalog.item("loader.wave").unwrap(), 0, false), PurchaseDecision::AlreadyOwned, "free");
+        wallet.gems = 59;
+        assert_eq!(wallet.decide_purchase(gold, 60, false), PurchaseDecision::InsufficientGems);
+        assert_eq!(catalog.free_items().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["loader.wave"]);
+        assert!(catalog.items.iter().all(|i| i.family != ItemFamily::Theme), "no accent theme on sale (#990)");
     }
 
     /// #975: loader styles are items; an uploaded loader takes a slot, under

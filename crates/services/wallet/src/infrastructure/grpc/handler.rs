@@ -697,20 +697,17 @@ mod tests {
         assert_eq!(denied.code(), Code::PermissionDenied);
     }
 
-    /// #892, #946: the catalogue lists the themes; a member buys one for its
-    /// own account only, a minor not at all; owned items start with the free
-    /// pink, and the export carries what was bought.
+    /// #892, #990: the catalogue lists no accent theme; a member buys an
+    /// item for its own account only, a minor not at all; owned items start
+    /// with the free loader, and the export carries what was bought.
     #[tokio::test]
-    async fn the_catalogue_sells_themes_to_the_callers_own_account() {
+    async fn the_catalogue_sells_items_to_the_callers_own_account() {
         let h = handler();
         let me = Uuid::now_v7().to_string();
         let catalog = h.list_catalog(as_caller(&me, proto::ListCatalogRequest {})).await.unwrap().into_inner();
         let items: Vec<_> = catalog.items.iter().map(|i| (i.item_id.as_str(), i.family, i.price)).collect();
-        let (theme, frame) = (proto::ItemFamily::Theme as i32, proto::ItemFamily::AvatarFrame as i32);
+        let frame = proto::ItemFamily::AvatarFrame as i32;
         assert_eq!(items, [
-            ("theme.pink", theme, 0),
-            ("theme.violet", theme, 50),
-            ("theme.red", theme, 50),
             ("frame.gold", frame, 60),
             ("frame.neon", frame, 60),
             ("frame.aurora", frame, 60),
@@ -725,8 +722,8 @@ mod tests {
         let purchase = |account: &str| proto::PurchaseItemRequest {
             account_id:      account.to_owned(),
             idempotency_key: Uuid::now_v7().to_string(),
-            item_id:         "theme.violet".into(),
-            expected_price:  50,
+            item_id:         "frame.gold".into(),
+            expected_price:  60,
         };
         let other = Uuid::now_v7().to_string();
         assert_eq!(h.purchase_item(as_caller(&me, purchase(&other))).await.unwrap_err().code(), Code::PermissionDenied);
@@ -736,14 +733,14 @@ mod tests {
         assert_eq!(refused.metadata().get(ERROR_CODE_METADATA).unwrap(), "WAL-3001");
 
         let bought = h.purchase_item(as_caller(&me, purchase(&me))).await.unwrap().into_inner();
-        assert_eq!((bought.outcome, bought.wallet.unwrap().gems), (proto::PurchaseOutcome::Purchased as i32, 50));
+        assert_eq!((bought.outcome, bought.wallet.unwrap().gems), (proto::PurchaseOutcome::Purchased as i32, 40));
         let owned = h.list_owned_items(as_caller(&me, proto::ListOwnedItemsRequest { account_id: me.clone() })).await.unwrap().into_inner();
         let owned: Vec<_> = owned.items.iter().map(|o| (o.item_id.as_str(), o.acquired_at.is_some())).collect();
-        assert_eq!(owned, [("theme.pink", false), ("loader.wave", false), ("theme.violet", true)]);
+        assert_eq!(owned, [("loader.wave", false), ("frame.gold", true)]);
         assert!(h.list_owned_items(as_caller(&me, proto::ListOwnedItemsRequest { account_id: other })).await.is_err());
 
         let export = h.export_wallet(Request::new(proto::ExportWalletRequest { account_id: me.clone() })).await.unwrap().into_inner();
-        assert_eq!(export.owned_items.iter().map(|o| o.item_id.as_str()).collect::<Vec<_>>(), ["theme.violet"], "bought ones only");
+        assert_eq!(export.owned_items.iter().map(|o| o.item_id.as_str()).collect::<Vec<_>>(), ["frame.gold"], "bought ones only");
     }
 
     /// #975: loaders are the caller's own account's; an import is adult
